@@ -13,6 +13,7 @@
 
 import assert from 'node:assert';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import Module from 'node:module';
 import { createRequire } from 'node:module';
@@ -220,6 +221,43 @@ await check('read-library-db liefert die Fixture-Zeilen über die Bridge', async
   assert.strictEqual(result.stats.tracks, 2);
   assert.strictEqual(result.rows.content[0].FolderPath, 'C:\\Music\\Rekordbox');
   await assert.rejects(() => read(null, ''), /Kein gültiger Datenbankpfad/);
+});
+
+await check('Build-Guard erkennt den node-gyp-Fehlerpfad (Leerzeichen + natives Modul)', () => {
+  const { analyzeEnvironment } = require(path.join(root, 'tools/check-build-env.cjs'));
+
+  const own = analyzeEnvironment(root);
+  const ownErrors = own.issues
+    .filter((issue) => issue.level === 'error')
+    .map((issue) => issue.message);
+  // Der Checkout hier muss die zwei typischen Fehlerbilder nicht melden (Pflege
+  // anderer Punkte, z. B. ein fehlender Electron-Install, ist hier egal).
+  assert.deepStrictEqual(ownErrors.filter((message) => /Leerzeichen|npmRebuild|assets/.test(message)), []);
+  assert.ok(
+    own.notes.some((note) => /npmRebuild = false/.test(note)),
+    'Der Guard muss npmRebuild:false bestätigen (sonst rebuildet electron-builder)'
+  );
+
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'space path '));
+  try {
+    fs.mkdirSync(path.join(fake, 'node_modules/better-sqlite3-multiple-ciphers/build/Release'), { recursive: true });
+    fs.writeFileSync(
+      path.join(fake, 'package.json'),
+      JSON.stringify({ name: 'x', version: '1.0.0', build: { productName: 'X' } })
+    );
+    const broken = analyzeEnvironment(fake);
+    const errors = broken.issues.filter((issue) => issue.level === 'error').map((issue) => issue.message);
+    assert.ok(
+      errors.some((message) => /Leerzeichen/.test(message)),
+      'Pfad mit Leerzeichen + nativem Modul muss als Fehler melden: ' + JSON.stringify(errors)
+    );
+    assert.ok(
+      errors.some((message) => /npmRebuild/.test(message)),
+      'fehlendes npmRebuild:false muss als Fehler melden: ' + JSON.stringify(errors)
+    );
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
 });
 
 await check('die Quelle der Fixture bleibt unverändert (Read-Only-Zusage)', async () => {

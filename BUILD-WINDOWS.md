@@ -38,10 +38,48 @@ Bewusst **nicht** eingerichtet: ein `postinstall`-Hook mit
 Er würde bei jedem `npm install` erneut node-gyp aufrufen und damit die
 Compilervoraussetzung zurückbringen.
 
+## 1a. Prüfen, ob die Korrektur wirklich aktiv ist
+
+electron-builder loggt den entscheidenden Unterschied in der ersten Minute.
+**Alt (fehlgeschlagen):**
+
+```
+• executing @electron/rebuild  electronVersion=44.2.0 arch=x64 buildFromSource=false …
+• preparing       moduleName=better-sqlite3-multiple-ciphers arch=x64
+⨯ Attempting to build a module with a space in the path
+⨯ node-gyp failed to rebuild '…\node_modules\better-sqlite3-multiple-ciphers'
+```
+
+**Korrekt (mit `npmRebuild: false`):**
+
+```
+• skipped dependencies rebuild  reason=npmRebuild is set to false
+• packaging       platform=win32 arch=x64 electron=44.2.0 appOutDir=release\win-unpacked
+```
+
+Erscheint die obere Zeile trotz aktueller Branch, wurde ein altes `package.json`
+verwendet (nicht gezogener Stand, editierte `build`-Sektion oder ein global
+gesetztes `npmRebuild`). Die npm-Skripte übergeben deshalb zusätzlich
+`--config.npmRebuild=false` auf der Kommandozeile – dieser Override gewinnt gegen
+jede `package.json`. Prüfen lässt sich das in einem Zug:
+
+```bat
+npm run check:build-env
+```
+
+Der Guard bricht ab, bevor der Build startet, wenn `npmRebuild` fehlt,
+`dist/index.html` absolute Asset-Pfade enthält, der Projektpfad Leerzeichen hat
+*und* das native Modul installiert ist, oder Node.js < 20 ist. Warnungen gibt es
+für OneDrive-Pfade (Sync-Sperren).
+
 ## 2. Bauen
 
 Voraussetzungen: Windows 10/11 x64, Node.js ≥ 20 (npm ≥ 10), etwas 2 GB freier
-Plattenspeicher. Eingabeaufforderung oder PowerShell im Projektordner:
+Plattenspeicher – und ein Projektpfad **ohne Leerzeichen und außerhalb von
+OneDrive** (z. B. `C:\Dev\airdox_editor`). Leerzeichen im Pfad bringen selbst
+mit installiertem Visual Studio nichts: node-gyp bricht dann mit
+„Attempting to build a module with a space in the path" ab.
+Eingabeaufforderung oder PowerShell im Projektordner:
 
 ```bat
 npm ci
