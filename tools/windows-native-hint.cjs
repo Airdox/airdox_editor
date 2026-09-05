@@ -25,7 +25,7 @@ const readJson = (relative) => {
 const line = (label, value) => console.log(`  ${label.padEnd(34)} ${value}`);
 
 console.log('\n══════════════════════════════════════════════════════════════');
-console.log('  Rekordbox Desktop Import – Build-Diagnose');
+console.log('  Airdox_intelligents_Editor – Build-Diagnose');
 console.log('══════════════════════════════════════════════════════════════\n');
 
 line('Betriebssystem', process.platform + ' / ' + process.arch);

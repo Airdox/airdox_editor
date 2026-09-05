@@ -1,6 +1,6 @@
 /**
  * @license
- * Rekordbox DJ Audio Editor - Type Definitions
+ * Airdox_intelligents_Editor - Type Definitions
  */
 
 export enum DataOrigin {

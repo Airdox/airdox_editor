@@ -1,4 +1,4 @@
-# Rekordbox Desktop Import
+# Airdox_intelligents_Editor
 
 Desktop-App (Electron, Windows x64) für die Rekordbox-Bibliothek: XML-Kollektion,
 ANLZ-Analysedateien und die SQLCipher-Datenbanken `master.db` (Rekordbox 6/7) bzw.

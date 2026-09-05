@@ -264,7 +264,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 onClick={() => { setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
               >
-                Über Rekordbox DJ Audio Editor
+                Über Airdox_intelligents_Editor
               </button>
               <div className="border-t border-[#2b2d35] my-1" />
               <button

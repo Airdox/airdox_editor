@@ -1,4 +1,4 @@
-# Windows-Build – Rekordbox Desktop Import
+# Windows-Build – Airdox_intelligents_Editor
 
 Diese Anleitung baut die Desktop-App für Windows 10/11 (x64). **Ein C-Compiler ist
 dafür nicht mehr nötig** – weder Visual Studio noch Build Tools, noch Python.
@@ -96,9 +96,9 @@ npm run package:win
 
 Ergebnis im Ordner `release\`:
 
-* `Rekordbox Desktop Import-0.1.0-win-x64.exe` – NSIS-Installer (Auswahl des
+* `Airdox_intelligents_Editor-0.1.0-win-x64.exe` – NSIS-Installer (Auswahl des
   Zielordners, Desktop- und Startmenü-Verknüpfung, pro Benutzer ohne Admin-Rechte)
-* `Rekordbox Desktop Import-Portable-0.1.0-x64.exe` – einzelne EXE ohne
+* `Airdox_intelligents_Editor-Portable-0.1.0-x64.exe` – einzelne EXE ohne
   Installation (für USB-Sticks oder Testläufe)
 
 Nur ein Ziel bauen:
@@ -225,7 +225,7 @@ npm run icon
 
 ## 9. Was nach dem ersten Build zu prüfen ist
 
-* [ ] `Rekordbox Desktop Import-…-win-x64.exe` installiert ohne Administrator-Rechte.
+* [ ] `Airdox_intelligents_Editor-…-win-x64.exe` installiert ohne Administrator-Rechte.
 * [ ] Kollektion aus XML lädt (11.000 Tracks in < 0,5 s).
 * [ ] Datenbank-Import meldet „reines JavaScript“ **und** liefert Tracks.
 * [ ] Waveform/Beatgrid/Cues einer ANLZ-Datei erscheinen im Edit-Modus.

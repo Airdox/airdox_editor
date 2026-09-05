@@ -1,7 +1,7 @@
 /**
  * @license
- * Rekordbox TitleBar Component
- * Windows-style title bar with Rekordbox logo and window controls
+ * Airdox_intelligents_Editor TitleBar Component
+ * Windows-style title bar with product mark and window controls
  */
 
 import React from 'react';
@@ -17,7 +17,7 @@ export const TitleBar: React.FC = () => {
           <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
         </div>
         <span className="font-semibold text-neutral-300 tracking-tight text-[11px] font-sans">
-          rekordbox
+          airdox&nbsp;intelligents&nbsp;editor
         </span>
       </div>
 

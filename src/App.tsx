@@ -1,6 +1,6 @@
 /**
  * @license
- * Rekordbox DJ Audio Editor - Master Application
+ * Airdox_intelligents_Editor - Master Application
  * Authoritative Visual Lock implementation matching screenshots 01, 02, and 03.
  */
 

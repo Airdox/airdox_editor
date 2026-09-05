@@ -1,4 +1,8 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+
+// Der Produktname steuert Fenstertitel, userData-Pfad und AppUserModelId.
+const PRODUCT_NAME = 'Airdox_intelligents_Editor';
+app.setName(PRODUCT_NAME);
 const { access, readFile, stat } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -17,7 +21,7 @@ function createWindow() {
     height: 960,
     minWidth: 1024,
     minHeight: 720,
-    title: 'Rekordbox Desktop Import',
+    title: PRODUCT_NAME,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

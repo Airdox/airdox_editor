@@ -1,5 +1,5 @@
 {
-  "name": "airdox_editor",
+  "name": "airdox_intelligents_editor",
   "private": true,
   "version": "0.1.0",
   "description": "Rekordbox-Bibliothek (XML, ANLZ, master.db/OneLibrary) ausschließlich lesend in den Desktop-Editor importieren.",
@@ -53,8 +53,8 @@
     "better-sqlite3-multiple-ciphers": "^12.11.1"
   },
   "build": {
-    "appId": "info.airdox.rekordboxdesktopimport",
-    "productName": "Rekordbox Desktop Import",
+    "appId": "info.airdox.intelligentseditor",
+    "productName": "Airdox_intelligents_Editor",
     "copyright": "Copyright © 2026 Airdox",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "publish": null,
@@ -101,7 +101,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Rekordbox Desktop Import",
+      "shortcutName": "Airdox_intelligents_Editor",
       "deleteAppDataOnUninstall": false
     },
     "portable": {
