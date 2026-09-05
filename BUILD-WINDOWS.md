@@ -48,6 +48,14 @@ npm ci
 npm run package:win
 ```
 
+> **Wichtig bei OneDrive / Desktop-Ordnern:** Der Projektordner sollte **nicht**
+> unter OneDrive (oder einem anderen Synchronisationsclient) liegen. Der Sync
+> sperrt Dateien in `node_modules\` und `release\`, was zu `EPERM`, `EBUSY` oder
+> halb geschriebenen Dateien führt – ein typischer Grund, warum Builds auf einem
+> Rechner laufen und auf dem anderen nicht. Empfohlen: `C:\Dev\airdox_editor`.
+> Zusätzlich lange Pfade aktivieren: `git config --system core.longpaths true`
+> und in den Gruppenrichtlinien „Lange Pfade aktivieren“ (Win10 1607+).
+
 Ergebnis im Ordner `release\`:
 
 * `Rekordbox Desktop Import-0.1.0-win-x64.exe` – NSIS-Installer (Auswahl des
