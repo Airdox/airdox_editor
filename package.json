@@ -11,8 +11,9 @@
     "package:win": "npm run build && electron-builder --win nsis",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts"
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && node tests/db-reader-keys.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -31,6 +32,7 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@electron/rebuild": "^4.0.1",
     "autoprefixer": "^10.4.21",
     "electron": "^44.2.0",
     "electron-builder": "^26.15.3",
@@ -39,6 +41,9 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "optionalDependencies": {
+    "better-sqlite3-multiple-ciphers": "^12.11.1"
   },
   "build": {
     "appId": "info.airdox.rekordboxdesktopimport",

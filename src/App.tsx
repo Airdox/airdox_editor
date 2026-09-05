@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   TrackModel,
+  PartialTrackModel,
   WaveformMode,
   SelectionRange,
   PaletteClip,
@@ -15,6 +16,7 @@ import {
   EditHistoryEntry,
   CuePoint,
 } from './types/rekordbox';
+import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
@@ -45,6 +47,63 @@ import {
   OperationTelemetry,
 } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
+
+/**
+ * Shared conversion of a compact collection entry (XML or Rekordbox DB)
+ * into a complete TrackModel that the collection browser can render.
+ */
+function buildCollectionTrackModel(
+  pt: PartialTrackModel,
+  idx: number,
+  origin: DataOrigin
+): TrackModel {
+  const duration = pt.duration && !isNaN(pt.duration) ? pt.duration : 300.0;
+  const bpm = pt.bpm && !isNaN(pt.bpm) ? pt.bpm : 130.0;
+  const id = pt.id || `${origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml'}-${Date.now()}-${idx}`;
+  return {
+    id,
+    title: pt.title || 'Untitled Track',
+    artist: pt.artist || 'Unknown Artist',
+    album: pt.album || 'Rekordbox Collection',
+    genre: pt.genre,
+    label: pt.label,
+    rating: pt.rating,
+    playCount: pt.playCount,
+    year: pt.year,
+    comments: pt.comments,
+    dateAdded: pt.dateAdded,
+    remixer: pt.remixer,
+    isrc: pt.isrc,
+    bpm,
+    key: pt.key || '2A',
+    duration,
+    sampleRate: pt.sampleRate || 44100,
+    channels: pt.channels || 2,
+    originalSha256: pt.originalSha256 || `sha256-rb-${idx}`,
+    isOriginalUntouched: true,
+    audioBuffer: pt.audioBuffer || null,
+    beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration),
+    cues: pt.cues || [],
+    loops: pt.loops || [],
+    analysis: pt.analysis || null,
+    phrases: pt.phrases || [],
+    rawXmlAttributes: pt.rawXmlAttributes,
+    originalMedia: pt.originalMedia,
+    origin,
+    workingSegments: [
+      {
+        id: `seg-${idx}`,
+        type: 'ORIGINAL',
+        trackId: id,
+        sourceStart: 0,
+        sourceEnd: duration,
+        projectStart: 0,
+        projectDuration: duration,
+        gain: 1.0,
+      },
+    ],
+  };
+}
 
 export default function App() {
   // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
@@ -733,51 +792,9 @@ export default function App() {
       });
 
       // Convert parsed entries to complete TrackModel instances
-      const fullTrackModels: TrackModel[] = parsedTracks.map((pt, idx) => {
-        const duration = pt.duration && !isNaN(pt.duration) ? pt.duration : 300.0;
-        const bpm = pt.bpm && !isNaN(pt.bpm) ? pt.bpm : 130.0;
-        return {
-          id: pt.id || `rb-xml-${Date.now()}-${idx}`,
-          title: pt.title || 'Untitled Track',
-          artist: pt.artist || 'Unknown Artist',
-          album: pt.album || 'Rekordbox Collection',
-          genre: pt.genre,
-          rating: pt.rating,
-          playCount: pt.playCount,
-          year: pt.year,
-          comments: pt.comments,
-          dateAdded: pt.dateAdded,
-          remixer: pt.remixer,
-          bpm,
-          key: pt.key || '2A',
-          duration,
-          sampleRate: 44100,
-          channels: 2,
-          originalSha256: pt.originalSha256 || `sha256-rb-${idx}`,
-          isOriginalUntouched: true,
-          audioBuffer: pt.audioBuffer || null,
-          beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration),
-          cues: pt.cues || [],
-          loops: pt.loops || [],
-          analysis: pt.analysis,
-          phrases: pt.phrases,
-          rawXmlAttributes: pt.rawXmlAttributes,
-          originalMedia: pt.originalMedia,
-          origin: DataOrigin.REKORDBOX_XML,
-          workingSegments: [
-            {
-              id: `seg-xml-${idx}`,
-              type: 'ORIGINAL',
-              trackId: pt.id || `rb-xml-${Date.now()}-${idx}`,
-              sourceStart: 0,
-              sourceEnd: duration,
-              projectStart: 0,
-              projectDuration: duration,
-              gain: 1.0,
-            },
-          ],
-        };
-      });
+      const fullTrackModels: TrackModel[] = parsedTracks.map((pt, idx) =>
+        buildCollectionTrackModel(pt, idx, DataOrigin.REKORDBOX_XML)
+      );
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(file.name);
@@ -864,6 +881,83 @@ export default function App() {
     }
   };
 
+  // Rekordbox 6/7 database (master.db / OneLibrary exportLibrary.db).
+  // The desktop bridge opens the SQLCipher library strictly for reading and
+  // returns only rows; the renderer never touches the source file.
+  const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
+    if (!window.rekordboxDesktop) return;
+    try {
+      const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
+      if (!result.available || !result.rows) {
+        throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
+      }
+
+      const mapped = mapRekordboxDatabaseRows(
+        {
+          content: result.rows.content,
+          cues: result.rows.cues,
+          artists: result.rows.artists,
+          albums: result.rows.albums,
+          genres: result.rows.genres,
+          keys: result.rows.keys,
+          labels: result.rows.labels,
+          playlists: result.rows.playlists,
+          songPlaylists: result.rows.songPlaylists,
+        },
+        result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
+      );
+
+      const fullTrackModels = mapped.tracks.map((track, idx) =>
+        buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB)
+      );
+
+      setXmlImportedTracks(fullTrackModels);
+      setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
+      setXmlCollectionModalOpen(true);
+
+      showOperationFeedback({
+        title: 'Rekordbox-Datenbank importiert (Read-Only)',
+        operationType: 'CUE',
+        description: `${sourceLabel || result.fileName || dbPath}: ${mapped.stats.tracks} Tracks, ${mapped.stats.memoryCues} Memory Cues, ${mapped.stats.hotCues} Hot Cues, ${mapped.stats.loops} Loops aus der Datenbank übernommen.`,
+        timeRangeSec: { start: 0, end: 0, duration: 0 },
+        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
+        timestamp: Date.now(),
+      });
+
+      const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
+      if (warnings.length > 0) {
+        console.warn('[Rekordbox DB] Hinweise:', warnings);
+      }
+    } catch (error) {
+      console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
+      alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleOpenRekordboxDatabase = async () => {
+    if (!window.rekordboxDesktop) {
+      alert('Der Datenbank-Import ist nur in der Windows-Desktop-App verfügbar.');
+      return;
+    }
+    try {
+      const chosen = await window.rekordboxDesktop.chooseRekordboxDatabase();
+      if (!chosen) return;
+      await handleLoadRekordboxDatabase(chosen.path);
+    } catch (error) {
+      console.error('[Rekordbox DB] Dateiauswahl fehlgeschlagen:', error);
+    }
+  };
+
+  const handleLocateRekordboxDatabases = async () => {
+    if (!window.rekordboxDesktop) return [];
+    try {
+      return await window.rekordboxDesktop.locateRekordboxDatabases();
+    } catch (error) {
+      console.warn('[Rekordbox DB] Automatische Suche fehlgeschlagen:', error);
+      return [];
+    }
+  };
+
   // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
     try {
@@ -915,21 +1009,22 @@ export default function App() {
         originalSha256: sha256,
         isOriginalUntouched: true,
         audioBuffer: originalAudio,
-        // XML collection entries intentionally retain only compact beatgrid
-        // metadata. Expand it when this one track is actually loaded.
+        // Collection entries intentionally retain only compact beatgrid
+        // metadata. Expand it when this one track is actually loaded,
+        // keeping the source origin (XML or Rekordbox DB).
         beatGrid: buildBeatGridFromTempo(
           selectedDef.beatGrid?.firstBeat ?? 0.0,
           selectedDef.beatGrid?.bpm ?? selectedDef.bpm ?? 130.0,
           duration,
           selectedDef.beatGrid?.meter ?? 4,
-          DataOrigin.REKORDBOX_XML
+          selectedDef.origin ?? DataOrigin.REKORDBOX_XML
         ),
         cues: selectedDef.cues || [],
         loops: selectedDef.loops || [],
         analysis,
         phrases,
         originalMedia,
-        origin: DataOrigin.REKORDBOX_XML,
+        origin: selectedDef.origin ?? DataOrigin.REKORDBOX_XML,
         workingSegments: [
           {
             id: `seg-${Date.now()}`,
@@ -1301,6 +1396,9 @@ export default function App() {
             onImportAnlzFile={handleImportAnlzFile}
             onImportAnlzFromDesktop={handleImportAnlzFromDesktop}
             onImportXmlFile={loadXmlFile}
+            onOpenRekordboxDatabase={handleOpenRekordboxDatabase}
+            onLocateRekordboxDatabases={handleLocateRekordboxDatabases}
+            onLoadRekordboxDatabase={handleLoadRekordboxDatabase}
           />
         </>
       )}

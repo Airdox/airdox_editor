@@ -3,6 +3,10 @@ const { access, readFile, stat } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
+const {
+  readRekordboxDatabase,
+  locateRekordboxDatabases,
+} = require('./dbReader.cjs');
 
 let mainWindow;
 
@@ -90,6 +94,31 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
   // File selection returns a path only; the selected file is opened read
   // only through rekordbox:read-analysis-file.
   return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+});
+
+ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Rekordbox-Datenbank auswählen (nur lesend)',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Rekordbox Datenbank', extensions: ['db'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+});
+
+ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
+  // Read-only directory scan of the standard Pioneer app-data folders.
+  return locateRekordboxDatabases();
+});
+
+ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
+  if (typeof dbPath !== 'string' || !dbPath.trim()) {
+    throw new Error('Kein gültiger Datenbankpfad übergeben.');
+  }
+  // The database is opened exclusively with SQLite readonly mode.
+  return readRekordboxDatabase(dbPath);
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {

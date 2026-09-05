@@ -42,6 +42,12 @@ interface DatabaseExtractionModalProps {
   /** Windows desktop path: opens the analysis file via the read-only bridge. */
   onImportAnlzFromDesktop?: () => void;
   onImportXmlFile?: (file: File) => void;
+  /** Rekordbox 6/7 SQLCipher database (master.db / OneLibrary), read-only. */
+  onOpenRekordboxDatabase?: () => void;
+  onLocateRekordboxDatabases?: () => Promise<
+    Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+  >;
+  onLoadRekordboxDatabase?: (dbPath: string, sourceLabel?: string) => void | Promise<void>;
 }
 
 export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = ({
@@ -55,9 +61,27 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   onImportAnlzFile,
   onImportAnlzFromDesktop,
   onImportXmlFile,
+  onOpenRekordboxDatabase,
+  onLocateRekordboxDatabases,
+  onLoadRekordboxDatabase,
 }) => {
   const currentTrack = track || activeTrack;
   const [activeTab, setActiveTab] = useState<'memoryCues' | 'waveform' | 'phrases' | 'sources'>('memoryCues');
+  const [databaseCandidates, setDatabaseCandidates] = useState<
+    Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+  >([]);
+  const [searchingDatabase, setSearchingDatabase] = useState(false);
+
+  const handleDiscoverDatabases = async () => {
+    if (!onLocateRekordboxDatabases || searchingDatabase) return;
+    setSearchingDatabase(true);
+    try {
+      const found = await onLocateRekordboxDatabases();
+      setDatabaseCandidates(found);
+    } finally {
+      setSearchingDatabase(false);
+    }
+  };
   const [filterType, setFilterType] = useState<'ALL' | 'MEMORY' | 'HOT_CUE'>('ALL');
 
   if (!isOpen || !currentTrack) return null;
@@ -540,7 +564,7 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
           {/* 4. Import / Sources Tab */}
           {activeTab === 'sources' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* ANLZ File Import */}
                 <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
                   <div>
@@ -616,6 +640,76 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                       }}
                     />
                   </label>
+                </div>
+
+                {/* Rekordbox 6/7 SQLCipher Database */}
+                <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center space-x-2 text-white font-semibold text-xs mb-1">
+                      <Database size={15} className="text-[#10b981]" />
+                      <span>Rekordbox 6/7 Datenbank (master.db / OneLibrary)</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Lokale Rekordbox-Bibliothek (djmdContent/djmdCue) oder OneLibrary-Export mit SQLCipher. Wird ausschließlich lesend geöffnet.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 mt-4">
+                    {onOpenRekordboxDatabase && (
+                      <button
+                        onClick={() => {
+                          onOpenRekordboxDatabase();
+                          onClose();
+                        }}
+                        className="w-full py-2 bg-[#10b981] hover:bg-[#0d9e73] text-white rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                      >
+                        <Upload size={13} />
+                        <span>Datenbankdatei auswählen... (.db, nur lesend)</span>
+                      </button>
+                    )}
+                    {onLocateRekordboxDatabases && (
+                      <button
+                        onClick={handleDiscoverDatabases}
+                        className="w-full py-2 bg-[#115c48] hover:bg-[#157055] border border-[#10b981]/40 text-[#7ce8c3] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                      >
+                        <Database size={13} />
+                        <span>{searchingDatabase ? 'Suche...' : 'Standardordner durchsuchen'}</span>
+                      </button>
+                    )}
+                    {databaseCandidates.length > 0 && (
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {databaseCandidates.map((candidate) => (
+                          <div
+                            key={candidate.path}
+                            className="flex items-center justify-between gap-2 bg-[#0f1015] border border-[#22242e] rounded px-2 py-1.5"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-mono text-neutral-300 truncate">
+                                {candidate.label}
+                              </div>
+                              <div className="text-[9px] text-neutral-500 font-mono truncate">
+                                {candidate.kind === 'ONE_LIBRARY' ? 'OneLibrary' : 'master.db'}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                onLoadRekordboxDatabase?.(candidate.path, candidate.label);
+                                onClose();
+                              }}
+                              className="px-2 py-1 bg-[#10b981]/20 hover:bg-[#10b981] text-[#7ce8c3] hover:text-white rounded text-[10px] border border-[#10b981]/40 flex-shrink-0 transition-colors"
+                            >
+                              Laden
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {databaseCandidates.length === 0 && !searchingDatabase && onLocateRekordboxDatabases && (
+                      <p className="text-[10px] text-neutral-500">
+                        Keine Datenbank im Standardordner gefunden. Du kannst die Datei auch manuell auswählen.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 

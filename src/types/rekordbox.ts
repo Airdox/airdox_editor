@@ -161,12 +161,14 @@ export interface TrackModel {
   artist: string;
   album: string;
   genre?: string;
+  label?: string;
   rating?: number; // 0 to 5 stars
   playCount?: number; // Rekordbox DJ-Play Count
   year?: string;
   comments?: string;
   dateAdded?: string;
   remixer?: string;
+  isrc?: string;
   bpm: number;
   key: string; // e.g. "2A" or "Fm"
   duration: number; // seconds
@@ -186,6 +188,15 @@ export interface TrackModel {
   originalMedia?: OriginalMediaReference;
   workingSegments: EditSegment[];
 }
+
+/**
+ * Compact collection entry shared by the XML importer and the Rekordbox
+ * database importer (no dense beat grids, no audio buffer until loaded).
+ */
+export type PartialTrackModel = Partial<TrackModel> & {
+  label?: string;
+  fileSize?: number;
+};
 
 export interface SelectionRange {
   start: number; // seconds

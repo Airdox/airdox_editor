@@ -27,6 +27,36 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
+      chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
+      locateRekordboxDatabases(): Promise<
+        Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+      >;
+      readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+    };
+  }
+
+  interface RekordboxDatabaseReadRow {
+    [column: string]: string | number | null;
+  }
+
+  interface RekordboxDatabaseReadResult {
+    available: boolean;
+    reason?: string;
+    dbType?: 'MASTER_DB' | 'ONE_LIBRARY';
+    filePath?: string;
+    fileName?: string;
+    stats?: { tracks: number; cues: number; playlists: number };
+    warnings?: string[];
+    rows?: {
+      content: RekordboxDatabaseReadRow[];
+      cues: RekordboxDatabaseReadRow[];
+      artists: RekordboxDatabaseReadRow[];
+      albums: RekordboxDatabaseReadRow[];
+      genres: RekordboxDatabaseReadRow[];
+      keys: RekordboxDatabaseReadRow[];
+      labels: RekordboxDatabaseReadRow[];
+      playlists: RekordboxDatabaseReadRow[];
+      songPlaylists: RekordboxDatabaseReadRow[];
     };
   }
 }

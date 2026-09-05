@@ -7,4 +7,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   readOriginalAudio: (location) => ipcRenderer.invoke('rekordbox:read-original-audio', location),
   chooseAnalysisFile: () => ipcRenderer.invoke('rekordbox:choose-analysis-file'),
   readAnalysisFile: (filePath) => ipcRenderer.invoke('rekordbox:read-analysis-file', filePath),
+  chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
+  locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
+  readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
 });
