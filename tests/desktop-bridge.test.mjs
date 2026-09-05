@@ -348,6 +348,57 @@ await check('der Produktname ist überall identisch (Umbenennung)', () => {
   assert.ok(html.includes('<title>' + pkg.build.productName), 'index.html-Titel weicht ab: ' + html.match(/<title>[^<]*/)?.[0]);
   assert.strictEqual(pkg.build.productName, 'Airdox_intelligents_Editor');
   assert.ok(pkg.build.nsis.shortcutName === pkg.build.productName, 'Verknüpfungsname weicht ab');
+
+  // Der Renderer bezieht den Namen aus einer einzigen Quelle, nicht aus Streusätzen.
+  const productNameModule = fs.readFileSync(path.join(root, 'src/productName.ts'), 'utf-8');
+  const declared = /export const PRODUCT_NAME = '([^']+)'/.exec(productNameModule);
+  assert.ok(declared, 'src/productName.ts deklariert PRODUCT_NAME nicht');
+  assert.strictEqual(declared[1], pkg.build.productName, 'src/productName.ts und package.json sind uneins');
+  const titleBar = fs.readFileSync(path.join(root, 'src/components/TitleBar.tsx'), 'utf-8');
+  assert.ok(titleBar.includes('PRODUCT_DISPLAY_NAME'), 'Titelleiste zeigt einen hartkodierten Produktnamen');
+  assert.ok(
+    !/airdox&nbsp;intelligents&nbsp;editor/i.test(titleBar),
+    'Titelleiste enthält eine zweite, handgeschriebene Namensschreibweise'
+  );
+
+  // Paketname, App-ID und CI-Artefakt folgen demselben Namen.
+  assert.strictEqual(pkg.name, pkg.build.productName.toLowerCase(), 'package.json „name“ weicht ab');
+  assert.ok(pkg.build.appId.includes('airdox'), `appId ${pkg.build.appId} nennt das Produkt nicht`);
+  assert.ok(pkg.build.nsis.shortcutName === pkg.build.productName);
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/windows-build.yml'), 'utf-8');
+  assert.ok(
+    /name:\s*airdox-intelligents-editor-windows-x64/.test(workflow),
+    'CI-Artefakt heißt noch nach dem alten Produktnamen'
+  );
+
+  // Beschreibung und Meta-Texte gehören auch zum Produkt, nicht zum Gerüst.
+  assert.ok(!/palette clips/i.test(html), 'index.html bewirbt noch „palette clips“ statt der Clip-Bibliothek');
+  assert.ok(html.includes('application-name'), 'index.html setzt application-name nicht');
+});
+
+await check('kein Rest des alten App-Namens in ausgelieferten Dateien', () => {
+  // Der alte Produktname war „Rekordbox Desktop Import“. „Rekordbox-Desktop-Importpfad“
+  // ist etwas anderes (der Importweg) und darf deshalb nicht melden → \b nach Import.
+  const stale = /rekordbox[\s._-]?desktop[\s._-]?import\b/i;
+  const skippedDirs = new Set(['node_modules', 'dist', 'release', '.git', 'coverage']);
+  const hits = [];
+  const walk = (dir, depth) => {
+    if (depth > 3) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'tests' || entry.name === '.git' || skippedDirs.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+      } else if (/\.(ts|tsx|cjs|mjs|js|json|html|md|yml|yaml|css)$/.test(entry.name)) {
+        const text = fs.readFileSync(full, 'utf-8');
+        text.split('\n').forEach((line, index) => {
+          if (stale.test(line)) hits.push(`${path.relative(root, full)}:${index + 1}: ${line.trim().slice(0, 90)}`);
+        });
+      }
+    }
+  };
+  walk(root, 0);
+  assert.deepEqual(hits, [], 'alte Produktnamen gefunden:\n      ' + hits.join('\n      '));
 });
 
 await check('Schreiben ist nur an dialogbestätigte Orte möglich', async () => {

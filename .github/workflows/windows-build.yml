@@ -83,7 +83,7 @@ jobs:
       - name: Build-Artefakte sichern
         uses: actions/upload-artifact@v4
         with:
-          name: rekordbox-desktop-import-windows-x64
+          name: airdox-intelligents-editor-windows-x64
           path: |
             release/*.exe
             release/*.blockmap

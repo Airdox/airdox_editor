@@ -6,18 +6,25 @@
 
 import React from 'react';
 import { Minus, Square, X } from 'lucide-react';
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from '../productName';
 
 export const TitleBar: React.FC = () => {
   return (
-    <div className="h-7 bg-[#0a0b0d] border-b border-[#18191d] flex items-center justify-between px-2 text-xs select-none z-50">
-      {/* Left: Pioneer Rekordbox branding logo & name */}
+    <div
+      className="h-7 bg-[#0a0b0d] border-b border-[#18191d] flex items-center justify-between px-2 text-xs select-none z-50"
+      title={PRODUCT_NAME}
+    >
+      {/* Left: Produktmarke – der Name kommt aus src/productName.ts */}
       <div className="flex items-center space-x-2">
         {/* Rekordbox distinctive circle mark */}
         <div className="w-3.5 h-3.5 rounded-full border border-neutral-300 flex items-center justify-center p-0.5">
           <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
         </div>
-        <span className="font-semibold text-neutral-300 tracking-tight text-[11px] font-sans">
-          airdox&nbsp;intelligents&nbsp;editor
+        <span
+          className="font-semibold text-neutral-300 tracking-tight text-[11px] font-sans"
+          title={`${PRODUCT_NAME} – ${PRODUCT_TAGLINE}`}
+        >
+          {PRODUCT_DISPLAY_NAME}
         </span>
       </div>
 
