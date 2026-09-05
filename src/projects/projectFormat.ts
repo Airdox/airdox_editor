@@ -20,7 +20,6 @@ import {
   EditOperationType,
   LoopPoint,
   OriginalMediaReference,
-  PaletteClip,
   PhraseSection,
   WaveformMode,
 } from '../types/rekordbox';
@@ -221,7 +220,7 @@ export interface ProjectDraftInput {
   activeTrackId: string;
   view: ProjectFile['view'];
   tracks: Array<Omit<ProjectTrack, 'audio'> & { pcm: PcmAudio }>;
-  clips: Array<{ clip: Omit<PaletteClip, 'audioBuffer' | 'miniPeaks'>; audio: PcmAudio; miniPeaks: number[] }>;
+  clips: Array<Omit<ProjectClip, 'audio'> & { pcm: PcmAudio }>;
   app: { name: string; version: string };
 }
 
@@ -241,10 +240,9 @@ export function buildProjectFile(input: ProjectDraftInput): ProjectFile {
       channels: pcm.channels.length,
       audio: encodeAudioBlock(pcm),
     })),
-    clips: input.clips.map(({ clip, audio, miniPeaks }) => ({
-      ...clip,
-      audio: encodeAudioBlock(audio),
-      miniPeaks,
+    clips: input.clips.map(({ pcm, ...rest }) => ({
+      ...rest,
+      audio: encodeAudioBlock(pcm),
     })),
     provenance: {
       originalsModified: false,

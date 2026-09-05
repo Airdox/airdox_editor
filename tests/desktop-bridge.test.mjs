@@ -27,6 +27,11 @@ const root = path.join(here, '..');
 const ipcHandlers = new Map();
 const loadCalls = [];
 const dialogRequests = [];
+const productNames = [];
+// Was der Speicherdialog „zurückgibt“ – wird pro Prüfung gesetzt.
+let saveDialogResult = { canceled: true };
+let openDialogResult = { canceled: true, filePaths: [] };
+const sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-bridge-'));
 
 const stub = {
   app: {
@@ -34,6 +39,8 @@ const stub = {
     on: () => {},
     quit: () => {},
     getAppPath: () => root,
+    getPath: (kind) => (kind === 'documents' ? sandboxDir : sandboxDir),
+    setName: (name) => productNames.push(name),
     platform: process.platform,
   },
   BrowserWindow: class BrowserWindowStub {
@@ -58,7 +65,13 @@ const stub = {
   dialog: {
     showOpenDialog: async (_parent, options) => {
       dialogRequests.push(options);
-      return { canceled: true, filePaths: [] };
+      return openDialogResult.filePaths?.length
+        ? openDialogResult
+        : { canceled: true, filePaths: [] };
+    },
+    showSaveDialog: async (_parent, options) => {
+      dialogRequests.push(options);
+      return saveDialogResult;
     },
   },
   ipcMain: {
@@ -113,6 +126,12 @@ await check('alle IPC-Kanäle sind registriert', () => {
     'rekordbox:locate-rekordbox-databases',
     'rekordbox:database-capabilities',
     'rekordbox:read-library-db',
+    'datei:specify-path',
+    'datei:write',
+    'datei:write-many',
+    'datei:pick-open',
+    'datei:pick-directory',
+    'datei:read-text',
   ];
   for (const channel of expected) assert.ok(ipcHandlers.has(channel), `fehlt: ${channel}`);
 });
@@ -194,15 +213,32 @@ await check('readOriginalAudio und readAnalysisFile lehnen falsche Quellen ab', 
   );
 });
 
-await check('Dateidialoge liefern nur einen Pfad und nie einen Schreibgriff', async () => {
+await check('Dateidialoge liefern nur einen Pfad; die Rekordbox-Kanäle bleiben reine Lesespur', async () => {
   const chooseAnalysis = ipcHandlers.get('rekordbox:choose-analysis-file');
   assert.strictEqual(await chooseAnalysis(), null, 'abgewählter Dialog muss null liefern');
   const chooseDb = ipcHandlers.get('rekordbox:choose-rekordbox-database');
   assert.strictEqual(await chooseDb(), null);
   assert.strictEqual(dialogRequests.length, 2);
   assert.ok(dialogRequests.every((options) => options.properties.includes('openFile')));
+  // Geschrieben werden darf nur in den datei:*-Kanälen – und dort ausschließlich an
+  // einen per Dialog bestätigten Ort. Kein rekordbox:*-Kanal darf schreiben.
   const mainSource = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf-8');
-  assert.doesNotMatch(mainSource, /writeFile|appendFile|createWriteStream|openSync\([^,]+,\s*'w/);
+  const blocks = mainSource.split(/ipcMain\.handle\('/).slice(1);
+  for (const block of blocks) {
+    const channel = block.slice(0, block.indexOf("'"));
+    const body = block.slice(0, block.indexOf("\nipcMain.handle(") > 0 ? block.indexOf("\nipcMain.handle(") : block.length);
+    if (channel.startsWith('rekordbox:')) {
+      assert.doesNotMatch(
+        body,
+        /writeFile|appendFile|createWriteStream|openSync\([^,]+,\s*'w/,
+        `${channel} schreibt, obwohl nur gelesen werden darf`
+      );
+    }
+    if (channel.startsWith('datei:write')) {
+      assert.ok(body.includes('assertWritableTarget'), `${channel} prüft die Dialogfreigabe nicht`);
+      assert.ok(body.includes('MAX_WRITE_BYTES'), `${channel} hat kein Größenlimit`);
+    }
+  }
 });
 
 await check('locateRekordboxDatabases und describeEngines laufen ohne Pioneer-Installation', async () => {
@@ -281,6 +317,109 @@ await check('die Build-Konfiguration kann electron-builder nicht mehr ausbremsen
   assert.ok(files.includes('sql.js'), 'files muss sql.js für das asar-Paket nennen');
 });
 
+
+await check('der Produktname ist überall identisch (Umbenennung)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+  const main = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf-8');
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf-8');
+  assert.ok(productNames.includes(pkg.build.productName), 'main.cjs ruft app.setName mit dem Produktnamen auf');
+  assert.ok(main.includes(`title: PRODUCT_NAME`), 'Fenstertitel nutzt PRODUCT_NAME');
+  assert.ok(html.includes('<title>' + pkg.build.productName), 'index.html-Titel weicht ab: ' + html.match(/<title>[^<]*/)?.[0]);
+  assert.strictEqual(pkg.build.productName, 'Airdox_intelligents_Editor');
+  assert.ok(pkg.build.nsis.shortcutName === pkg.build.productName, 'Verknüpfungsname weicht ab');
+});
+
+await check('Schreiben ist nur an dialogbestätigte Orte möglich', async () => {
+  const write = ipcHandlers.get('datei:write');
+  const outside = path.join(sandboxDir, 'einfach-so.wav');
+  await assert.rejects(
+    () => write(null, { filePath: outside, data: Buffer.from('x').toString('base64') }),
+    /nicht in einem Speicherdialog bestätigt/,
+    'Schreiben ohne Dialogfreigabe wurde zugelassen'
+  );
+
+  const target = path.join(sandboxDir, 'projekt.airdoxproj.json');
+  saveDialogResult = { canceled: false, filePath: target };
+  const choice = await ipcHandlers.get('datei:specify-path')(null, { kind: 'project', suggestedName: 'projekt.airdoxproj.json' });
+  assert.strictEqual(choice.filePath, path.resolve(target), 'Dialogpfad wurde verändert zurückgegeben');
+  const result = await write(null, { filePath: target, data: '{\"kind\":\"airdox-intelligents-project\"}', encoding: 'utf8' });
+  assert.strictEqual(result.bytes, fs.statSync(target).size, 'gemeldete Bytezahl stimmt nicht');
+  assert.ok(fs.readFileSync(target, 'utf-8').includes('airdox-intelligents-project'), 'Inhalt fehlt');
+});
+
+await check('ohne Endung ergänzt der Dialog .airdoxproj.json, abbruch liefert null', async () => {
+  const noExtension = path.join(sandboxDir, 'ohneendung');
+  saveDialogResult = { canceled: false, filePath: noExtension };
+  const choice = await ipcHandlers.get('datei:specify-path')(null, { kind: 'project' });
+  assert.ok(choice.filePath.endsWith('.airdoxproj.json'), `Erwartet .airdoxproj.json, bekam ${choice.filePath}`);
+
+  saveDialogResult = { canceled: true };
+  const aborted = await ipcHandlers.get('datei:specify-path')(null, { kind: 'project' });
+  assert.deepStrictEqual(aborted, { canceled: true }, 'Abbruch muss { canceled: true } sein');
+});
+
+await check('Mehrfachexport bleibt im bestätigten Ordner (kein Pfadtrick)', async () => {
+  const dir = path.join(sandboxDir, 'clips');
+  fs.mkdirSync(dir, { recursive: true });
+  openDialogResult = { canceled: false, filePaths: [dir] };
+  const picked = await ipcHandlers.get('datei:pick-directory')(null, {});
+  assert.strictEqual(picked.directory, path.resolve(dir));
+
+  const payload = {
+    directory: dir,
+    files: [
+      { name: '../ausserhalb.wav', data: Buffer.from('RIFF').toString('base64') },
+      { name: '02_zwei.wav', data: Buffer.from('RIFF').toString('base64') },
+    ],
+  };
+  const result = await ipcHandlers.get('datei:write-many')(null, payload);
+  assert.strictEqual(result.written.length, 2, 'beide Dateien müssen geschrieben werden');
+  for (const entry of result.written) {
+    assert.strictEqual(path.dirname(entry.filePath), path.resolve(dir), `Datei landet außerhalb: ${entry.filePath}`);
+  }
+  assert.ok(fs.existsSync(path.join(dir, '02_zwei.wav')), 'Clip-Datei fehlt');
+
+  await assert.rejects(
+    () => ipcHandlers.get('datei:write-many')(null, { directory: path.join(sandboxDir, 'fremd'), files: payload.files }),
+    /Zielordner wurde nicht in einem Ordnerdialog bestätigt/,
+    'Ordner ohne Dialogfreigabe wurde akzeptiert'
+  );
+});
+
+await check('read-text liest Projekte, aber keine anderen Dateitypen', async () => {
+  const project = path.join(sandboxDir, 'lesbar.airdoxproj.json');
+  fs.writeFileSync(project, '{\"kind\":\"airdox-intelligents-project\"}', 'utf-8');
+  const audio = path.join(sandboxDir, 'fremd.wav');
+  fs.writeFileSync(audio, 'RIFF', 'utf-8');
+
+  const result = await ipcHandlers.get('datei:read-text')(null, { filePath: project });
+  assert.ok(result.text.includes('airdox-intelligents-project'), 'Projektinhalt nicht gelesen');
+  await assert.rejects(
+    () => ipcHandlers.get('datei:read-text')(null, { filePath: audio }),
+    /Nur Projektdateien/,
+    'Der Lesekanal akzeptiert fremde Dateitypen'
+  );
+});
+
+await check('die Brücke kennt keinen generischen Schreibkanal', () => {
+  const preload = fs.readFileSync(path.join(root, 'electron/preload.cjs'), 'utf-8');
+  assert.ok(!/require\('node:fs'\)/.test(preload), 'preload darf kein fs direkt importieren');
+  assert.ok(!/ipcRenderer\.sendSync/.test(preload), 'sendSync umgeht die Handler-Prüfung');
+  const main = fs.readFileSync(path.join(root, 'electron/main.cjs'), 'utf-8');
+  assert.ok(main.includes('assertWritableTarget'), 'Schreibpfade werden nicht gegen Dialogfreigaben geprüft');
+});
+
+await check('der Editor schneidet über den geprüften Kern, nicht im Bauteil', () => {
+  const app = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf-8');
+  for (const op of ['copyRangeToEnd', 'moveRangeToStart', 'removeRange', 'insertClipAt', 'replaceRange', 'overdubRange', 'silenceRange', 'cutRange', 'pasteAt']) {
+    assert.ok(app.includes(`from './audio/editOps'`) && new RegExp(`${op}\\(`).test(app), `${op} wird nicht aus editOps aufgerufen`);
+  }
+  // Alte Muster: direkte Sample-Bastelei im Bauteil würde an den Tests vorbeilaufen.
+  assert.ok(!/dest\.set\(src\.subarray/.test(app), 'App.tsx schneidet wieder von Hand im Puffer');
+  assert.ok(app.includes('analyzePcm('), 'Wellenform wird nach Schnitten nicht neu berechnet');
+  assert.ok(app.includes('buildProjectFile(') && app.includes('parseProject('), 'Projekt speichern/öffnen nutzt nicht das Formatmodul');
+});
+
 await check('die Quelle der Fixture bleibt unverändert (Read-Only-Zusage)', async () => {
   const file = path.join(root, 'tests/fixtures/rekordbox6/master.db');
   const before = fs.readFileSync(file);
@@ -290,5 +429,6 @@ await check('die Quelle der Fixture bleibt unverändert (Read-Only-Zusage)', asy
   assert.strictEqual(fs.statSync(file).mtimeMs, beforeMtime, 'Datei wurde neu geschrieben');
 });
 
+fs.rmSync(sandboxDir, { recursive: true, force: true });
 console.log(results.join('\n'));
 console.log(`\n  ${results.length} Prüfungen bestanden\n`);

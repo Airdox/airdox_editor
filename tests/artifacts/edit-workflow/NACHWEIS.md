@@ -44,5 +44,15 @@ Werkzeugleiste: `src/audio/editOps.ts`.
 - 7.500 s entfernt; 4 Marker um 7.500 s nachgezogen, 4 Marker im Bereich gelöscht.
 - 8 Marker vorher → 4 nachher (4 im Schnitt entfernt, 4 nachgezogen)
 
+## Projektdatei (Beweis)
+
+- `nachweis-projekt.airdoxproj.json` – Schema 1, Art „airdox-intelligents-project",
+  1 Spur, 1 Palette-Clip, Arbeitskopie eingebettet
+  (360000 Samples @ 24000 Hz).
+- `nachweis-projekt-arbeitskopie.wav` – dieselbe Arbeitskopie als Tondatei,
+  SHA-256 `0cb6ee8c8240f0289f8c4138a252d442125266b8d64c46bd62fb9a9789efedc0`.
+- Die Datei enthält nur referenzierte, unveränderte Originale (accessMode READ_ONLY,
+  Status MISSING) und lässt sich ohne sie öffnen.
+
 Die WAVs sind Beweise, keine Datenbestände: sie lassen sich mit dem Test jederzeit
 neu erzeugen und können gelöscht werden.

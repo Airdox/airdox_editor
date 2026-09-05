@@ -889,7 +889,6 @@ export default function App() {
       view: { waveformMode, quantize, viewOffset, viewDuration, paletteOpen },
       tracks: buildProjectTracks(),
       clips: paletteClips.map((clip) => ({
-        clip: {
           id: clip.id,
           name: clip.name,
           sourceTrackId: clip.sourceTrackId,
@@ -903,9 +902,8 @@ export default function App() {
           key: clip.key,
           color: clip.color,
           origin: clip.origin,
-        },
-        audio: clipAudioOf(clip) ?? { sampleRate: workingPcm?.sampleRate ?? 44100, channels: [new Float32Array(0)] },
-        miniPeaks: clip.miniPeaks ?? [],
+          miniPeaks: clip.miniPeaks ?? [],
+          pcm: clipAudioOf(clip) ?? { sampleRate: workingPcm?.sampleRate ?? 44100, channels: [new Float32Array(0)] },
       })),
       app: { name: 'Airdox_intelligents_Editor', version: '0.1.0' },
     });
