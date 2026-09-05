@@ -159,11 +159,21 @@ Arbeitskopie – und quantisiert durch 16 Bit um höchstens ein halbes LSB.
   Spalte, Breite mindestens 1,2 px. Ohne `analysis` oder mit `length === 0` wird
   schlicht nichts gezeichnet.
 * `TrackOverview.tsx`: ein Balken pro Eimer über die ganze Breite, gleiche Buckets.
-* Farben in beiden Ansichten aus `src/waveform/colors.ts`: `AMBER` (Standard) rechnet
-  `amberColorCss(peak, low, high)` über die Anker ruhig `122,58,10` → mittel
-  `255,149,0` → laut `255,219,168`, mit Bass-Shift Richtung `255,86,0`; laute Spitzen
-  erhalten einen hellen Kern (`amberCoreAlpha`). `BLUE`, `RGB` und `3BAND` bleiben
-  über das Menü erreichbar.
+* Farben in beiden Ansichten aus `src/waveform/colors.ts`. `AMBER` (Standard)
+  rechnet `amberColorCss(peak, low, high)` über eine HSL-Rampe mit Kontrastkurve
+  (`contrastCurve`): leise `hsl(22°, 0.92, 0.22)` → Grundfarbe `hsl(29°, 1, 0.48)`
+  → laut `hsl(45°, 1, 0.63)`. Bewusst *keine* RGB-Mischung in Richtung Cremeweiß
+  und kein Weißstreifen auf jeder Bar: Höhen heben nur den Rot-/Grünanteil und
+  senken den Blauanteil („heiß“, nicht „hell“), der Kern greift erst ab
+  `peak ≥ 0.62` (`amberCoreAlpha`, max. 0.42) und die heiße Spitze `AMBER_HOT`
+  nur ab `peak ≥ 0.82`. Hintergrund ist `#0a0806`. Die Mini-Vorschau der Clips
+  nutzt dieselbe Rechnung. `BLUE`, `RGB` und `3BAND` bleiben über das Menü
+  erreichbar (dort ebenfalls ohne Dauer-Weißschleier).
+* Die Farbrechnung ist reine Mathematik ohne Canvas und wird deshalb von
+  `tests/waveform-colors.test.ts` geprüft (Sättigung, Weißanteil, Kontrast zum
+  Hintergrund, Kernschwelle, Verdrahtung der Renderer). Das Beweisbild liegt unter
+  `tests/artifacts/waveform-colors/vorschau.png`: graue Marke = alte Rechnung,
+  amber Marke = neue, identisches Signal.
 * Mini-Vorschau der Clips: `extractMiniPeaksPcm(pcm, 48)` (48 Eimer, Schrittweite 4,
   Maximalbetrag, auf 1 begrenzt).
 

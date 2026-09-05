@@ -32,7 +32,7 @@ import {
   GripVertical,
 } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
-import { amberColorCss } from '../waveform/colors';
+import { AMBER_HOT_GLOW, amberColorCss } from '../waveform/colors';
 import { CLIP_DND_MIME, CLIP_LIBRARY_LABEL, encodeClipDragPayload, clipAudioOf } from '../audio/clipLibrary';
 import { pcmToAudioBuffer } from '../audio/pcm';
 
@@ -211,7 +211,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                 }
               >
                 {/* Mini-Wellenform in Bernsteintönen (dieselbe Farbrechnung wie die Spur) */}
-                <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
+                <div className="w-full h-9 bg-[#0a0806] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
                   {clip.miniPeaks && clip.miniPeaks.length > 0 ? (
                     <div className="w-full h-full flex items-center px-1">
                       {clip.miniPeaks.map((pk, idx) => {
@@ -222,7 +222,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                             style={{
                               height: `${h}px`,
                               backgroundColor: amberColorCss(pk, pk, pk * 0.45),
-                              boxShadow: pk > 0.72 ? '0 0 3px rgba(255, 219, 168, 0.55)' : undefined,
+                              boxShadow: pk > 0.72 ? `0 0 3px ${AMBER_HOT_GLOW}` : undefined,
                             }}
                             className="flex-1 mx-[0.5px] rounded-[0.5px]"
                           />

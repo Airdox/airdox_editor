@@ -17,7 +17,16 @@ import {
   SelectionRange,
   CuePoint,
 } from '../types/rekordbox';
-import { amberColorCss, amberCoreAlpha, AMBER_ACCENT, AMBER_ACCENT_LINE } from '../waveform/colors';
+import {
+  AMBER_ACCENT,
+  AMBER_ACCENT_LINE,
+  AMBER_HOT,
+  AMBER_LOOP_TINT,
+  WAVEFORM_BACKGROUNDS,
+  amberColorCss,
+  amberCoreAlpha,
+  amberCoreColor,
+} from '../waveform/colors';
 import {
   CLIP_DND_MIME,
   CLIP_DROP_LABELS,
@@ -178,8 +187,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const height = canvas.height;
       ctx.clearRect(0, 0, width, height);
 
-      // 1. Dark background
-      ctx.fillStyle = '#0b0c0f';
+      // 1. Dark background – warm und fast schwarz, damit die Kurve satt wirkt
+      ctx.fillStyle = WAVEFORM_BACKGROUNDS[waveformMode] ?? WAVEFORM_BACKGROUNDS.AMBER;
       ctx.fillRect(0, 0, width, height);
 
       // Subtle horizontal centerline and amplitude bounds
@@ -323,23 +332,36 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const high = analysis.highEnergy[b];
 
           if (waveformMode === 'AMBER') {
-            // Warmes Bernstein: leise dunkler, laut heller, Bass satt-orange,
-            // Transienten mit hellem Kern – dieselbe Farbmathematik wie in der
-            // Übersichtsspur und in den Tests.
+            // Gesättigtes Bernstein: die Rampe hält die Sättigung, leise Balken
+            // bleiben tiefes Brandorange, laute werden heißes Gold. Dieselbe
+            // Farbmathematik wie in der Übersichtsspur, in den Clips und in den Tests.
             const barH = Math.max(2, peak * maxHalfH);
             ctx.fillStyle = amberColorCss(peak, low, high);
             ctx.fillRect(x, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = `rgba(255, 246, 226, ${amberCoreAlpha(peak, high)})`;
-            ctx.fillRect(x, centerY - 1.5, colW, 3);
+            // Heiße Spitze: nur die lautesten Balken bekommen einen goldglühenden
+            // Abschluss – statt des früheren weißen Streifens quer durch die Kurve.
+            if (peak >= 0.82) {
+              ctx.fillStyle = AMBER_HOT;
+              ctx.fillRect(x, centerY - barH, colW, Math.min(3, barH * 0.34));
+              ctx.fillRect(x, centerY + barH - Math.min(3, barH * 0.34), colW, Math.min(3, barH * 0.34));
+            }
+            const coreA = amberCoreAlpha(peak, high);
+            if (coreA > 0) {
+              ctx.globalAlpha = coreA;
+              ctx.fillStyle = amberCoreColor(peak, high);
+              ctx.fillRect(x, centerY - 1, colW, 2);
+              ctx.globalAlpha = 1;
+            }
           } else if (waveformMode === 'BLUE') {
             // High-contrast electric blue waveform
             const barH = Math.max(2, peak * maxHalfH);
             // Core transient
-            ctx.fillStyle = '#00a2ff';
+            ctx.fillStyle = '#0a9dff';
             ctx.fillRect(x, centerY - barH, colW, barH * 2);
-            // Highlight spikes
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, colW, barH * 0.7);
+            // Highlight-Spikes: gesättigter und dünner als früher, damit die
+            // Kurve nicht zur blassen Fläche wird.
+            ctx.fillStyle = '#8fe9ff';
+            ctx.fillRect(x, centerY - barH * 0.22, colW, barH * 0.44);
           } else if (waveformMode === 'RGB') {
             // Frequency color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
             const barH = Math.max(2, peak * maxHalfH);
@@ -350,9 +372,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
             ctx.fillRect(x, centerY - barH, colW, barH * 2);
 
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.7, high * 0.8)})`;
-            ctx.fillRect(x, centerY - 2, colW, 4);
+            // Bright center spine – nur bei deutlichen Höhen, nicht als Dauergrau
+            if (high > 0.45) {
+              ctx.fillStyle = `rgba(255, 248, 220, ${Math.min(0.34, (high - 0.45) * 0.62)})`;
+              ctx.fillRect(x, centerY - 1, colW, 2);
+            }
           } else {
             // 3BAND Mode: Separate layers
             const lowH = Math.max(1, low * maxHalfH * 0.8);
@@ -365,8 +389,9 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             // Mids (Cyan/Green)
             ctx.fillStyle = '#00e5ff';
             ctx.fillRect(x, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
+            // Highs (warmes Gold statt Reinweiss – Reissweiss wirkt auf dunklem
+            // Grund ausgewaschen)
+            ctx.fillStyle = '#ffe9a8';
             ctx.fillRect(x, centerY - highH * 0.3, colW, highH * 0.6);
           }
         }
@@ -450,10 +475,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const lx2 = timeToPixel(l.end, width);
         if (lx2 < 0 || lx1 > width) return;
 
-        ctx.fillStyle = 'rgba(255, 149, 0, 0.15)';
+        // Dünner Amber-Ton: früher 0.15 – das hat die Wellenform unter dem Loop
+        // zusätzlich blass gemacht.
+        ctx.fillStyle = AMBER_LOOP_TINT;
         ctx.fillRect(Math.max(0, lx1), 18, Math.min(width, lx2) - Math.max(0, lx1), height - 18);
 
-        ctx.strokeStyle = '#ff9500';
+        ctx.strokeStyle = AMBER_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.strokeRect(lx1, 18, lx2 - lx1, height - 18);
       });
@@ -721,7 +748,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           onDropFile?.(e.dataTransfer.files[0]);
         }
       }}
-      className={`relative flex-1 bg-[#0b0c0f] flex overflow-hidden select-none transition-all ${
+      className={`relative flex-1 bg-[#0a0806] flex overflow-hidden select-none transition-all ${
         clipDrag ? 'ring-2 ring-inset' : isDraggingOver ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
       }`}
     >

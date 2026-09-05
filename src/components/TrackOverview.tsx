@@ -7,7 +7,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel, WaveformMode } from '../types/rekordbox';
-import { amberColorCss, waveformPalette } from '../waveform/colors';
+import { AMBER_HOT, DEEP_AMBER, WAVEFORM_BACKGROUNDS, amberColorCss, waveformPalette } from '../waveform/colors';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -92,6 +92,14 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
 
         ctx.fillStyle = fill;
         ctx.fillRect(x, yTop, Math.max(1, stepX * 0.9), barH);
+
+        // Heiße Spitze bei den lautesten Balken – gibt der Übersicht Kontur,
+        // ohne die ganze Kurve aufzuhellen.
+        if (mode === 'AMBER' && peak >= 0.86) {
+          ctx.fillStyle = AMBER_HOT;
+          ctx.fillRect(x, yTop, Math.max(1, stepX * 0.9), 1.5);
+          ctx.fillRect(x, yTop + barH - 1.5, Math.max(1, stepX * 0.9), 1.5);
+        }
       }
     } else {
       // Fallback synthetic overview bars
@@ -100,7 +108,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const x = (i / numBars) * width;
         const amp = 0.3 + 0.6 * Math.sin((i / numBars) * Math.PI) * (0.8 + 0.2 * Math.cos(i * 0.5));
         const barH = amp * (height - 6);
-        ctx.fillStyle = i % 2 === 0 ? '#ff9500' : '#a35a00';
+        ctx.fillStyle = i % 2 === 0 ? '#ff9500' : DEEP_AMBER;
         ctx.fillRect(x, (height - barH) / 2, width / numBars - 1, barH);
       }
     }
@@ -206,7 +214,8 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       }}
       onMouseUp={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
-      className="relative w-full h-8 bg-[#0a0b0d] border border-[#1f2129] rounded-xs cursor-pointer overflow-hidden shadow-inner"
+      className="relative w-full h-8 border border-[#1f2129] rounded-xs cursor-pointer overflow-hidden shadow-inner"
+      style={{ backgroundColor: WAVEFORM_BACKGROUNDS[mode] ?? WAVEFORM_BACKGROUNDS.AMBER }}
     >
       <canvas
         ref={canvasRef}

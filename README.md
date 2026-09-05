@@ -22,7 +22,7 @@ npm install
 npm run dev        # Vite-Dev-Server (Browser-Modus, ohne Read-Only-Bridge)
 npm run desktop    # baut dist und startet die Electron-App
 npm run lint       # tsc --noEmit
-npm test           # XML-, ANLZ-, Last-, SQLCipher-, Edit-, Clip- und Projektsuiten
+npm test           # XML-, ANLZ-, Last-, SQLCipher-, Edit-, Clip-, Farb- und Projektsuiten
 npm run proof:edit-workflow   # Schnitt-Nachweis inklusive WAVs und NACHWEIS.md
 npm run proof:clip-library    # Clip-Bibliothek: Konsistenz, Drag & Drop, Ablagezeit
 npm run proof:project        # Projektdatei: Speichern, Öffnen, Validierung
