@@ -6,20 +6,48 @@
  */
 
 import { DataOrigin, WaveformAnalysisData } from '../types/rekordbox';
+import { PcmAudio, pcmSampleCount } from '../audio/pcm';
 
 export function analyzeAudioBuffer(
   buffer: AudioBuffer,
   origin: DataOrigin = DataOrigin.LOCAL_ANALYSIS
 ): WaveformAnalysisData {
-  const sampleRate = buffer.sampleRate;
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
-  const length = buffer.length;
+  const pcm: PcmAudio = {
+    sampleRate: buffer.sampleRate,
+    channels: Array.from({ length: buffer.numberOfChannels }, (_, ch) => buffer.getChannelData(ch)),
+  };
+  return analyzePcm(pcm, origin);
+}
+
+/**
+ * Dieselbe Analyse auf dem reinen PCM-Modell – ohne AudioContext, damit nach
+ * jedem Schnitt dieselbe Berechnung läuft, die auch die Tests prüfen.
+ */
+export function analyzePcm(
+  pcm: PcmAudio,
+  origin: DataOrigin = DataOrigin.LOCAL_ANALYSIS
+): WaveformAnalysisData {
+  const sampleRate = pcm.sampleRate || 44100;
+  if (pcmSampleCount(pcm) === 0) {
+    return {
+      length: 0,
+      peaks: new Float32Array(0),
+      peaksL: new Float32Array(0),
+      peaksR: new Float32Array(0),
+      lowEnergy: new Float32Array(0),
+      midEnergy: new Float32Array(0),
+      highEnergy: new Float32Array(0),
+      origin,
+    };
+  }
+  const left = pcm.channels[0] ?? new Float32Array(0);
+  const right = pcm.channels.length > 1 ? pcm.channels[1] : left;
+  const length = left.length;
 
   // Aim for ~150-200 buckets per second of audio for ultra-crisp DJ zoom levels
   const bucketsPerSecond = 180;
   const totalBuckets = Math.max(100, Math.floor((length / sampleRate) * bucketsPerSecond));
-  const samplesPerBucket = Math.floor(length / totalBuckets);
+  const samplesPerBucket = Math.max(1, Math.floor(length / totalBuckets));
 
   const peaks = new Float32Array(totalBuckets);
   const peaksL = new Float32Array(totalBuckets);
@@ -106,7 +134,15 @@ export function analyzeAudioBuffer(
  * Extracts mini peak profile (e.g. 64 buckets) for Palette clips
  */
 export function extractMiniPeaks(buffer: AudioBuffer, numBuckets: number = 64): number[] {
-  const left = buffer.getChannelData(0);
+  return extractMiniPeaksPcm(
+    { sampleRate: buffer.sampleRate, channels: Array.from({ length: buffer.numberOfChannels }, (_, ch) => buffer.getChannelData(ch)) },
+    numBuckets
+  );
+}
+
+/** Mini-Peaks auf dem PCM-Modell (Palette-Vorschau, auch in Tests nutzbar). */
+export function extractMiniPeaksPcm(pcm: PcmAudio, numBuckets: number = 64): number[] {
+  const left = pcm.channels[0] ?? new Float32Array(0);
   const len = left.length;
   const step = Math.floor(len / numBuckets);
   const result: number[] = [];

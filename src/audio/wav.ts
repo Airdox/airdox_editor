@@ -48,14 +48,16 @@ export function encodeWav(pcm: PcmAudio): Uint8Array {
   str(36, 'data');
   view.setUint32(40, dataSize, true);
 
+  const toInt16 = (value: number) => Math.max(-32768, Math.min(32767, Math.round(value * 32768)));
+
   let offset = 44;
   for (let i = 0; i < numSamples; i++) {
     const sL = Math.max(-1, Math.min(1, left[i] ?? 0));
     const sR = Math.max(-1, Math.min(1, right[i] ?? 0));
-    view.setInt16(offset, sL < 0 ? sL * 0x8000 : sL * 0x7fff, true);
+    view.setInt16(offset, toInt16(sL), true);
     offset += 2;
     if (channels > 1) {
-      view.setInt16(offset, sR < 0 ? sR * 0x8000 : sR * 0x7fff, true);
+      view.setInt16(offset, toInt16(sR), true);
       offset += 2;
     }
   }

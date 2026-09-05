@@ -160,21 +160,25 @@ function shiftLoops(
     let touched = false;
     if (options.removeInside) {
       const [a, b] = options.removeInside;
-      if (start < a && end > b) {
-        // Loop umspannt den Schnitt: innen entfernen, Länge des Schnitts abziehen
-        end -= b - a;
+      const removedLen = b - a;
+      if (end <= a || start >= b) {
+        if (start >= b) {
+          start -= removedLen;
+          end -= removedLen;
+          touched = true;
+        }
+      } else if (start < a && end > b) {
+        end -= removedLen; // der Loop umspannt den Schnitt: innen fehlt genau der Schnitt
         touched = true;
-      } else if (start >= a && start < b) {
-        start = a;
-        end = Math.max(a, end - (b - a));
+      } else if (start < a) {
+        end = a; // endet imremoveden Bereich: bis zur Nahtstelle behalten
         touched = true;
-      } else if (end > a && end <= b) {
-        end = a;
+      } else if (end > b) {
+        start = a; // beginnt imremoveden Bereich: auf die Nahtstelle ziehen
+        end -= removedLen;
         touched = true;
-      } else if (start >= b) {
-        start -= b - a;
-        end -= b - a;
-        touched = true;
+      } else {
+        continue; // lag vollständig im removeden Bereich
       }
       if (end <= start) continue;
     }
