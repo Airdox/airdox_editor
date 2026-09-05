@@ -299,6 +299,16 @@ await check('Build-Guard erkennt den node-gyp-Fehlerpfad (Leerzeichen + natives 
 await check('die Build-Konfiguration kann electron-builder nicht mehr ausbremsen', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
   assert.strictEqual(pkg.build.npmRebuild, false, 'npmRebuild:false fehlt → electron-builder startet node-gyp');
+  // Die dokumentierten Kommandos müssen es auch wirklich sein (Doku ↔ Realität).
+  const scripts = pkg.scripts;
+  assert.ok(scripts['check:build-env']?.includes('tools/check-build-env.cjs'), 'npm run check:build-env fehlt');
+  for (const name of ['package:win', 'package:win:installer', 'package:win:portable']) {
+    const script = scripts[name] || '';
+    assert.ok(script.includes('--config.npmRebuild=false'), `${name} erzwingt npmRebuild=false nicht`);
+    assert.ok(script.includes('npm run check:build-env'), `${name} läuft ohne Build-Guard`);
+  }
+  assert.ok(scripts.test?.includes('tests/clip-library.test.ts'), 'npm test überspringt die Clip-Bibliothek');
+  assert.ok(scripts.test?.includes('tests/project-io.test.ts'), 'npm test überspringt die Projektdatei-Suite');
   // Ein String an dieser Stelle wird als Provider-Name interpretiert und bricht
   // den Build mit 'Cannot find module for publisher "never"'.
   assert.strictEqual(pkg.build.publish, null, 'build.publish muss null sein (nicht "never")');

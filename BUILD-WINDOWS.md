@@ -82,9 +82,27 @@ mit installiertem Visual Studio nichts: node-gyp bricht dann mit
 Eingabeaufforderung oder PowerShell im Projektordner:
 
 ```bat
+git clone https://github.com/Airdox/airdox_editor.git C:\Dev\airdox_editor
+cd C:\Dev\airdox_editor
+git checkout arena/01a07073-airdox-editor
+git config core.longpaths true
 npm ci
+npm run check:build-env
 npm run package:win
 ```
+
+`npm run package:win` prüft zuerst die Umgebung (Guard), baut `dist/` und erzeugt
+Installer **und** Portable-EXE in `release\`:
+
+```
+release\Airdox_intelligents_Editor-0.1.0-win-x64.exe            (NSIS-Installer)
+release\Airdox_intelligents_Editor-Portable-0.1.0-win-x64.exe  (tragbare Variante)
+```
+
+Nur einen der beiden Läufe gibt es mit `npm run package:win:installer` bzw.
+`npm run package:win:portable`. Beide Skripte hängen `--config.npmRebuild=false`
+hinten an, damit ein altes oder editiertes `package.json` den node-gyp-Lauf nicht
+reaktivieren kann.
 
 > **Wichtig bei OneDrive / Desktop-Ordnern:** Der Projektordner sollte **nicht**
 > unter OneDrive (oder einem anderen Synchronisationsclient) liegen. Der Sync
