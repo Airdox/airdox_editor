@@ -3,6 +3,10 @@ const { access, readFile, stat } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
+const {
+  readRekordboxDatabase,
+  locateRekordboxDatabases,
+} = require('./dbReader.cjs');
 
 let mainWindow;
 
@@ -87,8 +91,65 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
     ],
   });
 
-  // File selection returns a path only; opening/parsing is added in the ANLZ phase.
+  // File selection returns a path only; the selected file is opened read
+  // only through rekordbox:read-analysis-file.
   return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+});
+
+ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Rekordbox-Datenbank auswählen (nur lesend)',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Rekordbox Datenbank', extensions: ['db'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+});
+
+ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
+  // Read-only directory scan of the standard Pioneer app-data folders.
+  return locateRekordboxDatabases();
+});
+
+ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
+  if (typeof dbPath !== 'string' || !dbPath.trim()) {
+    throw new Error('Kein gültiger Datenbankpfad übergeben.');
+  }
+  // The database is opened exclusively with SQLite readonly mode.
+  return readRekordboxDatabase(dbPath);
+});
+
+ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    throw new Error('Kein gültiger Analysepfad übergeben.');
+  }
+
+  const allowedExtensions = new Set(['.dat', '.ext', '.2ex']);
+  if (!allowedExtensions.has(path.extname(filePath).toLowerCase())) {
+    throw new Error('Die ausgewählte Datei ist keine unterstützte Rekordbox-ANLZ-Datei.');
+  }
+
+  const localPath = path.resolve(filePath);
+  await access(localPath, constants.R_OK);
+  const details = await stat(localPath);
+  if (!details.isFile()) throw new Error('Die ANLZ-Analysequelle verweist nicht auf eine Datei.');
+
+  // ANLZ files are a few hundred KB to a few MB; the boundary keeps the
+  // renderer process safe while still accepting every real-world file.
+  if (details.size > 1024 * 1024 * 1024) {
+    throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
+  }
+
+  const data = await readFile(localPath);
+  return {
+    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    path: localPath,
+    size: details.size,
+    modifiedAt: details.mtimeMs,
+    accessMode: 'READ_ONLY',
+  };
 });
 
 ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {

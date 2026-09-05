@@ -11,6 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
+  /** Own calculation used as a clearly labeled fallback when no Rekordbox
+   * source (ANLZ/DB/audio) provides the data. */
+  GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
 export type WaveformMode = 'BLUE' | 'RGB' | '3BAND';
@@ -57,18 +60,22 @@ export interface CuePoint {
 
 export interface PhraseSection {
   id: string;
-  name: 'INTRO' | 'UP' | 'CHORUS' | 'BREAKDOWN' | 'DROP' | 'OUTRO' | 'VERSE' | 'BRIDGE';
+  name: 'INTRO' | 'UP' | 'DOWN' | 'CHORUS' | 'BREAKDOWN' | 'DROP' | 'OUTRO' | 'VERSE' | 'BRIDGE';
   startBar: number;
   endBar: number;
   startTime: number;
   endTime: number;
   color: string;
+  /** Where the phrase data came from; own templates are GENERATED_FALLBACK. */
+  origin?: DataOrigin;
 }
 
 export interface ExtractedDatabaseRecord {
   trackId: string;
   databaseSource: 'REKORDBOX_XML' | 'REKORDBOX_DB' | 'REKORDBOX_ANLZ' | 'LOCAL_EXTRACT';
   anlzTagsFound: string[];
+  /** Non-fatal notices produced while decoding the analysis source. */
+  anlzWarnings?: string[];
   memoryCuesCount: number;
   hotCuesCount: number;
   loopsCount: number;
@@ -154,12 +161,14 @@ export interface TrackModel {
   artist: string;
   album: string;
   genre?: string;
+  label?: string;
   rating?: number; // 0 to 5 stars
   playCount?: number; // Rekordbox DJ-Play Count
   year?: string;
   comments?: string;
   dateAdded?: string;
   remixer?: string;
+  isrc?: string;
   bpm: number;
   key: string; // e.g. "2A" or "Fm"
   duration: number; // seconds
@@ -179,6 +188,15 @@ export interface TrackModel {
   originalMedia?: OriginalMediaReference;
   workingSegments: EditSegment[];
 }
+
+/**
+ * Compact collection entry shared by the XML importer and the Rekordbox
+ * database importer (no dense beat grids, no audio buffer until loaded).
+ */
+export type PartialTrackModel = Partial<TrackModel> & {
+  label?: string;
+  fileSize?: number;
+};
 
 export interface SelectionRange {
   start: number; // seconds

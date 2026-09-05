@@ -39,7 +39,15 @@ interface DatabaseExtractionModalProps {
   onSelectCue?: (time: number) => void;
   onLoadTrackByIndex?: (index: number) => void;
   onImportAnlzFile?: (file: File) => void;
+  /** Windows desktop path: opens the analysis file via the read-only bridge. */
+  onImportAnlzFromDesktop?: () => void;
   onImportXmlFile?: (file: File) => void;
+  /** Rekordbox 6/7 SQLCipher database (master.db / OneLibrary), read-only. */
+  onOpenRekordboxDatabase?: () => void;
+  onLocateRekordboxDatabases?: () => Promise<
+    Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+  >;
+  onLoadRekordboxDatabase?: (dbPath: string, sourceLabel?: string) => void | Promise<void>;
 }
 
 export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = ({
@@ -51,10 +59,29 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   onSelectCue,
   onLoadTrackByIndex,
   onImportAnlzFile,
+  onImportAnlzFromDesktop,
   onImportXmlFile,
+  onOpenRekordboxDatabase,
+  onLocateRekordboxDatabases,
+  onLoadRekordboxDatabase,
 }) => {
   const currentTrack = track || activeTrack;
   const [activeTab, setActiveTab] = useState<'memoryCues' | 'waveform' | 'phrases' | 'sources'>('memoryCues');
+  const [databaseCandidates, setDatabaseCandidates] = useState<
+    Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+  >([]);
+  const [searchingDatabase, setSearchingDatabase] = useState(false);
+
+  const handleDiscoverDatabases = async () => {
+    if (!onLocateRekordboxDatabases || searchingDatabase) return;
+    setSearchingDatabase(true);
+    try {
+      const found = await onLocateRekordboxDatabases();
+      setDatabaseCandidates(found);
+    } finally {
+      setSearchingDatabase(false);
+    }
+  };
   const [filterType, setFilterType] = useState<'ALL' | 'MEMORY' | 'HOT_CUE'>('ALL');
 
   if (!isOpen || !currentTrack) return null;
@@ -69,6 +96,21 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
 
   const analysis = currentTrack.analysis;
   const dbRecord = currentTrack.databaseRecord;
+  const anlzTags = new Set<string>(dbRecord?.anlzTagsFound ?? []);
+  const hasAnlzTag = (tag: string) => anlzTags.has(tag);
+  const tagRow = (tag: string, label: string, detail: string) => (
+    <div className="flex justify-between" key={tag}>
+      <span className="text-neutral-400">{label}:</span>
+      <span
+        className={`font-mono flex items-center space-x-1 ${
+          hasAnlzTag(tag) ? 'text-[#10b981]' : 'text-neutral-600'
+        }`}
+      >
+        {hasAnlzTag(tag) ? <CheckCircle2 size={12} /> : <span className="text-neutral-600">—</span>}
+        <span>{hasAnlzTag(tag) ? detail : 'Nicht enthalten'}</span>
+      </span>
+    </div>
+  );
 
   // Calculate average energies
   let avgLow = 0;
@@ -440,34 +482,29 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
 
                 <div className="bg-[#14161c] border border-[#22242e] p-3 rounded space-y-1.5">
                   <div className="text-neutral-400 font-semibold mb-1">Rekordbox Tag-Kompatibilität</div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-400">PWV3 (Waveform 3-Band):</span>
-                    <span className="text-[#10b981] font-mono flex items-center space-x-1">
-                      <CheckCircle2 size={12} />
-                      <span>Geladen</span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-400">PWV5 (High-Res RGB):</span>
-                    <span className="text-[#10b981] font-mono flex items-center space-x-1">
-                      <CheckCircle2 size={12} />
-                      <span>Geladen</span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-400">PCOB (Memory Cues):</span>
-                    <span className="text-[#10b981] font-mono flex items-center space-x-1">
-                      <CheckCircle2 size={12} />
-                      <span>{memoryCues.length} Cues</span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-400">PSSI (Phrasen):</span>
-                    <span className="text-[#10b981] font-mono flex items-center space-x-1">
-                      <CheckCircle2 size={12} />
-                      <span>{currentTrack.phrases?.length || 0} Phrasen</span>
-                    </span>
-                  </div>
+                  {tagRow('PQTZ', 'PQTZ (Beatgrid)', `${currentTrack.beatGrid.beats.length || 0} Beats`)}
+                  {tagRow('PCOB', 'PCOB (Classic Cues)', `${currentTrack.cues.length} Cues`)}
+                  {tagRow('PCO2', 'PCO2 (Extended Cues)', `${currentTrack.cues.length} Cues`)}
+                  {tagRow('PWV3', 'PWV3 (Waveform 1-Band)', 'Geladen')}
+                  {tagRow('PWV5', 'PWV5 (High-Res RGB)', 'Geladen')}
+                  {tagRow('PWV6', 'PWV6 (3-Band Preview)', 'Geladen')}
+                  {tagRow('PWV7', 'PWV7 (3-Band Detail)', 'Geladen')}
+                  {tagRow('PSSI', 'PSSI (Song-Struktur)', `${currentTrack.phrases?.length || 0} Phrasen`)}
+                  {dbRecord && dbRecord.anlzWarnings && dbRecord.anlzWarnings.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-[#22242e]">
+                      <div className="text-neutral-500 text-[10px] uppercase tracking-wide mb-1">
+                        Analysevermerke (Read-Only)
+                      </div>
+                      <div className="space-y-0.5 text-[10px] text-neutral-400 font-mono">
+                        {dbRecord.anlzWarnings.slice(0, 6).map((warning, idx) => (
+                          <div key={idx}>• {warning}</div>
+                        ))}
+                        {dbRecord.anlzWarnings.length > 6 && (
+                          <div>… {dbRecord.anlzWarnings.length - 6} weitere</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -527,7 +564,7 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
           {/* 4. Import / Sources Tab */}
           {activeTab === 'sources' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* ANLZ File Import */}
                 <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
                   <div>
@@ -536,26 +573,43 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                       <span>Pioneer ANLZ Binärdatei (.DAT / .EXT / .2EX)</span>
                     </div>
                     <p className="text-[11px] text-neutral-400">
-                      Enthält PCOB (Memory Cues), PWV3/PWV5 (Waveform-Cache), PQTZ (Beatgrid) und PSSI.
+                      Enthält PCOB/PCO2 (Memory &amp; Hot Cues), PWV3/PWV5/PWV6/PWV7 (Waveform-Cache), PQTZ (Beatgrid) und PSSI (Song-Struktur).
+                    </p>
+                    <p className="text-[10px] text-neutral-500 mt-1">
+                      ANLZ-Dateien werden ausschließlich lesend geöffnet; die Quelle bleibt unverändert.
                     </p>
                   </div>
 
-                  <label className="mt-4 cursor-pointer w-full py-2 bg-[#0088ff] hover:bg-[#0077e6] text-white rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5">
-                    <Upload size={13} />
-                    <span>ANLZ-Datei auswählen (.DAT / .EXT)...</span>
-                    <input
-                      type="file"
-                      accept=".DAT,.EXT,.2EX,.dat,.ext,.2ex"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          onImportAnlzFile(file);
+                  <div className="space-y-2 mt-4">
+                    {typeof window !== 'undefined' && window.rekordboxDesktop && (
+                      <button
+                        onClick={() => {
+                          onImportAnlzFromDesktop?.();
                           onClose();
-                        }
-                      }}
-                    />
-                  </label>
+                        }}
+                        className="w-full py-2 bg-[#0088ff] hover:bg-[#0077e6] text-white rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                      >
+                        <Upload size={13} />
+                        <span>Im Windows-Dateidialog auswählen (nur lesend)</span>
+                      </button>
+                    )}
+                    <label className="cursor-pointer w-full py-2 bg-[#0088ff]/15 hover:bg-[#0088ff]/25 border border-[#0088ff]/40 text-[#4fc3ff] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5">
+                      <Upload size={13} />
+                      <span>ANLZ-Datei auswählen (.DAT / .EXT)...</span>
+                      <input
+                        type="file"
+                        accept=".DAT,.EXT,.2EX,.dat,.ext,.2ex"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            onImportAnlzFile(file);
+                            onClose();
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 {/* XML Import */}
@@ -586,6 +640,76 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                       }}
                     />
                   </label>
+                </div>
+
+                {/* Rekordbox 6/7 SQLCipher Database */}
+                <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center space-x-2 text-white font-semibold text-xs mb-1">
+                      <Database size={15} className="text-[#10b981]" />
+                      <span>Rekordbox 6/7 Datenbank (master.db / OneLibrary)</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Lokale Rekordbox-Bibliothek (djmdContent/djmdCue) oder OneLibrary-Export mit SQLCipher. Wird ausschließlich lesend geöffnet.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 mt-4">
+                    {onOpenRekordboxDatabase && (
+                      <button
+                        onClick={() => {
+                          onOpenRekordboxDatabase();
+                          onClose();
+                        }}
+                        className="w-full py-2 bg-[#10b981] hover:bg-[#0d9e73] text-white rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                      >
+                        <Upload size={13} />
+                        <span>Datenbankdatei auswählen... (.db, nur lesend)</span>
+                      </button>
+                    )}
+                    {onLocateRekordboxDatabases && (
+                      <button
+                        onClick={handleDiscoverDatabases}
+                        className="w-full py-2 bg-[#115c48] hover:bg-[#157055] border border-[#10b981]/40 text-[#7ce8c3] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                      >
+                        <Database size={13} />
+                        <span>{searchingDatabase ? 'Suche...' : 'Standardordner durchsuchen'}</span>
+                      </button>
+                    )}
+                    {databaseCandidates.length > 0 && (
+                      <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                        {databaseCandidates.map((candidate) => (
+                          <div
+                            key={candidate.path}
+                            className="flex items-center justify-between gap-2 bg-[#0f1015] border border-[#22242e] rounded px-2 py-1.5"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-mono text-neutral-300 truncate">
+                                {candidate.label}
+                              </div>
+                              <div className="text-[9px] text-neutral-500 font-mono truncate">
+                                {candidate.kind === 'ONE_LIBRARY' ? 'OneLibrary' : 'master.db'}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                onLoadRekordboxDatabase?.(candidate.path, candidate.label);
+                                onClose();
+                              }}
+                              className="px-2 py-1 bg-[#10b981]/20 hover:bg-[#10b981] text-[#7ce8c3] hover:text-white rounded text-[10px] border border-[#10b981]/40 flex-shrink-0 transition-colors"
+                            >
+                              Laden
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {databaseCandidates.length === 0 && !searchingDatabase && onLocateRekordboxDatabases && (
+                      <p className="text-[10px] text-neutral-500">
+                        Keine Datenbank im Standardordner gefunden. Du kannst die Datei auch manuell auswählen.
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 

@@ -228,10 +228,10 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
             <Disc size={17} className="text-[#0088ff] animate-pulse" />
             <div>
               <span className="font-bold text-white text-xs tracking-wide">
-                Rekordbox XML Track-Auswahl
+                Rekordbox Track-Auswahl
               </span>
               <span className="text-[10.5px] text-neutral-400 ml-2 font-mono">
-                {fileName} ({xmlTracks.length} Tracks in XML)
+                {fileName} ({xmlTracks.length} Tracks)
               </span>
             </div>
           </div>
