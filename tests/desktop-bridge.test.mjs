@@ -307,6 +307,17 @@ await check('die Build-Konfiguration kann electron-builder nicht mehr ausbremsen
     assert.ok(script.includes('--config.npmRebuild=false'), `${name} erzwingt npmRebuild=false nicht`);
     assert.ok(script.includes('npm run check:build-env'), `${name} läuft ohne Build-Guard`);
   }
+  // Dokumentierte Dateinamen müssen aus den Mustern in package.json folgen.
+  const productName = pkg.build.productName;
+  const version = pkg.version;
+  const names = {
+    installer: `${productName}-${version}-win-x64.exe`,
+    portable: `${productName}-Portable-${version}-x64.exe`,
+  };
+  const docs = fs.readFileSync(path.join(root, 'BUILD-WINDOWS.md'), 'utf-8');
+  for (const file of Object.values(names)) {
+    assert.ok(docs.includes(file), `BUILD-WINDOWS.md nennt ${file} nicht, obwohl package.json es so benennt`);
+  }
   assert.ok(scripts.test?.includes('tests/clip-library.test.ts'), 'npm test überspringt die Clip-Bibliothek');
   assert.ok(scripts.test?.includes('tests/project-io.test.ts'), 'npm test überspringt die Projektdatei-Suite');
   // Ein String an dieser Stelle wird als Provider-Name interpretiert und bricht

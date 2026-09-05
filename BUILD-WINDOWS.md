@@ -95,9 +95,12 @@ npm run package:win
 Installer **und** Portable-EXE in `release\`:
 
 ```
-release\Airdox_intelligents_Editor-0.1.0-win-x64.exe            (NSIS-Installer)
-release\Airdox_intelligents_Editor-Portable-0.1.0-win-x64.exe  (tragbare Variante)
+release\Airdox_intelligents_Editor-0.1.0-win-x64.exe           (NSIS-Installer)
+release\Airdox_intelligents_Editor-Portable-0.1.0-x64.exe     (tragbare Variante)
 ```
+
+(Die Portable-Datei hat kein `-win` im Namen – ihr `artifactName`-Muster in
+`package.json` lautet `${productName}-Portable-${version}-${arch}.${ext}`.)
 
 Nur einen der beiden Läufe gibt es mit `npm run package:win:installer` bzw.
 `npm run package:win:portable`. Beide Skripte hängen `--config.npmRebuild=false`
