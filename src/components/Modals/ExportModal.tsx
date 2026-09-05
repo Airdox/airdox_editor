@@ -18,6 +18,7 @@ interface ExportModalProps {
   track: TrackModel;
   clips?: PaletteClip[];
   workingAudioBuffer: AudioBuffer | null;
+  protectedPaths?: string[];
   onExportComplete?: (telemetry: OperationTelemetry) => void;
 }
 
@@ -27,6 +28,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   track,
   clips = [],
   workingAudioBuffer,
+  protectedPaths,
   onExportComplete,
 }) => {
   const [format, setFormat] = useState<'WAV' | 'XML' | 'JSON'>('WAV');
@@ -36,12 +38,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   if (!isOpen) return null;
 
-  const triggerActualDownload = () => {
+  const triggerActualDownload = async () => {
     setShowLayerInspector(false);
     setIsExporting(true);
     setSuccessMsg(null);
 
     try {
+      let defaultName = '';
+      let kind: 'WAV' | 'XML' | 'JSON' = 'WAV';
+      let bytes: Uint8Array;
+
       if (format === 'WAV') {
         const bufferToExport = workingAudioBuffer || track.audioBuffer;
         if (!bufferToExport) {
@@ -49,34 +55,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           setIsExporting(false);
           return;
         }
-
         const wavBlob = audioEngine.exportToWavBlob(bufferToExport);
-        const url = URL.createObjectURL(wavBlob);
-        const a = document.createElement('a');
-        a.href = url;
+        bytes = new Uint8Array(await wavBlob.arrayBuffer());
         const cleanTitle = track.title.replace(/[^a-zA-Z0-9_-]/g, '_');
-        a.download = `${cleanTitle}_EDIT_MASTER.wav`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        setSuccessMsg(`Master-Audio erfolgreich als "${cleanTitle}_EDIT_MASTER.wav" exportiert.`);
+        defaultName = `${cleanTitle}_EDIT_MASTER.wav`;
+        kind = 'WAV';
       } else if (format === 'XML') {
         const xmlString = exportToRekordboxXml(track);
-        const blob = new Blob([xmlString], { type: 'text/xml' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
+        bytes = new TextEncoder().encode(xmlString);
         const cleanTitle = track.title.replace(/[^a-zA-Z0-9_-]/g, '_');
-        a.download = `${cleanTitle}_rekordbox.xml`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        setSuccessMsg(`Rekordbox XML erfolgreich als "${cleanTitle}_rekordbox.xml" exportiert.`);
-      } else if (format === 'JSON') {
+        defaultName = `${cleanTitle}_rekordbox.xml`;
+        kind = 'XML';
+      } else {
         const projectData = {
           version: '2.0.0',
           track: {
@@ -91,17 +81,45 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           },
           exportedAt: new Date().toISOString(),
         };
-        const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+        bytes = new TextEncoder().encode(JSON.stringify(projectData, null, 2));
+        defaultName = 'rekordbox_project_state.json';
+        kind = 'JSON';
+      }
+
+      // Desktop: save through the native dialog, which only writes to a NEW
+      // file and refuses to overwrite an original Rekordbox source.
+      if (window.rekordboxDesktop) {
+        const res = await window.rekordboxDesktop.saveExportFile({
+          kind,
+          data: bytes,
+          defaultName,
+          protectedPaths,
+        });
+        if (res.saved) {
+          setSuccessMsg(`${kind} erfolgreich als "${res.path?.split(/[\\\\/]/).pop() || defaultName}" gespeichert.`);
+        } else {
+          setIsExporting(false);
+          return;
+        }
+      } else {
+        // Browser fallback download.
+        const mime = kind === 'WAV' ? 'audio/wav' : kind === 'XML' ? 'text/xml' : 'application/json';
+        const blob = new Blob([bytes as BlobPart], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'rekordbox_project_state.json';
+        a.download = defaultName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-
-        setSuccessMsg('Projektzustand erfolgreich gespeichert.');
+        setSuccessMsg(
+          kind === 'WAV'
+            ? `Master-Audio erfolgreich als "${defaultName}" exportiert.`
+            : kind === 'XML'
+            ? `Rekordbox XML erfolgreich als "${defaultName}" exportiert.`
+            : 'Projektzustand erfolgreich gespeichert.'
+        );
       }
 
       onExportComplete?.({
@@ -113,7 +131,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       });
     } catch (err) {
       console.error(err);
-      alert('Fehler beim Exportieren.');
+      alert(`Fehler beim Exportieren: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsExporting(false);
     }

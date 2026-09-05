@@ -4,7 +4,7 @@
  * Authoritative Visual Lock implementation matching screenshots 01, 02, and 03.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   TrackModel,
   PartialTrackModel,
@@ -28,6 +28,12 @@ import {
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import {
+  serializeProject,
+  deserializeProject,
+  base64ToBytes,
+  SerializedTrack,
+} from './rekordbox/projectFile';
 
 import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
@@ -106,8 +112,85 @@ function buildCollectionTrackModel(
   };
 }
 
-export default function App() {
-  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
+/** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
+async function decodeWavBase64(audioCtx: AudioContext, base64?: string): Promise<AudioBuffer | undefined> {
+  if (!base64) return undefined;
+  const bytes = base64ToBytes(base64);
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return audioCtx.decodeAudioData(ab);
+}
+
+/**
+ * Rebuilds a persisted project track into a playable TrackModel. The original
+ * audio is NOT duplicated here for Rekordbox-sourced tracks (it is re-opened
+ * from its read-only path); embedded clip/original audio is decoded on demand.
+ */
+async function rebuildTrackFromSerialized(
+  st: SerializedTrack,
+  audioCtx: AudioContext
+): Promise<TrackModel> {
+  const segments: EditSegment[] = [];
+  for (const seg of st.workingSegments) {
+    const clipBuffer = await decodeWavBase64(audioCtx, seg.clipWavBase64);
+    segments.push({
+      id: seg.id,
+      type: seg.type,
+      trackId: seg.trackId,
+      sourceStart: seg.sourceStart,
+      sourceEnd: seg.sourceEnd,
+      projectStart: seg.projectStart,
+      projectDuration: seg.projectDuration,
+      clipId: seg.clipId,
+      clipBuffer,
+      gain: seg.gain,
+    });
+  }
+
+  const embeddedOriginal = st.originalAudioBase64
+    ? await decodeWavBase64(audioCtx, st.originalAudioBase64)
+    : undefined;
+
+  return {
+    id: st.id,
+    title: st.title,
+    artist: st.artist,
+    album: st.album,
+    genre: st.genre,
+    label: st.label,
+    rating: st.rating,
+    playCount: st.playCount,
+    year: st.year,
+    comments: st.comments,
+    dateAdded: st.dateAdded,
+    remixer: st.remixer,
+    isrc: st.isrc,
+    bpm: st.bpm,
+    key: st.key,
+    duration: st.duration,
+    sampleRate: st.sampleRate,
+    channels: st.channels,
+    originalSha256: st.originalSha256,
+    isOriginalUntouched: st.isOriginalUntouched,
+    audioBuffer: embeddedOriginal ?? null,
+    beatGrid: buildBeatGridFromTempo(
+      st.beatGrid.firstBeat,
+      st.beatGrid.bpm,
+      st.duration,
+      st.beatGrid.meter,
+      st.origin
+    ),
+    cues: st.cues,
+    loops: st.loops,
+    analysis: null,
+    origin: st.origin,
+    phrases: st.phrases,
+    rawXmlAttributes: st.rawXmlAttributes,
+    originalMedia: st.originalMedia,
+    workingSegments: segments,
+  };
+}
+
+export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
   const [projectName, setProjectName] = useState<string>('New Project');
   const [tracks, setTracks] = useState<TrackModel[]>([]);
   const [activeTrackId, setActiveTrackId] = useState<string>('');
@@ -164,6 +247,18 @@ export default function App() {
     setFeedbackTelemetry(telemetry);
     setFeedbackModalOpen(true);
   }, []);
+
+  // Original source paths that the export/save bridge must never overwrite.
+  const protectedPaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of tracks) {
+      const location = t.originalMedia?.location;
+      const resolved = t.originalMedia?.resolvedPath;
+      if (location) set.add(location);
+      if (resolved) set.add(resolved);
+    }
+    return Array.from(set);
+  }, [tracks]);
 
   // Hidden file inputs
   const xmlFileInputRef = useRef<HTMLInputElement>(null);
@@ -1377,6 +1472,167 @@ export default function App() {
     }
   };
 
+  // ---- Phase 4: Project persistence & desktop write path -----------------
+
+  const sanitizeFileName = (name: string) => name.replace(/[\\/:*?"<>|]/g, '_');
+
+  const handleSaveProject = useCallback(async () => {
+    const doc = serializeProject({
+      projectName,
+      activeTrackId,
+      selection,
+      tracks,
+      paletteClips,
+    });
+    const defaultName = `${sanitizeFileName(projectName) || 'project'}.airdox.json`;
+    const data = new TextEncoder().encode(doc);
+
+    try {
+      if (window.rekordboxDesktop) {
+        const res = await window.rekordboxDesktop.saveExportFile({
+          kind: 'PROJECT',
+          data,
+          defaultName,
+          protectedPaths,
+        });
+        if (res.saved) {
+          showOperationFeedback({
+            title: 'Projekt gespeichert',
+            operationType: 'EXPORT',
+            description: `Projekt "${projectName}" als "${res.path?.split(/[\\\\/]/).pop() || defaultName}" gespeichert. Original-Rekordbox-Quellen bleiben unverändert.`,
+            originalSha256: activeTrack?.originalSha256 ?? 'NOT_COMPUTED_READ_ONLY_SOURCE',
+            timestamp: Date.now(),
+          });
+        }
+        return;
+      }
+
+      // Browser fallback: plain download of the project document.
+      const blob = new Blob([doc], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = defaultName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showOperationFeedback({
+        title: 'Projekt gespeichert',
+        operationType: 'EXPORT',
+        description: `Projekt "${projectName}" als "${defaultName}" heruntergeladen.`,
+        originalSha256: activeTrack?.originalSha256 ?? 'NOT_COMPUTED_READ_ONLY_SOURCE',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.error('[Projekt] Speichern fehlgeschlagen:', err);
+      alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
+
+  const handleOpenProject = useCallback(async () => {
+    if (!window.rekordboxDesktop) {
+      alert('Projekte öffnen ist nur in der Windows-Desktop-App verfügbar.');
+      return;
+    }
+
+    try {
+      const opened = await window.rekordboxDesktop.openProjectFile();
+      if (!opened) return;
+
+      const doc = deserializeProject(opened.data);
+      const audioCtx = audioEngine.getContext();
+
+      // Rebuild all deck tracks (metadata + embedded clip audio) first.
+      const rebuiltTracks: TrackModel[] = [];
+      for (const st of doc.tracks) {
+        rebuiltTracks.push(await rebuildTrackFromSerialized(st, audioCtx));
+      }
+
+      // Rebuild the palette with its embedded clip audio.
+      const rebuiltClips = [];
+      for (const clip of doc.paletteClips) {
+        const audioBuffer = await decodeWavBase64(audioCtx, clip.clipWavBase64);
+        rebuiltClips.push({
+          id: clip.id,
+          name: clip.name,
+          sourceTrackId: clip.sourceTrackId,
+          sourceTrackName: clip.sourceTrackName,
+          sourceStart: clip.sourceStart,
+          sourceEnd: clip.sourceEnd,
+          duration: clip.duration,
+          beats: clip.beats,
+          bars: clip.bars,
+          bpm: clip.bpm,
+          key: clip.key,
+          color: clip.color,
+          audioBuffer,
+          miniPeaks: clip.miniPeaks,
+          origin: clip.origin,
+        });
+      }
+
+      setProjectName(doc.projectName);
+      setSelection(doc.selection);
+      setPaletteClips(rebuiltClips);
+      setTracks(rebuiltTracks);
+      setActiveTrackId(doc.activeTrackId || rebuiltTracks[0]?.id || '');
+      setCurrentTime(0);
+      setViewOffset(0);
+      setIsPlaying(false);
+      audioEngine.stop();
+
+      // The active track re-opens its original audio from the read-only source
+      // path (if it has one) and re-applies the stored edit segments.
+      const activeTrack = rebuiltTracks.find((t) => t.id === (doc.activeTrackId || rebuiltTracks[0]?.id)) ?? null;
+      if (activeTrack) {
+        let originalAudio = activeTrack.audioBuffer;
+        let originalMedia = activeTrack.originalMedia;
+
+        if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
+          try {
+            const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
+            originalAudio = await audioCtx.decodeAudioData(source.data);
+            originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
+          } catch (error) {
+            console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);
+            originalMedia = { ...originalMedia, status: 'MISSING' as const };
+          }
+        }
+
+        if (originalAudio) {
+          const withAudio: TrackModel = {
+            ...activeTrack,
+            audioBuffer: originalAudio,
+            originalMedia,
+            duration: originalAudio.duration || activeTrack.duration,
+            sampleRate: originalAudio.sampleRate,
+            channels: originalAudio.numberOfChannels,
+            analysis: analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
+          };
+          const working = audioEngine.renderWorkingAudio(originalAudio, withAudio.workingSegments);
+          setWorkingAudioBuffer(working);
+          setTracks((prev) => prev.map((t) => (t.id === withAudio.id ? withAudio : t)));
+        } else if (activeTrack.audioBuffer) {
+          setWorkingAudioBuffer(
+            audioEngine.renderWorkingAudio(activeTrack.audioBuffer, activeTrack.workingSegments)
+          );
+        }
+      }
+
+      showOperationFeedback({
+        title: 'Projekt geladen',
+        operationType: 'EXPORT',
+        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet.`,
+        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      console.error('[Projekt] Öffnen fehlgeschlagen:', err);
+      alert(`Projekt konnte nicht geöffnet werden: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [showOperationFeedback]);
+
   // Audio file loading (WAV, MP3, FLAC, AIFF)
   const loadAudioFile = async (file: File) => {
     try {
@@ -1551,6 +1807,8 @@ export default function App() {
           setProjectName('New Project');
           setSelection(null);
         }}
+        onSaveProject={handleSaveProject}
+        onOpenProject={handleOpenProject}
         onImportXml={() => xmlFileInputRef.current?.click()}
         onImportAudio={() => audioFileInputRef.current?.click()}
         onExportWav={() => setExportModalOpen(true)}
@@ -1582,7 +1840,7 @@ export default function App() {
         quantizeActive={quantize}
         onToggleQuantize={() => setQuantize(!quantize)}
         onNewProject={() => setProjectName('New Project')}
-        onSaveProject={() => alert('Projektzustand gespeichert.')}
+        onSaveProject={handleSaveProject}
         onExport={() => setExportModalOpen(true)}
         onShowInfo={() => setInfoModalOpen(true)}
         masterVolume={masterVolume}
@@ -1752,6 +2010,7 @@ export default function App() {
             track={activeTrack}
             clips={paletteClips}
             workingAudioBuffer={workingAudioBuffer}
+            protectedPaths={protectedPaths}
             onExportComplete={showOperationFeedback}
           />
           <DatabaseExtractionModal

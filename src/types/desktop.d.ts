@@ -32,6 +32,19 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      saveExportFile(payload: {
+        kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
+        data: Uint8Array;
+        defaultName: string;
+        protectedPaths?: string[];
+      }): Promise<{ saved: boolean; path?: string; bytes?: number; accessMode?: 'WRITE_NEW_ONLY' }>;
+      openProjectFile(): Promise<{
+        data: string;
+        path: string;
+        size: number;
+        modifiedAt: number;
+        accessMode: 'READ_ONLY';
+      } | null>;
     };
   }
 
