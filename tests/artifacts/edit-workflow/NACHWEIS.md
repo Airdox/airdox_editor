@@ -47,7 +47,7 @@ Werkzeugleiste: `src/audio/editOps.ts`.
 ## Projektdatei (Beweis)
 
 - `nachweis-projekt.airdoxproj.json` – Schema 1, Art „airdox-intelligents-project",
-  1 Spur, 1 Palette-Clip, Arbeitskopie eingebettet
+  1 Spur, 1 Clip aus der Clip-Bibliothek, Arbeitskopie eingebettet
   (360000 Samples @ 24000 Hz).
 - `nachweis-projekt-arbeitskopie.wav` – dieselbe Arbeitskopie als Tondatei,
   SHA-256 `0cb6ee8c8240f0289f8c4138a252d442125266b8d64c46bd62fb9a9789efedc0`.
