@@ -15,6 +15,9 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Die Arena-Sandbox reicht die Vorschau über einen Proxy-Host (*.e2b.app) durch.
+      // Ohne Freigabe antwortet Vite dort mit 403 "blocked host".
+      allowedHosts: ['.e2b.app'],
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
