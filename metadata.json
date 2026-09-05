@@ -1,0 +1,6 @@
+{
+  "name": "Rekordbox DJ Audio Editor",
+  "description": "Professional Rekordbox-style DJ audio editor with beatgrid synchronization, real audio engine, XML parsing, palette clips, multi-track, and non-destructive editing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
