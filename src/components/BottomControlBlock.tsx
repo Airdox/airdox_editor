@@ -23,6 +23,8 @@ import {
   Repeat
 } from 'lucide-react';
 import { SelectionRange } from '../types/rekordbox';
+import { CLIP_DND_MIME, readClipDragPayload } from '../audio/clipLibrary';
+import { Disc3, X } from 'lucide-react';
 
 interface BottomControlBlockProps {
   selection: SelectionRange | null;
@@ -43,6 +45,10 @@ interface BottomControlBlockProps {
   canUndo: boolean;
   canRedo: boolean;
   hasClipboard: boolean;
+  /** Clip, der gerade im Deck-Spieler liegt (sonst läuft die ganze Spur). */
+  deckClip?: { id: string; name: string; duration: number; position: number } | null;
+  onDropClipIntoDeck?: (clipId: string) => void;
+  onUnloadDeckClip?: () => void;
 }
 
 export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
@@ -64,11 +70,101 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   canUndo,
   canRedo,
   hasClipboard,
+  deckClip = null,
+  onDropClipIntoDeck,
+  onUnloadDeckClip,
 }) => {
   const hasSelection = selection !== null && selection.duration > 0;
+  const [clipDropArmed, setClipDropArmed] = React.useState(false);
+  const isClipDrag = (transfer: DataTransfer) =>
+    Array.from(transfer.types || []).some((type) => type === CLIP_DND_MIME);
+  const progress = deckClip && deckClip.duration > 0 ? Math.min(1, deckClip.position / deckClip.duration) : 0;
 
   return (
     <div className="h-44 bg-[#0d0e12] border-t border-[#1c1e26] flex select-none z-20">
+      {/* 0. Deck-Spieler: Ablageziel für Clips aus der Bibliothek */}
+      <div
+        onDragOver={(e) => {
+          if (!isClipDrag(e.dataTransfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!clipDropArmed) setClipDropArmed(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setClipDropArmed(false);
+        }}
+        onDrop={(e) => {
+          const payload = readClipDragPayload(e.dataTransfer);
+          setClipDropArmed(false);
+          if (!payload) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onDropClipIntoDeck?.(payload.clipId);
+        }}
+        className={`w-[210px] border-r border-[#1a1b22] flex flex-col transition-colors ${
+          clipDropArmed ? 'bg-[#1a1206] ring-2 ring-[#ff9500] ring-inset' : 'bg-[#0d0e12]'
+        }`}
+      >
+        <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
+          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
+            DECK-CLIP
+          </div>
+          {deckClip && (
+            <button
+              onClick={onUnloadDeckClip}
+              className="text-neutral-500 hover:text-white p-0.5 rounded transition-colors"
+              title="Clip aus dem Spieler nehmen (Strg+Shift+X) – die ganze Spur ist wieder hörbar"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+
+        <div className="flex-1 p-2 flex flex-col justify-between gap-1.5">
+          {deckClip ? (
+            <>
+              <div className="min-w-0">
+                <div className="flex items-center space-x-1.5 min-w-0">
+                  <Disc3 size={11} className="text-[#ff9500] flex-shrink-0" />
+                  <span className="text-white text-[11px] font-medium truncate" title={deckClip.name}>
+                    {deckClip.name}
+                  </span>
+                </div>
+                <div className="text-[9.5px] font-mono text-neutral-500 mt-0.5">
+                  {deckClip.position.toFixed(3)} / {deckClip.duration.toFixed(3)} s
+                </div>
+              </div>
+              <div className="h-1.5 bg-[#1a1c24] rounded-xs overflow-hidden border border-[#242734]">
+                <div className="h-full bg-[#ff9500]" style={{ width: `${(progress * 100).toFixed(2)}%` }} />
+              </div>
+              <div className="text-[8.5px] text-neutral-500 leading-tight">
+                TRANSPORT, LOOP und Zeitachse beziehen sich auf diesen Clip. Die Spur
+                selbst bleibt unverändert.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-[10px] text-neutral-500 leading-snug">
+                Clip aus der Bibliothek hierher ziehen – er läuft dann im Spieler, ohne
+                die Spur zu verändern.
+              </div>
+              <div
+                className={`border border-dashed rounded-xs flex-1 flex items-center justify-center text-[9.5px] font-mono transition-colors ${
+                  clipDropArmed ? 'border-[#ff9500] text-[#ffb74d]' : 'border-[#2b2e3a] text-neutral-600'
+                }`}
+              >
+                {clipDropArmed ? 'loslassen: ins Deck' : 'Ablagefläche für Clips'}
+              </div>
+              <div className="text-[8.5px] text-neutral-600 leading-tight">
+                Auf der Wellenform: einfügen · Alt darüberlegen · Umschalt ersetzen
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* 1. BEAT SELECT Panel */}
       <div className="w-[320px] border-r border-[#1a1b22] flex flex-col">
         {/* Angled Tab Header */}
@@ -196,7 +292,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onClone}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Auswahl klonen / zur Palette"
+            title="Auswahl klonen / in die Clip-Bibliothek"
           >
             <PlusSquare size={16} strokeWidth={1.8} className="text-[#00a2ff]" />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">

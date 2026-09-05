@@ -18,7 +18,28 @@ import {
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { logger } from './utils/logger';
-import { analyzeAudioBuffer, analyzePcm, extractMiniPeaks, extractMiniPeaksPcm } from './waveform/analyzer';
+import { analyzeAudioBuffer, analyzePcm } from './waveform/analyzer';
+import {
+  CLIP_LIBRARY_LABEL,
+  addClip,
+  buildClip,
+  normalizeLibrary,
+  clipAudioOf as pcmOfClip,
+  clipDisplayIndex,
+  describeClip,
+  dropModeFor,
+  duplicateClip,
+  ensureConsistentClip,
+  applyClipDrop,
+  clipDropTitle,
+  moveClip,
+  nextClipId,
+  readClipDragPayload,
+  removeClip,
+  renameClip,
+  resolveClipTargetTime,
+  type ClipDropMode,
+} from './audio/clipLibrary';
 import {
   EditableAudio,
   copyRange,
@@ -175,6 +196,12 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState<boolean>(true); // Screenshot 01 (open) vs Screenshot 02 (closed)
   const [paletteClips, setPaletteClips] = useState<PaletteClip[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  /** Clip, der gerade im Deck-Spieler läuft – die Spur selbst bleibt unberührt. */
+  const [deckClipId, setDeckClipId] = useState<string | null>(null);
+  const [deckTime, setDeckTime] = useState<number>(0);
+  const deckClipBuffers = useRef<Map<string, AudioBuffer>>(new Map());
+  /** Für den Animationslauf: läuft gerade ein Clip im Spieler (ID oder null)? */
+  const deckClipRef = useRef<string | null>(null);
 
   // Clipboard for Copy / Paste / Insert
   const [clipboardBuffer, setClipboardBuffer] = useState<PcmAudio | null>(null);
@@ -303,7 +330,12 @@ export default function App() {
     const updateLoop = () => {
       if (audioEngine.getIsPlaying()) {
         const time = audioEngine.getCurrentTime();
-        setCurrentTime(time);
+        if (deckClipRef.current) {
+          // Clip im Spieler: nur die Clip-Position läuft, die Spur bleibt stehen.
+          setDeckTime(time);
+        } else {
+          setCurrentTime(time);
+        }
 
         // Keep detail view centered or following playhead if near boundary
         if (time > viewOffset + viewDuration * 0.9) {
@@ -324,39 +356,61 @@ export default function App() {
     return () => cancelAnimationFrame(animId);
   }, [viewOffset, viewDuration]);
 
+  /** Referenz für den Animationslauf: zeigt der Spieler gerade einen Clip? */
+  deckClipRef.current = deckClipId;
+
   // Master volume control
   const handleMasterVolumeChange = (vol: number) => {
     setMasterVolume(vol);
     audioEngine.setMasterVolume(vol);
   };
 
-  // Playback Toggle
+  // Wiedergabe: läuft ein Clip im Deck-Spieler, gehören Zeit und Loop diesem Clip
   const handleTogglePlay = () => {
-    if (!activeTrack || !workingAudioBuffer) return;
-
     if (isPlaying) {
       audioEngine.pause();
       setIsPlaying(false);
-    } else {
-      let loopStart = 0;
-      let loopEnd = 0;
-      if (loopActive && selection) {
-        loopStart = selection.start;
-        loopEnd = selection.end;
-      }
-      audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
-      setIsPlaying(true);
+      return;
     }
+    if (deckClip) {
+      const buffer = clipBufferFor(deckClip);
+      if (!buffer) {
+        alert('Der Clip im Deck-Spieler hat keine Audiodaten.');
+        return;
+      }
+      audioEngine.play(buffer, Math.min(deckTime, Math.max(0, buffer.duration - 0.01)), loopActive, 0, buffer.duration);
+      setIsPlaying(true);
+      return;
+    }
+    if (!activeTrack || !workingAudioBuffer) return;
+    let loopStart = 0;
+    let loopEnd = 0;
+    if (loopActive && selection) {
+      loopStart = selection.start;
+      loopEnd = selection.end;
+    }
+    audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+    setIsPlaying(true);
   };
 
   const handleReturnToStart = () => {
     audioEngine.stop();
     setIsPlaying(false);
+    setDeckTime(0);
     setCurrentTime(0);
     setViewOffset(0);
   };
 
   const handleSeek = (targetTime: number) => {
+    if (deckClip) {
+      // Im Spieler bezieht sich die Position auf den Clip, nicht auf die Spur.
+      const buffer = clipBufferFor(deckClip);
+      const limit = buffer ? buffer.duration : deckClip.duration;
+      const clamped = Math.max(0, Math.min(Math.max(0, limit - 0.001), targetTime));
+      setDeckTime(clamped);
+      if (isPlaying && buffer) audioEngine.play(buffer, clamped, loopActive, 0, limit);
+      return;
+    }
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
     setCurrentTime(clamped);
     if (isPlaying && workingAudioBuffer) {
@@ -584,38 +638,157 @@ export default function App() {
     const source = trackPcm(activeTrack);
     if (!source) return;
     const sliced = copyRange({ audio: source, cues: [], loops: [], beatGrid: activeTrack.beatGrid }, selection.start, selection.end);
-    const newClipId = `clip-${Date.now()}`;
-    const newClip: PaletteClip = {
-      id: newClipId,
-      name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
-      sourceTrackId: activeTrack.id,
-      sourceTrackName: activeTrack.title,
-      sourceStart: selection.start,
-      sourceEnd: selection.end,
-      duration: selection.duration,
-      beats: Math.round(selection.beatsCount),
-      bars: selection.barsCount,
-      bpm: activeTrack.bpm,
-      key: activeTrack.key,
-      color: '#ff9500',
-      clipPcm: sliced,
-      audioBuffer: pcmToAudioBuffer(audioEngine.getContext(), sliced),
-      miniPeaks: extractMiniPeaksPcm(sliced, 48),
-      origin: DataOrigin.PROJECT,
-    };
-
-    setPaletteClips((prev) => [...prev, newClip]);
-    setSelectedClipId(newClipId);
+    setPaletteClips((prev) => {
+      const newClip = buildClip(
+        {
+          name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
+          sourceTrackId: activeTrack.id,
+          sourceTrackName: activeTrack.title,
+          sourceStart: selection.start,
+          sourceEnd: selection.end,
+          bpm: activeTrack.bpm,
+          key: activeTrack.key,
+          meter: activeTrack.beatGrid.meter,
+          origin: DataOrigin.PROJECT,
+          pcm: sliced,
+        },
+        { existing: prev }
+      );
+      setSelectedClipId(newClip.id);
+      logger.info('EDITING', `Clip in ${CLIP_LIBRARY_LABEL}: ${describeClip(newClip)}`);
+      return addClip(prev, newClip);
+    });
     if (!paletteOpen) setPaletteOpen(true);
-    logger.info(
-      'EDITING',
-      `Clip in der Palette: ${newClip.name} (${selection.duration.toFixed(3)} s, ` +
-        `${newClip.beats} Beats, ${selection.barsCount.toFixed(2)} Takte)`
-    );
+    setIsDirty(true);
   };
 
-  const clipAudioOf = (clip: PaletteClip): PcmAudio | null =>
-    clip.clipPcm ?? (clip.audioBuffer ? pcmFromAudioBuffer(clip.audioBuffer) : null);
+  // ── Clip-Bibliothek: Pflege (alle Wege über src/audio/clipLibrary) ────────
+  const handleRenameClip = (id: string, name: string) => {
+    setPaletteClips((prev) => renameClip(prev, id, name));
+    setIsDirty(true);
+  };
+
+  const handleDuplicateClip = (id: string) => {
+    setPaletteClips((prev) => {
+      const next = duplicateClip(prev, id);
+      const copy = next.find((clip) => clip.id.startsWith(`${id}-kopie`));
+      if (copy) setSelectedClipId(copy.id);
+      return next;
+    });
+    setIsDirty(true);
+  };
+
+  const handleMoveClip = (id: string, delta: number) => {
+    setPaletteClips((prev) => moveClip(prev, id, delta));
+    setIsDirty(true);
+  };
+
+  const handleDeleteClip = (id: string) => {
+    setPaletteClips((prev) => removeClip(prev, id));
+    if (selectedClipId === id) setSelectedClipId(null);
+    if (deckClipId === id) handleUnloadDeckClip();
+    deckClipBuffers.current.delete(id);
+    setIsDirty(true);
+  };
+
+  // ── Clip in den Deck-Spieler laden (die Spur bleibt unberührt) ────────────
+  const handleLoadClipIntoDeck = (id: string) => {
+    const clip = paletteClips.find((entry) => entry.id === id);
+    if (!clip) return;
+    if (!pcmOfClip(clip)) {
+      alert(`Clip „${clip.name}“ enthält keine Audiodaten und kann nicht geladen werden.`);
+      return;
+    }
+    if (!clipBufferFor(clip)) {
+      alert('Der Clip konnte nicht für die Wiedergabe vorbereitet werden.');
+      return;
+    }
+    setSelectedClipId(clip.id);
+    setDeckClipId(clip.id);
+    setDeckTime(0);
+    audioEngine.stop();
+    setIsPlaying(false);
+    logger.info('UI', `Clip in den Deck-Spieler geladen: ${describeClip(clip)}`);
+  };
+
+  const handleUnloadDeckClip = () => {
+    if (!deckClipId) return;
+    audioEngine.stop();
+    setIsPlaying(false);
+    setDeckClipId(null);
+    setDeckTime(0);
+    logger.info('UI', 'Deck-Spieler: Clip entfernt, wieder die ganze Spur.');
+  };
+
+  /** Clip an einer Zielzeit ablegen: einfügen, darüberlegen, ersetzen oder in den Spieler. */
+  const handleDropClip = (
+    clipId: string,
+    wantedSeconds: number,
+    modifiers: { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
+  ) => {
+    const clip = paletteClips.find((entry) => entry.id === clipId);
+    if (!clip) return;
+    const mode: ClipDropMode = dropModeFor(modifiers);
+    if (mode === 'deck') {
+      handleLoadClipIntoDeck(clipId);
+      return;
+    }
+    const audio = pcmOfClip(clip);
+    if (!audio) {
+      alert(`Clip „${clip.name}“ enthält keine Audiodaten.`);
+      return;
+    }
+    if (!activeTrack) {
+      alert('Ohne geladene Spur kann kein Clip eingefügt werden.');
+      return;
+    }
+    const source = trackPcm(activeTrack);
+    if (!source) {
+      alert('Die aktive Spur hat keine Audiodaten.');
+      return;
+    }
+    // Dieselbe Rechnung wie in tests/clip-library.test.ts: rastern, klemmen, einfügen.
+    const outcome = applyClipDrop(editableFrom(activeTrack, source), audio, wantedSeconds, { quantize, mode });
+    applyEdit(clipDropTitle(clip, mode), () => ({ target: outcome.target, report: outcome.report }));
+    const at = outcome.atSeconds;
+    const clipEnd = outcome.clipEndSeconds;
+
+    const grid = activeTrack.beatGrid;
+    const spb = grid.bpm > 0 ? 60 / grid.bpm : 0.5;
+    setSelection({
+      start: at,
+      end: Math.min(clipEnd, pcmDuration(outcome.target.audio)),
+      startBeat: (at - grid.firstBeat) / spb,
+      endBeat: (clipEnd - grid.firstBeat) / spb,
+      beatsCount: pcmDuration(audio) / spb,
+      barsCount: pcmDuration(audio) / spb / Math.max(1, grid.meter),
+      duration: pcmDuration(audio),
+    });
+    handleSeek(at);
+    if (outcome.reason) logger.info('EDITING', `Zielzeit gerastet: ${outcome.reason} → ${at.toFixed(4)} s`);
+  };
+
+  /** Einfügen an der Markierung bzw. am Spielkopf – dieselbe Rechnung wie beim Ablageweg. */
+  const handleInsertClipFromLibrary = (id: string, mode: 'insert' | 'overdub' | 'replace' = 'insert') => {
+    const modifiers = mode === 'overdub' ? { altKey: true } : mode === 'replace' ? { shiftKey: true } : {};
+    handleDropClip(id, selection ? selection.start : currentTime, modifiers);
+  };
+
+  /** Samples eines Clips – immer über denselben Kern wie die Bibliotheks-Tests. */
+  const clipAudioOf = (clip: PaletteClip): PcmAudio | null => pcmOfClip(clip);
+
+  /** AudioBuffer für die Wiedergabe, aus dem PCM-Anteil des Clips (mit Cache). */
+  const clipBufferFor = (clip: PaletteClip): AudioBuffer | null => {
+    const cached = deckClipBuffers.current.get(clip.id);
+    if (cached) return cached;
+    const audio = pcmOfClip(clip);
+    if (!audio) return null;
+    const buffer = pcmToAudioBuffer(audioEngine.getContext(), audio);
+    deckClipBuffers.current.set(clip.id, buffer);
+    return buffer;
+  };
+
+  const deckClip = deckClipId ? paletteClips.find((clip) => clip.id === deckClipId) ?? null : null;
 
   const activePaletteClip = (): PaletteClip | null => {
     const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
@@ -785,16 +958,17 @@ export default function App() {
     if (!activeTrack) return;
     const clips = paletteClips.length > 0 ? paletteClips : [];
     if (clips.length === 0) {
-      alert('Die Palette ist leer. Auswahl markieren und mit CLONE in die Palette legen.');
+      alert(`Die ${CLIP_LIBRARY_LABEL} ist leer. Auswahl markieren und mit CLONE in die Bibliothek legen.`);
       return;
     }
     const files: Array<{ name: string; bytes: Uint8Array }> = [];
-    clips.forEach((clip, index) => {
+    clips.forEach((clip) => {
       const audio = clipAudioOf(clip);
       if (!audio) return;
       const safeName = clip.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60);
+      const index = clipDisplayIndex(clips, clip.id);
       files.push({
-        name: `${String(index + 1).padStart(2, '0')}_${safeName}.wav`,
+        name: `${String(index).padStart(2, '0')}_${safeName}.wav`,
         bytes: encodeWav(audio),
       });
     });
@@ -928,6 +1102,12 @@ export default function App() {
     }
   };
 
+  /** BPM der ersten_projekt-Spur – Fallback, wenn ein Clip ohne BPM gespeichert wurde. */
+  const firstBpmOf = (project: { tracks: Array<{ bpm: number }> }): number | undefined => {
+    const bpm = project.tracks?.[0]?.bpm;
+    return typeof bpm === 'number' && bpm > 0 ? bpm : undefined;
+  };
+
   const saveTextFileOverwrite = async (target: string, text: string): Promise<number> => {
     const bridge = window.rekordboxDesktop;
     if (!bridge?.writeFile) throw new Error('Die Desktop-Bridge ist nicht verfügbar.');
@@ -1009,40 +1189,39 @@ export default function App() {
         return;
       }
 
+      // Clips über denselben Kern wie die Bibliothek: aus dem Projektblock lesen,
+      // dann konsistent machen (Dauer, Beats, Vorschau werden nachgerechnet).
       const loadedClips: PaletteClip[] = [];
       for (const clip of project.clips) {
-        let pcm: PcmAudio | null = null;
         try {
-          pcm = decodeAudioBlock(clip.audio).pcm;
+          const pcm = decodeAudioBlock(clip.audio).pcm;
+          loadedClips.push(
+            ensureConsistentClip(
+              {
+                ...clip,
+                clipPcm: pcm,
+                audioBuffer: pcmToAudioBuffer(ctx, pcm),
+              },
+              { bpm: firstBpmOf(project) }
+            )
+          );
         } catch (err) {
-          loadWarnings.push(`Clip „${clip.name}" konnte nicht gelesen werden: ${(err as Error).message}`);
+          loadWarnings.push(`Clip „${clip.name}“ konnte nicht gelesen werden: ${(err as Error).message}`);
         }
-        loadedClips.push({
-          id: clip.id,
-          name: clip.name,
-          sourceTrackId: clip.sourceTrackId,
-          sourceTrackName: clip.sourceTrackName,
-          sourceStart: clip.sourceStart,
-          sourceEnd: clip.sourceEnd,
-          duration: clip.duration,
-          beats: clip.beats,
-          bars: clip.bars,
-          bpm: clip.bpm,
-          key: clip.key,
-          color: clip.color,
-          origin: clip.origin,
-          clipPcm: pcm ?? undefined,
-          audioBuffer: pcm ? pcmToAudioBuffer(ctx, pcm) : undefined,
-          miniPeaks: clip.miniPeaks,
-        });
       }
+      deckClipBuffers.current.clear();
 
+      // Bibliothek auffrischen: eindeutige IDs/Namen, verwaiste Clips absehbarmachen
+      const library = normalizeLibrary(loadedClips, { bpm: firstBpmOf(project) });
+      for (const droppedClip of library.dropped) {
+        loadWarnings.push(`Clip „${droppedClip.name}“ ohne Audiodaten wurde übergangen: ${droppedClip.reason}`);
+      }
       const first = loadedTracks.find((t) => t.id === project.activeTrackId) ?? loadedTracks[0];
       setProjectName(project.projectName);
       setTracks(loadedTracks);
       setActiveTrackId(first.id);
-      setPaletteClips(loadedClips);
-      setSelectedClipId(loadedClips[0]?.id ?? null);
+      setPaletteClips(library.clips);
+      setSelectedClipId(library.clips[0]?.id ?? null);
       setWorkingPcm(trackPcm(first));
       setWorkingAudioBuffer(first.audioBuffer);
       setUndoStack([]);
@@ -1627,6 +1806,9 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyO') {
         e.preventDefault();
         void handleOpenProject();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyX') {
+        e.preventDefault();
+        handleUnloadDeckClip();
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyJ') {
         e.preventDefault();
         handleCopySelectionToEnd();
@@ -1792,6 +1974,7 @@ export default function App() {
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
+          onDropClip={handleDropClip}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
@@ -1800,19 +1983,35 @@ export default function App() {
           onToggle={() => setPaletteOpen(!paletteOpen)}
           clips={paletteClips}
           onAddFromSelection={handleAddSelectionToPalette}
-          onDeleteClip={(id) => {
-            setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-            if (selectedClipId === id) setSelectedClipId(null);
-          }}
           onSelectClip={(clip) => setSelectedClipId(clip.id)}
           selectedClipId={selectedClipId}
           hasSelection={selection !== null && selection.duration > 0}
+          libraryLabel={CLIP_LIBRARY_LABEL}
+          deckClipId={deckClipId}
+          onLoadIntoDeck={handleLoadClipIntoDeck}
+          onInsertAtPlayhead={(id) => handleInsertClipFromLibrary(id, 'insert')}
+          onRenameClip={handleRenameClip}
+          onDuplicateClip={handleDuplicateClip}
+          onMoveClip={handleMoveClip}
+          onDeleteClip={handleDeleteClip}
         />
       </div>
 
       {/* 6. Lower Action Block: BEAT SELECT | SELECT | EDIT (Screenshots 01, 02, 03) */}
       <BottomControlBlock
         selection={selection}
+        deckClip={
+          deckClip
+            ? {
+                id: deckClip.id,
+                name: deckClip.name,
+                duration: clipAudioOf(deckClip) ? pcmDuration(clipAudioOf(deckClip)!) : deckClip.duration,
+                position: deckTime,
+              }
+            : null
+        }
+        onDropClipIntoDeck={handleLoadClipIntoDeck}
+        onUnloadDeckClip={handleUnloadDeckClip}
         onBeatSelect={handleBeatSelect}
         onHalfSelection={handleHalfSelection}
         onDoubleSelection={handleDoubleSelection}
@@ -1840,6 +2039,13 @@ export default function App() {
         activeTrackId={activeTrackId}
         onSelectTrack={(id) => {
           setActiveTrackId(id);
+          // Ein Clip im Spieler gehört zur vorigen Spur – nicht mitnehmen.
+          if (deckClipId) {
+            audioEngine.stop();
+            setIsPlaying(false);
+            setDeckClipId(null);
+            setDeckTime(0);
+          }
           const t = tracks.find((tr) => tr.id === id);
           if (t && t.audioBuffer) {
             setWorkingAudioBuffer(t.audioBuffer);

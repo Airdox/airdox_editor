@@ -199,7 +199,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               >
                 <span className="flex items-center space-x-1.5">
                   <Layers size={12} />
-                  <span>Palette-Clips als WAVs exportieren…</span>
+                  <span>Clips der Bibliothek als WAVs exportieren…</span>
                 </span>
               </button>
               <button
@@ -319,7 +319,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 onClick={() => { onTogglePalette(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
               >
-                <span>Palette ein-/ausblenden</span>
+                <span>Clip-Bibliothek ein-/ausblenden</span>
                 <span>{paletteOpen ? '✓' : ''}</span>
               </button>
               <button

@@ -17,7 +17,15 @@ import {
   SelectionRange,
   CuePoint,
 } from '../types/rekordbox';
-import { amberColorCss, amberCoreAlpha } from '../waveform/colors';
+import { amberColorCss, amberCoreAlpha, AMBER_ACCENT, AMBER_ACCENT_LINE } from '../waveform/colors';
+import {
+  CLIP_DND_MIME,
+  CLIP_DROP_LABELS,
+  dropModeFor,
+  readClipDragPayload,
+  resolveClipTargetTime,
+  type ClipDropMode,
+} from '../audio/clipLibrary';
 import {
   Plus,
   Minus,
@@ -65,6 +73,12 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
+  /** Ein Clip aus der Clip-Bibliothek wurde auf die Zeitachse gezogen. */
+  onDropClip?: (
+    clipId: string,
+    timeSeconds: number,
+    modifiers: { altKey: boolean; ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }
+  ) => void;
 }
 
 interface ContextMenuState {
@@ -109,6 +123,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
+  onDropClip,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -116,6 +131,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [clipDrag, setClipDrag] = useState<{ x: number; seconds: number; mode: ClipDropMode } | null>(null);
+
+  /** Clip-Angebot erkennen, ohne fremde Drag-Inhalte zu schlucken. */
+  const carriesClip = (transfer: DataTransfer) =>
+    Array.from(transfer.types || []).some((type) => type === CLIP_DND_MIME);
 
   // Time to pixel / pixel to time conversions
   const timeToPixel = useCallback(
@@ -655,22 +675,54 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         e.preventDefault();
         e.stopPropagation();
         if (!isDraggingOver) setIsDraggingOver(true);
+        if (track && carriesClip(e.dataTransfer)) {
+          e.dataTransfer.dropEffect = 'copy';
+          const rect = canvasRef.current?.getBoundingClientRect();
+          const width = rect?.width || 1;
+          const x = rect ? Math.min(Math.max(e.clientX - rect.left, 0), width) : 0;
+          const raw = pixelToTime(x, width);
+          const mode = dropModeFor({ altKey: e.altKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+          const resolved = resolveClipTargetTime(raw, track.beatGrid, {
+            quantize: quantize,
+            mode,
+            maxSeconds: mode === 'insert' ? Number.POSITIVE_INFINITY : track.duration,
+          });
+          setClipDrag({ x, seconds: resolved.seconds, mode });
+        } else if (clipDrag) {
+          setClipDrag(null);
+        }
       }}
       onDragLeave={(e) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
+        setClipDrag(null);
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
+        const payload = readClipDragPayload(e.dataTransfer);
+        if (payload && track) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          const width = rect?.width || 1;
+          const seconds = pixelToTime(rect ? Math.min(Math.max(e.clientX - rect.left, 0), width) : 0, width);
+          onDropClip?.(payload.clipId, seconds, {
+            altKey: e.altKey,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+          });
+          setClipDrag(null);
+          return;
+        }
+        setClipDrag(null);
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }
       }}
       className={`relative flex-1 bg-[#0b0c0f] flex overflow-hidden select-none transition-all ${
-        isDraggingOver ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
+        clipDrag ? 'ring-2 ring-inset' : isDraggingOver ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
       }`}
     >
       {/* Left side column: BPM display, Memory Cue controls & Zoom controls */}
@@ -830,6 +882,25 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
 
       {/* Center Waveform Canvas */}
       <div className="flex-1 h-full relative overflow-hidden bg-[#0a0b0d]">
+        {clipDrag && (
+          <div className="absolute inset-0 pointer-events-none z-30">
+            <div
+              className="absolute top-0 bottom-0 w-px"
+              style={{ left: `${clipDrag.x}px`, backgroundColor: AMBER_ACCENT_LINE, boxShadow: `0 0 8px ${AMBER_ACCENT}` }}
+            />
+            <div
+              className="absolute top-1 -translate-x-1/2 px-2 py-1 rounded-xs text-[9.5px] font-mono whitespace-nowrap border"
+              style={{
+                left: `${clipDrag.x}px`,
+                backgroundColor: 'rgba(12,10,4,0.92)',
+                borderColor: AMBER_ACCENT,
+                color: '#ffd9a0',
+              }}
+            >
+              {CLIP_DROP_LABELS[clipDrag.mode]} · {clipDrag.seconds.toFixed(3)} s
+            </div>
+          </div>
+        )}
         <canvas
           ref={canvasRef}
           width={1200}
@@ -977,7 +1048,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                   }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white font-medium text-[#00a2ff]"
                 >
-                  Add to Palette (Clip)
+                  Add to Clip Library
                 </button>
                 <button
                   onClick={() => { onCopy(); setContextMenu(null); }}

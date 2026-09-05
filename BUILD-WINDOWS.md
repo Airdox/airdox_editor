@@ -127,6 +127,15 @@ dann ist der Datenbank-Import nach dem Build nachweislich funktionsfähig.
    auswählen** (`.DAT`, `.EXT`, `.2EX`).
 3. Für die Bibliothek direkt: **Rekordbox-Datenbank auswählen** oder
    „Standardordner durchsuchen".
+4. Ohne eigene Dateien testen: **Datei → Demospur laden (8 Takte, 128 BPM)** – eine
+   deterministisch erzeugte Spur, an der Schneiden, Rastern und Clip-Export geprüft
+   werden können (Herkunft ist als gekennzeichneter Fallback markiert).
+5. Arbeit speichern: **Datei → Projekt speichern unter…** (`.airdoxproj.json`,
+   eingebettete Arbeitskopie) und mit **Projekt öffnen…** wieder zurück.
+6. Clips: Auswahl markieren → CLONE in die **Clip-Bibliothek**, dann den Eintrag auf
+   die Wellenform ziehen (einfügen), mit `Alt` darüberlegen, mit `Umschalt` ersetzen
+   oder auf das Feld **DECK-CLIP** unten ziehen (Clip läuft im Spieler, die Spur
+   bleibt unverändert). `Strg+Shift+X` nimmt den Clip wieder aus dem Spieler.
 
 Erwartete Ablageorte von `master.db` (nur lesend):
 
@@ -231,3 +240,13 @@ npm run icon
 * [ ] Waveform/Beatgrid/Cues einer ANLZ-Datei erscheinen im Edit-Modus.
 * [ ] Originale `*.wav`/`*.mp3` werden über die XML-`Location` geöffnet.
 * [ ] SHA-256 der Originaldatei bleibt unverändert (App schreibt nie zurück).
+* [ ] `Projekt speichern…` schreibt `.airdoxproj.json` an den gewählten Ort, `Projekt
+  öffnen…` lädt Spur, Marker, Loops, Beatgrid und Clips – und die Prüfsummenmeldung
+  bleibt aus.
+* [ ] Clip aus der Bibliothek auf die Wellenform gezogen: Timeline schiebt sich,
+  Marker und Beatgrid bleiben synchron, Undo stellt exakt den alten Stand her.
+* [ ] `Alt`/`Umschalt`/`Strg` beim Ablagen ändern die Absicht (darüberlegen /
+  ersetzen / in den Deck-Spieler), `Quantize` rastet auf Takt oder Beat.
+* [ ] Wellenform ist bernsteinfarben (Menü → Wellenform: AMBER/BLUE/RGB/3BAND).
+* [ ] `Palette-Clips als WAVs exportieren…` schreibt eine Datei pro Clip in den
+  gewählten Ordner, Originaldateien bleiben bitgenau unverändert.

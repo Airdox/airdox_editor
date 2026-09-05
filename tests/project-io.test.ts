@@ -404,10 +404,15 @@ runTest('Beweisdateien', 'Projektdatei wird geschrieben, zurückgelesen und im N
   const project = projectFromTrack(step2.target, 'Nachweis – Projekt');
   const text = serializeProject(project);
 
+  // Der Zeitstempel wird für die Beweisdatei fixiert, damit ein Testlauf die
+  // eingecheckte Datei nicht bei jedem Run verändert.
+  const stamp = (value: string) => value.replace(/"createdAt": "[^"]*"/, '"createdAt": "ZEITSTEMPEL-FIXIERT"');
+  const proofText = stamp(text);
   const file = path.join(ARTIFACT_DIR, 'nachweis-projekt.airdoxproj.json');
-  fs.writeFileSync(file, text, 'utf-8');
+  fs.writeFileSync(file, proofText, 'utf-8');
   const onDisk = fs.readFileSync(file, 'utf-8');
-  assert.equal(onDisk, text, 'Dateiinhalt weicht ab');
+  assert.equal(onDisk, proofText, 'Dateiinhalt weicht ab');
+  assert.equal(stamp(onDisk), stamp(text), 'Beweisdatei weicht vom gespeicherten Inhalt ab');
 
   const parsed = parseProject(onDisk);
   assert.equal(parsed.errors.length, 0, parsed.errors.join(' | '));
@@ -428,7 +433,7 @@ runTest('Beweisdateien', 'Projektdatei wird geschrieben, zurückgelesen und im N
     const addendum = `## Projektdatei (Beweis)
 
 - \`nachweis-projekt.airdoxproj.json\` – Schema ${PROJECT_SCHEMA}, Art „${PROJECT_KIND}",
-  ${project.tracks.length} Spur, ${project.clips.length} Palette-Clip, Arbeitskopie eingebettet
+  ${project.tracks.length} Spur, ${project.clips.length} Clip aus der Clip-Bibliothek, Arbeitskopie eingebettet
   (${parsed.project!.tracks[0].audio.samples} Samples @ ${parsed.project!.tracks[0].audio.sampleRate} Hz).
 - \`nachweis-projekt-arbeitskopie.wav\` – dieselbe Arbeitskopie als Tondatei,
   SHA-256 \`${sha}\`.
