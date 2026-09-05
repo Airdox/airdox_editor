@@ -1,0 +1,96 @@
+name: Windows-Build (Installer + Portable)
+
+# Baut die Desktop-App für Windows 10/11 (x64). Der Build läuft auf einem
+# GitHub-Runner, deshalb ist lokal weder Visual Studio noch ein anderes
+# Build-Toolchain nötig. Der Datenbank-Import funktioniert im Paket komplett
+# ohne natives Modul (reiner JavaScript-Leser, siehe VORHABEN.md Phase 4).
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Ziel (nsis, portable oder beide)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - nsis
+          - portable
+  push:
+    branches:
+      - main
+    paths:
+      - 'electron/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'index.html'
+      - '.github/workflows/windows-build.yml'
+  pull_request:
+    paths:
+      - 'electron/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'index.html'
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Kein Code-Signing-Zertifikat im Repository – electron-builder sonst
+      # versucht würde, eines über die Umgebungsvariablen zu finden.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Repository abrufen
+        uses: actions/checkout@v4
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Abhängigkeiten installieren
+        # Die optionale Native-Abhängigkeit darf scheitern: der Build ist
+        # bewusst auch ohne C-Compiler vollständig.
+        continue-on-error: false
+        run: npm ci --no-audit --no-fund
+
+      - name: Typen prüfen
+        run: npm run lint
+
+      - name: Tests (XML, ANLZ, SQLCipher-Leser)
+        run: npm test
+
+      - name: Windows-Paket bauen
+        if: github.event.inputs.target == '' || github.event.inputs.target == 'all'
+        run: npm run package:win
+
+      - name: Nur den Installer bauen
+        if: github.event.inputs.target == 'nsis'
+        run: npm run package:win:installer
+
+      - name: Nur die Portable-EXE bauen
+        if: github.event.inputs.target == 'portable'
+        run: npm run package:win:portable
+
+      - name: Build-Artefakte sichern
+        uses: actions/upload-artifact@v4
+        with:
+          name: rekordbox-desktop-import-windows-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/*-latest.yml
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Prüfumgebung für den Nutzer zusammenfassen
+        if: always()
+        run: node tools/windows-native-hint.cjs

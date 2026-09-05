@@ -48,6 +48,8 @@ interface DatabaseExtractionModalProps {
     Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
   >;
   onLoadRekordboxDatabase?: (dbPath: string, sourceLabel?: string) => void | Promise<void>;
+  /** Installed database readers (desktop only): native SQLCipher binding vs. pure JS. */
+  databaseEngines?: RekordboxDatabaseEngines | null;
 }
 
 export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = ({
@@ -64,6 +66,7 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   onOpenRekordboxDatabase,
   onLocateRekordboxDatabases,
   onLoadRekordboxDatabase,
+  databaseEngines,
 }) => {
   const currentTrack = track || activeTrack;
   const [activeTab, setActiveTab] = useState<'memoryCues' | 'waveform' | 'phrases' | 'sources'>('memoryCues');
@@ -652,6 +655,25 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                     <p className="text-[11px] text-neutral-400">
                       Lokale Rekordbox-Bibliothek (djmdContent/djmdCue) oder OneLibrary-Export mit SQLCipher. Wird ausschließlich lesend geöffnet.
                     </p>
+                    {databaseEngines && (
+                      <div className="mt-2 rounded bg-[#0f1015] border border-[#22242e] px-2 py-1.5">
+                        <div className="text-[10px] font-mono text-neutral-300">
+                          Leseverfahren:{' '}
+                          {databaseEngines.native.available
+                            ? 'natives SQLCipher-Modul'
+                            : databaseEngines.javascript.available
+                            ? 'reines JavaScript (SQLCipher + SQLite/WASM)'
+                            : 'derzeit nicht verfügbar'}
+                        </div>
+                        <div className="text-[9.5px] text-neutral-500 mt-0.5">
+                          {databaseEngines.native.available
+                            ? 'Das optionale Modul ist installiert und wird für die Abfragen verwendet.'
+                            : databaseEngines.javascript.available
+                            ? 'Ohne natives Modul und ohne C-Compiler: Entschlüsselung erfolgt im Hauptprozess mit node:crypto.'
+                            : 'Bitte "npm install" ausführen – dann steht mindestens der JavaScript-Leser zur Verfügung.'}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2 mt-4">

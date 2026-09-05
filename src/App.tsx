@@ -17,6 +17,7 @@ import {
   CuePoint,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
+import { logger } from './utils/logger';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
@@ -149,6 +150,9 @@ export default function App() {
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
   const [xmlImportedTracks, setXmlImportedTracks] = useState<TrackModel[]>([]);
   const [xmlFileName, setXmlFileName] = useState<string>('rekordbox_collection.xml');
+  // Which database reader is active in this installation (native module or the
+  // compiler-free JavaScript path). Only meaningful inside the desktop app.
+  const [databaseEngines, setDatabaseEngines] = useState<RekordboxDatabaseEngines | null>(null);
 
   // Real-time Transparency Modals (Non-blocking parser & operation feedback)
   const [importProgress, setImportProgress] = useState<XmlImportProgress | null>(null);
@@ -886,11 +890,18 @@ export default function App() {
   // returns only rows; the renderer never touches the source file.
   const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
     if (!window.rekordboxDesktop) return;
+    const startedAt = Date.now();
     try {
+      logger.info('DATABASE', `Lese Rekordbox-Datenbank nur lesend: ${sourceLabel || dbPath}`);
       const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
       if (!result.available || !result.rows) {
         throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
       }
+      logger.info(
+        'DATABASE',
+        `Datenbank gelesen in ${Date.now() - startedAt}ms (${result.dbType}, Leseverfahren: ${result.engine || 'unbekannt'}` +
+          `${result.cipher ? `, ${result.cipher}` : ''}).`
+      );
 
       const mapped = mapRekordboxDatabaseRows(
         {
@@ -918,7 +929,12 @@ export default function App() {
       showOperationFeedback({
         title: 'Rekordbox-Datenbank importiert (Read-Only)',
         operationType: 'CUE',
-        description: `${sourceLabel || result.fileName || dbPath}: ${mapped.stats.tracks} Tracks, ${mapped.stats.memoryCues} Memory Cues, ${mapped.stats.hotCues} Hot Cues, ${mapped.stats.loops} Loops aus der Datenbank übernommen.`,
+        description: `${sourceLabel || result.fileName || dbPath}: ${mapped.stats.tracks} Tracks, ${mapped.stats.memoryCues} Memory Cues, ${mapped.stats.hotCues} Hot Cues, ${mapped.stats.loops} Loops aus der Datenbank übernommen. ` +
+          `Leseverfahren: ${
+            result.engine === 'JS_SQLCIPHER'
+              ? `reines JavaScript (SQLCipher-Entschlüsselung + SQLite/WASM${result.cipher ? `, ${result.cipher}` : ''}, kein natives Modul nötig)`
+              : 'native SQLCipher-Bindung'
+          }.`,
         timeRangeSec: { start: 0, end: 0, duration: 0 },
         originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
         timestamp: Date.now(),
@@ -927,9 +943,15 @@ export default function App() {
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
         console.warn('[Rekordbox DB] Hinweise:', warnings);
+        warnings.forEach((warning) => logger.warn('DATABASE', warning));
       }
     } catch (error) {
       console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
+      logger.error(
+        'DATABASE',
+        `Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`,
+        { dbPath }
+      );
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -957,6 +979,22 @@ export default function App() {
       return [];
     }
   };
+
+  // Ask the desktop bridge which reader is installed, so the UI can tell an
+  // actually broken import apart from a missing optional native module.
+  useEffect(() => {
+    if (!window.rekordboxDesktop?.describeDatabaseEngines) return;
+    let cancelled = false;
+    window.rekordboxDesktop
+      .describeDatabaseEngines()
+      .then((engines) => {
+        if (!cancelled) setDatabaseEngines(engines);
+      })
+      .catch((error) => console.warn('[Rekordbox DB] Leseverfahren nicht ermittelbar:', error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
@@ -1399,6 +1437,7 @@ export default function App() {
             onOpenRekordboxDatabase={handleOpenRekordboxDatabase}
             onLocateRekordboxDatabases={handleLocateRekordboxDatabases}
             onLoadRekordboxDatabase={handleLoadRekordboxDatabase}
+            databaseEngines={databaseEngines}
           />
         </>
       )}

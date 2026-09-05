@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // Relative asset URLs: the packaged desktop app loads dist/index.html from
+    // the filesystem (file://), where absolute "/assets/..." paths would 404.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

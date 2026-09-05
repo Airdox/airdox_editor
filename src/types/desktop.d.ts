@@ -31,6 +31,8 @@ declare global {
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
+      /** Which read engines are installed (native SQLCipher binding / pure JS). */
+      describeDatabaseEngines(): Promise<RekordboxDatabaseEngines>;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
     };
   }
@@ -39,12 +41,21 @@ declare global {
     [column: string]: string | number | null;
   }
 
+  interface RekordboxDatabaseEngines {
+    native: { available: boolean; note: string; reason: string | null };
+    javascript: { available: boolean; note: string };
+  }
+
   interface RekordboxDatabaseReadResult {
     available: boolean;
     reason?: string;
     dbType?: 'MASTER_DB' | 'ONE_LIBRARY';
     filePath?: string;
     fileName?: string;
+    /** 'NATIVE_SQLCIPHER' or 'JS_SQLCIPHER' – the reader that produced the rows. */
+    engine?: string;
+    driver?: string;
+    cipher?: string;
     stats?: { tracks: number; cues: number; playlists: number };
     warnings?: string[];
     rows?: {

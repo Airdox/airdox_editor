@@ -6,6 +6,7 @@ const { fileURLToPath } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
+  describeEngines,
 } = require('./dbReader.cjs');
 
 let mainWindow;
@@ -113,11 +114,18 @@ ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
 });
 
+ipcMain.handle('rekordbox:database-capabilities', async () => {
+  // Lets the UI explain which reader is active: the optional native SQLCipher
+  // binding or the compiler-free JavaScript reader. Nothing is written here.
+  return describeEngines();
+});
+
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
-  // The database is opened exclusively with SQLite readonly mode.
+  // The database is opened exclusively with SQLite readonly mode (or, when the
+  // native module is missing, decrypted in memory without any file writes).
   return readRekordboxDatabase(dbPath);
 });
 

@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   readAnalysisFile: (filePath) => ipcRenderer.invoke('rekordbox:read-analysis-file', filePath),
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
+  describeDatabaseEngines: () => ipcRenderer.invoke('rekordbox:database-capabilities'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
 });
