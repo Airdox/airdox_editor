@@ -87,8 +87,8 @@ jobs:
           path: |
             release/*.exe
             release/*.blockmap
-            release/*-latest.yml
-          if-no-files-found: error
+          # build.publish = null → es entsteht kein latest.yml (kein Update-Server)
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Prüfumgebung für den Nutzer zusammenfassen

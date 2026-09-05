@@ -260,6 +260,27 @@ await check('Build-Guard erkennt den node-gyp-Fehlerpfad (Leerzeichen + natives 
   }
 });
 
+await check('die Build-Konfiguration kann electron-builder nicht mehr ausbremsen', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+  assert.strictEqual(pkg.build.npmRebuild, false, 'npmRebuild:false fehlt → electron-builder startet node-gyp');
+  // Ein String an dieser Stelle wird als Provider-Name interpretiert und bricht
+  // den Build mit 'Cannot find module for publisher "never"'.
+  assert.strictEqual(pkg.build.publish, null, 'build.publish muss null sein (nicht "never")');
+  const runtime = Object.keys(pkg.dependencies || {});
+  const dev = Object.keys(pkg.devDependencies || {});
+  assert.deepStrictEqual(
+    runtime.filter((name) => dev.includes(name)),
+    [],
+    'Build-Werkzeuge dürfen nicht zusätzlich als Runtime-Abhängigkeit im Paket landen'
+  );
+  for (const unused of ['express', 'dotenv', 'vite']) {
+    assert.ok(!runtime.includes(unused), `${unused} wird nirgends importiert und gehört nicht ins Paket`);
+  }
+  assert.ok(runtime.includes('sql.js'), 'sql.js ist der Compiler-freie Datenbankleser');
+  const files = JSON.stringify(pkg.build.files);
+  assert.ok(files.includes('sql.js'), 'files muss sql.js für das asar-Paket nennen');
+});
+
 await check('die Quelle der Fixture bleibt unverändert (Read-Only-Zusage)', async () => {
   const file = path.join(root, 'tests/fixtures/rekordbox6/master.db');
   const before = fs.readFileSync(file);

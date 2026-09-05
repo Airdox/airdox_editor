@@ -51,6 +51,28 @@ function analyzeEnvironment(projectRoot) {
       });
     }
 
+    const publish = pkg.build ? pkg.build.publish : undefined;
+    if (typeof publish === 'string') {
+      issues.push({
+        level: 'error',
+        message:
+          `build.publish ist "${publish}" – in der Konfiguration steht darin kein Modus, sondern ein ` +
+          `Provider-Name, den electron-builder als Modul sucht (electron-publisher-${publish}) und mit ` +
+          '"Cannot find module for publisher" abbricht. Richtig: "build": { "publish": null } ' +
+          '(kein Update-Server). Den Modus "never" gibt es nur auf der Kommandozeile: --publish never.',
+      });
+    }
+
+    const shared = Object.keys(pkg.dependencies || {}).filter((name) => (pkg.devDependencies || {})[name] !== undefined);
+    if (shared.length > 0) {
+      issues.push({
+        level: 'error',
+        message:
+          `Diese Pakete stehen zugleich in dependencies und devDependencies: ${shared.join(', ')}. ` +
+          'Als Runtime-Abhängigkeit wandert ein Build-Werkzeug sonst unnötig in die App.',
+      });
+    }
+
     const hasDist = fs.existsSync(path.join(projectRoot, 'dist', 'index.html'));
     if (!hasDist) {
       notes.push('dist/index.html fehlt – das npm-Skript holt das mit "npm run build" nach.');
