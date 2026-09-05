@@ -21,7 +21,7 @@
     "clean": "node tools/clean.cjs",
     "icon": "npx --yes png2icons app-resources/icon.png app-resources/icon -icowe",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && node tests/db-reader-keys.test.mjs && node tests/sqlcipher-js-reader.test.mjs",
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && node tests/db-reader-keys.test.mjs && node tests/sqlcipher-js-reader.test.mjs && node tests/desktop-bridge.test.mjs",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "native:windows-hint": "node tools/windows-native-hint.cjs"
   },

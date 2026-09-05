@@ -8,7 +8,7 @@ Original-Audio, XML-, ANLZ- und Datenbankdateien bleiben immer unverändert und 
 
 ## Phase 1 – Desktop-Grundlage ✅
 
-Die Windows-App prüft XML-`Location`-Pfade und kann unterstützte Originalaudiodateien ausschließlich lesend öffnen. Sie erzeugt keinen synthetischen Ersatztrack mehr, wenn die Originaldatei nicht verfügbar ist.
+Die Windows-App prüft XML-`Location`-Pfade und kann unterstützte Originalaudiodateien ausschließlich lesend öffnen. Sie erzeugt keinen synthetischen Ersatztrack mehr, wenn die Originaldatei nicht verfügbar ist – der frühere Generator `src/audio/synthesizerTrack.ts` ist entfernt, fehlende Originale bleiben ein reiner Metadaten-/ANLZ-Track mit Status `MISSING`.
 
 - Read-only-Bridge: `inspectLocation`, `readOriginalAudio` (`electron/main.cjs`, `preload.cjs`, `src/types/desktop.d.ts`).
 - Track-Auswahl lädt erst nach expliziter Auswahl die Daten des Tracks; XML-Kollektionen werden mit kompakten Beatgrid-Metadaten durchsuchbar gehalten (11.000 Tracks < 0,5 s).
@@ -43,5 +43,5 @@ Der Paketierlauf für Windows durfte nicht mehr von einem C-Compiler abhängen: 
 - `electron/dbReader.cjs`: Engine-Auswahl (natives Modul → JavaScript-Fallback), spaltentolerante Abfragen über `PRAGMA table_info` (abweichende Rekordbox-Versionen führen zu Hinweisen, nicht zu Importabbruch), Hinweis auf eine vorhandene `-wal`-Datei, `describeEngines()` für die UI.
 - Packaging: `build.npmRebuild = false` (kein node-gyp beim Bauen), `asarUnpack` für optionale Native-Binaries und `sql.js`, NSIS-Installer + Portable-EXE, `base: './'` in `vite.config.ts` (sonst weißes Fenster aus dem `file://`-Loader), App-Icon (`app-resources/`), plattformneutrales `npm run clean`.
 - Diagnose: `tools/windows-native-hint.cjs` prüft Electron-ABI, optionale Abhängigkeit und entschlüsselt testweise eine Fixture; `BUILD-WINDOWS.md` dokumentiert Build, Fehlersuche und den optionalen nativen Pfad. `.github/workflows/windows-build.yml` baut Installer und Portable-EXE auf einem Windows-Runner.
-- Verifikation: echte SQLCipher-Dateien (mit SQLCipher 4.12 erzeugt, Schema `djmd*` bzw. OneLibrary, deutsche Umlaute und Windows-Pfade) werden entschlüsselt, gelesen und liefern identische Zeilen wie der native Pfad – 12 Prüfungen in `tests/sqlcipher-js-reader.test.mjs`, Fixture-Erzeugung unter `tools/generate-sqlcipher-fixtures.py`. Messung: 11.000 Tracks (3,7 MB) in ≈ 0,8 s, 100.000 Tracks (43 MB) in ≈ 3,5 s.
+- Verifikation: echte SQLCipher-Dateien (mit SQLCipher 4.12 erzeugt, Schema `djmd*` bzw. OneLibrary, deutsche Umlaute und Windows-Pfade) werden entschlüsselt, gelesen und liefern identische Zeilen wie der native Pfad – 12 Prüfungen in `tests/sqlcipher-js-reader.test.mjs`, Fixture-Erzeugung unter `tools/generate-sqlcipher-fixtures.py`. `tests/desktop-bridge.test.mjs` prüft die Windows-Verdrahtung ohne Electron-Binary: alle IPC-Kanäle von `preload.cjs` haben einen Handler in `main.cjs`, die Typen in `src/types/desktop.d.ts` decken die Bridge ab, Dateiendungen werden abgewiesen, und die Fixture bleibt nach dem Import bitgenau unverändert (10 Prüfungen). Messung: 11.000 Tracks (3,7 MB) in ≈ 0,8 s, 100.000 Tracks (43 MB) in ≈ 3,5 s.
 
