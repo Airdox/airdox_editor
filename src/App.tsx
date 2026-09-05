@@ -818,18 +818,49 @@ export default function App() {
 
   // ANLZ belongs to the explicitly active XML track. It is read-only input and
   // takes priority over XML values only for analysis fields it actually holds.
-  const handleImportAnlzFile = async (file: File) => {
+  const handleImportAnlzData = async (data: ArrayBuffer, fileName: string) => {
     if (!activeTrack) return;
 
     try {
-      const extraction = parseAnlzBinary(await file.arrayBuffer());
+      const extraction = parseAnlzBinary(data);
       const enrichedTrack = applyAnlzExtractionToTrack(activeTrack, extraction);
       setTracks((previous) => previous.map((track) => (
         track.id === enrichedTrack.id ? enrichedTrack : track
       )));
       if (enrichedTrack.audioBuffer) setWorkingAudioBuffer(enrichedTrack.audioBuffer);
+
+      const tags = extraction.tagsFound.join(', ');
+      showOperationFeedback({
+        title: 'Rekordbox ANLZ-Analyse übernommen (Read-Only)',
+        operationType: 'CUE',
+        description: `${fileName}: ${extraction.cues.length} Cues, ${extraction.loops.length} Loops, ${extraction.phrases.length} PSSI-Phrasen, ${extraction.waveform?.length || 0} Waveform-Buckets und ${extraction.beatGrid ? extraction.beatGrid.beats.length : 0} Beat-Einträge übernommen.`,
+        timeRangeSec: { start: 0, end: enrichedTrack.duration, duration: enrichedTrack.duration },
+        originalSha256: enrichedTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
     } catch (error) {
       console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
+    }
+  };
+
+  const handleImportAnlzFile = async (file: File) => {
+    await handleImportAnlzData(await file.arrayBuffer(), file.name);
+  };
+
+  // Native Windows path: the bridge opens the analysis file strictly for
+  // reading; the renderer never writes to the ANLZ source.
+  const handleImportAnlzFromDesktop = async () => {
+    if (!activeTrack || !window.rekordboxDesktop) return;
+    try {
+      const chosen = await window.rekordboxDesktop.chooseAnalysisFile();
+      if (!chosen) return;
+      const source = await window.rekordboxDesktop.readAnalysisFile(chosen.path);
+      const fileName = chosen.path.split(/[\\/]/).pop() || 'ANLZ-Datei';
+      await handleImportAnlzData(source.data, fileName);
+    } catch (error) {
+      console.error('[ANLZ Import] Windows-Lesepfad fehlgeschlagen:', error);
+      alert(`ANLZ-Datei konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -1268,6 +1299,7 @@ export default function App() {
             track={activeTrack}
             onApplyTrack={handleApplyExtractedTrack}
             onImportAnlzFile={handleImportAnlzFile}
+            onImportAnlzFromDesktop={handleImportAnlzFromDesktop}
             onImportXmlFile={loadXmlFile}
           />
         </>

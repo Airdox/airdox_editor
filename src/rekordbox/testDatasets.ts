@@ -415,3 +415,340 @@ export function generateSyntheticAnlzBuffer(bpm: number = 128.0): ArrayBuffer {
 
   return buffer;
 }
+
+// ---------------------------------------------------------------------------
+// Real-layout ANLZ fixture builders (Deep Symmetry documented byte layouts)
+// ---------------------------------------------------------------------------
+
+type AnlzTag = { tag: string; lenHeader: number; body: number[] };
+
+class AnlzByteWriter {
+  bytes: number[] = [];
+
+  u8(value: number) {
+    this.bytes.push(value & 0xff);
+    return this;
+  }
+  u16(value: number) {
+    this.bytes.push((value >> 8) & 0xff, value & 0xff);
+    return this;
+  }
+  u32(value: number) {
+    this.bytes.push(
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff
+    );
+    return this;
+  }
+  u32s(value: number) {
+    return this.u32(value);
+  }
+  ascii(text: string) {
+    for (const ch of text) this.bytes.push(ch.charCodeAt(0));
+    return this;
+  }
+  zeros(count: number) {
+    for (let i = 0; i < count; i++) this.bytes.push(0);
+    return this;
+  }
+  utf16Be(text: string, nulTerminated = true) {
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      this.bytes.push((code >> 8) & 0xff, code & 0xff);
+    }
+    if (nulTerminated) this.bytes.push(0, 0);
+    return this;
+  }
+  concat(values: number[]) {
+    this.bytes.push(...values);
+    return this;
+  }
+  get body() {
+    return this.bytes;
+  }
+}
+
+function encodeTag(writer: AnlzByteWriter, tag: string, header: number, body: number[]): void {
+  writer.ascii(tag).u32(header).u32(12 + body.length).concat(body);
+}
+
+function encodePcptEntry(timeMs: number, opts: { hotCue: number; loop?: number; orderFirst?: number; orderLast?: number } = {
+  hotCue: 0,
+}): number[] {
+  const w = new AnlzByteWriter();
+  const isLoop = opts.loop !== undefined;
+  w.ascii('PCPT')
+    .u32(0x1c)
+    .u32(0x38)
+    .u32(opts.hotCue)
+    .u32(0)
+    .u32(0x10000)
+    .u16(opts.orderFirst ?? 0xffff)
+    .u16(opts.orderLast ?? 0xffff)
+    .u8(isLoop ? 2 : 1)
+    .u8(0x00)
+    .u8(0x03)
+    .u8(0xe8)
+    .u32(timeMs)
+    .u32(isLoop ? (opts.loop as number) : 0)
+    .zeros(16);
+  return w.body;
+}
+
+function encodePcp2Entry(
+  timeMs: number,
+  opts: {
+    hotCue: number;
+    type?: 1 | 2;
+    loop?: number;
+    colorId?: number;
+    comment?: string;
+    colorCode?: number;
+    colorRgb?: [number, number, number];
+    loopNumerator?: number;
+    loopDenominator?: number;
+  }
+): number[] {
+  const w = new AnlzByteWriter();
+  const comment = opts.comment ?? '';
+  const commentBytes = comment.length > 0 ? comment.length * 2 + 2 : 0;
+  const hasColor = opts.colorRgb !== undefined || opts.colorCode !== undefined;
+
+  // Fixed header + fixed fields (0x28 bytes) + comment length + comment + color.
+  const lenEntry = 0x28 + 4 + commentBytes + (hasColor ? 4 : 0);
+
+  w.ascii('PCP2')
+    .u32(0x0a)
+    .u32(lenEntry)
+    .u32(opts.hotCue)
+    .u8(opts.type ?? 1)
+    .u8(0x00)
+    .u8(0x03)
+    .u8(0xe8)
+    .u32(timeMs)
+    .u32(opts.loop ?? 0)
+    .u8(opts.colorId ?? 0)
+    .u8(0x01)
+    .zeros(6)
+    .u16(opts.loopNumerator ?? 0)
+    .u16(opts.loopDenominator ?? 0)
+    .u32(commentBytes);
+  if (commentBytes > 0) w.utf16Be(comment);
+  if (hasColor) {
+    w.u8(opts.colorCode ?? 0);
+    const rgb = opts.colorRgb ?? [0, 0, 0];
+    w.u8(rgb[0]).u8(rgb[1]).u8(rgb[2]);
+  }
+  return w.body;
+}
+
+function encodePcob(type: 0 | 1, entries: number[][]): AnlzTag {
+  const w = new AnlzByteWriter();
+  w.u32(type).u16(0).u16(entries.length).u32(0);
+  entries.forEach((entry) => w.concat(entry));
+  return { tag: 'PCOB', lenHeader: 0x18, body: w.body };
+}
+
+function encodePco2(type: 0 | 1, entries: number[][]): AnlzTag {
+  const w = new AnlzByteWriter();
+  w.u32(type).u16(entries.length).u16(0);
+  entries.forEach((entry) => w.concat(entry));
+  return { tag: 'PCO2', lenHeader: 0x0e, body: w.body };
+}
+
+function encodePqtz(bpm: number, firstBeatMs: number, beats: { beatInBar: number; tempo: number; timeMs: number }[]): AnlzTag {
+  const w = new AnlzByteWriter();
+  w.u32(0).u32(0x80000).u32(beats.length);
+  beats.forEach((b) => w.u16(b.beatInBar).u16(b.tempo).u32(b.timeMs));
+  return { tag: 'PQTZ', lenHeader: 0x18, body: w.body };
+}
+
+function encodePpth(path: string): AnlzTag {
+  const w = new AnlzByteWriter();
+  const len = path.length * 2 + 2;
+  w.u32(len).utf16Be(path);
+  return { tag: 'PPTH', lenHeader: 0x10, body: w.body };
+}
+
+function encodePwv5(count: number): AnlzTag {
+  const w = new AnlzByteWriter();
+  w.u32(2).u32(count).u32(0x00960305);
+  for (let i = 0; i < count; i++) {
+    // 3-bit R, 3-bit G, 3-bit B + 5-bit height + 2 unused bits.
+    const height = Math.min(31, 8 + Math.floor(20 * Math.abs(Math.sin(i * 0.15))));
+    const value = (0x50 << 11) | (0x30 << 8) | (0x20 << 5) | height;
+    w.u16(value);
+  }
+  return { tag: 'PWV5', lenHeader: 0x18, body: w.body };
+}
+
+function encodePssiPhrase(opts: {
+  index: number;
+  beat: number;
+  kind: number;
+  k1?: number;
+  k2?: number;
+  k3?: number;
+  b?: number;
+  beats?: number[];
+  fill?: number;
+  beatFill?: number;
+}): number[] {
+  const w = new AnlzByteWriter();
+  w.u16(opts.index)
+    .u16(opts.beat)
+    .u16(opts.kind)
+    .u8(0)
+    .u8(opts.k1 ?? 0)
+    .u8(0)
+    .u8(opts.k2 ?? 0)
+    .u8(0)
+    .u8(opts.b ?? 0)
+    .u16(opts.beats?.[0] ?? 0)
+    .u16(opts.beats?.[1] ?? 0)
+    .u16(opts.beats?.[2] ?? 0)
+    .u8(0)
+    .u8(opts.k3 ?? 0)
+    .u8(0)
+    .u8(opts.fill ?? 0)
+    .u16(opts.beatFill ?? 0);
+  return w.body;
+}
+
+const PSSI_MASK_BASE = [
+  0xcb, 0xe1, 0xee, 0xfa, 0xe5, 0xee, 0xad, 0xee, 0xe9, 0xd2,
+  0xe9, 0xeb, 0xe1, 0xe9, 0xf3, 0xe8, 0xe9, 0xf4, 0xe1,
+];
+
+function encodePssi(
+  mood: number,
+  endBeat: number,
+  entries: number[][],
+  opts: { masked?: boolean; bank?: number } = {}
+): AnlzTag {
+  const body = new AnlzByteWriter();
+  body.u32(24).u16(entries.length);
+
+  const payload = new AnlzByteWriter();
+  payload.u16(mood).zeros(6).u16(endBeat).zeros(2).u8(opts.bank ?? 0).zeros(1);
+  entries.forEach((e) => payload.concat(e));
+
+  const payloadBytes = payload.body;
+  if (opts.masked) {
+    for (let i = 0; i < payloadBytes.length; i++) {
+      payloadBytes[i] ^= (PSSI_MASK_BASE[i % PSSI_MASK_BASE.length] + entries.length) & 0xff;
+    }
+  }
+  body.concat(payloadBytes);
+
+  return { tag: 'PSSI', lenHeader: 0x14, body: body.body };
+}
+
+function assembleAnlzFile(tags: AnlzTag[]): ArrayBuffer {
+  const headerLen = 0x1c;
+  const sectionsSize = tags.reduce((sum, t) => sum + 12 + t.body.length, 0);
+  const writer = new AnlzByteWriter();
+  writer.ascii('PMAI').u32(headerLen).u32(headerLen + sectionsSize).u32(1).u32(0x10000).u32(0x10000).u32(0);
+  tags.forEach((t) => encodeTag(writer, t.tag, t.lenHeader, t.body));
+  const bytes = Uint8Array.from(writer.body);
+  return bytes.buffer;
+}
+
+function standardBeatGrid(bpm: number, firstBeatMs: number, beatCount: number) {
+  const beats: { beatInBar: number; tempo: number; timeMs: number }[] = [];
+  for (let i = 0; i < beatCount; i++) {
+    beats.push({
+      beatInBar: (i % 4) + 1,
+      tempo: Math.round(bpm * 100),
+      timeMs: firstBeatMs + Math.round((60000 / bpm) * i),
+    });
+  }
+  return beats;
+}
+
+/**
+ * .DAT fixture with the real PMAI/PPTH/PQTZ/PCOB/PWV5 layouts: two memory
+ * points + one loop, one hot cue and a 4-beat beat grid.
+ */
+export function generateRealAnlzDatFixture(bpm: number = 128.0): ArrayBuffer {
+  const spbMs = Math.round(60000 / bpm);
+  const tags: AnlzTag[] = [
+    encodePpth('C:\\Music\\Reference.wav'),
+    encodePqtz(bpm, 0, standardBeatGrid(bpm, 0, 32)),
+    encodePcob(0, [
+      encodePcptEntry(0, { hotCue: 0, orderFirst: 0xffff, orderLast: 1 }),
+      encodePcptEntry(8 * spbMs, { hotCue: 0, orderFirst: 0, orderLast: 2 }),
+      encodePcptEntry(16 * spbMs, { hotCue: 0, orderFirst: 1, orderLast: 0xffff }),
+      encodePcptEntry(4 * spbMs, { hotCue: 0, loop: 12 * spbMs, orderFirst: 2, orderLast: 3 }),
+    ]),
+    encodePcob(1, [
+      encodePcptEntry(16 * spbMs, { hotCue: 1, orderFirst: 0xffff, orderLast: 0xffff }),
+    ]),
+    encodePwv5(600),
+  ];
+  return assembleAnlzFile(tags);
+}
+
+/**
+ * .EXT fixture with PCO2 extended cues (comments + colors), PWV3/PWV7 and
+ * PSSI song structure (optionally in the masked Rekordbox 6 export encoding).
+ */
+export function generateRealAnlzExtFixture(
+  bpm: number = 128.0,
+  opts: { maskPssi?: boolean } = {}
+): ArrayBuffer {
+  const spbMs = Math.round(60000 / bpm);
+  const tags: AnlzTag[] = [
+    encodePpth('C:\\Music\\Reference.wav'),
+    encodePqtz(bpm, 0, standardBeatGrid(bpm, 0, 128)),
+    encodePcob(0, [
+      encodePcptEntry(0, { hotCue: 0, orderFirst: 0xffff, orderLast: 0xffff }),
+    ]),
+    encodePco2(1, [
+      encodePcp2Entry(0, { hotCue: 1, comment: 'Einsatz A', colorCode: 3, colorRgb: [0, 162, 255] }),
+      encodePcp2Entry(8 * spbMs, { hotCue: 2, comment: 'Drop', colorCode: 5, colorRgb: [255, 80, 80] }),
+      encodePcp2Entry(32 * spbMs, { hotCue: 3, colorCode: 9, colorRgb: [0, 230, 118] }),
+    ]),
+    encodePco2(0, [
+      encodePcp2Entry(16 * spbMs, { hotCue: 0, comment: 'Breakdown Memory' }),
+    ]),
+    {
+      tag: 'PWV3',
+      lenHeader: 0x18,
+      body: (() => {
+        const w = new AnlzByteWriter();
+        w.u32(1).u32(900).u32(0x00960000);
+        for (let i = 0; i < 900; i++) w.u8(10 + Math.floor(20 * Math.abs(Math.sin(i * 0.1))));
+        return w.body;
+      })(),
+    },
+    {
+      tag: 'PWV7',
+      lenHeader: 0x18,
+      body: (() => {
+        const w = new AnlzByteWriter();
+        w.u32(3).u32(900).u32(0x00960000);
+        for (let i = 0; i < 900; i++) {
+          w.u8(20 + Math.floor(60 * Math.abs(Math.sin(i * 0.07))));
+          w.u8(15 + Math.floor(50 * Math.abs(Math.cos(i * 0.09))));
+          w.u8(10 + Math.floor(40 * Math.abs(Math.sin(i * 0.05))));
+        }
+        return w.body;
+      })(),
+    },
+    encodePssi(
+      1,
+      65,
+      [
+        encodePssiPhrase({ index: 1, beat: 1, kind: 1, k1: 1 }),
+        encodePssiPhrase({ index: 2, beat: 17, kind: 2, k2: 0, k3: 1 }),
+        encodePssiPhrase({ index: 3, beat: 33, kind: 5, k1: 1 }),
+        encodePssiPhrase({ index: 4, beat: 65, kind: 6, k1: 1 }),
+      ],
+      { masked: opts.maskPssi ?? true, bank: 3 }
+    ),
+  ];
+  return assembleAnlzFile(tags);
+}

@@ -11,6 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
+  /** Own calculation used as a clearly labeled fallback when no Rekordbox
+   * source (ANLZ/DB/audio) provides the data. */
+  GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
 export type WaveformMode = 'BLUE' | 'RGB' | '3BAND';
@@ -57,18 +60,22 @@ export interface CuePoint {
 
 export interface PhraseSection {
   id: string;
-  name: 'INTRO' | 'UP' | 'CHORUS' | 'BREAKDOWN' | 'DROP' | 'OUTRO' | 'VERSE' | 'BRIDGE';
+  name: 'INTRO' | 'UP' | 'DOWN' | 'CHORUS' | 'BREAKDOWN' | 'DROP' | 'OUTRO' | 'VERSE' | 'BRIDGE';
   startBar: number;
   endBar: number;
   startTime: number;
   endTime: number;
   color: string;
+  /** Where the phrase data came from; own templates are GENERATED_FALLBACK. */
+  origin?: DataOrigin;
 }
 
 export interface ExtractedDatabaseRecord {
   trackId: string;
   databaseSource: 'REKORDBOX_XML' | 'REKORDBOX_DB' | 'REKORDBOX_ANLZ' | 'LOCAL_EXTRACT';
   anlzTagsFound: string[];
+  /** Non-fatal notices produced while decoding the analysis source. */
+  anlzWarnings?: string[];
   memoryCuesCount: number;
   hotCuesCount: number;
   loopsCount: number;

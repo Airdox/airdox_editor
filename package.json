@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts"
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

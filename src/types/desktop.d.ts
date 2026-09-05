@@ -20,6 +20,13 @@ declare global {
         accessMode: 'READ_ONLY';
       }>;
       chooseAnalysisFile(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
+      readAnalysisFile(filePath: string): Promise<{
+        data: ArrayBuffer;
+        path: string;
+        size: number;
+        modifiedAt: number;
+        accessMode: 'READ_ONLY';
+      }>;
     };
   }
 }
