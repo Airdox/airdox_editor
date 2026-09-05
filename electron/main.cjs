@@ -3,7 +3,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 // Der Produktname steuert Fenstertitel, userData-Pfad und AppUserModelId.
 const PRODUCT_NAME = 'Airdox_intelligents_Editor';
 app.setName(PRODUCT_NAME);
-const { access, readFile, stat } = require('node:fs/promises');
+const { access, mkdir, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
@@ -191,6 +191,161 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
     modifiedAt: details.mtimeMs,
     accessMode: 'READ_ONLY',
   };
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Projektdateien und Exporte: der einzige Weg, auf der Platte zu schreiben.
+//
+// Grundsatz des Programms: Rekordbox-Originale (Audiodateien, master.db,
+// exportLibrary.db, ANLZ) werden ausschließlich gelesen. Geschrieben wird nur
+// dorthin, wo der Mensch es in einem Systemdialog bestätigt hat. Dieser Prozess
+// merkt sich deshalb die Pfade, die ein Dialog gerade freigegeben hat, und jede
+// Schreiboperation muss darin liegen – das begrenzt auch ein fehlerhaftes oder
+// manipuliertes Renderer-Skript.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_WRITE_BYTES = 512 * 1024 * 1024; // 512 MB je Datei
+const confirmedSavePaths = new Set();
+const confirmedSaveDirs = new Set();
+
+const SAVE_FILTERS = {
+  project: { name: 'Airdox-Projekt (JSON)', extensions: ['json'] },
+  wav: { name: 'WAV-Audio (16-Bit PCM)', extensions: ['wav'] },
+  xml: { name: 'Rekordbox XML', extensions: ['xml'] },
+  text: { name: 'Textdatei', extensions: ['txt', 'log'] },
+};
+
+function filterFor(kind) {
+  const single = SAVE_FILTERS[kind] || SAVE_FILTERS.text;
+  return [single, { name: 'Alle Dateien', extensions: ['*'] }];
+}
+
+// Windows ergänzt die Filterendung nicht immer; ohne Endung wäre die Datei nutzlos.
+function withExtension(target, kind) {
+  if (path.extname(target)) return target;
+  const ext = kind === 'project' ? '.airdoxproj.json' : '.' + (SAVE_FILTERS[kind] || SAVE_FILTERS.text).extensions[0];
+  return target + ext;
+}
+
+function rememberWriteTarget(filePath) {
+  const resolved = path.resolve(filePath);
+  confirmedSavePaths.add(resolved);
+  confirmedSaveDirs.add(path.dirname(resolved));
+  return resolved;
+}
+
+function assertWritableTarget(target) {
+  const resolved = path.resolve(String(target || ''));
+  if (confirmedSavePaths.has(resolved)) return resolved;
+  for (const dir of confirmedSaveDirs) {
+    if (resolved.startsWith(dir + path.sep)) return resolved;
+  }
+  throw new Error('Schreiben verweigert: dieser Pfad wurde nicht in einem Speicherdialog bestätigt.');
+}
+
+ipcMain.handle('datei:specify-path', async (_event, options) => {
+  const kind = options && typeof options.kind === 'string' ? options.kind : 'project';
+  const suggested = options && typeof options.suggestedName === 'string' && options.suggestedName.trim()
+    ? path.basename(options.suggestedName.trim())
+    : 'projekt.json';
+  const startDir = options && typeof options.startDir === 'string' && options.startDir.trim()
+    ? options.startDir
+    : app.getPath('documents');
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: options && options.title ? options.title : 'Ziel für die Datei wählen',
+    defaultPath: path.join(startDir, suggested),
+    filters: filterFor(kind),
+    properties: ['createDirectories', 'showHiddenFiles'],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  return { canceled: false, filePath: rememberWriteTarget(withExtension(result.filePath, kind)) };
+});
+
+ipcMain.handle('datei:write', async (_event, payload) => {
+  const target = assertWritableTarget(payload && payload.filePath);
+  const encoding = payload && payload.encoding === 'utf8' ? 'utf8' : 'base64';
+  if (!payload || typeof payload.data !== 'string' || payload.data.length === 0) {
+    throw new Error('Keine Daten zum Schreiben erhalten.');
+  }
+  const buffer = encoding === 'utf8' ? Buffer.from(payload.data, 'utf8') : Buffer.from(payload.data, 'base64');
+  if (buffer.length > MAX_WRITE_BYTES) {
+    throw new Error('Datei größer als ' + MAX_WRITE_BYTES / 1024 / 1024 + ' MB – Abbruch.');
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, buffer);
+  return { filePath: target, bytes: buffer.length };
+});
+
+ipcMain.handle('datei:write-many', async (_event, payload) => {
+  const dir = path.resolve(String((payload && payload.directory) || ''));
+  if (!confirmedSaveDirs.has(dir)) {
+    throw new Error('Zielordner wurde nicht in einem Ordnerdialog bestätigt.');
+  }
+  const files = payload && Array.isArray(payload.files) ? payload.files : [];
+  if (files.length === 0) throw new Error('Keine Dateien zum Schreiben erhalten.');
+  await mkdir(dir, { recursive: true });
+  const written = [];
+  for (const entry of files) {
+    const rawName = String((entry && entry.name) || '');
+    const name = path.basename(rawName.replace(/[\\/:*?"<>|]+/g, '_'));
+    if (!name) throw new Error('Dateiname fehlt.');
+    const target = assertWritableTarget(path.join(dir, name));
+    const buffer = entry && entry.encoding === 'utf8'
+      ? Buffer.from(String((entry && entry.data) || ''), 'utf8')
+      : Buffer.from(String((entry && entry.data) || ''), 'base64');
+    if (buffer.length > MAX_WRITE_BYTES) {
+      throw new Error(name + ' ist größer als ' + MAX_WRITE_BYTES / 1024 / 1024 + ' MB – Abbruch.');
+    }
+    await writeFile(target, buffer);
+    written.push({ filePath: target, bytes: buffer.length });
+  }
+  return { directory: dir, written };
+});
+
+ipcMain.handle('datei:pick-open', async (_event, options) => {
+  const kind = options && typeof options.kind === 'string' ? options.kind : 'project';
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: options && options.title ? options.title : 'Datei öffnen',
+    defaultPath: (options && options.startDir) || app.getPath('documents'),
+    filters: filterFor(kind),
+    properties: ['openFile', 'showHiddenFiles'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return { canceled: true };
+  return { canceled: false, filePath: path.resolve(result.filePaths[0]) };
+});
+
+ipcMain.handle('datei:pick-directory', async (_event, options) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: options && options.title ? options.title : 'Ordner wählen',
+    defaultPath: (options && options.startDir) || app.getPath('documents'),
+    properties: ['openDirectory', 'createDirectory', 'showHiddenFiles'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return { canceled: true };
+  const dir = path.resolve(result.filePaths[0]);
+  confirmedSaveDirs.add(dir);
+  return { canceled: false, directory: dir };
+});
+
+ipcMain.handle('datei:read-text', async (_event, payload) => {
+  const target = path.resolve(String((payload && payload.filePath) || ''));
+  const details = await stat(target);
+  if (!details.isFile()) throw new Error('Keine Datei.');
+  const limit = 512 * 1024 * 1024;
+  if (details.size > limit) {
+    throw new Error('Datei ist größer als ' + limit / 1024 / 1024 + ' MB und wird nicht gelesen.');
+  }
+  // Gelesen wird über diesen Kanal nur, was per Dialog gewählt wurde oder eine
+  // Projektdatei ist – Audiodaten und Bibliotheken haben ihre eigenen Lesekanäle.
+  const allowed =
+    confirmedSavePaths.has(target) ||
+    confirmedSavePaths.has(path.dirname(target)) ||
+    /\.(airdoxproj\.)?json$/i.test(target);
+  if (!allowed) {
+    throw new Error('Nur Projektdateien (.airdoxproj.json/.json) können über diesen Kanal gelesen werden.');
+  }
+  const text = await readFile(target, 'utf8');
+  return { filePath: target, text, size: details.size, modifiedAt: details.mtimeMs };
 });
 
 app.whenReady().then(() => {

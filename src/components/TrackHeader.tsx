@@ -15,6 +15,8 @@ interface TrackHeaderProps {
   viewDuration: number; // duration of detail window in seconds
   onSeek: (time: number) => void;
   onPanView: (newOffset: number) => void;
+  /** Wellenform-Farbmodus für die Übersichtsspur. */
+  mode?: import('../types/rekordbox').WaveformMode;
 }
 
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
@@ -24,6 +26,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   viewDuration,
   onSeek,
   onPanView,
+  mode = 'AMBER',
 }) => {
   // Format 05:26.3
   const formatTime = (secs: number) => {
@@ -102,6 +105,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         viewDuration={viewDuration}
         onSeek={onSeek}
         onPanView={onPanView}
+        mode={mode}
       />
     </div>
   );

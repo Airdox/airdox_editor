@@ -8,6 +8,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   FilePlus,
+  FolderOpen,
   Save,
   Share2,
   ChevronDown,
@@ -28,6 +29,11 @@ interface EditModeBarProps {
   onToggleQuantize: () => void;
   onNewProject: () => void;
   onSaveProject: () => void;
+  onOpenProject: () => void;
+  /** Pfad der zuletzt gespeicherten Projektdatei (Desktop) bzw. null. */
+  projectPath: string | null;
+  /** Ungespeicherte Änderungen am Arbeitsstand. */
+  isDirty: boolean;
   onExport: () => void;
   onShowInfo: () => void;
   masterVolume: number;
@@ -47,6 +53,9 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onToggleQuantize,
   onNewProject,
   onSaveProject,
+  onOpenProject,
+  projectPath,
+  isDirty,
   onExport,
   onShowInfo,
   masterVolume,
@@ -88,9 +97,25 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             <FilePlus size={14} />
           </button>
           <button
-            onClick={onSaveProject}
+            onClick={onOpenProject}
             className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
-            title="Projekt speichern"
+            title="Projekt öffnen (Strg+Shift+O)"
+          >
+            <FolderOpen size={14} />
+          </button>
+          <button
+            onClick={onSaveProject}
+            className={`p-1 rounded transition-colors hover:text-black hover:bg-[#ff9500] ${
+              isDirty ? 'text-[#ff9500]' : 'text-neutral-400'
+            }`}
+            title={
+              isDirty
+                ? 'Projekt speichern (Strg+S) – ungespeicherte Änderungen' +
+                  (projectPath ? ` → ${projectPath}` : '')
+                : projectPath
+                  ? `zuletzt gespeichert: ${projectPath}`
+                  : 'Projekt speichern (Strg+S)'
+            }
           >
             <Save size={14} />
           </button>
@@ -104,8 +129,12 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
         </div>
 
         {/* Project Name dropdown */}
-        <div className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]">
+        <div
+          className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]"
+          title={projectPath ? `Projektdatei: ${projectPath}` : 'Projekt noch nicht gespeichert'}
+        >
           <span>{projectName}</span>
+          {isDirty && <span className="text-[#ff9500] font-bold">*</span>}
           <ChevronDown size={11} className="text-neutral-500" />
         </div>
 

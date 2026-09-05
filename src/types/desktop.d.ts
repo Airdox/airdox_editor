@@ -31,6 +31,40 @@ declare global {
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
+      /**
+       * Dateiablage der Desktop-App. Writes are accepted only for paths a human
+       * confirmed in a save dialog (or a directory chosen in an open dialog).
+       */
+      chooseSavePath(options: {
+        kind?: 'project' | 'wav' | 'xml' | 'text';
+        suggestedName?: string;
+        startDir?: string;
+        title?: string;
+      }): Promise<{ canceled: boolean; filePath?: string }>;
+      writeFile(payload: {
+        filePath: string;
+        data: string;
+        encoding?: 'utf8' | 'base64';
+      }): Promise<{ filePath: string; bytes: number }>;
+      writeMany(payload: {
+        directory: string;
+        files: Array<{ name: string; data: string; encoding?: 'utf8' | 'base64' }>;
+      }): Promise<{ directory: string; written: Array<{ filePath: string; bytes: number }> }>;
+      chooseOpenPath(options: {
+        kind?: 'project' | 'wav' | 'xml' | 'text';
+        startDir?: string;
+        title?: string;
+      }): Promise<{ canceled: boolean; filePath?: string }>;
+      chooseDirectory(options?: {
+        startDir?: string;
+        title?: string;
+      }): Promise<{ canceled: boolean; directory?: string }>;
+      readTextFile(payload: { filePath: string }): Promise<{
+        filePath: string;
+        text: string;
+        size: number;
+        modifiedAt: number;
+      }>;
       /** Which read engines are installed (native SQLCipher binding / pure JS). */
       describeDatabaseEngines(): Promise<RekordboxDatabaseEngines>;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;

@@ -3,7 +3,7 @@
  * Rekordbox DetailWaveform Component
  * High-performance 60fps Canvas renderer implementing the strict visual lock
  * from screenshots 01, 02, and 03:
- * - 3 Waveform Modes: BLUE, RGB, 3BAND
+ * - Wellenform-Modi: AMBER (Standard, warm), BLUE, RGB, 3BAND
  * - Beatgrid bar numbers (1, 9, 17... / 105, 113, 121)
  * - Exact blue selection frame with diagonal corner handles & stats box
  * - Left BPM & Zoom control column
@@ -17,6 +17,7 @@ import {
   SelectionRange,
   CuePoint,
 } from '../types/rekordbox';
+import { amberColorCss, amberCoreAlpha } from '../waveform/colors';
 import {
   Plus,
   Minus,
@@ -301,7 +302,16 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
-          if (waveformMode === 'BLUE') {
+          if (waveformMode === 'AMBER') {
+            // Warmes Bernstein: leise dunkler, laut heller, Bass satt-orange,
+            // Transienten mit hellem Kern – dieselbe Farbmathematik wie in der
+            // Übersichtsspur und in den Tests.
+            const barH = Math.max(2, peak * maxHalfH);
+            ctx.fillStyle = amberColorCss(peak, low, high);
+            ctx.fillRect(x, centerY - barH, colW, barH * 2);
+            ctx.fillStyle = `rgba(255, 246, 226, ${amberCoreAlpha(peak, high)})`;
+            ctx.fillRect(x, centerY - 1.5, colW, 3);
+          } else if (waveformMode === 'BLUE') {
             // High-contrast electric blue waveform
             const barH = Math.max(2, peak * maxHalfH);
             // Core transient

@@ -5,11 +5,23 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc } from 'lucide-react';
+import { Disc, FolderOpen, Save, SaveAll, Sparkles, Layers } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
+import { WAVEFORM_MODES } from '../waveform/colors';
 
 interface MenuBarProps {
   onNewProject: () => void;
+  onSaveProject: () => void;
+  onSaveProjectAs: () => void;
+  onOpenProject: () => void;
+  onExportClips: () => void;
+  onLoadDemoTrack: () => void;
+  projectPath: string | null;
+  isDirty: boolean;
+  canSaveProject: boolean;
+  hasSelection: boolean;
+  onCopySelectionToEnd: () => void;
+  onMoveSelectionToStart: () => void;
   onImportXml: () => void;
   onImportAudio: () => void;
   onExportWav: () => void;
@@ -32,6 +44,17 @@ interface MenuBarProps {
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
+  onSaveProject,
+  onSaveProjectAs,
+  onOpenProject,
+  onExportClips,
+  onLoadDemoTrack,
+  projectPath,
+  isDirty,
+  canSaveProject,
+  hasSelection,
+  onCopySelectionToEnd,
+  onMoveSelectionToStart,
   onImportXml,
   onImportAudio,
   onExportWav,
@@ -93,6 +116,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span>Neues Projekt</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+N</span>
               </button>
+              <button
+                onClick={() => { onOpenProject(); setActiveMenu(null); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+              >
+                <span className="flex items-center space-x-1.5">
+                  <FolderOpen size={12} />
+                  <span>Projekt öffnen…</span>
+                </span>
+                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Shift+O</span>
+              </button>
               <div className="h-px bg-[#262830] my-1" />
               {onOpenDatabaseInspector && (
                 <button
@@ -129,6 +162,47 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               </button>
               <div className="h-px bg-[#262830] my-1" />
               <button
+                onClick={() => { onSaveProject(); setActiveMenu(null); }}
+                disabled={!canSaveProject}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+              >
+                <span className="flex items-center space-x-1.5">
+                  <Save size={12} />
+                  <span>Projekt speichern{isDirty ? ' *' : '…'}</span>
+                </span>
+                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+S</span>
+              </button>
+              <button
+                onClick={() => { onSaveProjectAs(); setActiveMenu(null); }}
+                disabled={!canSaveProject}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+              >
+                <span className="flex items-center space-x-1.5">
+                  <SaveAll size={12} />
+                  <span>Projekt speichern unter…</span>
+                </span>
+                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Shift+S</span>
+              </button>
+              {projectPath && (
+                <div
+                  className="px-3 py-1 text-[9.5px] text-neutral-500 truncate font-mono"
+                  title={projectPath}
+                >
+                  {projectPath}
+                </div>
+              )}
+              <div className="h-px bg-[#262830] my-1" />
+              <button
+                onClick={() => { onExportClips(); setActiveMenu(null); }}
+                disabled={!canSaveProject}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+              >
+                <span className="flex items-center space-x-1.5">
+                  <Layers size={12} />
+                  <span>Palette-Clips als WAVs exportieren…</span>
+                </span>
+              </button>
+              <button
                 onClick={() => { onExportWav(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
               >
@@ -140,6 +214,17 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
               >
                 <span>Rekordbox XML exportieren...</span>
+              </button>
+              <div className="h-px bg-[#262830] my-1" />
+              <button
+                onClick={() => { onLoadDemoTrack(); setActiveMenu(null); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#ff9500] hover:text-black flex justify-between text-[#ffb74d] font-medium"
+                title="Deterministisch erzeugte Demospur: 8 Takte, 128 BPM"
+              >
+                <span className="flex items-center space-x-1.5">
+                  <Sparkles size={12} />
+                  <span>Demospur laden (8 Takte, 128 BPM)</span>
+                </span>
               </button>
             </div>
           )}
@@ -174,6 +259,25 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Y</span>
               </button>
               <div className="h-px bg-[#262830] my-1" />
+              <button
+                onClick={() => { onCopySelectionToEnd(); setActiveMenu(null); }}
+                disabled={!hasSelection}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                title="Kopiert die Auswahl ans Ende und rastet sie auf den nächsten Taktanfang ein"
+              >
+                <span>Auswahl ans Ende kopieren</span>
+                <span className="text-neutral-500 hover:text-neutral-200">Strg+J</span>
+              </button>
+              <button
+                onClick={() => { onMoveSelectionToStart(); setActiveMenu(null); }}
+                disabled={!hasSelection}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                title="Setzt die Auswahl an den Taktanfang und entfernt sie aus der Spur"
+              >
+                <span>Auswahl an den Taktanfang setzen</span>
+                <span className="text-neutral-500 hover:text-neutral-200">Strg+M</span>
+              </button>
+              <div className="h-px bg-[#262830] my-1" />
               <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
                 Originalschutz aktiv (Read-Only)
               </div>
@@ -196,33 +300,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
                 Waveform-Modus
               </div>
-              <button
-                onClick={() => { onSetWaveformMode('BLUE'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === 'BLUE' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-              >
-                <span>BLUE (Monochrom)</span>
-                {waveformMode === 'BLUE' && <span>✓</span>}
-              </button>
-              <button
-                onClick={() => { onSetWaveformMode('RGB'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === 'RGB' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-              >
-                <span>RGB (Frequenzfarben)</span>
-                {waveformMode === 'RGB' && <span>✓</span>}
-              </button>
-              <button
-                onClick={() => { onSetWaveformMode('3BAND'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === '3BAND' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-              >
-                <span>3BAND (Low / Mid / High)</span>
-                {waveformMode === '3BAND' && <span>✓</span>}
-              </button>
+              {WAVEFORM_MODES.map((entry) => (
+                <button
+                  key={entry.mode}
+                  onClick={() => { onSetWaveformMode(entry.mode); setActiveMenu(null); }}
+                  className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
+                    waveformMode === entry.mode ? 'text-white' : 'text-neutral-300'
+                  }`}
+                  title={entry.hint}
+                >
+                  <span>{entry.label}</span>
+                  {waveformMode === entry.mode && <span>✓</span>}
+                </button>
+              ))}
+
               <div className="h-px bg-[#262830] my-1" />
               <button
                 onClick={() => { onTogglePalette(); setActiveMenu(null); }}

@@ -16,7 +16,7 @@ export enum DataOrigin {
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
-export type WaveformMode = 'BLUE' | 'RGB' | '3BAND';
+export type WaveformMode = 'AMBER' | 'BLUE' | 'RGB' | '3BAND';
 
 export interface SourcedValue<T> {
   value: T;
@@ -111,6 +111,8 @@ export interface PaletteClip {
   key: string;
   color: string;
   audioBuffer?: AudioBuffer;
+  /** Dieselben Samples wie audioBuffer, ohne AudioContext – Bearbeitung und Tests. */
+  clipPcm?: import('../audio/pcm').PcmAudio;
   miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
   origin: DataOrigin;
 }
@@ -187,6 +189,8 @@ export interface TrackModel {
   rawXmlAttributes?: Record<string, string>;
   originalMedia?: OriginalMediaReference;
   workingSegments: EditSegment[];
+  /** Arbeitskopie nach destruktiven Schnitten; audioBuffer bleibt das Original. */
+  workingPcm?: import('../audio/pcm').PcmAudio;
 }
 
 /**
@@ -214,6 +218,10 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
+  loops?: LoopPoint[];
+  beatGrid?: BeatGrid;
+  /** Vollständiger Arbeitsstand vor dem Eingriff: der exakte Rückweg für Undo. */
+  audio?: import('../audio/pcm').PcmAudio;
 }
 
 export interface MultiTrackLayer {

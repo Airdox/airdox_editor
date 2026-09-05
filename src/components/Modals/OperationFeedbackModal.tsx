@@ -22,7 +22,7 @@ import {
 
 export interface OperationTelemetry {
   title: string;
-  operationType: 'INSERT' | 'REPLACE' | 'OVERDUB' | 'DELETE' | 'CLEAR' | 'EXPORT' | 'CUE';
+  operationType: 'INSERT' | 'REPLACE' | 'OVERDUB' | 'DELETE' | 'CLEAR' | 'EXPORT' | 'CUE' | 'IMPORT' | 'PROJECT';
   description: string;
   timeRangeSec?: { start: number; end: number; duration: number };
   barsCount?: number;

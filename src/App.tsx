@@ -18,7 +18,43 @@ import {
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { logger } from './utils/logger';
-import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
+import { analyzeAudioBuffer, analyzePcm, extractMiniPeaks, extractMiniPeaksPcm } from './waveform/analyzer';
+import {
+  EditableAudio,
+  copyRange,
+  copyRangeToEnd,
+  cutRange,
+  insertClipAt,
+  moveRangeToStart,
+  overdubRange,
+  pasteAt,
+  removeRange,
+  replaceRange,
+  silenceRange,
+  EditReport,
+} from './audio/editOps';
+import { PcmAudio, pcmDuration, pcmFromAudioBuffer, pcmSampleCount as pcmSampleCountOrZero, pcmToAudioBuffer } from './audio/pcm';
+import { encodeWav } from './audio/wav';
+import { generateDemoTrack } from './audio/demoTrack';
+import {
+  ProjectAudioBlock,
+  ProjectSegment,
+  ProjectTrack,
+  buildProjectFile,
+  encodeAudioBlock,
+  decodeAudioBlock,
+  parseProject,
+  serializeProject,
+} from './projects/projectFormat';
+import {
+  describeSaveMode,
+  isDesktopShell,
+  openTextFile,
+  saveBinaryFile,
+  saveFileSetToDirectory,
+  saveTextFile,
+  suggestProjectFileName,
+} from './projects/projectIO';
 import { audioEngine } from './audio/audioEngine';
 import {
   parseRekordboxXml,
@@ -111,12 +147,20 @@ export default function App() {
   const [tracks, setTracks] = useState<TrackModel[]>([]);
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
+  /**
+   * Arbeitskopie im reinen PCM-Modell: alle Schnitte laufen darüber, damit der
+   * Editor dieselben Funktionen benutzt wie die Tests. workingAudioBuffer ist nur
+   * die Wiedergabeansicht davon.
+   */
+  const [workingPcm, setWorkingPcm] = useState<PcmAudio | null>(null);
+  const [projectPath, setProjectPath] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState<boolean>(false);
 
   // Viewport & Timeline state
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
-  const [waveformMode, setWaveformMode] = useState<WaveformMode>('RGB');
+  const [waveformMode, setWaveformMode] = useState<WaveformMode>('AMBER');
   const [quantize, setQuantize] = useState<boolean>(true);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loopActive, setLoopActive] = useState<boolean>(false);
@@ -133,7 +177,7 @@ export default function App() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
 
   // Clipboard for Copy / Paste / Insert
-  const [clipboardBuffer, setClipboardBuffer] = useState<AudioBuffer | null>(null);
+  const [clipboardBuffer, setClipboardBuffer] = useState<PcmAudio | null>(null);
 
   // History Stack for Undo / Redo
   const [undoStack, setUndoStack] = useState<EditHistoryEntry[]>([]);
@@ -171,6 +215,87 @@ export default function App() {
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+
+  // ── Arbeitsstand: PCM als Quelle, AudioBuffer nur für die Wiedergabe ──────
+  const trackPcm = useCallback((track: TrackModel): PcmAudio | null => {
+    if (track.workingPcm) return track.workingPcm;
+    if (track.audioBuffer) return pcmFromAudioBuffer(track.audioBuffer);
+    return null;
+  }, []);
+
+  const editableFrom = useCallback(
+    (track: TrackModel, pcm: PcmAudio | null): EditableAudio => ({
+      audio: pcm ?? { sampleRate: track.sampleRate, channels: [new Float32Array(0)] },
+      cues: track.cues,
+      loops: track.loops,
+      beatGrid: track.beatGrid,
+    }),
+    []
+  );
+
+  /**
+   * Ergebnis eines Eingriffs in den Zustand übernehmen: Spur, Wellenform,
+   * Wiedergabepuffer und Schmutz-Markierung. Das Original (audioBuffer) bleibt.
+   */
+  const commitEditable = useCallback(
+    (trackId: string, next: EditableAudio, options: { selection?: SelectionRange | null; touch?: boolean } = {}) => {
+      const ctx = audioEngine.getContext();
+      const buffer = pcmToAudioBuffer(ctx, next.audio);
+      setWorkingPcm(next.audio);
+      setWorkingAudioBuffer(buffer);
+      setTracks((prev) =>
+        prev.map((track) =>
+          track.id === trackId
+            ? {
+                ...track,
+                workingPcm: next.audio,
+                duration: Math.round(pcmDuration(next.audio) * 1e6) / 1e6,
+                cues: next.cues,
+                loops: next.loops,
+                beatGrid: next.beatGrid,
+                analysis: analyzePcm(next.audio, DataOrigin.PROJECT),
+              }
+            : track
+        )
+      );
+      if (options.selection !== undefined) setSelection(options.selection);
+      if (options.touch !== false) setIsDirty(true);
+    },
+    []
+  );
+
+  /** Eintragung im Operations-Protokoll aus dem Report einer Editier-Operation. */
+  const reportFeedback = useCallback(
+    (track: TrackModel, report: EditReport, title: string) => {
+      showOperationFeedback({
+        title,
+        operationType:
+          report.kind === 'INSERT_CLIP'
+            ? 'INSERT'
+            : report.kind === 'REPLACE_RANGE'
+              ? 'REPLACE'
+              : report.kind === 'OVERDUB_RANGE'
+                ? 'OVERDUB'
+                : report.kind === 'SILENCE_RANGE'
+                  ? 'CLEAR'
+                  : report.kind === 'REMOVE_RANGE'
+                    ? 'DELETE'
+                    : 'INSERT',
+        description: report.description,
+        timeRangeSec: {
+          start: report.targetStart,
+          end: report.targetEnd,
+          duration: report.durationSec,
+        },
+        barsCount: report.barsCount,
+        beatsCount: report.endBeat - report.startBeat,
+        shiftedCuesCount: report.shiftedCues,
+        originalSha256: track.originalSha256,
+        timestamp: Date.now(),
+      });
+    },
+    [showOperationFeedback]
+  );
 
   // Real-time animation loop for playhead progress and VU stereo meters
   useEffect(() => {
@@ -332,6 +457,7 @@ export default function App() {
     setActiveTrackId(extractedTrack.id);
     if (extractedTrack.audioBuffer) {
       setWorkingAudioBuffer(extractedTrack.audioBuffer);
+      setWorkingPcm(pcmFromAudioBuffer(extractedTrack.audioBuffer));
     }
   };
 
@@ -341,60 +467,250 @@ export default function App() {
     const snapshot: EditHistoryEntry = {
       description: desc,
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: activeTrack.workingSegments.map((s) => ({ ...s })),
       selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      cues: activeTrack.cues.map((c) => ({ ...c })),
+      loops: activeTrack.loops.map((l) => ({ ...l })),
+      beatGrid: activeTrack.beatGrid,
+      audio: trackPcm(activeTrack) ?? undefined,
     };
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
     setRedoStack([]);
   };
 
-  // Undo / Redo
+  /** Rückgängig: stellt den gespeicherten Arbeitsstand samplegenau wieder her. */
   const handleUndo = () => {
-    if (undoStack.length === 0 || !activeTrack || !activeTrack.audioBuffer) return;
+    if (undoStack.length === 0 || !activeTrack) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
 
-    // Push current to redo
     const currentSnapshot: EditHistoryEntry = {
       description: 'Before Undo',
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: activeTrack.workingSegments.map((s) => ({ ...s })),
       selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      cues: activeTrack.cues.map((c) => ({ ...c })),
+      loops: activeTrack.loops.map((l) => ({ ...l })),
+      beatGrid: activeTrack.beatGrid,
+      audio: trackPcm(activeTrack) ?? undefined,
     };
     setRedoStack((prev) => [...prev, currentSnapshot]);
 
-    // Restore
-    activeTrack.workingSegments = previous.segments;
-    activeTrack.cues = previous.cues;
-    setSelection(previous.selection);
-
-    const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
-    setWorkingAudioBuffer(reRendered);
+    if (previous.audio) {
+      commitEditable(
+        activeTrack.id,
+        {
+          audio: previous.audio,
+          cues: previous.cues,
+          loops: previous.loops ?? [],
+          beatGrid: previous.beatGrid ?? activeTrack.beatGrid,
+        },
+        { selection: previous.selection }
+      );
+    } else if (activeTrack.audioBuffer) {
+      // Alter Stand ohne Sample-Snapshot: aus den Segmenten neu aufbauen.
+      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
+      setWorkingAudioBuffer(reRendered);
+      setWorkingPcm(pcmFromAudioBuffer(reRendered));
+      setSelection(previous.selection);
+    }
+    setIsDirty(true);
   };
 
   const handleRedo = () => {
-    if (redoStack.length === 0 || !activeTrack || !activeTrack.audioBuffer) return;
+    if (redoStack.length === 0 || !activeTrack) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
 
-    // Push current to undo
     const currentSnapshot: EditHistoryEntry = {
       description: 'Before Redo',
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: activeTrack.workingSegments.map((s) => ({ ...s })),
       selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      cues: activeTrack.cues.map((c) => ({ ...c })),
+      loops: activeTrack.loops.map((l) => ({ ...l })),
+      beatGrid: activeTrack.beatGrid,
+      audio: trackPcm(activeTrack) ?? undefined,
     };
     setUndoStack((prev) => [...prev, currentSnapshot]);
 
-    activeTrack.workingSegments = next.segments;
-    activeTrack.cues = next.cues;
-    setSelection(next.selection);
+    if (next.audio) {
+      commitEditable(
+        activeTrack.id,
+        {
+          audio: next.audio,
+          cues: next.cues,
+          loops: next.loops ?? [],
+          beatGrid: next.beatGrid ?? activeTrack.beatGrid,
+        },
+        { selection: next.selection }
+      );
+    } else if (activeTrack.audioBuffer) {
+      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
+      setWorkingAudioBuffer(reRendered);
+      setWorkingPcm(pcmFromAudioBuffer(reRendered));
+      setSelection(next.selection);
+    }
+    setIsDirty(true);
+  };
 
-    const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
-    setWorkingAudioBuffer(reRendered);
+  /** Gemeinsamer Ablauf: Snapshot → Operation → commit → Protokoll. */
+  const applyEdit = (
+    title: string,
+    operation: (track: EditableAudio) => { target: EditableAudio; report: EditReport },
+    options: { newSelection?: SelectionRange | null } = {}
+  ): boolean => {
+    if (!activeTrack) return false;
+    const editable = editableFrom(activeTrack, trackPcm(activeTrack));
+    if (pcmDuration(editable.audio) <= 0) {
+      alert('Diese Spur hat keine Audiodaten – laden oder importiere zuerst Audio.');
+      return false;
+    }
+    pushHistorySnapshot(title);
+    const outcome = operation(editable);
+    commitEditable(activeTrack.id, outcome.target, {
+      selection: options.newSelection === undefined ? selection : options.newSelection,
+    });
+    reportFeedback(activeTrack, outcome.report, title);
+    if (outcome.report.warnings.length > 0) {
+      logger.warn('EDITING', `[${title}] ${outcome.report.warnings.join(' ')}`);
+    }
+    return true;
+  };
+
+  // Add selection to Palette (CLONE or '+' button)
+  const handleAddSelectionToPalette = () => {
+    if (!selection || !activeTrack) return;
+    const source = trackPcm(activeTrack);
+    if (!source) return;
+    const sliced = copyRange({ audio: source, cues: [], loops: [], beatGrid: activeTrack.beatGrid }, selection.start, selection.end);
+    const newClipId = `clip-${Date.now()}`;
+    const newClip: PaletteClip = {
+      id: newClipId,
+      name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
+      sourceTrackId: activeTrack.id,
+      sourceTrackName: activeTrack.title,
+      sourceStart: selection.start,
+      sourceEnd: selection.end,
+      duration: selection.duration,
+      beats: Math.round(selection.beatsCount),
+      bars: selection.barsCount,
+      bpm: activeTrack.bpm,
+      key: activeTrack.key,
+      color: '#ff9500',
+      clipPcm: sliced,
+      audioBuffer: pcmToAudioBuffer(audioEngine.getContext(), sliced),
+      miniPeaks: extractMiniPeaksPcm(sliced, 48),
+      origin: DataOrigin.PROJECT,
+    };
+
+    setPaletteClips((prev) => [...prev, newClip]);
+    setSelectedClipId(newClipId);
+    if (!paletteOpen) setPaletteOpen(true);
+    logger.info(
+      'EDITING',
+      `Clip in der Palette: ${newClip.name} (${selection.duration.toFixed(3)} s, ` +
+        `${newClip.beats} Beats, ${selection.barsCount.toFixed(2)} Takte)`
+    );
+  };
+
+  const clipAudioOf = (clip: PaletteClip): PcmAudio | null =>
+    clip.clipPcm ?? (clip.audioBuffer ? pcmFromAudioBuffer(clip.audioBuffer) : null);
+
+  const activePaletteClip = (): PaletteClip | null => {
+    const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (!clip) {
+      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+      return null;
+    }
+    if (!clipAudioOf(clip)) {
+      alert('Der Clip enthält keine Audiodaten.');
+      return null;
+    }
+    return clip;
+  };
+
+  // Copy selection
+  const handleCopy = () => {
+    if (!selection || !activeTrack) return;
+    const source = trackPcm(activeTrack);
+    if (!source) return;
+    const sliced = copyRange({ audio: source, cues: [], loops: [], beatGrid: activeTrack.beatGrid }, selection.start, selection.end);
+    setClipboardBuffer(sliced);
+    logger.info('EDITING', `Ablage gefüllt: ${selection.duration.toFixed(3)} s (${selection.beatsCount.toFixed(0)} Beats)`);
+  };
+
+  // Cut selection
+  const handleCut = () => {
+    if (!selection || !activeTrack) return;
+    handleCopy();
+    applyEdit('Auswahl ausgeschnitten', (track) => cutRange(track, selection!.start, selection!.end), {
+      newSelection: null,
+    });
+  };
+
+  // Paste at playhead (überschreibt, verschiebt die Timeline nicht)
+  const handlePaste = () => {
+    if (!clipboardBuffer || !activeTrack) return;
+    const clip = clipboardBuffer;
+    applyEdit('Ablage eingefügt', (track) => pasteAt(track, currentTime, clip));
+  };
+
+  // Insert (verschiebt Timeline und nachfolgende Marker)
+  const handleInsert = () => {
+    if (!clipboardBuffer || !activeTrack) return;
+    const clip = clipboardBuffer;
+    const insertPos = selection ? selection.start : currentTime;
+    applyEdit('Clip eingeschnitten', (track) => ({
+      ...insertClipAt(track, insertPos, clip),
+    }));
+  };
+
+  // Replace selection with active Palette clip
+  const handleReplace = () => {
+    if (!selection || !activeTrack) return;
+    const clip = activePaletteClip();
+    if (!clip) return;
+    const audio = clipAudioOf(clip)!;
+    applyEdit('Auswahl ersetzt', (track) => replaceRange(track, selection.start, selection.end, audio));
+  };
+
+  // Overdub active Palette clip onto selection
+  const handleOverdub = () => {
+    if (!selection || !activeTrack) return;
+    const clip = activePaletteClip();
+    if (!clip) return;
+    const audio = clipAudioOf(clip)!;
+    applyEdit('Clip überlagert', (track) => overdubRange(track, selection.start, selection.end, audio, 0.85));
+  };
+
+  // Delete selection (entfernt den Bereich und zieht das Folgende nach)
+  const handleDelete = () => {
+    if (!selection || !activeTrack) return;
+    applyEdit('Auswahl gelöscht', (track) => removeRange(track, selection.start, selection.end), {
+      newSelection: null,
+    });
+  };
+
+  // Kopiert die Auswahl ans Ende der Spur (auf den nächsten Taktanfang gerastet)
+  const handleCopySelectionToEnd = () => {
+    if (!selection || !activeTrack) return;
+    applyEdit('Auswahl ans Ende kopiert', (track) => copyRangeToEnd(track, selection.start, selection.end, { alignToBar: true }));
+  };
+
+  // Setzt die Auswahl an den Taktanfang und entfernt sie aus der Mitte
+  const handleMoveSelectionToStart = () => {
+    if (!selection || !activeTrack) return;
+    const firstBeat = activeTrack.beatGrid.firstBeat || 0;
+    applyEdit('Auswahl an den Taktanfang gesetzt', (track) =>
+      moveRangeToStart(track, selection.start, selection.end, { atSec: firstBeat })
+    );
+  };
+
+  // Clear selection (silences range without changing duration)
+  const handleClear = () => {
+    if (!selection || !activeTrack) return;
+    applyEdit('Bereich stummgeschaltet', (track) => silenceRange(track, selection.start, selection.end));
   };
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
@@ -464,296 +780,379 @@ export default function App() {
     setSelection(null);
   };
 
-  // Add selection to Palette (CLONE or '+' button)
-  const handleAddSelectionToPalette = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
-    const newClipId = `clip-${Date.now()}`;
-    const newClip: PaletteClip = {
-      id: newClipId,
-      name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
-      sourceTrackId: activeTrack.id,
-      sourceTrackName: activeTrack.title,
-      sourceStart: selection.start,
-      sourceEnd: selection.end,
-      duration: selection.duration,
-      beats: Math.round(selection.beatsCount),
-      bars: selection.barsCount,
-      bpm: activeTrack.bpm,
-      key: activeTrack.key,
-      color: '#00a2ff',
-      audioBuffer: sliced,
-      miniPeaks: extractMiniPeaks(sliced, 48),
-      origin: DataOrigin.PROJECT,
-    };
-
-    setPaletteClips((prev) => [...prev, newClip]);
-    setSelectedClipId(newClipId);
-    if (!paletteOpen) setPaletteOpen(true);
-  };
-
-  // Copy selection
-  const handleCopy = () => {
-    if (!selection || !workingAudioBuffer) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
-    setClipboardBuffer(sliced);
-  };
-
-  // Cut selection
-  const handleCut = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    handleCopy();
-    handleDelete();
-  };
-
-  // Paste at playhead
-  const handlePaste = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Paste');
-
-    const pasteDuration = clipboardBuffer.duration;
-    const newSeg: EditSegment = {
-      id: `paste-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: pasteDuration,
-      projectStart: currentTime,
-      projectDuration: pasteDuration,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-  };
-
-  // Insert (shifts timeline and subsequent markers)
-  const handleInsert = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Insert');
-
-    const shiftAmount = clipboardBuffer.duration;
-    const insertPos = currentTime;
-
-    // Mathematically shift cues occurring after insert position
-    activeTrack.cues = activeTrack.cues.map((c) => {
-      if (c.position >= insertPos) {
-        return { ...c, position: c.position + shiftAmount };
-      }
-      return c;
-    });
-
-    const newSeg: EditSegment = {
-      id: `insert-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: shiftAmount,
-      projectStart: insertPos,
-      projectDuration: shiftAmount,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Audio Segment eingefügt (Insert)',
-      operationType: 'INSERT',
-      description: `Audio-Material (${shiftAmount.toFixed(3)}s) an Playhead-Position ${insertPos.toFixed(3)}s eingefügt. Nachfolgende Cues und Wellenform wurden um +${shiftAmount.toFixed(3)}s verschoben.`,
-      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
-      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Replace selection with active Palette clip
-  const handleReplace = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+  // ── Palette-Clips als einzelne WAVs exportieren ───────────────────────────
+  const handleExportPaletteClips = async () => {
+    if (!activeTrack) return;
+    const clips = paletteClips.length > 0 ? paletteClips : [];
+    if (clips.length === 0) {
+      alert('Die Palette ist leer. Auswahl markieren und mit CLONE in die Palette legen.');
       return;
     }
-
-    pushHistorySnapshot('Replace');
-    const replaceSeg: EditSegment = {
-      id: `replace-${Date.now()}`,
-      type: 'REPLACE',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: Math.min(activeClip.duration, selection.duration),
-      projectStart: selection.start,
-      projectDuration: selection.duration,
-      clipId: activeClip.id,
-      clipBuffer: activeClip.audioBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, replaceSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Auswahl ersetzt (Replace)',
-      operationType: 'REPLACE',
-      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${activeClip.name}" ersetzt.`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Overdub active Palette clip onto selection
-  const handleOverdub = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
-      return;
-    }
-
-    pushHistorySnapshot('Overdub');
-    const overdubSeg: EditSegment = {
-      id: `overdub-${Date.now()}`,
-      type: 'OVERDUB',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: activeClip.duration,
-      projectStart: selection.start,
-      projectDuration: Math.min(activeClip.duration, selection.duration),
-      clipId: activeClip.id,
-      clipBuffer: activeClip.audioBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, overdubSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Clip überlagert (Overdub)',
-      operationType: 'OVERDUB',
-      description: `Clip "${activeClip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte).`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Delete selection (removes range and shifts subsequent material)
-  const handleDelete = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Delete');
-
-    const delDuration = selection.duration;
-    const delStart = selection.start;
-
-    // Shift cues occurring after delete
-    activeTrack.cues = activeTrack.cues
-      .filter((c) => c.position < delStart || c.position > selection.end)
-      .map((c) => {
-        if (c.position > selection.end) {
-          return { ...c, position: Math.max(0, c.position - delDuration) };
-        }
-        return c;
+    const files: Array<{ name: string; bytes: Uint8Array }> = [];
+    clips.forEach((clip, index) => {
+      const audio = clipAudioOf(clip);
+      if (!audio) return;
+      const safeName = clip.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60);
+      files.push({
+        name: `${String(index + 1).padStart(2, '0')}_${safeName}.wav`,
+        bytes: encodeWav(audio),
       });
-
-    // Create a new buffer with that duration removed
-    const audioCtx = audioEngine.getContext();
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(delStart * rate);
-    const endIdx = Math.floor(selection.end * rate);
-    const delSamples = endIdx - startIdx;
-    const newLength = Math.max(1, workingAudioBuffer.length - delSamples);
-
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      newLength,
-      rate
-    );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src.subarray(0, startIdx), 0);
-      dest.set(src.subarray(endIdx), startIdx);
-    }
-
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.duration = newBuffer.duration;
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
-
-    showOperationFeedback({
-      title: 'Auswahl gelöscht (Delete)',
-      operationType: 'DELETE',
-      description: `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${delDuration.toFixed(3)}s nach vorne gerückt.`,
-      timeRangeSec: { start: delStart, end: selection.end, duration: delDuration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
     });
-
-    setSelection(null);
+    if (files.length === 0) {
+      alert('Keiner der Clips enthält Audiodaten.');
+      return;
+    }
+    try {
+      const result = await saveFileSetToDirectory({
+        files,
+        directoryTitle: `${files.length} Clips exportieren – Zielordner wählen`,
+      });
+      if (result.written.length === 0) return;
+      showOperationFeedback({
+        title: `Clips exportiert (${files.length} WAVs)`,
+        operationType: 'EXPORT',
+        description:
+          `${files.length} Clips als 16-Bit-WAVs geschrieben` +
+          (result.directory ? ` nach ${result.directory}` : ' (Browser-Download)') +
+          '. Originaldateien wurden nicht verändert.',
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      logger.info('UI', `Clips exportiert: ${files.length} Dateien${result.directory ? ` → ${result.directory}` : ''}`);
+    } catch (err) {
+      alert(`Export fehlgeschlagen: ${(err as Error).message}`);
+    }
   };
 
-  // Clear selection (silences range without changing duration)
-  const handleClear = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Clear');
+  // ── Projekt speichern / öffnen ────────────────────────────────────────────
+  const buildProjectTracks = (): Array<Omit<ProjectTrack, 'audio'> & { pcm: PcmAudio }> =>
+    tracks.map((track) => {
+      const audio = trackPcm(track);
+      const meta: Omit<ProjectTrack, 'audio' | 'segments'> = {
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        genre: track.genre,
+        label: track.label,
+        rating: track.rating,
+        playCount: track.playCount,
+        year: track.year,
+        comments: track.comments,
+        dateAdded: track.dateAdded,
+        remixer: track.remixer,
+        isrc: track.isrc,
+        key: track.key,
+        bpm: track.bpm,
+        duration: Math.round(pcmDuration(audio ?? { sampleRate: track.sampleRate, channels: [new Float32Array(0)] }) * 1e6) / 1e6,
+        sampleRate: audio?.sampleRate ?? track.sampleRate,
+        channels: audio?.channels.length ?? 2,
+        origin: track.origin,
+        originalSha256: track.originalSha256,
+        isOriginalUntouched: track.isOriginalUntouched !== false,
+        source: track.originalMedia,
+        cues: track.cues,
+        loops: track.loops,
+        beatGrid: {
+          firstBeat: track.beatGrid.firstBeat,
+          bpm: track.beatGrid.bpm,
+          meter: track.beatGrid.meter,
+          origin: track.beatGrid.origin,
+          beats: track.beatGrid.beats,
+        },
+        phrases: track.phrases ?? [],
+      };
+      return {
+        ...meta,
+        pcm: audio ?? { sampleRate: track.sampleRate, channels: [new Float32Array(0)] },
+        segments: track.workingSegments.map<ProjectSegment>((segment) => ({
+          id: segment.id,
+          type: segment.type,
+          sourceStart: segment.sourceStart,
+          sourceEnd: segment.sourceEnd,
+          projectStart: segment.projectStart,
+          projectDuration: segment.projectDuration,
+          gain: segment.gain,
+          clipId: segment.clipId,
+        })),
+      };
+    });
 
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(selection.start * rate);
-    const endIdx = Math.floor(selection.end * rate);
-
-    const audioCtx = audioEngine.getContext();
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      workingAudioBuffer.length,
-      rate
-    );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src);
-      // Zero out range
-      for (let i = startIdx; i < endIdx && i < dest.length; i++) {
-        dest[i] = 0;
-      }
+  const handleSaveProject = async (forceDialog: boolean = false) => {
+    if (tracks.length === 0) {
+      alert('Es gibt nichts zu speichern: lade zuerst Audio oder importiere eine Rekordbox-Sammlung.');
+      return;
     }
+    const project = buildProjectFile({
+      projectName,
+      activeTrackId: activeTrack?.id ?? tracks[0].id,
+      view: { waveformMode, quantize, viewOffset, viewDuration, paletteOpen },
+      tracks: buildProjectTracks(),
+      clips: paletteClips.map((clip) => ({
+        clip: {
+          id: clip.id,
+          name: clip.name,
+          sourceTrackId: clip.sourceTrackId,
+          sourceTrackName: clip.sourceTrackName,
+          sourceStart: clip.sourceStart,
+          sourceEnd: clip.sourceEnd,
+          duration: clip.duration,
+          beats: clip.beats,
+          bars: clip.bars,
+          bpm: clip.bpm,
+          key: clip.key,
+          color: clip.color,
+          origin: clip.origin,
+        },
+        audio: clipAudioOf(clip) ?? { sampleRate: workingPcm?.sampleRate ?? 44100, channels: [new Float32Array(0)] },
+        miniPeaks: clip.miniPeaks ?? [],
+      })),
+      app: { name: 'Airdox_intelligents_Editor', version: '0.1.0' },
+    });
+    const text = serializeProject(project);
+    const target = !forceDialog && projectPath && isDesktopShell() ? projectPath : null;
+    try {
+      if (target) {
+        const bytes = await saveTextFileOverwrite(target, text);
+        finishProjectSave(target, bytes, project.tracks.length, project.clips.length);
+        return;
+      }
+      const written = await saveTextFile({
+        suggestedName: suggestProjectFileName(projectName, activeTrack?.title),
+        text,
+        kind: 'project',
+      });
+      if (!written) return; // Dialog abgebrochen
+      finishProjectSave(written.target, written.bytes, project.tracks.length, project.clips.length);
+    } catch (err) {
+      alert(`Projekt konnte nicht gespeichert werden: ${(err as Error).message}`);
+      logger.error('UI', `Projektspeicherung fehlgeschlagen: ${(err as Error).message}`);
+    }
+  };
 
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
+  const saveTextFileOverwrite = async (target: string, text: string): Promise<number> => {
+    const bridge = window.rekordboxDesktop;
+    if (!bridge?.writeFile) throw new Error('Die Desktop-Bridge ist nicht verfügbar.');
+    const result = await bridge.writeFile({ filePath: target, data: text, encoding: 'utf8' });
+    return result.bytes;
+  };
 
+  const finishProjectSave = (target: string, bytes: number, trackCount: number, clipCount: number) => {
+    setProjectPath(target);
+    setIsDirty(false);
     showOperationFeedback({
-      title: 'Bereich stummgeschaltet (Clear / Mute)',
-      operationType: 'CLEAR',
-      description: `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet. Timeline-Dauer und Beatgrid-Synchronisation unverändert erhalten.`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
+      title: 'Projekt gespeichert',
+      operationType: 'EXPORT',
+      description:
+        `${trackCount} Spur(en), ${clipCount} Clip(s) nach ${target} geschrieben (${(bytes / 1024).toFixed(0)} kB). ` +
+        'Enthält die geschnittene Arbeitskopie; Originaldateien bleiben unberührt.',
+      originalSha256: activeTrack?.originalSha256 ?? '',
       timestamp: Date.now(),
     });
+    logger.info('UI', `Projekt gespeichert: ${target} (${bytes} Bytes)`);
+  };
+
+  const handleOpenProject = async () => {
+    try {
+      const opened = await openTextFile({ kind: 'project' });
+      if (!opened) return;
+      const { project, errors, warnings } = parseProject(opened.text);
+      if (!project) {
+        alert(`Projekt kann nicht geöffnet werden:\n${errors.join('\n')}`);
+        logger.error('UI', `Projektöffnung abgelehnt: ${errors.join(' ')}`);
+        return;
+      }
+
+      const ctx = audioEngine.getContext();
+      const loadedTracks: TrackModel[] = [];
+      const loadWarnings = [...warnings];
+      for (const entry of project.tracks) {
+        const { pcm, warning } = decodeAudioBlock(entry.audio as ProjectAudioBlock);
+        if (warning) loadWarnings.push(`${entry.title}: ${warning}`);
+        const buffer = pcmSampleCountOrZero(pcm) > 0 ? pcmToAudioBuffer(ctx, pcm) : null;
+        loadedTracks.push({
+          id: entry.id,
+          title: entry.title,
+          artist: entry.artist,
+          album: entry.album,
+          genre: entry.genre,
+          label: entry.label,
+          rating: entry.rating,
+          playCount: entry.playCount,
+          year: entry.year,
+          comments: entry.comments,
+          dateAdded: entry.dateAdded,
+          remixer: entry.remixer,
+          isrc: entry.isrc,
+          bpm: entry.bpm,
+          key: entry.key,
+          duration: entry.duration,
+          sampleRate: entry.sampleRate,
+          channels: entry.channels,
+          originalSha256: entry.originalSha256,
+          isOriginalUntouched: entry.isOriginalUntouched,
+          audioBuffer: buffer,
+          workingPcm: pcm,
+          beatGrid: entry.beatGrid.beats.length > 0
+            ? entry.beatGrid
+            : buildBeatGridFromTempo(entry.beatGrid.firstBeat, entry.beatGrid.bpm, entry.duration, entry.beatGrid.meter, DataOrigin.PROJECT),
+          cues: entry.cues,
+          loops: entry.loops,
+          analysis: pcmSampleCountOrZero(pcm) > 0 ? analyzePcm(pcm, DataOrigin.PROJECT) : null,
+          phrases: entry.phrases ?? [],
+          origin: entry.origin,
+          originalMedia: entry.source,
+          workingSegments: entry.segments.map((segment) => ({ ...segment, trackId: entry.id })),
+        });
+      }
+
+      if (loadedTracks.length === 0) {
+        alert('Das Projekt enthält keine lesbare Spur.');
+        return;
+      }
+
+      const loadedClips: PaletteClip[] = [];
+      for (const clip of project.clips) {
+        let pcm: PcmAudio | null = null;
+        try {
+          pcm = decodeAudioBlock(clip.audio).pcm;
+        } catch (err) {
+          loadWarnings.push(`Clip „${clip.name}" konnte nicht gelesen werden: ${(err as Error).message}`);
+        }
+        loadedClips.push({
+          id: clip.id,
+          name: clip.name,
+          sourceTrackId: clip.sourceTrackId,
+          sourceTrackName: clip.sourceTrackName,
+          sourceStart: clip.sourceStart,
+          sourceEnd: clip.sourceEnd,
+          duration: clip.duration,
+          beats: clip.beats,
+          bars: clip.bars,
+          bpm: clip.bpm,
+          key: clip.key,
+          color: clip.color,
+          origin: clip.origin,
+          clipPcm: pcm ?? undefined,
+          audioBuffer: pcm ? pcmToAudioBuffer(ctx, pcm) : undefined,
+          miniPeaks: clip.miniPeaks,
+        });
+      }
+
+      const first = loadedTracks.find((t) => t.id === project.activeTrackId) ?? loadedTracks[0];
+      setProjectName(project.projectName);
+      setTracks(loadedTracks);
+      setActiveTrackId(first.id);
+      setPaletteClips(loadedClips);
+      setSelectedClipId(loadedClips[0]?.id ?? null);
+      setWorkingPcm(trackPcm(first));
+      setWorkingAudioBuffer(first.audioBuffer);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelection(null);
+      setClipboardsEmpty();
+      setProjectPath(opened.source);
+      setIsDirty(false);
+      if (project.view) {
+        setWaveformMode(project.view.waveformMode);
+        setQuantize(project.view.quantize);
+        setViewOffset(project.view.viewOffset);
+        setViewDuration(project.view.viewDuration);
+        setPaletteOpen(project.view.paletteOpen);
+      }
+      setCurrentTime(0);
+      audioEngine.stop();
+      setIsPlaying(false);
+
+      showOperationFeedback({
+        title: 'Projekt geöffnet',
+        operationType: 'IMPORT',
+        description:
+          `${loadedTracks.length} Spur(en), ${loadedClips.length} Clip(s) aus ${opened.source} geladen` +
+          (loadWarnings.length > 0 ? `. Hinweise: ${loadWarnings.join(' ')}` : '.') +
+          ' Keine Originaldatei wurde verändert.',
+        originalSha256: first.originalSha256,
+        timestamp: Date.now(),
+      });
+      logger.info('UI', `Projekt geöffnet: ${opened.source} (${loadedTracks.length} Spuren, ${loadedClips.length} Clips)`);
+    } catch (err) {
+      alert(`Projekt konnte nicht geöffnet werden: ${(err as Error).message}`);
+      logger.error('UI', `Projektöffnung fehlgeschlagen: ${(err as Error).message}`);
+    }
+  };
+
+  const setClipboardsEmpty = () => setClipboardBuffer(null);
+
+  /** Deterministische Demospur – für Vorführungen und zum Prüfen des Workflows. */
+  const handleLoadDemoTrack = async () => {
+    const demo = generateDemoTrack({ bars: 8, bpm: 128, sampleRate: 44100 });
+    const ctx = audioEngine.getContext();
+    const buffer = pcmToAudioBuffer(ctx, demo.pcm);
+    const id = `demo-${Date.now()}`;
+    const beatGrid = buildBeatGridFromTempo(demo.firstBeat, demo.bpm, demo.duration, demo.meter, DataOrigin.GENERATED_FALLBACK);
+    const track: TrackModel = {
+      id,
+      title: 'Demospur 128 BPM (selbst erzeugt)',
+      artist: 'Airdox Editor',
+      album: 'Nachweis-Workflow',
+      bpm: demo.bpm,
+      key: '1A',
+      duration: Math.round(demo.duration * 1e6) / 1e6,
+      sampleRate: demo.sampleRate,
+      channels: demo.pcm.channels.length,
+      originalSha256: audioEngine.computeBufferChecksum(buffer),
+      isOriginalUntouched: true,
+      audioBuffer: buffer,
+      workingPcm: demo.pcm,
+      beatGrid,
+      cues: [
+        {
+          id: 'demo-cue-1',
+          name: 'MEM 1',
+          type: 'MEMORY',
+          position: 0,
+          inMsec: 0,
+          cueIndex: 1,
+          barNumber: 1,
+          beatNumber: 1,
+          color: '#ff2222',
+          origin: DataOrigin.LOCAL_ANALYSIS,
+        },
+      ],
+      loops: [],
+      analysis: analyzePcm(demo.pcm, DataOrigin.LOCAL_ANALYSIS),
+      origin: DataOrigin.GENERATED_FALLBACK,
+      workingSegments: [
+        {
+          id: `demo-seg-${id}`,
+          type: 'ORIGINAL',
+          trackId: id,
+          sourceStart: 0,
+          sourceEnd: demo.duration,
+          projectStart: 0,
+          projectDuration: demo.duration,
+          gain: 1,
+        },
+      ],
+    };
+    setTracks((prev) => [...prev, track]);
+    setActiveTrackId(id);
+    setWorkingPcm(demo.pcm);
+    setWorkingAudioBuffer(buffer);
+    setSelection(null);
+    setCurrentTime(0);
+    setViewOffset(0);
+    setIsDirty(true);
+    showOperationFeedback({
+      title: 'Demospur geladen',
+      operationType: 'IMPORT',
+      description:
+        '8 Takte, 128 BPM, 44,1 kHz, deterministisch erzeugt (kein Zufall). Jeder Takt hat ' +
+        'einen eigenen Wiedererkennungston – damit lassen sich Schnitte inhaltlich nachprüfen.',
+      originalSha256: track.originalSha256,
+      timestamp: Date.now(),
+    });
+    logger.info('UI', 'Demospur geladen (eigene Berechnung, als Fallback gekennzeichnet)');
   };
 
   // Add Cue marker at position
@@ -847,7 +1246,10 @@ export default function App() {
       setTracks((previous) => previous.map((track) => (
         track.id === enrichedTrack.id ? enrichedTrack : track
       )));
-      if (enrichedTrack.audioBuffer) setWorkingAudioBuffer(enrichedTrack.audioBuffer);
+      if (enrichedTrack.audioBuffer) {
+        setWorkingAudioBuffer(enrichedTrack.audioBuffer);
+        setWorkingPcm(enrichedTrack.workingPcm ?? pcmFromAudioBuffer(enrichedTrack.audioBuffer));
+      }
 
       const tags = extraction.tagsFound.join(', ');
       showOperationFeedback({
@@ -1088,6 +1490,7 @@ export default function App() {
 
       setActiveTrackId(loadedTrack.id);
       setWorkingAudioBuffer(originalAudio);
+      setWorkingPcm(pcmFromAudioBuffer(originalAudio));
       setCurrentTime(0);
       setViewOffset(0);
       setIsPlaying(false);
@@ -1151,6 +1554,7 @@ export default function App() {
       setTracks((prev) => [newTrack, ...prev]);
       setActiveTrackId(newTrack.id);
       setWorkingAudioBuffer(decoded);
+      setWorkingPcm(pcmFromAudioBuffer(decoded));
       setCurrentTime(0);
       setViewOffset(0);
       setIsPlaying(false);
@@ -1219,6 +1623,18 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
         e.preventDefault();
         handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') {
+        e.preventDefault();
+        void handleSaveProject(e.shiftKey);
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyO') {
+        e.preventDefault();
+        void handleOpenProject();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyJ') {
+        e.preventDefault();
+        handleCopySelectionToEnd();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyM') {
+        e.preventDefault();
+        handleMoveSelectionToStart();
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
         e.preventDefault();
         handleCopy();
@@ -1263,11 +1679,24 @@ export default function App() {
         onNewProject={() => {
           setProjectName('New Project');
           setSelection(null);
+          setProjectPath(null);
+          setIsDirty(false);
         }}
         onImportXml={() => xmlFileInputRef.current?.click()}
         onImportAudio={() => audioFileInputRef.current?.click()}
         onExportWav={() => setExportModalOpen(true)}
         onExportXml={() => setExportModalOpen(true)}
+        onSaveProject={() => void handleSaveProject(false)}
+        onSaveProjectAs={() => void handleSaveProject(true)}
+        onOpenProject={() => void handleOpenProject()}
+        onExportClips={() => void handleExportPaletteClips()}
+        onLoadDemoTrack={() => void handleLoadDemoTrack()}
+        projectPath={projectPath}
+        isDirty={isDirty}
+        canSaveProject={tracks.length > 0}
+        hasSelection={selection !== null && selection.duration > 0}
+        onCopySelectionToEnd={handleCopySelectionToEnd}
+        onMoveSelectionToStart={handleMoveSelectionToStart}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={undoStack.length > 0}
@@ -1294,8 +1723,25 @@ export default function App() {
         onToggleLoop={() => setLoopActive(!loopActive)}
         quantizeActive={quantize}
         onToggleQuantize={() => setQuantize(!quantize)}
-        onNewProject={() => setProjectName('New Project')}
-        onSaveProject={() => alert('Projektzustand gespeichert.')}
+        onNewProject={() => {
+          setProjectName('New Project');
+          setTracks([]);
+          setActiveTrackId('');
+          setPaletteClips([]);
+          setSelectedClipId(null);
+          setWorkingPcm(null);
+          setWorkingAudioBuffer(null);
+          setUndoStack([]);
+          setRedoStack([]);
+          setProjectPath(null);
+          setIsDirty(false);
+          setSelection(null);
+          logger.info('UI', 'Neues Projekt: Arbeitsdaten geleert, geladene Originale bleiben unangetastet.');
+        }}
+        onSaveProject={() => void handleSaveProject(false)}
+        onOpenProject={() => void handleOpenProject()}
+        projectPath={projectPath}
+        isDirty={isDirty}
         onExport={() => setExportModalOpen(true)}
         onShowInfo={() => setInfoModalOpen(true)}
         masterVolume={masterVolume}
@@ -1312,6 +1758,7 @@ export default function App() {
         viewDuration={viewDuration}
         onSeek={handleSeek}
         onPanView={handlePanView}
+        mode={waveformMode}
       />
 
       {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
@@ -1398,6 +1845,7 @@ export default function App() {
           const t = tracks.find((tr) => tr.id === id);
           if (t && t.audioBuffer) {
             setWorkingAudioBuffer(t.audioBuffer);
+            setWorkingPcm(t.workingPcm ?? pcmFromAudioBuffer(t.audioBuffer));
             setCurrentTime(0);
             setViewOffset(0);
             setIsPlaying(false);

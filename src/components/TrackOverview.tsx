@@ -6,7 +6,8 @@
  */
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { TrackModel } from '../types/rekordbox';
+import { TrackModel, WaveformMode } from '../types/rekordbox';
+import { amberColorCss, waveformPalette } from '../waveform/colors';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -15,6 +16,8 @@ interface TrackOverviewProps {
   viewDuration: number;
   onSeek: (time: number) => void;
   onPanView: (newOffset: number) => void;
+  /** Wellenform-Farbmodus – Standard: AMBER (warm). */
+  mode?: WaveformMode;
 }
 
 export const TrackOverview: React.FC<TrackOverviewProps> = ({
@@ -24,6 +27,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
   viewDuration,
   onSeek,
   onPanView,
+  mode = 'AMBER',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -73,13 +77,20 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const barH = Math.max(2, peak * (height - 4));
         const yTop = (height - barH) / 2;
 
-        // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
+        // Farbe folgt dem gewählten Modus; AMBER ist der warme Standard.
+        let fill: string;
+        if (mode === 'AMBER') {
+          fill = amberColorCss(peak, low, high);
+        } else if (mode === 'BLUE' || mode === '3BAND') {
+          fill = waveformPalette(mode).body;
+        } else {
+          const r = Math.min(255, Math.floor(low * 255 + mid * 70));
+          const g = Math.min(255, Math.floor(mid * 240 + high * 60));
+          const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
+          fill = `rgb(${r}, ${g}, ${bCol})`;
+        }
 
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+        ctx.fillStyle = fill;
         ctx.fillRect(x, yTop, Math.max(1, stepX * 0.9), barH);
       }
     } else {
@@ -89,7 +100,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const x = (i / numBars) * width;
         const amp = 0.3 + 0.6 * Math.sin((i / numBars) * Math.PI) * (0.8 + 0.2 * Math.cos(i * 0.5));
         const barH = amp * (height - 6);
-        ctx.fillStyle = i % 2 === 0 ? '#d32f2f' : '#0288d1';
+        ctx.fillStyle = i % 2 === 0 ? '#ff9500' : '#a35a00';
         ctx.fillRect(x, (height - barH) / 2, width / numBars - 1, barH);
       }
     }
