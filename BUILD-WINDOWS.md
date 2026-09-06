@@ -107,6 +107,18 @@ Nur einen der beiden Läufe gibt es mit `npm run package:win:installer` bzw.
 hinten an, damit ein altes oder editiertes `package.json` den node-gyp-Lauf nicht
 reaktivieren kann.
 
+> **Nie aus `C:\Windows` heraus bauen** (auch nicht `C:\Windows\System32\airdox_editor`):
+> Eine App ohne Admin-Rechte schreibt dort nicht hin, UAC leitet alles nach
+> `%LOCALAPPDATA%\VirtualStore\Windows\System32\…` um. `npm ci` und `vite build`
+> laufen trotzdem durch, aber electron-builders Kindprozesse (`7za.exe`,
+> `makensis.exe`) sehen einen anderen Ordner und das Portable-Paket wird leer –
+> im Log `Add new data to archive: 0 files` und `Das System kann den angegebenen
+> Pfad nicht finden`. `npm run check:build-env` prüft Pfad *und* Schreibbarkeit und
+> nennt außerdem, welche Dateinamen entstehen (bei einem Stand ohne Umbenennung
+> steht dort der alte Name – die zweite Verwechslung in dem Fehlerbild).
+> **Klonen statt kopieren:** `git clone … C:\Dev\airdox_editor`, dort `git checkout
+> arena/01a07073-airdox-editor`, `npm ci`, dann bauen.
+>
 > **Wichtig bei OneDrive / Desktop-Ordnern:** Der Projektordner sollte **nicht**
 > unter OneDrive (oder einem anderen Synchronisationsclient) liegen. Der Sync
 > sperrt Dateien in `node_modules\` und `release\`, was zu `EPERM`, `EBUSY` oder
@@ -185,6 +197,8 @@ in den Hinweisen darauf hin).
 | Weißes Fenster nach dem Start | `vite.config.ts` muss `base: './'` enthalten, damit `dist/index.html` die Assets relativ lädt (file://). |
 | `Die Originaldatei ist größer als 1 GB …` | Bewusste Grenze des Read-Only-Bridges; Datei auf ein Laufwerk mit ausreichendem Speicher kopieren oder die Originalgröße prüfen. |
 | `Cannot find module for publisher "never" with any extension` | In `package.json → build` muss `"publish": null` stehen. Ein String an dieser Stelle ist der *Name* eines Publish-Providers (electron-builder sucht dann `electron-publisher-never`); der Modus `never` gehört nur als `--publish never` auf die Kommandozeile. Ohne Update-Server entfällt außerdem die `latest.yml`. |
+| `7za.exe process failed 1` · `Add new data to archive: 0 files` · `Das System kann den angegebenen Pfad nicht finden` | Der Projektordner liegt im Windows-Verzeichnis (z. B. `C:\Windows\System32\airdox_editor`) oder ist sonst nicht frei beschreibbar: UAC virtualisiert die Schreibzugriffe, die Kindprozesse von electron-builder finden `release\win-unpacked` nicht. Nach `C:\Dev\airdox_editor` **neu klonen** (nicht herüberkopieren – die VirtualStore-Reste wandern mit), dort `npm ci` und `npm run package:win`. Der Guard meldet beides jetzt vor dem Build. |
+| `default Electron icon is used`, und die gebaute Datei heißt nach dem **alten** Produktnamen mit Fassung 0.1.0 | Falscher Stand gebaut: `main` kennt weder `app-resources/` noch `build.win.icon` noch die Umbenennung und die Fassung 0.2.0. `git checkout arena/01a07073-airdox-editor` (bzw. nach dem Merge von PR #3: `main`), dann `npm run check:build-env` – die Notiz „Es entstehen: …“ zeigt vor dem Build, welcher Name und welche Fassung herauskommen. |
 | `npm ci` bricht bei `better-sqlite3-multiple-ciphers` ab | Nur als `optionalDependencies` eingetragen – `npm ci --omit=optional` überspringt es vollständig. |
 | Windows-SmartScreen-Warnung „Unbekannter Herausgeber" | Der Build ist nicht signiert. „Weitere Informationen → Trotzdem ausführen", oder mit eigenem Zertifikat signieren (Abschnitt 7). |
 | Sehr großer Arbeitsspeicher beim Datenbank-Import | Snapshot im RAM: ca. 3× Dateigröße plus Zeilen. 100.000 Tracks (≈ 43 MB `master.db`) dauern ≈ 3,5 s und belegen ≈ 330 MB. Für deutlich größere Bibliotheken das native Modul bauen (Abschnitt 6). |

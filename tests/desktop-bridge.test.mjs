@@ -296,6 +296,48 @@ await check('Build-Guard erkennt den node-gyp-Fehlerpfad (Leerzeichen + natives 
   }
 });
 
+await check('der Build-Guard erkennt das System32-Bild und nennt die Dateinamen', () => {
+  const { analyzeEnvironment } = require(path.join(root, 'tools/check-build-env.cjs'));
+
+  // Ein Projektordner, der wie C:\Windows\System32\… aussieht. Dort virtualisiert UAC
+  // die Schreibzugriffe, und electron-builders Kindprozesse (7za.exe für das
+  // Portable-Paket, makensis.exe für den Installer) finden das eben ausgepackte
+  // win-unpacked nicht – im Log: „Add new data to archive: 0 files“.
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-guard-'));
+  try {
+    const inside = path.join(fake, 'Windows', 'System32', 'airdox_editor');
+    fs.mkdirSync(inside, { recursive: true });
+    fs.writeFileSync(
+      path.join(inside, 'package.json'),
+      JSON.stringify({
+        name: 'x',
+        version: '0.1.0',
+        build: { productName: 'Rekordbox Desktop Import', npmRebuild: false, win: {} },
+      })
+    );
+    const broken = analyzeEnvironment(inside);
+    const errors = broken.issues.filter((issue) => issue.level === 'error').map((issue) => issue.message);
+    assert.ok(
+      errors.some((message) => /Windows-Verzeichnis/.test(message)),
+      'Pfad im Windows-Verzeichnis muss als Fehler melden: ' + JSON.stringify(errors)
+    );
+    assert.ok(
+      broken.issues.some((issue) => issue.level === 'warn' && /Standard-Electron-Icon/.test(issue.message)),
+      'fehlendes build.win.icon muss gemeldet werden (electron-builder: „default Electron icon is used“)'
+    );
+
+    // Der andere Fall derselben Verwechslung: welcher Stand gebaut wird, steht vor
+    // dem Build da – Name und Fassung kommen aus package.json.
+    const own = analyzeEnvironment(root);
+    const note = own.notes.find((text) => /Es entstehen:/.test(text));
+    assert.ok(note, 'der Guard muss die entstehenden Dateinamen nennen');
+    assert.ok(/Airdox_intelligents_Editor-0\.2\.0-win-x64\.exe/.test(note), 'Installer-Name: ' + note);
+    assert.ok(/Airdox_intelligents_Editor-Portable-0\.2\.0-x64\.exe/.test(note), 'Portable-Name: ' + note);
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
+});
+
 await check('die Build-Konfiguration kann electron-builder nicht mehr ausbremsen', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
   assert.strictEqual(pkg.build.npmRebuild, false, 'npmRebuild:false fehlt → electron-builder startet node-gyp');

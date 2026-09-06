@@ -12,6 +12,14 @@
  *  2. „Attempting to build a module with a space in the path" – node-gyp (und
  *     viele Build-Werkzeuge) scheitern an Pfaden wie
  *     `C:\Users\me\OneDrive\Desktop\Neuer Ordner\projekt`.
+ *  3. Aus `C:\Windows\System32\…` gebaut: UAC virtualisiert Schreibzugriffe, die
+ *     Kindprozesse von electron-builder (`7za.exe`, `makensis.exe`) sehen einen
+ *     anderen Ordner und das Portable-Paket wird leer
+ *     („Add new data to archive: 0 files", „Das System kann den angegebenen Pfad
+ *     nicht finden"). Deshalb: Pfad gegen `%%SystemRoot%%` prüfen und Schreibtest.
+ *  4. Falscher Zweig gebaut (Name und Fassung der Datei passen nicht zur App) –
+ *     der Guard nennt vor dem Build, welche Dateinamen entstehen und ob das Icon
+ *     gefunden wird.
  *
  * Aufruf: node tools/check-build-env.cjs [--json]
  */
@@ -20,6 +28,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const NATIVE_MODULE = 'better-sqlite3-multiple-ciphers';
+
+/**
+ * Die Namen, die electron-builder laut `artifactName`-Mustern erzeugt – hier
+ * vorhergesagt, damit vor dem Build sichtbar ist, welcher Stand gebaut wird.
+ */
+function describeArtifacts(pkg) {
+  const build = pkg.build || {};
+  const fields = {
+    name: pkg.name || 'app',
+    productName: build.productName || pkg.name || 'app',
+    version: pkg.version || '0',
+    os: 'win',
+    arch: 'x64',
+    ext: 'exe',
+  };
+  const templates = [build.artifactName, build.nsis && build.nsis.artifactName, build.portable && build.portable.artifactName];
+  const names = [];
+  for (const template of templates) {
+    if (typeof template !== 'string') continue;
+    const name = template.replace(/\$\{(\w+)\}/g, (_, key) => (key in fields ? fields[key] : key));
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
 
 /** Reine Analyse, damit das Verhalten ohne echten Build testbar ist. */
 function analyzeEnvironment(projectRoot) {
@@ -61,6 +93,32 @@ function analyzeEnvironment(projectRoot) {
           '"Cannot find module for publisher" abbricht. Richtig: "build": { "publish": null } ' +
           '(kein Update-Server). Den Modus "never" gibt es nur auf der Kommandozeile: --publish never.',
       });
+    }
+
+    const win = (pkg.build && pkg.build.win) || {};
+    const iconRef = win.icon;
+    if (!iconRef) {
+      issues.push({
+        level: 'warn',
+        message:
+          'build.win.icon ist nicht gesetzt – die EXE bekommt das Standard-Electron-Icon ' +
+          '(electron-builder meldet „default Electron icon is used\"). Im Projekt liegt ' +
+          'app-resources/icon.ico; wer den Build aus einem anderen Stand (z. B. main statt ' +
+          'dem Arbeitszweig) fährt, sieht genau dieses Bild.',
+      });
+    } else if (!fs.existsSync(path.resolve(projectRoot, iconRef))) {
+      issues.push({
+        level: 'error',
+        message:
+          `build.win.icon zeigt auf ${iconRef}, die Datei fehlt im Projektordner – ` +
+          'electron-builder baut ohne Icon und makensis bricht im Installer-Skript ab. ' +
+          'Zweig prüfen (app-resources/ existiert erst ab dem Umbau auf diesen Namen).',
+      });
+    }
+
+    const built = describeArtifacts(pkg);
+    if (built.length > 0) {
+      notes.push(`Es entstehen: ${built.join(' · ')} – Name und Fassung kommen aus package.json.`);
     }
 
     const shared = Object.keys(pkg.dependencies || {}).filter((name) => (pkg.devDependencies || {})[name] !== undefined);
@@ -131,6 +189,67 @@ function analyzeEnvironment(projectRoot) {
     });
   }
 
+  // Niemals aus dem Windows-Verzeichnis heraus bauen: Schreibzugriffe dorthin
+  // virtualisiert UAC nach %LOCALAPPDATA%\VirtualStore, und die Kindprozesse von
+  // electron-builder (7za.exe für das Portable-Paket, makensis.exe für den Installer)
+  // laufen mit anderer Integrität und sehen einen anderen Ordner. Bild im Log:
+  // „Add new data to archive: 0 files" plus „Das System kann den angegebenen Pfad
+  // nicht finden", obwohl win-unpacked gerade erst ausgepackt wurde.
+  const systemRoot = process.env.SystemRoot || process.env.windir || '';
+  const looksLikeWindowsDir =
+    /[\\/]Windows([\\/]|$)/i.test(normalized) ||
+    /[\\/](System32|SysWOW64|Program Files(?: \(x86\))?)([\\/]|$)/i.test(normalized);
+  const insideSystemRoot =
+    systemRoot &&
+    path
+      .normalize(normalized)
+      .toLowerCase()
+      .startsWith(path.normalize(systemRoot).toLowerCase() + path.sep);
+  if (looksLikeWindowsDir || insideSystemRoot) {
+    issues.push({
+      level: 'error',
+      message:
+        `Projektordner liegt im Windows-Verzeichnis: ${normalized}\n` +
+        '      Dorthin schreibt eine App ohne Admin-Rechte nicht direkt – UAC leitet alles nach\n' +
+        '      %LOCALAPPDATA%\\VirtualStore um, und electron-builders Kindprozesse finden den\n' +
+        '      ausgepackten Ordner nicht (7za.exe: „0 files", „Das System kann den angegebenen Pfad\n' +
+        '      nicht finden"). Neu klonen nach C:\\Dev\\airdox_editor, dort „npm ci" und\n' +
+        '      „npm run package:win" – nicht herüberkopieren, sonst wandern die VirtualStore-Reste mit.',
+    });
+  }
+
+  // Schreibtest im Projektordner: fängt die übrigen Fälle ab (schreibgeschütztes
+  // Laufwerk, durch Sync belegte Ordner, VirtualStore), bevor sie im Paketierlauf
+  // als kryptische Kindprozess-Fehler erscheinen.
+  if (fs.existsSync(normalized)) {
+    let probeDir = null;
+    try {
+      probeDir = fs.mkdtempSync(path.join(normalized, '.build-probe-'));
+      const probeFile = path.join(probeDir, 'probe.txt');
+      fs.writeFileSync(probeFile, 'airdox');
+      if (fs.readFileSync(probeFile, 'utf-8') !== 'airdox') {
+        throw Object.assign(new Error('nach dem Schreiben ein anderer Inhalt'), { code: 'EBADCONTENT' });
+      }
+      notes.push('Im Projektordner lassen sich Ordner anlegen und lesen ✓');
+    } catch (err) {
+      issues.push({
+        level: 'error',
+        message:
+          `Im Projektordner kann nicht geschrieben werden (${(err && err.code) || err}): ${normalized}\n` +
+          '      electron-builder braucht dort „release\\" (Entpacken, Archivieren, Signieren).' +
+          ' Auf einem anderen Laufwerk oder Nutzerordner neu klonen und „npm ci" dort ausführen.',
+      });
+    } finally {
+      if (probeDir) {
+        try {
+          fs.rmSync(probeDir, { recursive: true, force: true });
+        } catch {
+          // Aufräumfehler sind für die Bewertung egal.
+        }
+      }
+    }
+  }
+
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   if (nodeMajor < 20) {
     issues.push({
@@ -193,8 +312,9 @@ function main() {
   const errors = issues.filter((issue) => issue.level === 'error');
   if (errors.length > 0) {
     console.log(
-      '\n  Abbruch vor dem Build. Bei Leerzeichen-/OneDrive-Problemen hilft ein Umzug des Projektordners;\n' +
-        '  danach „npm ci“ und erneut „npm run package:win“ ausführen.\n'
+      '\n  Abbruch vor dem Build. Ein Umzug des Projektordners (C:\\Dev\\airdox_editor, außerhalb\n' +
+        '  von OneDrive und außerhalb von C:\\Windows) behebt die drei typischen Bilder; danach\n' +
+        '  dort „npm ci“ und erneut „npm run package:win“ ausführen.\n'
     );
     process.exitCode = 1;
     return;
