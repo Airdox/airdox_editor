@@ -1,0 +1,57 @@
+name: Windows-Build
+
+# Baut die Windows-Artefakte auf einem echten Windows-Runner.
+# Ergebnis: NSIS-Installer und portable EXE als herunterladbare Artifacts.
+
+on:
+  push:
+    branches:
+      - arena/01a0755a-airdox-editor
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Typen prüfen
+        run: npm run lint
+
+      - name: Tests ausführen
+        run: npm test
+
+      - name: Windows-Pakete bauen (NSIS + Portable)
+        run: npm run package:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Artefakte auflisten
+        shell: bash
+        run: ls -la release/
+
+      - name: Installer hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: airdox-smart-editor-setup
+          path: release/*Setup*.exe
+          if-no-files-found: warn
+
+      - name: Portable EXE hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: airdox-smart-editor-portable
+          path: release/*portable*.exe
+          if-no-files-found: warn
