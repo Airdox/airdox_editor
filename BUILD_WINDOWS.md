@@ -13,10 +13,11 @@ Es entstehen zwei Artefakte (im Ordner `release/`):
 
 1. **Node.js** (LTS, ≥ 20) – https://nodejs.org
 2. **Git** (optional)
-3. Für den optionalen Rekordbox-Datenbank-Import (`master.db` / `exportLibrary.db`):
-   Visual Studio **Build Tools** mit „Desktopentwicklung mit C++“ (nötig, um
-   `better-sqlite3-multiple-ciphers` für Electron zu kompilieren). Ohne sie
-   bleibt der XML-/ANLZ-Import voll funktionsfähig.
+
+Der Basis-Build benötigt **kein** Visual Studio: XML-/ANLZ-Import, Audio-Editor
+und Export funktionieren vollständig. Der native Rebuild des optionalen
+SQLCipher-Moduls ist per `"npmRebuild": false` abgeschaltet, sodass der Build
+auch in Pfaden **mit Leerzeichen** und ohne C++-Toolchain durchläuft.
 
 ## Bauen
 
@@ -25,13 +26,24 @@ git clone https://github.com/Airdox/airdox_editor.git
 cd airdox_editor
 
 npm install
-# Optional: natives SQLCipher-Modul für Electron neu bauen
-npm run rebuild:electron
-
 npm run package:win
 ```
 
 Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
+
+## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
+
+Der DB-Import (`better-sqlite3-multiple-ciphers`) ist optional. Ohne ihn bleibt
+der XML-/ANLZ-Import voll funktionsfähig; die App meldet den nicht verfügbaren
+DB-Import nachvollziehbar. Um ihn zu aktivieren:
+
+1. Visual Studio **Build Tools** mit „Desktopentwicklung mit C++“ installieren.
+2. Modul für Electron kompilieren und erneut bauen:
+
+```powershell
+npm run rebuild:electron
+npm run package:win
+```
 
 ## Hinweise
 
