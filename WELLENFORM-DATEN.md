@@ -58,6 +58,36 @@ Analyse-Engine ist nicht das Ziel." Daraus folgt für den Code-Pfad:
   `npm test` eingebunden und enthält Negativkontrollen: Ein fortgeschriebenes
   Raster müsste an den Fixture-Werten mit Tempo-Wechsel scheitern.
 
+## Beatgrid aus der XML: `Battito` und `Metro` sind die Ansage
+
+Ein Rekordbox-Export verankert das Raster mit einem oder mehreren `<TEMPO>`-Einträgen
+(`Inizio`, `Bpm`, `Metro`, `Battito`). Real exportierte Bibliotheken nutzen das breit:
+In einer geprüften Collection mit über 11 000 Zeilen hat rund ein Viertel der Tracks
+einen Anker, der **nicht** auf Schlag 1 fällt (`Battito="3"`, `"4"`), und viele nennen
+mehrere Anker im Stück. Deshalb gilt im Import (`src/rekordbox/xmlParser.ts`):
+
+* Jeder Eintrag verankert einen Schlag an seiner `Inizio`-Zeit; ab dort gilt sein Tempo
+  bis zum nächsten Eintrag. Nur die Schläge *dazwischen* werden fortgeschrieben
+  (`beatsAreDerived`).
+* `Battito` ist der Schlag-im-Takt des Ankers. Ist er 4, beginnt der nächste Takt einen
+  Schlag später – und der Anlauf-Takt zählt als Takt 0, genau wie Rekordbox benennt.
+  Die Zählung läuft über Anker hinweg fort; die Abstände in echten Dateien sind
+  ganzzahlig (auf Millisekunden gerundet), deshalb stimmen die `Battito`-Werte der
+  Folgeanker von selbst.
+* `Metro="3/4"` ergibt 3 Schläge pro Takt – 4/4 wird nicht angenommen.
+* Marker-Takt und Marker-Schlag (`barNumber`/`beatNumber` an Cues) werden **aus diesem
+  Raster** abgelesen (auch in `databaseExtractor.ts`), nicht gegen `AverageBpm` und ein
+  hartes 4/4 gerechnet. In echten Dateien sitzt der Hot Cue „1.1Bars" dann exakt auf
+  Takt 1 Schlag 1 – dieser Abgleich ist Teil des Nachweises.
+* Eine Zeile ohne `<TEMPO>` (es gibt sie: nur `AverageBpm`) bekommt ein Raster ab 0 s
+  und heißt `GENERATED_FALLBACK`.
+
+Und die `Location`: `file://localhost//contents_…/unknownartist/…` (verschwundene oder
+in die Cloud verschobene Sammlungen) enthält keinen Laufwerksanteil. So ein Pfad wird
+**nicht** geraten – `electron/locationPath.cjs` meldet den Grund in Klartext, und die
+Zeile bleibt als „Original nicht gefunden" sichtbar. Pfade mit Laufwerk und
+Prozentkodierung (`…/Moved%20from%20Cloud/…`) werden korrekt dekodiert.
+
 ## Schritt 1 – XML-Import: die Bibliothek wird gefüllt, die Welle noch nicht
 
 `handleImportXmlFile` → `loadXmlFile(file)` → `parseRekordboxXmlAsync(text, onProgress)`:

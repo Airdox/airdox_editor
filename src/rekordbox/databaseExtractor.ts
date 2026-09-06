@@ -21,6 +21,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer, waveformModesFor } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
+import { nearestBeatIndex } from '../audio/editOps';
 import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
 
 /**
@@ -231,13 +232,18 @@ export function extractTrackFromRekordboxXml(
   const duration = rawTrack.duration || (audioBuffer ? audioBuffer.duration : 300.0);
   const bg = rawTrack.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration);
 
-  // Enrich memory cues with bar/beat alignment and inMsec
+  // Enrich memory cues with bar/beat alignment and inMsec – die Lage kommt aus dem
+  // Raster der Datei (Schlag-im-Takt aus `Battito`, Taktmaß aus `Metro`), nicht aus
+  // einer Rechnung gegen 4/4.
   const secondsPerBeat = 60.0 / bpm;
+  const seed = bg.beats.length > 0 ? (bg.beats[0].beatInBar ?? 1) - 1 : 0;
   const memoryCues: CuePoint[] = (rawTrack.cues || []).map((c, idx) => {
     const timeMs = Math.round(c.position * 1000);
+    const gridBeat =
+      bg.beats.length > 0 ? bg.beats[Math.max(0, Math.min(bg.beats.length - 1, nearestBeatIndex(bg, c.position)))] : undefined;
     const beatIndex = Math.round((c.position - bg.firstBeat) / secondsPerBeat);
-    const barNumber = Math.floor(beatIndex / 4) + 1;
-    const beatNumber = (beatIndex % 4) + 1;
+    const barNumber = gridBeat?.barNumber ?? Math.floor(Math.max(0, beatIndex + seed) / bg.meter) + (seed === 0 ? 1 : 0);
+    const beatNumber = gridBeat?.beatInBar ?? ((Math.max(0, beatIndex + seed) % bg.meter) + 1);
 
     return {
       ...c,

@@ -32,6 +32,7 @@ import {
   PhraseSection,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { nearestBeatIndex } from '../audio/editOps';
 
 export interface AnlzCueEntry {
   /** 0 = memory point, 1..N = hot cue number (A=1, B=2, ...) */
@@ -328,7 +329,10 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
     const tempo = view.getUint16(entry + 2, false);
     const time = view.getUint32(entry + 4, false) / 1000;
     if (beatInBar < 1 || beatInBar > 16 || tempo < 1) return undefined;
-    if (i === 0 || beatInBar === 1) barNumber++;
+    // Der erste Downbeat eröffnet Takt 1; liegt der erste Schlag mitten im Takt,
+    // ist das ein Takt 0 (Anlauf-Takt) – genau so zählt Rekordbox.
+    if (i === 0) barNumber = beatInBar === 1 ? 1 : 0;
+    else if (beatInBar === 1) barNumber++;
     beats.push({ index: i, time, isBarStart: beatInBar === 1, barNumber, beatInBar });
   }
 
@@ -420,11 +424,37 @@ function cueColor(entry: AnlzCueEntry, isHot: boolean): string {
   return MEMORY_COLOR;
 }
 
+/**
+ * Lage eines Markers: der nächste Schlag des importierten Rasters bestimmt Takt
+ * und Schlag-im-Takt. Ohne Raster wird aus dem Tempo fortgeschrieben (und das
+ * Taktmaß kommt aus dem Raster, nicht aus einer 4/4-Annahme).
+ */
+function markerPosition(
+  grid: BeatGrid | undefined,
+  bpm: number,
+  firstBeat: number,
+  seconds: number
+): { barNumber: number; beatNumber: number } {
+  const meter = grid && grid.meter > 0 ? grid.meter : 4;
+  if (grid && grid.beats.length > 0) {
+    const node = grid.beats[nearestBeatIndex(grid, seconds)];
+    if (node) return { barNumber: node.barNumber, beatNumber: node.beatInBar };
+  }
+  const spb = bpm > 0 ? 60.0 / bpm : 0.5;
+  const beatIndex = Math.max(0, Math.round((seconds - firstBeat) / spb));
+  const seed = grid && grid.beats.length > 0 ? 0 : Math.min(meter - 1, Math.max(0, (grid?.beats[0]?.beatInBar ?? 1) - 1));
+  return {
+    barNumber: Math.floor((beatIndex + seed) / meter) + (seed === 0 ? 1 : 0),
+    beatNumber: ((beatIndex + seed) % meter) + 1,
+  };
+}
+
 function entriesToModel(
   entries: AnlzCueEntry[],
   isHot: boolean,
   bpm: number,
-  firstBeat: number
+  firstBeat: number,
+  grid?: BeatGrid
 ): { cues: CuePoint[]; loops: LoopPoint[] } {
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
@@ -433,9 +463,7 @@ function entriesToModel(
 
   entries.forEach((entry, index) => {
     const position = entry.timeMs / 1000;
-    const beatIndex = Math.max(0, Math.round((position - firstBeat) / spb));
-    const barNumber = Math.floor(beatIndex / 4) + 1;
-    const beatNumber = (beatIndex % 4) + 1;
+    const { barNumber, beatNumber } = markerPosition(grid, bpm, firstBeat, position);
 
     if (entry.type === 2) {
       const end = entry.loopMs > entry.timeMs ? entry.loopMs / 1000 : position + spb * 4;
@@ -806,8 +834,8 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
 
   const bpm = result.bpm ?? 128;
   const firstBeat = result.firstBeat ?? 0;
-  const hotModel = entriesToModel(rawHotCues, true, bpm, firstBeat);
-  const memModel = entriesToModel(rawMemoryCues, false, bpm, firstBeat);
+  const hotModel = entriesToModel(rawHotCues, true, bpm, firstBeat, beatGrid);
+  const memModel = entriesToModel(rawMemoryCues, false, bpm, firstBeat, beatGrid);
   result.cues = [...memModel.cues, ...hotModel.cues];
   result.loops = [...memModel.loops, ...hotModel.loops];
 

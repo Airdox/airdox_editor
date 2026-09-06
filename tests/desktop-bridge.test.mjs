@@ -203,7 +203,9 @@ await check('readOriginalAudio und readAnalysisFile lehnen falsche Quellen ab', 
     /unterstützte Audiodatei/,
     'MIDI darf nicht als Audio akzeptiert werden'
   );
-  await assert.rejects(() => readAudio(null, ''), /kein lokaler Dateipfad/);
+  // Leere Location: abgelehnt – und der Grund nennt jetzt die fehlende XML-Angabe
+  // statt einer allgemeinen Formulierung (Nachweis unten in der Location-Suite).
+  await assert.rejects(() => readAudio(null, ''), /kein lokaler Dateipfad|keinen Location-Wert/);
 
   const readAnalysis = ipcHandlers.get('rekordbox:read-analysis-file');
   await assert.rejects(
@@ -541,6 +543,31 @@ await check('die Quelle der Fixture bleibt unverändert (Read-Only-Zusage)', asy
   await ipcHandlers.get('rekordbox:read-library-db')(null, file);
   assert.ok(fs.readFileSync(file).equals(before), 'Dateiinhalt wurde verändert');
   assert.strictEqual(fs.statSync(file).mtimeMs, beforeMtime, 'Datei wurde neu geschrieben');
+});
+
+await check('eine Location ohne Sammlungs-Wurzel wird nicht erraten', async () => {
+  const { toLocalPath, locationIssue, relativeLibraryLocation } = require(path.join(root, 'electron/locationPath.cjs'));
+  // echte Zeile einer verschobenen/Cloud-Sammlung aus einem rekordbox-7-Export
+  const relative = 'file://localhost//contents_4136090260/unknownartist/unknownalbum/andreas%20henneberg%20%20skirmish%20original%20mix.mp3';
+  assert.ok(relativeLibraryLocation(relative), 'relative Form wird erkannt');
+  assert.strictEqual(toLocalPath(relative), null, 'es wird ein Pfad erfunden, den die XML nicht nennt');
+  assert.ok(/Sammlung|Wurzel/.test(locationIssue(relative) ?? ''), 'Grund ist unklar formuliert');
+
+  const inspected = await ipcHandlers.get('rekordbox:inspect-location')(null, relative);
+  assert.strictEqual(inspected.validLocation, false, 'unauflösbar gilt als gültiger Pfad');
+  assert.strictEqual(inspected.exists, false, 'unauflösbar gilt als vorhanden');
+  assert.ok(/Sammlung|Wurzel/.test(inspected.reason), `Reason: ${inspected.reason}`);
+  await assert.rejects(() => ipcHandlers.get('rekordbox:read-original-audio')(null, relative), /Sammlung|Wurzel/);
+});
+
+await check('Location mit Laufwerk und Prozentkodierung wird richtig gelesen', () => {
+  const { toLocalPath } = require(path.join(root, 'electron/locationPath.cjs'));
+  const real = 'file://localhost/C:/Users/p_kro/Music/rekordbox/Moved%20from%20Cloud/contents_4136090260/unknownartist/unknownalbum/koffee%20%20toast%20yungness%20%20jaminn%20remix.mp3';
+  const local = toLocalPath(real);
+  assert.ok(local, 'Laufwerk-Pfad wird nicht aufgelöst');
+  assert.ok(local.endsWith('koffee  toast yungness  jaminn remix.mp3'), `Ende: ${local}`);
+  assert.ok(!local.includes('%20'), 'Prozentkodierung bleibt im Pfad stehen');
+  assert.strictEqual(toLocalPath('http://example.com/a.mp3'), null, 'fremdes Protokoll wird akzeptiert');
 });
 
 fs.rmSync(sandboxDir, { recursive: true, force: true });

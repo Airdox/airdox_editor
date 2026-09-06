@@ -29,6 +29,13 @@ Rekordbox/Hackerblocks-Daten stammen … Eine eigene Analyse-Engine ist nicht da
 | Tragen · Renderer analysefrei, App trägt statt zu rechnen | bestanden |
 | Kennzeichnung · Fortgeschriebenes Raster nennt sich Fortschreibung | bestanden |
 | XML · Jeder TEMPO-Eintrag und jedes Taktmaß wird benutzt | bestanden |
+| Echte Bibliothek · Battito="4": Taktanfang liegt einen Beat später | bestanden |
+| Echte Bibliothek · Battito="3" bei 122 BPM: zwei Beats bis zum Takt | bestanden |
+| Echte Bibliothek · Mehrere TEMPO-Anker zählen fort, nicht neu | bestanden |
+| Echte Bibliothek · Halbes Tempo und Anker mitten im Stück | bestanden |
+| Echte Bibliothek · Zeile ohne TEMPO: nur AverageBpm, als eigene Rechnung markiert | bestanden |
+| Echte Bibliothek · Loop-Slots bleiben einzeln erhalten | bestanden |
+| Echte Bibliothek · ANLZ-Raster zählt den Anlauf-Takt ebenfalls als 0 | bestanden |
 
 ## Messwerte
 
@@ -139,6 +146,41 @@ importiert: 16 Beats ohne Flag · fortgeschrieben: 26 Beats mit Flag „FORTGESC
 ```
 [XML] Jeder TEMPO-Eintrag und jedes Taktmaß wird benutzt
 Anker 0 s (128 BPM) und 30 s (140 BPM) · Abstand davor 468.8 ms, danach 428.6 ms · Taktmaß 3
+```
+
+```
+[Echte Bibliothek] Battito="4": Taktanfang liegt einen Beat später
+Anker 0,238 s = Schlag 4 (Takt 0) · Takt 1 bei 718 ms · Marker „1.1Bars" gemeldet als Takt 1.1
+```
+
+```
+[Echte Bibliothek] Battito="3" bei 122 BPM: zwei Beats bis zum Takt
+Anker 0,190 s (Schlag 3) · zwei Beats später 1174 ms = 1.1 · Name und Raster stimmen überein
+```
+
+```
+[Echte Bibliothek] Mehrere TEMPO-Anker zählen fort, nicht neu
+Alan Braxe: 495 Beats fortgezählt ergeben Schlag 4 · Dapayk: Schläge 4 und 3 an den Ankerzeiten
+```
+
+```
+[Echte Bibliothek] Halbes Tempo und Anker mitten im Stück
+71 BPM · Anker 0,264 s = Schlag 3 · Downbeat und Marker bei 1,955 s = 1.1
+```
+
+```
+[Echte Bibliothek] Zeile ohne TEMPO: nur AverageBpm, als eigene Rechnung markiert
+kein <TEMPO>-Eintrag · 128 BPM aus AverageBpm · Raster als GENERATED_FALLBACK ausgewiesen
+```
+
+```
+[Echte Bibliothek] Loop-Slots bleiben einzeln erhalten
+6 Schleifen (davon 3 mit identischen Grenzen) · Namen: Loop 5, Loop 6, Loop 7, Loop 1, Loop 2, Loop 8
+```
+
+```
+[Echte Bibliothek] ANLZ-Raster zählt den Anlauf-Takt ebenfalls als 0
+Schläge 3, 4, 1, 2 bei 190/659/1127/1596 ms · Takte 0, 0, 1, 1
 ```
 
 ## Offen (bewusst, dokumentiert)

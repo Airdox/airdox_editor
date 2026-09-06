@@ -41,32 +41,13 @@ function createWindow() {
   }
 }
 
-function toLocalPath(location) {
-  if (typeof location !== 'string' || !location.trim()) return null;
-
-  try {
-    // Windows drive paths must be handled before generic URL detection because
-    // "C:\\Music" otherwise looks like a URL with the scheme "c:".
-    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
-      return path.resolve(location);
-    }
-
-    // Rekordbox exports file:// URLs. Reject all non-file URL schemes.
-    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
-      const url = new URL(location);
-      return url.protocol === 'file:' ? fileURLToPath(url) : null;
-    }
-
-    return path.resolve(location);
-  } catch {
-    return null;
-  }
-}
+const { toLocalPath, locationIssue } = require('./locationPath.cjs');
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
+  const issue = locationIssue(location);
   const localPath = toLocalPath(location);
   if (!localPath) {
-    return { validLocation: false, exists: false, reason: 'Kein lokaler file://-Pfad.' };
+    return { validLocation: false, exists: false, reason: issue ?? 'Kein lokaler file://-Pfad.' };
   }
 
   try {
@@ -166,7 +147,9 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
 
 ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   const localPath = toLocalPath(location);
-  if (!localPath) throw new Error('Die XML-Location ist kein lokaler Dateipfad.');
+  if (!localPath) {
+    throw new Error(locationIssue(location) ?? 'Die XML-Location ist kein lokaler Dateipfad.');
+  }
 
   const allowedExtensions = new Set(['.wav', '.mp3', '.flac', '.aiff', '.aif', '.m4a', '.aac', '.ogg']);
   if (!allowedExtensions.has(path.extname(localPath).toLowerCase())) {

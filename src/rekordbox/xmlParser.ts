@@ -6,23 +6,27 @@
  */
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
+import { nearestBeatIndex } from '../audio/editOps';
 
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
   bpm: number,
   totalDurationSec: number,
   meter: number = 4,
-  origin: DataOrigin = DataOrigin.REKORDBOX_XML
+  origin: DataOrigin = DataOrigin.REKORDBOX_XML,
+  /** Schlag-in-Takt des Ankers aus `Battito` – 1 heißt: der Anker IST der Downbeat. */
+  firstBeatInBar: number = 1
 ): BeatGrid {
   const secondsPerBeat = 60.0 / bpm;
   const totalBeats = Math.max(1, Math.ceil((totalDurationSec - firstBeatSec) / secondsPerBeat) + 4);
   const beats: BeatNode[] = [];
+  const seed = beatInBarSeed(firstBeatInBar, meter);
 
   for (let i = 0; i < totalBeats; i++) {
     const time = firstBeatSec + i * secondsPerBeat;
-    const isBarStart = i % meter === 0;
-    const barNumber = Math.floor(i / meter) + 1;
-    const beatInBar = (i % meter) + 1;
+    const beatInBar = ((i + seed) % meter) + 1;
+    const isBarStart = beatInBar === 1;
+    const barNumber = barOfBeat(i + seed, meter, seed);
 
     beats.push({
       index: i,
@@ -52,11 +56,12 @@ export function buildBeatGridFromTempo(
  * Fortgeschrieben wird nur zwischen den Ankern (`beatsAreDerived`).
  */
 export function buildBeatGridFromTempoPoints(
-  points: { startTime: number; bpm: number; meter?: number }[],
+  points: { startTime: number; bpm: number; meter?: number; beatInBar?: number }[],
   totalDurationSec: number,
   meter: number = 4,
   origin: DataOrigin = DataOrigin.REKORDBOX_XML
 ): BeatGrid {
+  const seed = beatInBarSeed(points.length > 0 ? points[0].beatInBar ?? 1 : 1, meter);
   const anchors = points
     .filter((point) => point.bpm > 0)
     .sort((a, b) => a.startTime - b.startTime);
@@ -65,27 +70,32 @@ export function buildBeatGridFromTempoPoints(
   }
   const beats: BeatNode[] = [];
   const push = (time: number) => {
+    if (beats.length > 0 && time - beats[beats.length - 1].time <= 1e-9) return;
     const index = beats.length;
+    // Die Nummerierung läuft vom ersten Anker durch – die Abstände in der Datei
+    // sind ganzzahlig, also stimmt `Battito` an den späteren Ankern von selbst.
+    const beatInBar = ((index + seed) % meter) + 1;
     beats.push({
       index,
       time,
-      isBarStart: index % meter === 0,
-      barNumber: Math.floor(index / meter) + 1,
-      beatInBar: (index % meter) + 1,
+      isBarStart: beatInBar === 1,
+      barNumber: barOfBeat(index + seed, meter, seed),
+      beatInBar,
     });
   };
   for (let s = 0; s < anchors.length; s++) {
     const secondsPerBeat = 60.0 / anchors[s].bpm;
-    const limit = s + 1 < anchors.length ? anchors[s + 1].startTime : totalDurationSec;
-    let time = anchors[s].startTime;
-    while (time < limit - 1e-9) {
-      push(time);
-      time += secondsPerBeat;
-    }
-    if (s + 1 >= anchors.length) {
-      // Wie bisher ein Schlag über das Ende hinaus, damit die letzte Zeitspanne
-      // des Stücks ein Raster hat.
-      push(time);
+    const anchorTime = anchors[s].startTime;
+    const hasNext = s + 1 < anchors.length;
+    const span = (hasNext ? anchors[s + 1].startTime : totalDurationSec) - anchorTime;
+    // Die Datei rundet auf Millisekunden, ein Anker liegt also selten exakt auf
+    // dem arithmetischen Schlag. Gezählt wird deshalb die gerundete Schlaganzahl,
+    // die Zeit des Ankers selbst kommt unverändert aus der Datei.
+    const steps = hasNext
+      ? Math.max(1, Math.round(span / secondsPerBeat))
+      : Math.max(1, Math.ceil(Math.max(0, span) / secondsPerBeat) + 1);
+    for (let k = 0; k < steps; k++) {
+      push(k === 0 ? anchorTime : anchorTime + k * secondsPerBeat);
     }
   }
   return {
@@ -96,6 +106,22 @@ export function buildBeatGridFromTempoPoints(
     origin,
     beatsAreDerived: true,
   };
+}
+
+/**
+ * `Battito` (XML) und der importierte Schlag-in-Takt (PQTZ) sagen, welcher Schlag
+ * des Takts der Anker ist. Takt 1 beginnt beim ersten Downbeat – ein Resttakt davor
+ * zahlt als Takt 0, genau wie in Rekordbox (deshalb heißt der erste ganze Takt bei
+ * `Battito="4"` auch in der Datei „1.1Bars“).
+ */
+function beatInBarSeed(beatInBar: number, meter: number): number {
+  const meterSafe = Math.max(1, meter);
+  const b = Math.min(meterSafe, Math.max(1, Math.trunc(beatInBar || 1)));
+  return b - 1;
+}
+
+function barOfBeat(positionInMeter: number, meter: number, seed: number): number {
+  return Math.floor(positionInMeter / meter) + (seed === 0 ? 1 : 0);
 }
 
 // Helper to unescape XML entities
@@ -281,16 +307,18 @@ function parseSingleTrackNode(
   // Parse TEMPO (Beatgrid) – alle Einträge, nicht nur den ersten: jeder gilt ab
   // seiner `Inizio`-Zeit, und `Metro` nennt das Taktmaß. Beides steht in der
   // Datei und wird deshalb benutzt; nur die Schläge dazwischen sind Rechnung.
-  const tempoEntries: { startTime: number; bpm: number; meter: number }[] = [];
+  const tempoEntries: { startTime: number; bpm: number; meter: number; beatInBar: number }[] = [];
   el.querySelectorAll('TEMPO').forEach((tempoEl: any) => {
     const entryBpm = parseFloat(tempoEl.getAttribute('Bpm') || '0');
     if (!(entryBpm > 0)) return;
     const entryStart = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
     const metro = String(tempoEl.getAttribute('Metro') || '').match(/^\s*(\d+)\s*\/\s*(\d+)/);
+    const battito = parseFloat(tempoEl.getAttribute('Battito') || '1');
     tempoEntries.push({
       startTime: Number.isFinite(entryStart) ? entryStart : 0,
       bpm: entryBpm,
       meter: metro ? Math.max(1, parseInt(metro[1], 10)) : 4,
+      beatInBar: Number.isFinite(battito) ? Math.max(1, Math.trunc(battito)) : 1,
     });
   });
   tempoEntries.sort((a, b) => a.startTime - b.startTime);
@@ -298,25 +326,30 @@ function parseSingleTrackNode(
   let firstBeat = 0.0;
   let tempoBpm = bpm;
   let meter = 4;
+  let firstBeatInBar = 1;
   if (tempoEntries.length > 0) {
     firstBeat = tempoEntries[0].startTime;
     tempoBpm = tempoEntries[0].bpm;
     meter = tempoEntries[0].meter;
+    firstBeatInBar = tempoEntries[0].beatInBar;
   }
 
   // A complete grid contains hundreds of objects per song.  Keep collection
   // imports compact; the full grid is reconstructed only for the track loaded
   // into a deck.
+  // Ohne `<TEMPO>` nennt die XML nur `AverageBpm`; der Anker bei 0 s ist dann
+  // eigene Annahme und muss als solche ausgewiesen werden.
+  const gridOrigin = tempoEntries.length > 0 ? DataOrigin.REKORDBOX_XML : DataOrigin.GENERATED_FALLBACK;
   const beatGrid = buildDenseBeatGrid
     ? tempoEntries.length > 1
-      ? buildBeatGridFromTempoPoints(tempoEntries, duration, meter, DataOrigin.REKORDBOX_XML)
-      : buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
+      ? buildBeatGridFromTempoPoints(tempoEntries, duration, meter, gridOrigin)
+      : buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, gridOrigin, firstBeatInBar)
     : {
         firstBeat,
         bpm: tempoBpm,
         meter,
         beats: [],
-        origin: DataOrigin.REKORDBOX_XML,
+        origin: gridOrigin,
       };
 
   // Parse POSITION_MARK
@@ -337,10 +370,16 @@ function parseSingleTrackNode(
 
     if (type === '0') {
       const inMsec = Math.round(start * 1000);
-      const spb = 60.0 / tempoBpm;
-      const beatIndex = Math.round((start - firstBeat) / spb);
-      const barNumber = Math.floor(beatIndex / 4) + 1;
-      const beatNumber = (beatIndex % 4) + 1;
+      // Lage des Markers aus dem Raster der Datei, nicht aus einer Rechnung: Der
+      // Eintrag kennt seinen Schlag im Takt (`Battito`) und sein Taktmaß (`Metro`).
+      const gridBeat =
+        beatGrid.beats.length > 0
+          ? beatGrid.beats[nearestBeatIndex(beatGrid, start)]
+          : undefined;
+      const seed = beatInBarSeed(firstBeatInBar, meter);
+      const beatIndex = Math.round((start - firstBeat) / (60.0 / tempoBpm));
+      const barNumber = gridBeat?.barNumber ?? barOfBeat(beatIndex + seed, meter, seed);
+      const beatNumber = gridBeat?.beatInBar ?? ((beatIndex + seed) % meter) + 1;
 
       if (num >= 0) {
         const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -374,9 +413,13 @@ function parseSingleTrackNode(
       }
     } else if (type === '4') {
       const end = parseFloat(mEl.getAttribute('End') || `${start + 4}`);
+      // `Num` ist der Slot in der Rekordbox-Oberfläche – ohne ihn wären mehrere
+      // Schleifen über denselben Grenzen nicht zu unterscheiden.
+      const slot = Number.isFinite(num) && num >= 0 ? ` ${num + 1}` : '';
+      const loopName = mEl.getAttribute('Name') || '';
       loops.push({
         id: `loop-${mIdx}`,
-        name: name || 'Loop',
+        name: loopName || `Loop${slot}`,
         start,
         end,
         length: Math.max(0.1, end - start),

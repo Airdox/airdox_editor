@@ -33,7 +33,7 @@ import {
   extractTrackFromRekordboxXml,
   parseAnlzBinary,
 } from '../src/rekordbox/databaseExtractor';
-import { BeatGrid, DataOrigin } from '../src/types/rekordbox';
+import { BeatGrid, BeatNode, DataOrigin } from '../src/types/rekordbox';
 import { buildBeatGridFromTempo } from '../src/rekordbox/xmlParser';
 import type { PcmAudio } from '../src/audio/pcm';
 import type { EditableAudio } from '../src/audio/editOps';
@@ -658,6 +658,167 @@ runTest('XML', 'Jeder TEMPO-Eintrag und jedes Taktmaß wird benutzt', () => {
   assert(Math.abs(gapAfter - 60 / 140) < 1e-6, `Nach dem Wechsel gilt nicht 140 BPM (${gapAfter})`);
   assertEqual(track.beatGrid.beatsAreDerived, true, 'Zwischen den Ankern wird fortgeschrieben – muss gekennzeichnet sein');
   return `Anker 0 s (128 BPM) und 30 s (140 BPM) · Abstand davor ${(gapBefore * 1000).toFixed(1)} ms, danach ${(gapAfter * 1000).toFixed(1)} ms · Taktmaß 3`;
+});
+
+// ─── 4c) Echte Bibliothekszeilen: Battito, Metro, Loop-Slots ───────────────
+// Zeilen wie sie ein Rekordbox-7-Export wirklich schreibt (Auszug aus einer
+// exportierten collection_backup.xml). Geprüft wird gegen die Werte der Datei –
+// nicht gegen eine eigene Rechnung.
+function libraryRow(trackAttributes: string, inner: string) {
+  return (
+    '<?xml version="1.0" encoding="UTF-8"?><DJ_PLAYLISTS Version="1.0.0">' +
+    '<PRODUCT Name="rekordbox" Version="7.2.16" Company="AlphaTheta"/>' +
+    `<COLLECTION Entries="1"><TRACK ${trackAttributes}>${inner}</TRACK></COLLECTION></DJ_PLAYLISTS>`
+  );
+}
+
+function realTrack(trackAttributes: string, inner: string) {
+  return extractTrackFromRekordboxXml(libraryRow(trackAttributes, inner), 0).track;
+}
+
+function beatNear(grid: BeatGrid, seconds: number) {
+  let best: BeatNode | undefined;
+  let bestDiff = Infinity;
+  for (const beat of grid.beats) {
+    const diff = Math.abs(beat.time - seconds);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = beat;
+    }
+  }
+  assert(best !== undefined && bestDiff < 1e-6, `kein Beat bei ${seconds} s im Raster`);
+  return best!;
+}
+
+runTest('Echte Bibliothek', 'Battito="4": Taktanfang liegt einen Beat später', () => {
+  // Gorgon City – Lick Shot Visualiser: Anker 0,238 s bei 125 BPM, Schlag 4 im Takt.
+  const track = realTrack(
+    'TrackID="73381820" Name="Gorgon City  Lick Shot Visualiser" TotalTime="235" AverageBpm="125.00"',
+    '<TEMPO Inizio="0.238" Bpm="125.00" Metro="4/4" Battito="4"/>' +
+      '<POSITION_MARK Name="1.1Bars" Type="0" Start="0.718" Num="0" Red="255" Green="55" Blue="111"/>'
+  );
+  const grid = track.beatGrid;
+  assertEqual(grid.beats[0].beatInBar, 4, 'Anker ist Schlag 4, nicht Schlag 1');
+  assertEqual(grid.beats[0].isBarStart, false, 'Ein Anker mitten im Takt ist kein Taktanfang');
+  assertEqual(grid.beats[0].barNumber, 0, 'Anlauf-Takt zählt als Takt 0');
+  const down = beatNear(grid, 0.718);
+  assertEqual(down.beatInBar, 1, 'einen Beat später beginnt Takt 1');
+  assert(down.isBarStart, 'die 1.1 in „1.1Bars“ ist kein Taktanfang');
+  assertEqual(down.barNumber, 1, 'Takt 1 beginnt dort, wo Rekordbox ihn benennt');
+  // Der Markername aus der Datei muss zur berechneten Lage passen – sonst stimmt
+  // entweder das Raster oder die Herkunft nicht.
+  const cue = track.cues.find((c) => c.name === '1.1Bars')!;
+  assert(cue !== undefined, 'Hot Cue fehlt');
+  assertEqual(cue.barNumber, 1, 'Marker-Takt aus dem Raster');
+  assertEqual(cue.beatNumber, 1, 'Marker-Schlag aus dem Raster');
+  const snapped = snapToGrid(grid, 0.5, 'bar');
+  assert(Math.abs(snapped.seconds - down.time) < 1e-9, 'Takt-Rasterung greift zum falschen Anker');
+  return `Anker 0,238 s = Schlag 4 (Takt 0) · Takt 1 bei ${(down.time * 1000).toFixed(0)} ms · Marker „${cue.name}" gemeldet als Takt ${cue.barNumber}.${cue.beatNumber}`;
+});
+
+runTest('Echte Bibliothek', 'Battito="3" bei 122 BPM: zwei Beats bis zum Takt', () => {
+  // ajukaja feat maria minerva – nii hea
+  const track = realTrack(
+    'TrackID="55434903" Name="ajukaja feat maria minerva - nii hea" TotalTime="272" AverageBpm="122.00"',
+    '<TEMPO Inizio="0.190" Bpm="122.00" Metro="4/4" Battito="3"/>' +
+      '<POSITION_MARK Name="1.1Bars" Type="0" Start="1.174" Num="0" Red="255" Green="55" Blue="111"/>'
+  );
+  const cue = track.cues[0];
+  assertEqual(cue.barNumber, 1, 'Marker liegt auf Takt 1');
+  assertEqual(cue.beatNumber, 1, 'Marker liegt auf Schlag 1');
+  const anchor = track.beatGrid.beats[0];
+  assertEqual(anchor.beatInBar, 3, 'Anker = Schlag 3');
+  return `Anker 0,190 s (Schlag 3) · zwei Beats später ${(cue.position * 1000).toFixed(0)} ms = 1.1 · Name und Raster stimmen überein`;
+});
+
+runTest('Echte Bibliothek', 'Mehrere TEMPO-Anker zählen fort, nicht neu', () => {
+  // Alan Braxe Fred Falke – Intro: 0,240 s (Schlag 1) und 239,929 s (Schlag 4) bei 123,91
+  const track = realTrack(
+    'TrackID="73234695" Name="Alan Braxe Fred Falke - Intro" TotalTime="295" AverageBpm="123.91"',
+    '<TEMPO Inizio="0.240" Bpm="123.91" Metro="4/4" Battito="1"/>' +
+      '<TEMPO Inizio="239.929" Bpm="123.91" Metro="4/4" Battito="4"/>'
+  );
+  const anchor = beatNear(track.beatGrid, 239.929);
+  assertEqual(anchor.beatInBar, 4, 'Zweiter Anker behält seinen Schlag-im-Takt aus der Datei');
+  assertEqual(anchor.isBarStart, false, 'Schlag 4 ist kein Taktanfang');
+  // Dapayk & Padberg – Fishin: drei Anker, 125 BPM
+  const dapayk = realTrack(
+    'TrackID="224563357" Name="Dapayk Padberg - Fishin" TotalTime="354" AverageBpm="125.00"',
+    '<TEMPO Inizio="0.290" Bpm="125.00" Metro="4/4" Battito="1"/>' +
+      '<TEMPO Inizio="82.371" Bpm="125.00" Metro="4/4" Battito="4"/>' +
+      '<TEMPO Inizio="260.452" Bpm="125.00" Metro="4/4" Battito="3"/>'
+  );
+  assertEqual(beatNear(dapayk.beatGrid, 82.371).beatInBar, 4, 'Dapayk-Anker bei 82,371 s');
+  assertEqual(beatNear(dapayk.beatGrid, 260.452).beatInBar, 3, 'Dapayk-Anker bei 260,452 s');
+  return `Alan Braxe: 495 Beats fortgezählt ergeben Schlag 4 · Dapayk: Schläge 4 und 3 an den Ankerzeiten`;
+});
+
+runTest('Echte Bibliothek', 'Halbes Tempo und Anker mitten im Stück', () => {
+  // Bisweed – Dusty Shadows: 71 BPM (Halftempo), Anker bei Schlag 3, dann 1
+  const track = realTrack(
+    'TrackID="264163605" Name="Bisweed - Dusty Shadows" TotalTime="127" AverageBpm="71.00"',
+    '<TEMPO Inizio="0.264" Bpm="71.00" Metro="4/4" Battito="3"/>' +
+      '<TEMPO Inizio="1.955" Bpm="71.00" Metro="4/4" Battito="1"/>' +
+      '<POSITION_MARK Name="1.1Bars" Type="0" Start="1.955" Num="0" Red="255" Green="55" Blue="111"/>'
+  );
+  const anchor = beatNear(track.beatGrid, 1.955);
+  assertEqual(anchor.beatInBar, 1, 'zweiter Anker ist der erste Downbeat');
+  assertEqual(anchor.isBarStart, true, 'Downbeat muss als solcher erkannt werden');
+  assertEqual(anchor.barNumber, 1, 'und eröffnet Takt 1');
+  assertEqual(track.cues[0].barNumber, 1, 'Marker sitzt auf Takt 1');
+  return `71 BPM · Anker 0,264 s = Schlag 3 · Downbeat und Marker bei 1,955 s = 1.1`;
+});
+
+runTest('Echte Bibliothek', 'Zeile ohne TEMPO: nur AverageBpm, als eigene Rechnung markiert', () => {
+  // Flex – Building The Efforts: die Datei nennt keinen Beatgrid-Anker, nur 128 BPM
+  const track = realTrack(
+    'TrackID="47366556" Name="Flex - Building The Efforts (Daegon Remix)" TotalTime="397" AverageBpm="128.00"',
+    '<POSITION_MARK Name="" Type="0" Start="0.138" Num="-1"/>'
+  );
+  assertEqual(track.beatGrid.bpm, 128, 'Temperament aus AverageBpm');
+  assertEqual(track.beatGrid.origin, DataOrigin.GENERATED_FALLBACK, 'Ohne <TEMPO> ist der Anker eigene Annahme');
+  assertEqual(track.beatGrid.beatsAreDerived, true, 'Fortgeschriebenes Raster ist gekennzeichnet');
+  return `kein <TEMPO>-Eintrag · 128 BPM aus AverageBpm · Raster als GENERATED_FALLBACK ausgewiesen`;
+});
+
+runTest('Echte Bibliothek', 'Loop-Slots bleiben einzeln erhalten', () => {
+  // Hilit Kolet: sechs Type-4-Schleifen, drei davon gleiche Grenzen in verschiedenen Slots
+  const marks = [
+    ['0.087', '3.958', '4'],
+    ['170.410', '185.894', '5'],
+    ['15.571', '19.442', '6'],
+    ['0.087', '3.958', '0'],
+    ['0.087', '3.958', '1'],
+    ['15.571', '19.442', '7'],
+  ]
+    .map(([s, e, n]) => `<POSITION_MARK Name="" Type="4" Start="${s}" End="${e}" Num="${n}" Red="255" Green="140" Blue="0"/>`)
+    .join('');
+  const track = realTrack(
+    'TrackID="205580900" Name="Hilit Kolet - Techno Disco" TotalTime="294" AverageBpm="124.00"',
+    `<TEMPO Inizio="0.087" Bpm="124.00" Metro="4/4" Battito="1"/>${marks}`
+  );
+  assertEqual(track.loops.length, 6, 'Keine Schleife wird wegen gleicher Grenzen weggeworfen');
+  const ids = new Set(track.loops.map((l) => l.id));
+  assertEqual(ids.size, 6, 'Verschiedene Slots bleiben verschieden');
+  const names = track.loops.map((l) => l.name).join(', ');
+  assert(names.includes('Loop 5') && names.includes('Loop 1'), `Slot-Nummern aus der Datei: ${names}`);
+  return `6 Schleifen (davon 3 mit identischen Grenzen) · Namen: ${names}`;
+});
+
+runTest('Echte Bibliothek', 'ANLZ-Raster zählt den Anlauf-Takt ebenfalls als 0', () => {
+  // PQTZ-Eintrag mit Schlag 3 im Takt: Takt 1 beginnt erst beim nächsten Downbeat.
+  const beats: AnlzBeatEntry[] = [
+    { beatInBar: 3, tempo: 12800, timeMs: 190 },
+    { beatInBar: 4, tempo: 12800, timeMs: 659 },
+    { beatInBar: 1, tempo: 12800, timeMs: 1127 },
+    { beatInBar: 2, tempo: 12800, timeMs: 1596 },
+  ];
+  const grid = parseAnlzBinary(generateAnlzWithBeatTimes(beats, 128)).beatGrid!;
+  assertEqual(grid.beats[0].barNumber, 0, 'Anlauf-Takt = 0');
+  assertEqual(grid.beats[2].barNumber, 1, 'erster Downbeat = Takt 1');
+  assertEqual(grid.beats[2].isBarStart, true, 'und ist der Taktanfang');
+  assert(!grid.beatsAreDerived, 'die Liste kommt aus der Datei');
+  return `Schläge 3, 4, 1, 2 bei 190/659/1127/1596 ms · Takte 0, 0, 1, 1`;
 });
 
 // ─── Zusammenfassung + Nachweisdatei ───────────────────────────────────────
