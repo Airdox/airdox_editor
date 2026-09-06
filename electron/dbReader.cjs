@@ -136,7 +136,10 @@ function openRekordboxDb(filePath) {
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
-      return { db, dbType };
+      // `available` muss gesetzt sein: readRekordboxDatabase() prüft genau
+      // dieses Feld und würde einen erfolgreich entschlüsselten Treffer
+      // sonst als Fehlschlag behandeln (und die Datei offen lassen).
+      return { available: true, db, dbType };
     } catch (openError) {
       try {
         db.close();
