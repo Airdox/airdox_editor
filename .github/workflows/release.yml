@@ -1,0 +1,61 @@
+name: Release
+
+# Baut die Windows-Artefakte und haengt sie an einen GitHub Release.
+# Releases sind direkt ueber die Repo-Startseite erreichbar - anders als
+# Actions-Artefakte, die einen Login mit Actions-Leserecht verlangen.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release-Tag, z.B. v0.4"
+        required: true
+        default: "v0.4"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Abhaengigkeiten installieren
+        run: npm ci
+
+      - name: Typen pruefen
+        run: npm run lint
+
+      - name: Tests ausfuehren
+        run: npm test
+
+      - name: Windows-Pakete bauen
+        run: npm run package:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Artefakte auflisten
+        shell: bash
+        run: ls -la release/
+
+      - name: Release anlegen und EXE anhaengen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Airdox Smart Editor ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*.exe
