@@ -95,8 +95,8 @@ npm run package:win
 Installer **und** Portable-EXE in `release\`:
 
 ```
-release\Airdox_intelligents_Editor-0.1.0-win-x64.exe           (NSIS-Installer)
-release\Airdox_intelligents_Editor-Portable-0.1.0-x64.exe     (tragbare Variante)
+release\Airdox_intelligents_Editor-0.2.0-win-x64.exe           (NSIS-Installer)
+release\Airdox_intelligents_Editor-Portable-0.2.0-x64.exe     (tragbare Variante)
 ```
 
 (Die Portable-Datei hat kein `-win` im Namen – ihr `artifactName`-Muster in
@@ -117,9 +117,9 @@ reaktivieren kann.
 
 Ergebnis im Ordner `release\`:
 
-* `Airdox_intelligents_Editor-0.1.0-win-x64.exe` – NSIS-Installer (Auswahl des
+* `Airdox_intelligents_Editor-0.2.0-win-x64.exe` – NSIS-Installer (Auswahl des
   Zielordners, Desktop- und Startmenü-Verknüpfung, pro Benutzer ohne Admin-Rechte)
-* `Airdox_intelligents_Editor-Portable-0.1.0-x64.exe` – einzelne EXE ohne
+* `Airdox_intelligents_Editor-Portable-0.2.0-x64.exe` – einzelne EXE ohne
   Installation (für USB-Sticks oder Testläufe)
 
 Nur ein Ziel bauen:
@@ -202,6 +202,28 @@ beiden `.exe`-Dateien als Workflow-Artefakt hoch:
 GitHub-Runner enthalten Visual Studio Build Tools, dort würde also auch das
 native Modul kompilieren.
 
+Dasselbe von der Kommandozeile (Ergebnis liegt danach im Arbeitsverzeichnis,
+`release\` ist in `.gitignore` und landet damit nicht im Repository):
+
+```bat
+gh workflow run windows-build.yml --ref arena/01a07073-airdox-editor -f target=all
+gh run list --workflow windows-build.yml --limit 3
+gh run watch <lauf-id>
+gh run download <lauf-id> --name airdox-intelligents-editor-windows-x64 --dir release
+```
+
+Das Artefakt enthält `Airdox_intelligents_Editor-<fassung>-win-x64.exe`, die
+Portable-EXE und die zugehörigen `.blockmap`-Dateien; es bleibt 30 Tage abrufbar.
+
+### Fassung erhöhen
+
+`version` in `package.json` ist die einzige Quelle. electron-builder schreibt die
+Zahl in den Dateinamen (`${version}` in `artifactName`) und in die
+Versionsressource der EXE (Dateieigenschaften → „Produktversion“), `vite.config.ts`
+setzt sie als `__APP_VERSION__` in den Rumpf (Titelleiste rechts neben dem Namen und
+Block `app` jeder Projektdatei). Also: `package.json` ändern, nichts anderes – ein
+zweiter Ort wäre die alte Fehlerquelle der Produktnamen (siehe `src/productName.ts`).
+
 ## 6. Optional: natives SQLCipher-Modul (schneller, nur für Riesenbibliotheken)
 
 Nur sinnvoll, wenn `master.db` deutlich größer als ~100 MB ist.
@@ -271,3 +293,10 @@ npm run icon
 * [ ] Wellenform ist bernsteinfarben (Menü → Wellenform: AMBER/BLUE/RGB/3BAND).
 * [ ] `Palette-Clips als WAVs exportieren…` schreibt eine Datei pro Clip in den
   gewählten Ordner, Originaldateien bleiben bitgenau unverändert.
+* [ ] Titelleiste zeigt `v` und die Fassung aus `package.json`; die EXE-Dateieigenschaften
+  melden dieselbe Produktversion.
+* [ ] Clip aus einer 120-BPM-Quellspur in eine 128-BPM-Spur gezogen: er ist 6,7 % kürzer,
+  die Tonhöhe bleibt (Key-Lock zu), und er endet auf einer Taktgrenze – mit
+  „Tonhöhe folgt dem Tempo“ wandert die Tonhöhe im gleichen Verhältnis.
+* [ ] `Maximize2` im Kopf der Clip-Bibliothek klappt die Deck-Ansicht auf; `IN`/`OUT`/`AUS`,
+  `CLIP` / `WIE EINGEFÜGT` und die drei Einfügeknöpfe wirken nur auf den Clip, nicht auf die Spur.

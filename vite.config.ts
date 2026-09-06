@@ -1,7 +1,15 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import {readFileSync} from 'node:fs';
 import {defineConfig} from 'vite';
+
+// Die Fassung steht nur an einer Stelle: in package.json. electron-builder liest
+// sie für den Dateinamen und die Versionsressource der EXE, der Rumpf liest sie
+// über dieses `define` – damit Titelleiste und Projektdatei nicht nachlaufen.
+const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')) as {
+  version: string;
+};
 
 export default defineConfig(() => {
   return {
@@ -9,6 +17,9 @@ export default defineConfig(() => {
     // the filesystem (file://), where absolute "/assets/..." paths would 404.
     base: './',
     plugins: [react(), tailwindcss()],
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

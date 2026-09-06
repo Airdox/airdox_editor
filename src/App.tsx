@@ -1251,7 +1251,7 @@ export default function App() {
           miniPeaks: clip.miniPeaks ?? [],
           pcm: clipAudioOf(clip) ?? { sampleRate: workingPcm?.sampleRate ?? 44100, channels: [new Float32Array(0)] },
       })),
-      app: { name: 'Airdox_intelligents_Editor', version: '0.1.0' },
+      app: { name: 'Airdox_intelligents_Editor', version: __APP_VERSION__ },
     });
     const text = serializeProject(project);
     const target = !forceDialog && projectPath && isDesktopShell() ? projectPath : null;

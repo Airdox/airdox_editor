@@ -1,7 +1,7 @@
 {
   "name": "airdox_intelligents_editor",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Rekordbox-Bibliothek (XML, ANLZ, master.db/OneLibrary) ausschließlich lesend in den Desktop-Editor importieren.",
   "author": "Airdox",
   "type": "module",

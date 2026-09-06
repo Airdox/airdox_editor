@@ -26,6 +26,12 @@ export const TitleBar: React.FC = () => {
         >
           {PRODUCT_DISPLAY_NAME}
         </span>
+        <span
+          className="text-[10px] leading-none text-neutral-600 font-mono pt-px"
+          title={`Gebaute Fassung ${__APP_VERSION__} (package.json)`}
+        >
+          v{__APP_VERSION__}
+        </span>
       </div>
 
       {/* Right: Windows window controls */}
