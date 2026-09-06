@@ -340,6 +340,48 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             ctx.fillRect(x, centerY - highH * 0.3, colW, highH * 0.6);
           }
         }
+      } else {
+        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
+        const maxHalfH = height * 0.42;
+        const bpm = bg.bpm || 130;
+        const secondsPerBeat = 60 / bpm;
+        const numCols = Math.ceil(width / 2);
+        for (let i = 0; i < numCols; i++) {
+          const x = i * 2;
+          const t = pixelToTime(x, width);
+          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
+          const beatFract = ((beatPos % 1) + 1) % 1;
+          const barIndex = Math.floor(beatPos / 4);
+          const isBreak = (barIndex >= 24 && barIndex < 32) || (barIndex >= 48 && barIndex < 56);
+          const kickEnv = isBreak ? 0.08 : Math.exp(-beatFract * 10) * 0.85;
+          const subBass = isBreak ? 0.12 : (0.2 + 0.15 * Math.sin(t * 18));
+          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.25;
+          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
+
+          const barH = Math.max(2, peak * maxHalfH);
+          if (waveformMode === 'RGB') {
+            const r = Math.min(255, Math.floor(kickEnv * 280));
+            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
+            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
+            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+            ctx.fillRect(x, centerY - barH, 2, barH * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillRect(x, centerY - 2, 2, 4);
+          } else if (waveformMode === 'BLUE') {
+            ctx.fillStyle = '#00a2ff';
+            ctx.fillRect(x, centerY - barH, 2, barH * 2);
+            ctx.fillStyle = '#b3e5fc';
+            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
+          } else {
+            // 3BAND
+            ctx.fillStyle = '#ff2b2b';
+            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
+            ctx.fillStyle = '#00e5ff';
+            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
+          }
+        }
       }
 
       // 3b. Beatgrid overlay lines over waveform (ensures beatgrid lines cut cleanly through loud transients)

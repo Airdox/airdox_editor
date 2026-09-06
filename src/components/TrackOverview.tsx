@@ -59,18 +59,36 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     const analysis = track.analysis;
     const duration = Math.max(1, track.duration);
 
+    const targetCols = width;
+
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
-      const stepX = width / buckets;
+      const bucketsPerCol = buckets / targetCols;
 
-      for (let b = 0; b < buckets; b++) {
-        const x = b * stepX;
-        const peak = analysis.peaks[b];
-        const low = analysis.lowEnergy[b];
-        const mid = analysis.midEnergy[b];
-        const high = analysis.highEnergy[b];
+      for (let col = 0; col < targetCols; col++) {
+        const startB = Math.floor(col * bucketsPerCol);
+        const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
 
-        const barH = Math.max(2, peak * (height - 4));
+        let maxPeak = 0;
+        let sumLow = 0;
+        let sumMid = 0;
+        let sumHigh = 0;
+        let count = 0;
+
+        for (let b = startB; b < endB; b++) {
+          const p = analysis.peaks[b] || 0;
+          if (p > maxPeak) maxPeak = p;
+          sumLow += analysis.lowEnergy[b] || 0;
+          sumMid += analysis.midEnergy[b] || 0;
+          sumHigh += analysis.highEnergy[b] || 0;
+          count++;
+        }
+
+        const low = count > 0 ? sumLow / count : 0;
+        const mid = count > 0 ? sumMid / count : 0;
+        const high = count > 0 ? sumHigh / count : 0;
+
+        const barH = Math.max(2, maxPeak * (height - 4));
         const yTop = (height - barH) / 2;
 
         // Color based on spectral density (Rekordbox RGB spectral styling)
@@ -80,17 +98,60 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
 
         ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-        ctx.fillRect(x, yTop, Math.max(1, stepX * 0.9), barH);
+        ctx.fillRect(col, yTop, 1, barH);
       }
     } else {
-      // Fallback synthetic overview bars
-      const numBars = 180;
-      for (let i = 0; i < numBars; i++) {
-        const x = (i / numBars) * width;
-        const amp = 0.3 + 0.6 * Math.sin((i / numBars) * Math.PI) * (0.8 + 0.2 * Math.cos(i * 0.5));
-        const barH = amp * (height - 6);
-        ctx.fillStyle = i % 2 === 0 ? '#d32f2f' : '#0288d1';
-        ctx.fillRect(x, (height - barH) / 2, width / numBars - 1, barH);
+      // Natural organic DJ energy contour (intro, verse, drop, breakdown, main drop, outro)
+      // Never a rigid, symmetric mathematical sine wave!
+      const bpm = track.bpm || 130;
+      const beatsTotal = (duration / 60) * bpm;
+      for (let col = 0; col < targetCols; col++) {
+        const progress = col / targetCols;
+        const beatAtCol = progress * beatsTotal;
+        const barAtCol = beatAtCol / 4;
+
+        // Realistic 64-bar DJ electronic song structure:
+        // 0-16 bars: Intro build
+        // 16-32 bars: Drop 1
+        // 32-44 bars: Breakdown (lower bass, airy synths)
+        // 44-48 bars: Build-up snare roll
+        // 48-60 bars: Main Peak Drop
+        // 60+ bars: Outro
+        let baseEnergy = 0.5;
+        let isBreak = false;
+        const normBar = barAtCol % 64;
+        if (normBar < 16) {
+          baseEnergy = 0.35 + (normBar / 16) * 0.35;
+        } else if (normBar < 32) {
+          baseEnergy = 0.85;
+        } else if (normBar < 44) {
+          baseEnergy = 0.3; // Breakdown
+          isBreak = true;
+        } else if (normBar < 48) {
+          baseEnergy = 0.5 + ((normBar - 44) / 4) * 0.45; // Buildup
+        } else if (normBar < 60) {
+          baseEnergy = 0.95; // Main drop
+        } else {
+          baseEnergy = 0.8 - ((normBar - 60) / 4) * 0.4; // Outro
+        }
+
+        // Add transient kick spikes every beat
+        const beatFract = beatAtCol % 1;
+        const kickTransient = Math.exp(-beatFract * 12) * (isBreak ? 0.1 : 0.35);
+        const noise = (Math.sin(col * 13.7) * 0.5 + 0.5) * 0.12;
+
+        const peak = Math.min(1.0, Math.max(0.12, baseEnergy * 0.65 + kickTransient + noise));
+        const barH = Math.max(2, peak * (height - 4));
+        const yTop = (height - barH) / 2;
+
+        if (isBreak) {
+          ctx.fillStyle = '#00c3ff';
+        } else if (kickTransient > 0.15) {
+          ctx.fillStyle = '#ff2b2b';
+        } else {
+          ctx.fillStyle = '#00a2ff';
+        }
+        ctx.fillRect(col, yTop, 1, barH);
       }
     }
 

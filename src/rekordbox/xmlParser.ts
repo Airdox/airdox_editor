@@ -223,32 +223,83 @@ function parseSingleTrackNode(
   }
 
   // Parse TEMPO (Beatgrid)
-  const tempoEl = el.querySelector('TEMPO');
+  // Rekordbox tracks may have multiple <TEMPO> nodes (dynamic grid / markers)
+  const tempoElements = el.querySelectorAll ? el.querySelectorAll('TEMPO') : [];
   let firstBeat = 0.0;
   let tempoBpm = bpm;
-  if (tempoEl) {
-    firstBeat = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
-    tempoBpm = parseFloat(tempoEl.getAttribute('Bpm') || bpm.toString());
-  }
+  let meter = 4;
 
-  // A complete grid contains hundreds of objects per song.  Keep collection
-  // imports compact; the full grid is reconstructed only for the track loaded
-  // into a deck.
-  const beatGrid = buildDenseBeatGrid
-    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, 4, DataOrigin.REKORDBOX_XML)
-    : {
-        firstBeat,
-        bpm: tempoBpm,
-        meter: 4,
-        beats: [],
-        origin: DataOrigin.REKORDBOX_XML,
-      };
+  if (tempoElements && tempoElements.length > 0) {
+    let chosenTempoEl = tempoElements[0];
+    for (let t = 0; t < tempoElements.length; t++) {
+      const tEl = tempoElements[t];
+      const ini = parseFloat(tEl.getAttribute('Inizio') || '0.0');
+      const bpmVal = parseFloat(tEl.getAttribute('Bpm') || '0.0');
+      if (bpmVal > 0) {
+        if (ini > 0 && parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0') === 0.0) {
+          chosenTempoEl = tEl;
+        }
+      }
+    }
+
+    const inizio = parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0');
+    tempoBpm = parseFloat(chosenTempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
+    const battitoStr = chosenTempoEl.getAttribute('Battito') || '1';
+    const battito = parseInt(battitoStr, 10) || 1;
+    const metroStr = chosenTempoEl.getAttribute('Metro') || '4/4';
+    if (metroStr.startsWith('3/')) meter = 3;
+    else meter = 4;
+
+    const spb = 60.0 / tempoBpm;
+    let rawFirstBeat = inizio - (battito - 1) * spb;
+    while (rawFirstBeat < 0) rawFirstBeat += spb;
+    firstBeat = rawFirstBeat;
+  } else {
+    const tempoEl = el.querySelector('TEMPO');
+    if (tempoEl) {
+      const inizio = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
+      tempoBpm = parseFloat(tempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
+      const battito = parseInt(tempoEl.getAttribute('Battito') || '1', 10) || 1;
+      const spb = 60.0 / tempoBpm;
+      let rawFirstBeat = inizio - (battito - 1) * spb;
+      while (rawFirstBeat < 0) rawFirstBeat += spb;
+      firstBeat = rawFirstBeat;
+    }
+  }
 
   // Parse POSITION_MARK
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
 
   const markElements = el.querySelectorAll('POSITION_MARK');
+  let firstBeatCueAnchor: number | null = null;
+  markElements.forEach((mEl: any) => {
+    const name = (mEl.getAttribute('Name') || '').toLowerCase();
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
+    if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
+      firstBeatCueAnchor = start;
+    }
+  });
+
+  if (firstBeatCueAnchor !== null && (firstBeat === 0.0 || Math.abs(firstBeatCueAnchor - firstBeat) > 0.05)) {
+    const spb = 60.0 / tempoBpm;
+    let rawFirstBeat = firstBeatCueAnchor;
+    while (rawFirstBeat >= spb) rawFirstBeat -= spb;
+    firstBeat = rawFirstBeat;
+  }
+
+  // A complete grid contains hundreds of objects per song.  Keep collection
+  // imports compact; the full grid is reconstructed only for the track loaded
+  // into a deck.
+  const beatGrid = buildDenseBeatGrid
+    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
+    : {
+        firstBeat,
+        bpm: tempoBpm,
+        meter,
+        beats: [],
+        origin: DataOrigin.REKORDBOX_XML,
+      };
   markElements.forEach((mEl: any, mIdx: number) => {
     const type = mEl.getAttribute('Type') || '0';
     const start = parseFloat(mEl.getAttribute('Start') || '0.0');

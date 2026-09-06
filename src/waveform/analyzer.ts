@@ -124,3 +124,95 @@ export function extractMiniPeaks(buffer: AudioBuffer, numBuckets: number = 64): 
 
   return result;
 }
+
+/**
+ * Detects the first prominent kick drum / downbeat transient in an AudioBuffer
+ * near an expected beat anchor, and returns the phase-aligned firstBeat timestamp.
+ * This guarantees that beatgrid markers sit precisely on the kick drum transients.
+ */
+export function detectBeatgridAlignment(
+  buffer: AudioBuffer,
+  bpm: number,
+  initialFirstBeat: number = 0.0
+): number {
+  const sampleRate = buffer.sampleRate;
+  const channel = buffer.getChannelData(0);
+  const totalSamples = channel.length;
+  const secondsPerBeat = 60.0 / Math.max(1, bpm);
+
+  // Search window: check around initialFirstBeat or first 6 beats
+  const searchStartSec = Math.max(0.0, initialFirstBeat - secondsPerBeat * 0.5);
+  const searchEndSec = Math.min(
+    buffer.duration,
+    Math.max(initialFirstBeat + secondsPerBeat * 1.5, secondsPerBeat * 6.0)
+  );
+
+  const startSample = Math.floor(searchStartSec * sampleRate);
+  const endSample = Math.min(totalSamples, Math.ceil(searchEndSec * sampleRate));
+
+  if (endSample <= startSample + 128) return initialFirstBeat;
+
+  // Window chunk (~4ms) with low-pass filter to isolate kick drum punch
+  const chunkSize = Math.max(16, Math.floor(0.004 * sampleRate));
+  const numChunks = Math.floor((endSample - startSample) / chunkSize);
+
+  let bestSample = -1;
+  let maxScore = 0;
+  let prevEnergy = 0;
+
+  const dt = 1.0 / sampleRate;
+  const rc = 1.0 / (2.0 * Math.PI * 180.0); // 180 Hz kick punch
+  const alpha = dt / (rc + dt);
+  let lp = 0;
+
+  for (let c = 0; c < numChunks; c++) {
+    const chunkStart = startSample + c * chunkSize;
+    let sumSq = 0;
+    for (let i = 0; i < chunkSize; i++) {
+      const s = channel[chunkStart + i];
+      lp += alpha * (s - lp);
+      sumSq += lp * lp;
+    }
+    const curEnergy = Math.sqrt(sumSq / chunkSize);
+    // Transient onset: rapid energy surge
+    const onset = Math.max(0, curEnergy - prevEnergy * 0.82);
+    const score = curEnergy * 0.35 + onset * 0.65;
+
+    if (score > maxScore) {
+      maxScore = score;
+      // Search for the peak absolute value sample within this chunk
+      let peakIdx = chunkStart;
+      let peakVal = 0;
+      for (let i = 0; i < chunkSize; i++) {
+        const val = Math.abs(channel[chunkStart + i]);
+        if (val > peakVal) {
+          peakVal = val;
+          peakIdx = chunkStart + i;
+        }
+      }
+      bestSample = peakIdx;
+    }
+    prevEnergy = curEnergy;
+  }
+
+  // If signal is too quiet or no clear transient detected, return initial anchor
+  if (bestSample < 0 || maxScore < 0.015) {
+    return initialFirstBeat;
+  }
+
+  const detectedTime = bestSample / sampleRate;
+
+  // Calculate phase shift relative to expected beat interval
+  const diff = detectedTime - initialFirstBeat;
+  const beatFract = ((diff % secondsPerBeat) + secondsPerBeat) % secondsPerBeat;
+  let shift = beatFract;
+  if (shift > secondsPerBeat / 2) {
+    shift -= secondsPerBeat;
+  }
+
+  let alignedFirstBeat = initialFirstBeat + shift;
+  while (alignedFirstBeat < 0) alignedFirstBeat += secondsPerBeat;
+  while (alignedFirstBeat >= secondsPerBeat) alignedFirstBeat -= secondsPerBeat;
+
+  return alignedFirstBeat;
+}
