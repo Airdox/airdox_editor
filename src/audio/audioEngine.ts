@@ -5,7 +5,8 @@
  * Non-destructive Edit Graph playback, and WAV export.
  */
 
-import { EditSegment, TrackModel } from '../types/rekordbox';
+import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
+import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -255,6 +256,55 @@ class AudioEngine {
       }
     }
     return sliced;
+  }
+
+  /**
+   * Adapts a PaletteClip's tempo (BPM) to the destination track, and optionally
+   * shifts the pitch to match the destination track's harmonic key.
+   */
+  public adaptClipToTrack(
+    clip: PaletteClip,
+    destTrack: TrackModel,
+    matchPitch: boolean = false
+  ): {
+    adaptedBuffer: AudioBuffer;
+    tempoRatio: number;
+    semitonesShifted: number;
+    harmonicRelation: string;
+    originalDuration: number;
+    newDuration: number;
+    isCrossTrack: boolean;
+  } {
+    const ctx = this.init();
+    if (!clip.audioBuffer) {
+      throw new Error(`Clip ${clip.name} besitzt keine Audiodaten.`);
+    }
+
+    const isCrossTrack = clip.sourceTrackId !== destTrack.id;
+    const destBpm = destTrack.bpm > 0 ? destTrack.bpm : 120.0;
+    const clipBpm = clip.bpm > 0 ? clip.bpm : destBpm;
+
+    const res = adaptClipAudioBuffer(
+      clip.audioBuffer,
+      clipBpm,
+      clip.key,
+      destBpm,
+      destTrack.key,
+      matchPitch,
+      (numCh, len, sRate) => ctx.createBuffer(numCh, len, sRate)
+    );
+
+    return {
+      ...res,
+      isCrossTrack,
+    };
+  }
+
+  /**
+   * Computes the harmonic pitch shift preview between clip and target track
+   */
+  public previewHarmonicShift(sourceKey: string | undefined, targetKey: string | undefined) {
+    return calculateHarmonicPitchShift(sourceKey, targetKey);
   }
 
   /**

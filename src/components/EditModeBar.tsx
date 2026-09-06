@@ -34,6 +34,8 @@ interface EditModeBarProps {
   onMasterVolumeChange: (vol: number) => void;
   meterL: number;
   meterR: number;
+  paletteViewMode?: 'SIDEBAR' | 'FULL_DECK';
+  onTogglePaletteViewMode?: () => void;
 }
 
 export const EditModeBar: React.FC<EditModeBarProps> = ({
@@ -53,6 +55,8 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onMasterVolumeChange,
   meterL,
   meterR,
+  paletteViewMode = 'SIDEBAR',
+  onTogglePaletteViewMode,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('15:21');
 
@@ -168,6 +172,21 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             <span className="text-neutral-300 font-sans text-[11px]">: AUTO</span>
             <ChevronDown size={10} className="text-neutral-400" />
           </button>
+
+          {/* Deck View Layout Toggle: 1-DECK vs 2-DECK (Dual Deck Clip View) */}
+          {onTogglePaletteViewMode && (
+            <button
+              onClick={onTogglePaletteViewMode}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
+                paletteViewMode === 'FULL_DECK'
+                  ? 'border-[#0088ff] bg-[#0d2238] text-[#00c8ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white hover:border-[#383d4e]'
+              }`}
+              title="Zwischen Standard-Ansicht und 2-Deck-Ansicht (Deck A + Clip-Deck B) umschalten"
+            >
+              <span>{paletteViewMode === 'FULL_DECK' ? '2-DECK AKTIV' : '2-DECK ANSICHT'}</span>
+            </button>
+          )}
         </div>
       </div>
 

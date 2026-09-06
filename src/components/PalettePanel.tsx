@@ -11,7 +11,7 @@
 
 import React, { useState } from 'react';
 import { PaletteClip } from '../types/rekordbox';
-import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, CheckSquare } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
 
 interface PalettePanelProps {
@@ -23,6 +23,11 @@ interface PalettePanelProps {
   onSelectClip: (clip: PaletteClip) => void;
   selectedClipId: string | null;
   hasSelection: boolean;
+  onExpandToDeckView?: () => void;
+  matchPitch?: boolean;
+  onToggleMatchPitch?: (match: boolean) => void;
+  targetBpm?: number;
+  targetKey?: string;
 }
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
@@ -34,6 +39,11 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   onSelectClip,
   selectedClipId,
   hasSelection,
+  onExpandToDeckView,
+  matchPitch = true,
+  onToggleMatchPitch,
+  targetBpm,
+  targetKey,
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
 
@@ -77,11 +87,25 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
         <ChevronRight size={10} />
       </button>
 
-      {/* Top Header: Angled Polygon "PALETTE" tab & Trash button */}
+      {/* Top Header: Angled Polygon "PALETTE" tab & Action buttons */}
       <div className="h-7 bg-[#121318] border-b border-[#20222a] flex items-center justify-between px-2">
         {/* Characteristic angled polygon tab */}
-        <div className="rb-tab-chamfer bg-[#1f2129] text-neutral-200 text-[11px] font-bold px-3 py-1 tracking-wider uppercase">
-          PALETTE
+        <div className="flex items-center space-x-2">
+          <div className="rb-tab-chamfer bg-[#1f2129] text-neutral-200 text-[11px] font-bold px-3 py-1 tracking-wider uppercase">
+            PALETTE
+          </div>
+
+          {/* Expand to Full Deck View button */}
+          {onExpandToDeckView && (
+            <button
+              onClick={onExpandToDeckView}
+              className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#1a2333] hover:bg-[#223048] border border-[#263c5c] text-[#00a2ff] text-[10px] font-bold transition-colors"
+              title="Clip-Bibliothek zur vollständigen Deck-Ansicht ausklappen"
+            >
+              <Maximize2 size={10} />
+              <span>Deck-Ansicht</span>
+            </button>
+          )}
         </div>
 
         {/* Trash button */}
@@ -95,6 +119,38 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
         >
           <Trash2 size={13} />
         </button>
+      </div>
+
+      {/* Cross-Track Import Adaptation Bar: Key Sync Checkbox & Tempo Notice */}
+      <div className="bg-[#11131a] border-b border-[#1f212c] px-2.5 py-1.5 flex flex-col space-y-1 text-[10px]">
+        <div className="flex items-center justify-between">
+          {onToggleMatchPitch && (
+            <label className="flex items-center space-x-1.5 cursor-pointer group select-none">
+              <input
+                type="checkbox"
+                checked={matchPitch}
+                onChange={(e) => onToggleMatchPitch(e.target.checked)}
+                className="w-3 h-3 rounded-xs accent-[#0088ff] cursor-pointer"
+              />
+              <span className={`text-[10px] font-medium transition-colors ${
+                matchPitch ? 'text-[#00e5ff]' : 'text-neutral-400 group-hover:text-neutral-300'
+              }`}>
+                Tonhöhe anpassen (Key Sync)
+              </span>
+            </label>
+          )}
+
+          {targetKey && (
+            <span className="font-mono text-[9px] bg-[#1a1d26] px-1.5 py-0.2 rounded text-neutral-400 border border-[#2b2e3b]">
+              Ziel: {targetKey}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[9px] text-neutral-500 font-mono">
+          <span>Tempo-Anpassung:</span>
+          <span className="text-[#00c853]">Auto-Sync an Deck ({targetBpm ? `${targetBpm.toFixed(1)} BPM` : 'Aktiv'})</span>
+        </div>
       </div>
 
       {/* Clips List */}

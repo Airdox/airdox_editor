@@ -43,6 +43,9 @@ interface BottomControlBlockProps {
   canUndo: boolean;
   canRedo: boolean;
   hasClipboard: boolean;
+  matchPitch?: boolean;
+  onToggleMatchPitch?: (match: boolean) => void;
+  targetKey?: string;
 }
 
 export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
@@ -64,6 +67,9 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   canUndo,
   canRedo,
   hasClipboard,
+  matchPitch = true,
+  onToggleMatchPitch,
+  targetKey,
 }) => {
   const hasSelection = selection !== null && selection.duration > 0;
 
@@ -166,8 +172,25 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             EDIT
           </div>
 
-          {/* Quick operations badge (REPLACE / OVERDUB) */}
-          <div className="flex items-center space-x-2 text-[10px]">
+          {/* Pitch adaptation checkbox & Quick operations badge (REPLACE / OVERDUB) */}
+          <div className="flex items-center space-x-2.5 text-[10px]">
+            {onToggleMatchPitch && (
+              <label
+                className="flex items-center space-x-1 cursor-pointer select-none text-neutral-300 hover:text-white"
+                title="Tonhöhe beim Einfügen/Überschreiben an Zieltrack anpassen"
+              >
+                <input
+                  type="checkbox"
+                  checked={matchPitch}
+                  onChange={(e) => onToggleMatchPitch(e.target.checked)}
+                  className="w-3 h-3 rounded-xs accent-[#0088ff] cursor-pointer"
+                />
+                <span className="text-[9.5px] font-medium text-neutral-300">
+                  Tonhöhe anpassen {targetKey ? `(${targetKey})` : ''}
+                </span>
+              </label>
+            )}
+
             <button
               onClick={onReplace}
               disabled={!hasSelection}

@@ -35,6 +35,7 @@ import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
+import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
@@ -131,6 +132,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState<boolean>(true); // Screenshot 01 (open) vs Screenshot 02 (closed)
   const [paletteClips, setPaletteClips] = useState<PaletteClip[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [paletteViewMode, setPaletteViewMode] = useState<'SIDEBAR' | 'FULL_DECK'>('SIDEBAR');
+  const [matchPitchOnInsert, setMatchPitchOnInsert] = useState<boolean>(true);
 
   // Clipboard for Copy / Paste / Insert
   const [clipboardBuffer, setClipboardBuffer] = useState<AudioBuffer | null>(null);
@@ -573,26 +576,92 @@ export default function App() {
     });
   };
 
-  // Replace selection with active Palette clip
-  const handleReplace = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+  // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
+  const handleInsertClipToDeckA = (clip: PaletteClip) => {
+    if (!activeTrack || !workingAudioBuffer) {
+      alert('Bitte lade zuerst einen Track in Deck A.');
+      return;
+    }
+    if (!clip.audioBuffer) {
+      alert('Der Clip enthält keine Audiodaten.');
       return;
     }
 
-    pushHistorySnapshot('Replace');
+    pushHistorySnapshot('Insert Clip');
+
+    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+
+    const shiftAmount = adapted.newDuration;
+    const insertPos = currentTime;
+
+    // Shift cues occurring after insert position
+    activeTrack.cues = activeTrack.cues.map((c) => {
+      if (c.position >= insertPos) {
+        return { ...c, position: c.position + shiftAmount };
+      }
+      return c;
+    });
+
+    const newSeg: EditSegment = {
+      id: `insert-clip-${Date.now()}`,
+      type: 'INSERT',
+      trackId: activeTrack.id,
+      sourceStart: 0,
+      sourceEnd: shiftAmount,
+      projectStart: insertPos,
+      projectDuration: shiftAmount,
+      clipId: clip.id,
+      clipBuffer: adapted.adaptedBuffer,
+      gain: 1.0,
+    };
+
+    const updatedSegments = [...activeTrack.workingSegments, newSeg];
+    activeTrack.workingSegments = updatedSegments;
+
+    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    setWorkingAudioBuffer(rendered);
+
+    showOperationFeedback({
+      title: 'Clip in Deck A eingefügt (Insert)',
+      operationType: 'INSERT',
+      description: `Clip "${clip.name}" an Position ${insertPos.toFixed(3)}s eingefügt. Tempo: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
+          : matchPitchOnInsert
+          ? 'Tonhöhe: Harmonisch synchronisiert.'
+          : 'Tonhöhe: Original beibehalten (Key Sync aus).'
+      }`,
+      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
+      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
+  const handleReplaceDeckAWithClip = (clip: PaletteClip) => {
+    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
+      return;
+    }
+
+    pushHistorySnapshot('Replace with Clip');
+
+    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+
     const replaceSeg: EditSegment = {
       id: `replace-${Date.now()}`,
       type: 'REPLACE',
       trackId: activeTrack.id,
       sourceStart: 0,
-      sourceEnd: Math.min(activeClip.duration, selection.duration),
+      sourceEnd: Math.min(adapted.newDuration, selection.duration),
       projectStart: selection.start,
       projectDuration: selection.duration,
-      clipId: activeClip.id,
-      clipBuffer: activeClip.audioBuffer,
+      clipId: clip.id,
+      clipBuffer: adapted.adaptedBuffer,
       gain: 1.0,
     };
 
@@ -603,9 +672,15 @@ export default function App() {
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
-      title: 'Auswahl ersetzt (Replace)',
+      title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
       operationType: 'REPLACE',
-      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${activeClip.name}" ersetzt.`,
+      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${clip.name}" ersetzt. Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe angepasst: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne (${adapted.harmonicRelation}).`
+          : matchPitchOnInsert
+          ? 'Tonhöhe: Harmonisch kompatibel.'
+          : 'Tonhöhe: Original beibehalten.'
+      }`,
       timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
       barsCount: selection.barsCount,
       beatsCount: selection.beatsCount,
@@ -614,26 +689,28 @@ export default function App() {
     });
   };
 
-  // Overdub active Palette clip onto selection
-  const handleOverdub = () => {
+  // Overdub selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
+  const handleOverdubDeckAWithClip = (clip: PaletteClip) => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
       return;
     }
 
-    pushHistorySnapshot('Overdub');
+    pushHistorySnapshot('Overdub with Clip');
+
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+
     const overdubSeg: EditSegment = {
       id: `overdub-${Date.now()}`,
       type: 'OVERDUB',
       trackId: activeTrack.id,
       sourceStart: 0,
-      sourceEnd: activeClip.duration,
+      sourceEnd: Math.min(adapted.newDuration, selection.duration),
       projectStart: selection.start,
-      projectDuration: Math.min(activeClip.duration, selection.duration),
-      clipId: activeClip.id,
-      clipBuffer: activeClip.audioBuffer,
+      projectDuration: selection.duration,
+      clipId: clip.id,
+      clipBuffer: adapted.adaptedBuffer,
       gain: 1.0,
     };
 
@@ -644,15 +721,41 @@ export default function App() {
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
-      title: 'Clip überlagert (Overdub)',
+      title: 'Deck A überlagert (Overdub mit Clip)',
       operationType: 'OVERDUB',
-      description: `Clip "${activeClip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte).`,
+      description: `Clip "${clip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte). Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
+          : 'Tonhöhe: Harmonisch kompatibel.'
+      }`,
       timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
       barsCount: selection.barsCount,
       beatsCount: selection.beatsCount,
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
+  };
+
+  // Replace selection with active Palette clip
+  const handleReplace = () => {
+    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (!activeClip || !activeClip.audioBuffer) {
+      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+      return;
+    }
+    handleReplaceDeckAWithClip(activeClip);
+  };
+
+  // Overdub active Palette clip onto selection
+  const handleOverdub = () => {
+    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (!activeClip || !activeClip.audioBuffer) {
+      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+      return;
+    }
+    handleOverdubDeckAWithClip(activeClip);
   };
 
   // Delete selection (removes range and shifts subsequent material)
@@ -1265,6 +1368,10 @@ export default function App() {
         onMasterVolumeChange={handleMasterVolumeChange}
         meterL={meterL}
         meterR={meterR}
+        paletteViewMode={paletteViewMode}
+        onTogglePaletteViewMode={() =>
+          setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
+        }
       />
 
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
@@ -1313,20 +1420,52 @@ export default function App() {
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
-        <PalettePanel
-          isOpen={paletteOpen}
-          onToggle={() => setPaletteOpen(!paletteOpen)}
-          clips={paletteClips}
-          onAddFromSelection={handleAddSelectionToPalette}
-          onDeleteClip={(id) => {
-            setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-            if (selectedClipId === id) setSelectedClipId(null);
-          }}
-          onSelectClip={(clip) => setSelectedClipId(clip.id)}
-          selectedClipId={selectedClipId}
-          hasSelection={selection !== null && selection.duration > 0}
-        />
+        {paletteViewMode === 'SIDEBAR' && (
+          <PalettePanel
+            isOpen={paletteOpen}
+            onToggle={() => setPaletteOpen(!paletteOpen)}
+            clips={paletteClips}
+            onAddFromSelection={handleAddSelectionToPalette}
+            onDeleteClip={(id) => {
+              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+              if (selectedClipId === id) setSelectedClipId(null);
+            }}
+            onSelectClip={(clip) => setSelectedClipId(clip.id)}
+            selectedClipId={selectedClipId}
+            hasSelection={selection !== null && selection.duration > 0}
+            onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
+            matchPitch={matchPitchOnInsert}
+            onToggleMatchPitch={setMatchPitchOnInsert}
+            targetBpm={activeTrack?.bpm}
+            targetKey={activeTrack?.key}
+          />
+        )}
       </div>
+
+      {/* Full Deck View (Expanded Clip Library Deck B) */}
+      {paletteViewMode === 'FULL_DECK' && (
+        <div className="h-56 flex flex-col flex-shrink-0 z-30 shadow-2xl">
+          <ClipDeckView
+            clips={paletteClips}
+            activeClipId={selectedClipId}
+            onSelectClip={(clip) => setSelectedClipId(clip.id)}
+            onDeleteClip={(id) => {
+              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+              if (selectedClipId === id) setSelectedClipId(null);
+            }}
+            onAddFromSelection={handleAddSelectionToPalette}
+            hasSelectionInDeckA={selection !== null && selection.duration > 0}
+            activeTrack={activeTrack}
+            matchPitch={matchPitchOnInsert}
+            onToggleMatchPitch={setMatchPitchOnInsert}
+            onInsertClipToDeckA={handleInsertClipToDeckA}
+            onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
+            onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
+            onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
+            waveformMode={waveformMode}
+          />
+        </div>
+      )}
 
       {/* 6. Lower Action Block: BEAT SELECT | SELECT | EDIT (Screenshots 01, 02, 03) */}
       <BottomControlBlock
@@ -1348,6 +1487,9 @@ export default function App() {
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
         hasClipboard={clipboardBuffer !== null}
+        matchPitch={matchPitchOnInsert}
+        onToggleMatchPitch={setMatchPitchOnInsert}
+        targetKey={activeTrack?.key}
       />
 
       {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
