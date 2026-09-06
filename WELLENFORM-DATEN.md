@@ -61,10 +61,11 @@ Analyse-Engine ist nicht das Ziel." Daraus folgt für den Code-Pfad:
 ## Beatgrid aus der XML: `Battito` und `Metro` sind die Ansage
 
 Ein Rekordbox-Export verankert das Raster mit einem oder mehreren `<TEMPO>`-Einträgen
-(`Inizio`, `Bpm`, `Metro`, `Battito`). Real exportierte Bibliotheken nutzen das breit:
-In einer geprüften Collection mit über 11 000 Zeilen hat rund ein Viertel der Tracks
-einen Anker, der **nicht** auf Schlag 1 fällt (`Battito="3"`, `"4"`), und viele nennen
-mehrere Anker im Stück. Deshalb gilt im Import (`src/rekordbox/xmlParser.ts`):
+(`Inizio`, `Bpm`, `Metro`, `Battito`). Real exportierte Bibliotheken nutzen das: in einer geprüften Collection (rekordbox 7,
+Export für USB) enthielt die Stichprobe von 15 Zeilen durchweg Anker, die **nicht** auf
+Schlag 1 fallen (`Battito="2"` bis `"4"`), mehrere Zeilen nennen zwei bis drei Anker im
+Stück (Alan Braxe „Love This": Anker bei 0.240 s mit Schlag 1 und bei 239.929 s mit
+Schlag 4), und eine Zeile (Flex „Vertical Integration") hat gar keinen `<TEMPO>`-Eintrag. Deshalb gilt im Import (`src/rekordbox/xmlParser.ts`):
 
 * Jeder Eintrag verankert einen Schlag an seiner `Inizio`-Zeit; ab dort gilt sein Tempo
   bis zum nächsten Eintrag. Nur die Schläge *dazwischen* werden fortgeschrieben
