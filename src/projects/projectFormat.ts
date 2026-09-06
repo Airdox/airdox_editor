@@ -121,6 +121,12 @@ export interface ProjectFile {
     viewOffset: number;
     viewDuration: number;
     paletteOpen: boolean;
+    /** Tempoangleichung beim Ablagen eines Clips (fehlt das Feld: an). */
+    clipTempoMatch?: boolean;
+    /** Tonhöhe folgt dem Tempo (fehlt das Feld: aus, Tonhöhe bleibt). */
+    clipPitchFollow?: boolean;
+    /** Aufgeklappte Deck-Ansicht der Clip-Bibliothek (fehlt das Feld: zu). */
+    clipDeckOpen?: boolean;
   };
   tracks: ProjectTrack[];
   clips: ProjectClip[];
@@ -413,6 +419,10 @@ export function parseProject(text: string): ProjectParseResult {
       viewOffset: Number(data.view?.viewOffset) || 0,
       viewDuration: Number(data.view?.viewDuration) || 18,
       paletteOpen: data.view?.paletteOpen !== false,
+      // Fehlende Felder (ältere Projektdateien) bedeuten die Standard-Schalter.
+      clipTempoMatch: data.view?.clipTempoMatch !== false,
+      clipPitchFollow: data.view?.clipPitchFollow === true,
+      clipDeckOpen: data.view?.clipDeckOpen === true,
     },
     tracks,
     clips,

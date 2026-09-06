@@ -30,9 +30,12 @@ import {
   duplicateClip,
   ensureConsistentClip,
   applyClipDrop,
+  clipDropNote,
   clipDropTitle,
   clipExportFileName,
   clipLevelNote,
+  describeClipFit,
+  fitClipForTrack,
   moveClip,
   nextClipId,
   readClipDragPayload,
@@ -41,6 +44,7 @@ import {
   resolveClipTargetTime,
   type ClipDropMode,
 } from './audio/clipLibrary';
+import { tempoFitNote } from './audio/timeStretch';
 import {
   EditableAudio,
   copyRange,
@@ -92,7 +96,7 @@ import { MenuBar } from './components/MenuBar';
 import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
 import { DetailWaveform } from './components/DetailWaveform';
-import { PalettePanel } from './components/PalettePanel';
+import { PalettePanel, type ClipDeckCommand } from './components/PalettePanel';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
@@ -201,6 +205,19 @@ export default function App() {
   const [deckClipId, setDeckClipId] = useState<string | null>(null);
   const [deckTime, setDeckTime] = useState<number>(0);
   const deckClipBuffers = useRef<Map<string, AudioBuffer>>(new Map());
+  /** Clips aus anderer Quelle: Tempo an die Zielspur anpassen (Standard: an). */
+  const [clipTempoMatch, setClipTempoMatch] = useState<boolean>(true);
+  /** Tonhöhe folgt dem Tempo (Key-Lock aus) – sonst hält der Vocoder die Tonhöhe. */
+  const [clipPitchFollow, setClipPitchFollow] = useState<boolean>(false);
+  /** Aufgeklappte Deck-Ansicht der Clip-Bibliothek. */
+  const [clipDeckOpen, setClipDeckOpen] = useState<boolean>(false);
+  /** true: die Vorschau spielt den Clip, wie er in die aktive Spur käme (Pegel + Tempo). */
+  const [deckPreviewFitted, setDeckPreviewFitted] = useState<boolean>(false);
+  /** Loop-Region des Clip-Spielers in Clip-Sekunden (null = ganzer Clip) und die offene Marke. */
+  const [deckLoop, setDeckLoop] = useState<{ start: number; end: number } | null>(null);
+  const [deckLoopMark, setDeckLoopMark] = useState<number | null>(null);
+  /** Vorschau-Puffer „Clip wie eingefügt“, nach Einstellung censiert. */
+  const clipFitBuffers = useRef<Map<string, AudioBuffer>>(new Map());
   /** Für den Animationslauf: läuft gerade ein Clip im Spieler (ID oder null)? */
   const deckClipRef = useRef<string | null>(null);
 
@@ -374,12 +391,15 @@ export default function App() {
       return;
     }
     if (deckClip) {
-      const buffer = clipBufferFor(deckClip);
+      const buffer = deckBufferFor(deckClip);
       if (!buffer) {
         alert('Der Clip im Deck-Spieler hat keine Audiodaten.');
         return;
       }
-      audioEngine.play(buffer, Math.min(deckTime, Math.max(0, buffer.duration - 0.01)), loopActive, 0, buffer.duration);
+      const loop = loopActive ? deckLoop : null;
+      const wanted = Math.min(deckTime, Math.max(0, buffer.duration - 0.01));
+      const from = loop ? Math.min(Math.max(wanted, loop.start), Math.max(loop.start, loop.end - 0.005)) : wanted;
+      audioEngine.play(buffer, from, Boolean(loop), loop ? loop.start : 0, loop ? loop.end : buffer.duration);
       setIsPlaying(true);
       return;
     }
@@ -405,11 +425,14 @@ export default function App() {
   const handleSeek = (targetTime: number) => {
     if (deckClip) {
       // Im Spieler bezieht sich die Position auf den Clip, nicht auf die Spur.
-      const buffer = clipBufferFor(deckClip);
+      const buffer = deckBufferFor(deckClip);
       const limit = buffer ? buffer.duration : deckClip.duration;
       const clamped = Math.max(0, Math.min(Math.max(0, limit - 0.001), targetTime));
       setDeckTime(clamped);
-      if (isPlaying && buffer) audioEngine.play(buffer, clamped, loopActive, 0, limit);
+      if (isPlaying && buffer) {
+        const loop = loopActive ? deckLoop : null;
+        audioEngine.play(buffer, clamped, Boolean(loop), loop ? loop.start : 0, loop ? loop.end : limit);
+      }
       return;
     }
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
@@ -748,15 +771,25 @@ export default function App() {
       alert('Die aktive Spur hat keine Audiodaten.');
       return;
     }
-    // Dieselbe Rechnung wie in tests/clip-library.test.ts: rastern, klemmen, einfügen.
-    // Vor der Ablage normalisiert der Kern den Clip-Pegel und hält beim Überlagern
-    // den Kopfraum frei – was er getan hat, steht mit im Bericht.
-    const outcome = applyClipDrop(editableFrom(activeTrack, source), audio, wantedSeconds, { quantize, mode });
+    // Dieselbe Rechnung wie in tests/clip-library.test.ts: anpassen, rastern, ablegen.
+    // Vor der Ablage normalisiert der Kern den Clip-Pegel, hält beim Überlagern den
+    // Kopfraum frei und bringt die Dauer auf das Tempo der Zielspur – was er getan
+    // hat, steht mit im Bericht (und deshalb auch im Undo-Protokoll).
+    const outcome = applyClipDrop(editableFrom(activeTrack, source), audio, wantedSeconds, {
+      quantize,
+      mode,
+      sourceBpm: clip.bpm,
+      tempoMatch: clipTempoMatch,
+      pitchFollowsTempo: clipPitchFollow,
+    });
     const levelNote = clipLevelNote(outcome.level, outcome.mix ?? null);
-    if (levelNote) {
+    if (levelNote) logger.info('EDITING', `[Pegel] ${levelNote}`);
+    const fitNote = clipDropNote(outcome);
+    const tempoNote = tempoFitNote(outcome.tempo);
+    if (tempoNote) logger.info('EDITING', `[Tempo] ${tempoNote}`);
+    if (fitNote) {
       const base = outcome.report.description.replace(/\s*\(?\s*–\s*.*$/, '').replace(/\.$/, '');
-      outcome.report.description = `${base} – ${levelNote}.`;
-      logger.info('EDITING', `[Pegel] ${levelNote}`);
+      outcome.report.description = `${base} – ${fitNote}.`;
     }
     applyEdit(clipDropTitle(clip, mode), () => ({ target: outcome.target, report: outcome.report }));
     const at = outcome.atSeconds;
@@ -783,8 +816,118 @@ export default function App() {
     handleDropClip(id, selection ? selection.start : currentTime, modifiers);
   };
 
+  /**
+   * Kommandos der aufgeklappten Deck-Ansicht. Alles läuft über die bestehenden
+   * Handler der zentralen Wiedergabe – das Clip-Deck ist eine zweite Ansicht auf
+   * denselben Spieler, nicht ein zweiter Transport.
+   */
+  const handleClipDeckCommand = (command: ClipDeckCommand): void => {
+    switch (command.type) {
+      case 'load':
+        setClipDeckOpen(true);
+        handleLoadClipIntoDeck(command.clipId);
+        break;
+      case 'togglePlay':
+        handleTogglePlay();
+        break;
+      case 'stop':
+        audioEngine.stop();
+        setIsPlaying(false);
+        break;
+      case 'returnToStart':
+        setDeckTime(0);
+        audioEngine.stop();
+        setIsPlaying(false);
+        break;
+      case 'seek':
+        handleSeek(command.seconds);
+        break;
+      case 'loopToggle':
+        if (!deckLoop) {
+          const clip = deckClip;
+          const buffer = clip ? deckBufferFor(clip) : null;
+          setDeckLoop({ start: 0, end: buffer ? buffer.duration : clip?.duration ?? 0 });
+        }
+        setLoopActive((value) => !value);
+        break;
+      case 'loopEdge': {
+        if (command.edge === 'in') {
+          setDeckLoopMark(deckTime);
+          return;
+        }
+        const start = deckLoopMark ?? 0;
+        const end = deckTime;
+        if (end > start + 0.02) {
+          setDeckLoop({ start, end });
+          setLoopActive(true);
+          setDeckLoopMark(null);
+          logger.info('UI', `Clip-Deck: Schleife ${start.toFixed(3)}–${end.toFixed(3)} s im Clip.`);
+        }
+        break;
+      }
+      case 'loopClear':
+        setDeckLoop(null);
+        setDeckLoopMark(null);
+        setLoopActive(false);
+        break;
+      case 'preview':
+        setDeckPreviewFitted(command.fitted);
+        if (isPlaying && deckClip) {
+          const buffer = deckPreviewFitted === false ? deckBufferFor(deckClip) : clipBufferFor(deckClip);
+          if (buffer) audioEngine.play(buffer, Math.min(deckTime, buffer.duration - 0.01), false, 0, buffer.duration);
+        }
+        logger.info('UI', command.fitted ? 'Clip-Deck: Vorschau spielt den Clip, wie er in die Spur käme.' : 'Clip-Deck: Vorschau spielt das Original des Clips.');
+        break;
+      case 'apply':
+        handleInsertClipFromLibrary(command.clipId, command.mode);
+        break;
+      case 'toggleTempoMatch':
+        setClipTempoMatch((value) => !value);
+        logger.info('UI', `Tempoangleichung beim Ablagen: ${clipTempoMatch ? 'aus' : 'an'}.`);
+        break;
+      case 'togglePitchFollow':
+        setClipPitchFollow((value) => !value);
+        logger.info('UI', `Tonhöhe folgt dem Tempo: ${clipPitchFollow ? 'nein (Master Tempo)' : 'ja (Key-Lock aus)'}.`);
+        break;
+    }
+  };
+
   /** Samples eines Clips – immer über denselben Kern wie die Bibliotheks-Tests. */
   const clipAudioOf = (clip: PaletteClip): PcmAudio | null => pcmOfClip(clip);
+
+  // Neue Einstellung, neue Spur, anderer Clip-Stand: Vorschau-Puffer müssen weg.
+  useEffect(() => {
+    clipFitBuffers.current.clear();
+  }, [clipTempoMatch, clipPitchFollow, activeTrackId, paletteClips]);
+
+  /**
+   * Puffer für den Deck-Spieler: der Clip selbst – oder, wenn die Vorschau auf
+   * „wie eingefügt“ steht, genau das Material, das die Ablage schreiben würde.
+   */
+  const deckBufferFor = (clip: PaletteClip): AudioBuffer | null => {
+    if (deckPreviewFitted) {
+      const fitted = fittedClipBufferFor(clip);
+      if (fitted) return fitted;
+    }
+    return clipBufferFor(clip);
+  };
+
+  /** Vorschau „Clip, wie er in die aktive Spur käme“ – rechnet der gemeinsame Kern. */
+  const fittedClipBufferFor = (clip: PaletteClip): AudioBuffer | null => {
+    const targetBpm = activeTrack?.beatGrid?.bpm ?? 0;
+    const audio = pcmOfClip(clip);
+    if (!audio) return null;
+    const key = `${clip.id}|${targetBpm.toFixed(4)}|${clipTempoMatch ? 't' : '-'}${clipPitchFollow ? 'p' : '-'}|${audio.sampleRate}|${clip.bpm.toFixed(4)}`;
+    const cached = clipFitBuffers.current.get(key);
+    if (cached) return cached;
+    const fitted = fitClipForTrack(audio, clip.bpm, targetBpm, {
+      tempoMatch: clipTempoMatch,
+      pitchFollowsTempo: clipPitchFollow,
+    });
+    const buffer = pcmToAudioBuffer(audioEngine.getContext(), fitted.pcm);
+    clipFitBuffers.current.set(key, buffer);
+    return buffer;
+  };
 
   /** AudioBuffer für die Wiedergabe, aus dem PCM-Anteil des Clips (mit Cache). */
   const clipBufferFor = (clip: PaletteClip): AudioBuffer | null => {
@@ -1089,7 +1232,7 @@ export default function App() {
     const project = buildProjectFile({
       projectName,
       activeTrackId: activeTrack?.id ?? tracks[0].id,
-      view: { waveformMode, quantize, viewOffset, viewDuration, paletteOpen },
+      view: { waveformMode, quantize, viewOffset, viewDuration, paletteOpen, clipTempoMatch, clipPitchFollow, clipDeckOpen },
       tracks: buildProjectTracks(),
       clips: paletteClips.map((clip) => ({
           id: clip.id,
@@ -1265,6 +1408,14 @@ export default function App() {
         setViewOffset(project.view.viewOffset);
         setViewDuration(project.view.viewDuration);
         setPaletteOpen(project.view.paletteOpen);
+        setClipTempoMatch(project.view.clipTempoMatch !== false);
+        setClipPitchFollow(project.view.clipPitchFollow === true);
+        setClipDeckOpen(project.view.clipDeckOpen === true);
+        setDeckLoop(null);
+        setDeckLoopMark(null);
+        setDeckPreviewFitted(false);
+        setDeckTime(0);
+        clipFitBuffers.current.clear();
       }
       setCurrentTime(0);
       audioEngine.stop();
@@ -2026,6 +2177,35 @@ export default function App() {
           onDuplicateClip={handleDuplicateClip}
           onMoveClip={handleMoveClip}
           onDeleteClip={handleDeleteClip}
+          tempoMatch={clipTempoMatch}
+          pitchFollow={clipPitchFollow}
+          targetBpm={activeTrack?.beatGrid?.bpm ?? 0}
+          targetTrackName={activeTrack?.title ?? null}
+          deckViewOpen={clipDeckOpen}
+          onToggleDeckView={() => setClipDeckOpen((value) => !value)}
+          deck={
+            deckClip
+              ? {
+                  clipId: deckClip.id,
+                  clipName: deckClip.name,
+                  clipBpm: deckClip.bpm,
+                  position: deckTime,
+                  duration: deckBufferFor(deckClip)?.duration ?? deckClip.duration,
+                  isPlaying,
+                  loopActive,
+                  loop: deckLoop,
+                  loopMark: deckLoopMark,
+                  previewFitted: deckPreviewFitted,
+                  fitSpeed: clipTempoMatch && (activeTrack?.beatGrid?.bpm ?? 0) > 0 && deckClip.bpm > 0 ? (activeTrack!.beatGrid.bpm / deckClip.bpm) : 1,
+                  peaks: deckClip.miniPeaks ?? [],
+                  level: describeClipFit(deckClip, activeTrack?.beatGrid?.bpm ?? 0, {
+                    tempoMatch: clipTempoMatch,
+                    pitchFollowsTempo: clipPitchFollow,
+                  }),
+                }
+              : null
+          }
+          onDeckCommand={handleClipDeckCommand}
         />
       </div>
 

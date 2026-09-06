@@ -9,6 +9,11 @@
  *   mit Umschalt ersetzen, mit Strg in den Spieler
  * - unten „+“: aktuelle Auswahl als Clip hinzufügen
  * - Ein-/Ausklappen (< / >) auf der Trennlinie
+ * - Rechtsklick auf einen Clip: was mit ihm passieren soll (Ablage, Pflege, Export)
+ * - „Deck-Ansicht“: die Bibliothek lässt sich zu einem vollständigen Spieler für
+ *   den ausgewählten Clip aufklappen – dieselben Funktionen wie der zentrale
+ *   Deck-Spieler, weil es *derselbe* Spieler ist (Transport, Schleife, Vorschau
+ *   „wie eingefügt“ mit Tempo- und Pegelangleichung).
  *
  * Die Einträge entstehen und bleiben über src/audio/clipLibrary konsistent –
  * dieses Bauteil erfindet keine Felder, es zeigt nur, was der Kern berechnet hat.
@@ -19,6 +24,7 @@ import { PaletteClip } from '../types/rekordbox';
 import {
   Trash2,
   Play,
+  Pause,
   Square,
   Plus,
   ChevronRight,
@@ -31,9 +37,18 @@ import {
   Replace,
   Disc3,
   CornerUpRight,
+  CornerDownLeft,
   ArrowUp,
   ArrowDown,
+  ArrowDownToLine,
   GripVertical,
+  Maximize2,
+  Minimize2,
+  Repeat,
+  SkipBack,
+  Eraser,
+  Check,
+  X,
 } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
 import { AMBER_HOT_GLOW, amberColorCss } from '../waveform/colors';
@@ -44,10 +59,47 @@ import {
   ClipDropMode,
   clipAudioOf,
   describeClip,
+  describeClipFit,
   describeClipLevel,
   encodeClipDragPayload,
 } from '../audio/clipLibrary';
 import { pcmToAudioBuffer } from '../audio/pcm';
+
+/** Kommandos der Deck-Ansicht – die App bleibt der einzige Besitzer des Spielers. */
+export type ClipDeckCommand =
+  | { type: 'load'; clipId: string }
+  | { type: 'togglePlay' }
+  | { type: 'stop' }
+  | { type: 'returnToStart' }
+  | { type: 'seek'; seconds: number }
+  | { type: 'loopToggle' }
+  | { type: 'loopEdge'; edge: 'in' | 'out' }
+  | { type: 'loopClear' }
+  | { type: 'preview'; fitted: boolean }
+  | { type: 'apply'; clipId: string; mode: 'insert' | 'replace' | 'overdub' }
+  | { type: 'toggleTempoMatch' }
+  | { type: 'togglePitchFollow' };
+
+/** Stand des Spielers, wie ihn die Deck-Ansicht zeigt. */
+export interface ClipDeckState {
+  clipId: string;
+  clipName: string;
+  /** Tempo, aus dem der Clip stammt. */
+  clipBpm: number;
+  position: number;
+  duration: number;
+  isPlaying: boolean;
+  loopActive: boolean;
+  loop: { start: number; end: number } | null;
+  loopMark: number | null;
+  /** true: es läuft der angeglichene Vorschau-Puffer, nicht das Clip-Original. */
+  previewFitted: boolean;
+  /** ratio Zieltempo / Quelltempo (1, wenn nichts angepasst wird). */
+  fitSpeed: number;
+  peaks: number[];
+  /** Klartext, was die Anpassung tut – aus dem Kern, nicht erfunden. */
+  level: string;
+}
 
 interface PalettePanelProps {
   isOpen: boolean;
@@ -76,6 +128,18 @@ interface PalettePanelProps {
   onExportClip?: (id: string) => void;
   /** Clip aus dem Deck-Spieler entladen. */
   onUnloadFromDeck?: () => void;
+  /** Tempoangleichung beim Ablagen (Schalter der Oberfläche). */
+  tempoMatch?: boolean;
+  /** Tonhöhe folgt dem Tempo. */
+  pitchFollow?: boolean;
+  /** Tempo der Zielspur; 0 = kein Raster, dann ist nichts anzupassen. */
+  targetBpm?: number;
+  targetTrackName?: string | null;
+  /** Aufgeklappte Deck-Ansicht. */
+  deckViewOpen?: boolean;
+  onToggleDeckView?: () => void;
+  deck?: ClipDeckState | null;
+  onDeckCommand?: (command: ClipDeckCommand) => void;
 }
 
 /** Aktionen des Kontextmenüs – Reihenfolge ist zugleich die Tastenreihenfolge. */
@@ -90,7 +154,10 @@ type ClipMenuAction =
   | 'rename'
   | 'up'
   | 'down'
-  | 'delete';
+  | 'delete'
+  | 'deckView'
+  | 'tempoMatch'
+  | 'pitchFollow';
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
   isOpen,
@@ -111,6 +178,14 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   onApplyClipAt,
   onExportClip,
   onUnloadFromDeck,
+  tempoMatch = true,
+  pitchFollow = false,
+  targetBpm = 0,
+  targetTrackName = null,
+  deckViewOpen = false,
+  onToggleDeckView,
+  deck = null,
+  onDeckCommand,
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -133,7 +208,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
     event.stopPropagation();
     onSelectClip(clip);
     const width = 252;
-    const height = 322;
+    const height = 430;
     setMenu({
       x: Math.max(6, Math.min(event.clientX, window.innerWidth - width - 6)),
       y: Math.max(6, Math.min(event.clientY, Math.max(6, window.innerHeight - height - 6))),
@@ -152,7 +227,19 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
         onApplyClipAt?.(clip.id, action);
         break;
       case 'deck':
-        onLoadIntoDeck?.(clip.id);
+        // Direkt mit aufgeklappter Deck-Ansicht, falls die App das anbietet.
+        if (onDeckCommand) onDeckCommand({ type: 'load', clipId: clip.id });
+        else onLoadIntoDeck?.(clip.id);
+        break;
+      case 'deckView':
+        if (!deckViewOpen) onDeckCommand?.({ type: 'load', clipId: clip.id });
+        else onToggleDeckView?.();
+        break;
+      case 'tempoMatch':
+        onDeckCommand?.({ type: 'toggleTempoMatch' });
+        break;
+      case 'pitchFollow':
+        onDeckCommand?.({ type: 'togglePitchFollow' });
         break;
       case 'unload':
         onUnloadFromDeck?.();
@@ -204,6 +291,10 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
     }
   };
 
+  const deckBtn =
+    'h-5 px-1.5 flex items-center gap-1 rounded-xs bg-[#1b1d25] hover:bg-[#2a2d38] text-neutral-300 hover:text-white transition-colors text-[9px] font-medium disabled:opacity-30 disabled:hover:bg-[#1b1d25]';
+  const deckBtnOn = 'h-5 px-1.5 flex items-center gap-1 rounded-xs bg-[#ff9500] text-black text-[9px] font-medium';
+
   const commitRename = (clip: PaletteClip) => {
     if (onRenameClip && draftName.trim() && draftName.trim() !== clip.name) {
       onRenameClip(clip.id, draftName);
@@ -251,6 +342,19 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
           <span className="text-[9px] font-mono text-neutral-500">{clips.length}</span>
           <button
             onClick={() => {
+              if (!deckViewOpen && !deck && selectedClipId) onDeckCommand?.({ type: 'load', clipId: selectedClipId });
+              onToggleDeckView?.();
+            }}
+            disabled={clips.length === 0}
+            className={`p-1 transition-colors disabled:opacity-30 ${
+              deckViewOpen ? 'text-[#ff9500] hover:text-white' : 'text-neutral-400 hover:text-white'
+            }`}
+            title={deckViewOpen ? 'Deck-Ansicht einklappen' : 'Deck-Ansicht aufklappen (Spieler für den ausgewählten Clip)'}
+          >
+            {deckViewOpen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+          <button
+            onClick={() => {
               if (selectedClipId) onDeleteClip(selectedClipId);
             }}
             disabled={!selectedClipId}
@@ -261,6 +365,202 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
           </button>
         </div>
       </div>
+
+
+      {/* Anpassung beim Ablagen: Pegel rechnet der Kern immer, Tempo und Tonhöhe sind Schalter */}
+      <div className="px-2 py-1.5 border-b border-[#20222a] bg-[#101116] space-y-1">
+        <label
+          className="flex items-start gap-1.5 cursor-pointer group"
+          title="Clip-Dauer auf das Tempo der Zielspur bringen (Phasenvocoder, Tonhöhe bleibt). Betrifft nur Clips aus einer anderen Spur bzw. einem anderen Tempo."
+        >
+          <input
+            type="checkbox"
+            checked={tempoMatch}
+            onChange={() => onDeckCommand?.({ type: 'toggleTempoMatch' })}
+            className="mt-0.5 w-3 h-3 accent-[#ff9500]"
+          />
+          <span className="text-[10px] leading-tight text-neutral-300 group-hover:text-white">
+            Tempo an Zielspur anpassen
+            <span className="block text-[9px] font-mono text-neutral-500" title={targetTrackName ?? ''}>
+              {targetBpm > 0
+                ? `Ziel: ${targetTrackName ? `${targetTrackName.slice(0, 18)} · ` : ''}${targetBpm.toFixed(1)} BPM`
+                : 'Zielspur ohne Beat-Raster'}
+            </span>
+          </span>
+        </label>
+        <label
+          className="flex items-center gap-1.5 cursor-pointer group"
+          title="Key-Lock aus: Tonhöhe wandert mit dem Tempo wie beim Plattenspieler. Aus lassen heißt: Tonhöhe halten."
+        >
+          <input
+            type="checkbox"
+            checked={pitchFollow}
+            disabled={!tempoMatch}
+            onChange={() => onDeckCommand?.({ type: 'togglePitchFollow' })}
+            className="w-3 h-3 accent-[#ff9500] disabled:opacity-30"
+          />
+          <span
+            className={`text-[10px] leading-tight disabled:opacity-40 ${
+              pitchFollow && tempoMatch ? 'text-[#ffb74d]' : 'text-neutral-300 group-hover:text-white'
+            }`}
+          >
+            Tonhöhe mit anpassen <span className="text-[9px] font-mono text-neutral-500">(Key-Lock aus)</span>
+          </span>
+        </label>
+      </div>
+
+      {/* Deck-Ansicht: derselbe Spieler, hier vollständig bedienbar */}
+      {deckViewOpen && (
+        <div className="border-b border-[#20222a] bg-[#0b0c10] px-2 py-2 space-y-1.5" aria-label="Deck-Ansicht der Clip-Bibliothek">
+          <div className="flex items-center justify-between gap-1">
+            <div className="flex items-center gap-1 min-w-0 text-[10px] font-bold text-neutral-200">
+              <Disc3 size={11} className={deck ? 'text-[#ff9500]' : 'text-neutral-600'} />
+              <span className="truncate" title={deck?.clipName ?? ''}>{deck ? deck.clipName : 'kein Clip geladen'}</span>
+            </div>
+            <button onClick={onToggleDeckView} className="p-0.5 text-neutral-400 hover:text-white transition-colors" title="Deck-Ansicht einklappen">
+              <Minimize2 size={12} />
+            </button>
+          </div>
+
+          {deck ? (
+            (() => {
+              const duration = Math.max(0.001, deck.duration);
+              const bpmEff = deck.clipBpm > 0 ? deck.clipBpm * (deck.previewFitted ? deck.fitSpeed || 1 : 1) : 0;
+              const beats = bpmEff > 0 ? deck.position / (60 / bpmEff) : 0;
+              const pct = (value: number) => `${Math.max(0, Math.min(100, (value / duration) * 100))}%`;
+              const seek = (event: React.MouseEvent<HTMLDivElement>) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const fraction = (event.clientX - rect.left) / Math.max(1, rect.width);
+                onDeckCommand?.({ type: 'seek', seconds: Math.max(0, Math.min(duration - 0.001, fraction * duration)) });
+              };
+              return (
+                <>
+                  <div
+                    className="relative h-11 bg-[#0a0806] border border-[#22242d] rounded-xs overflow-hidden cursor-pointer"
+                    onClick={seek}
+                    title="Klicken = im Clip springen · Schatten = Schleifenregion"
+                  >
+                    <div className="absolute inset-0 flex items-center px-px">
+                      {(deck.peaks.length > 0 ? deck.peaks : [0]).map((pk, i) => (
+                        <div
+                          key={i}
+                          style={{ height: `${Math.max(2, pk * 34)}px`, backgroundColor: amberColorCss(pk, pk, pk * 0.45) }}
+                          className="flex-1 mx-[0.5px] rounded-[0.5px]"
+                        />
+                      ))}
+                    </div>
+                    {deck.loopActive && deck.loop && (
+                      <div
+                        className="absolute inset-y-0 bg-[#ff9500]/15 border-x border-[#ff9500]/60 pointer-events-none"
+                        style={{ left: pct(deck.loop.start), width: pct(Math.max(0, deck.loop.end - deck.loop.start)) }}
+                      />
+                    )}
+                    <div className="absolute inset-y-0 w-px bg-white pointer-events-none" style={{ left: pct(deck.position) }} />
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => onDeckCommand?.({ type: 'returnToStart' })} className={deckBtn} title="An den Clip-Anfang">
+                      <SkipBack size={10} />
+                    </button>
+                    <button
+                      onClick={() => onDeckCommand?.({ type: 'togglePlay' })}
+                      className={deck.isPlaying ? deckBtnOn : deckBtn}
+                      title={deck.isPlaying ? 'Pause' : 'Wiedergabe (der Spur-Transport stoppt dabei)'}
+                    >
+                      {deck.isPlaying ? <Pause size={10} /> : <Play size={10} fill="currentColor" />}
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'stop' })} className={deckBtn} title="Stop">
+                      <Square size={10} fill="currentColor" />
+                    </button>
+                    <div className="ml-auto text-right font-mono text-[9px] leading-tight text-neutral-400">
+                      <div className="text-white">{deck.position.toFixed(3)} / {duration.toFixed(3)} s</div>
+                      <div>
+                        {bpmEff > 0
+                          ? `Takt ${Math.floor(beats / 4) + 1}.${Math.floor(beats % 4) + 1} · ${bpmEff.toFixed(1)} BPM`
+                          : 'ohne Raster'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => onDeckCommand?.({ type: 'loopToggle' })}
+                      className={deck.loopActive ? deckBtnOn : deckBtn}
+                      title="Schleife an/aus – ohne gesetzte Region loopt der ganze Clip"
+                    >
+                      <Repeat size={10} />
+                      <span>LOOP</span>
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'loopEdge', edge: 'in' })} className={deckBtn} title="Schleifenanfang an der aktuellen Position">
+                      <span>IN</span>
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'loopEdge', edge: 'out' })} className={deckBtn} title="Schleifenende an der aktuellen Position">
+                      <span>OUT</span>
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'loopClear' })} className={deckBtn} title="Schleifenregion löschen">
+                      <Eraser size={10} />
+                    </button>
+                    <span className="ml-auto font-mono text-[9px] text-neutral-500 truncate" title="Länge der Schleife in Sekunden und Takten">
+                      {deck.loop
+                        ? `${deck.loop.start.toFixed(2)}–${deck.loop.end.toFixed(2)} s (${(deck.loop.end - deck.loop.start).toFixed(3)} s)`
+                        : deck.loopMark !== null
+                          ? `IN bei ${deck.loopMark.toFixed(3)} s`
+                          : 'ganzer Clip'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => onDeckCommand?.({ type: 'preview', fitted: false })} className={deck.previewFitted ? deckBtn : deckBtnOn} title="Originalsamples des Clips">
+                      CLIP
+                    </button>
+                    <button
+                      onClick={() => onDeckCommand?.({ type: 'preview', fitted: true })}
+                      className={deck.previewFitted ? deckBtnOn : deckBtn}
+                      title="Dasselbe Material, so vorgerechnet, wie die Ablage es in die aktive Spur schreiben würde (Pegel und Tempo)"
+                    >
+                      WIE EINGEFÜGT
+                    </button>
+                  </div>
+                  <div className="text-[9px] font-mono leading-snug text-[#ffb74d]/90" title="Pegel und Tempo laut Kernrechnung">
+                    {deck.level}
+                  </div>
+
+                  <div className="flex items-center gap-1 pt-1 border-t border-[#1d1f27]">
+                    <button onClick={() => onDeckCommand?.({ type: 'apply', clipId: deck.clipId, mode: 'insert' })} className={deckBtn} title={CLIP_DROP_LABELS.insert}>
+                      <CornerUpRight size={10} />
+                      <span>EINFÜGEN</span>
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'apply', clipId: deck.clipId, mode: 'replace' })} className={deckBtn} title={CLIP_DROP_LABELS.replace}>
+                      <Replace size={10} />
+                      <span>ERSETZEN</span>
+                    </button>
+                    <button onClick={() => onDeckCommand?.({ type: 'apply', clipId: deck.clipId, mode: 'overdub' })} className={deckBtn} title={CLIP_DROP_LABELS.overdub}>
+                      <Layers size={10} />
+                      <span>DARÜBER</span>
+                    </button>
+                    <button onClick={() => onUnloadFromDeck?.()} className={`${deckBtn} ml-auto`} title="Clip aus dem Deck-Spieler entladen">
+                      <X size={10} />
+                    </button>
+                  </div>
+                </>
+              );
+            })()
+          ) : (
+            <div className="text-[10px] text-neutral-500 leading-relaxed">
+              Kein Clip im Spieler. Alles hier bezieht sich auf den Clip, nicht auf die Spur –
+              derselbe Spieler wie unten am Fenster, nur am Clip.
+              <button
+                onClick={() => selectedClipId && onDeckCommand?.({ type: 'load', clipId: selectedClipId })}
+                disabled={!selectedClipId}
+                className={`${deckBtn} mt-1.5`}
+              >
+                <Disc3 size={10} />
+                <span>AUSGEWÄHLTEN CLIP LADEN</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Clip-Liste */}
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -385,6 +685,14 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                       )}
                       <span className="text-neutral-500 text-[9.5px] font-mono">
                         {clip.bars.toFixed(1)} Takte • {clip.beats} Beats • {clip.duration.toFixed(2)} s
+                        {tempoMatch && targetBpm > 0 && clip.bpm > 0 && Math.abs(clip.bpm - targetBpm) > 0.05 && (
+                          <span
+                            className="text-[#ffb74d]"
+                            title={describeClipFit(clip, targetBpm, { tempoMatch, pitchFollowsTempo: pitchFollow })}
+                          >
+                            {' '}→ {targetBpm.toFixed(1)} BPM
+                          </span>
+                        )}
                       </span>
                     </div>
                   </div>
@@ -595,6 +903,27 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                 {item('rename', 'Umbenennen', { icon: <Pencil size={11} />, hint: 'Name in der Bibliothek ändern' })}
                 {item('up', 'In der Liste nach oben', { icon: <ArrowUp size={11} />, disabled: clipIndex <= 0 })}
                 {item('down', 'In der Liste nach unten', { icon: <ArrowDown size={11} />, disabled: clipIndex >= clips.length - 1 })}
+
+                {item('deckView', deckViewOpen ? 'Deck-Ansicht einklappen' : 'In Deck-Ansicht öffnen', {
+                  icon: deckViewOpen ? <Minimize2 size={11} /> : <Maximize2 size={11} />,
+                  disabled: !clipHasAudio,
+                  hint: 'Voller Spieler für diesen Clip: Transport, Schleife, Vorschau „wie eingefügt“',
+                })}
+
+                <div className="my-1 border-t border-[#22242d]" />
+
+                {item('tempoMatch', tempoMatch ? 'Tempo an Zielspur anpassen ✓' : 'Tempo an Zielspur anpassen', {
+                  icon: tempoMatch ? <Check size={11} /> : undefined,
+                  hint:
+                    targetBpm > 0
+                      ? `Clip-Dauer von ${clip.bpm.toFixed(1)} auf ${targetBpm.toFixed(1)} BPM bringen – Tonhöhe bleibt`
+                      : 'Ohne Beat-Raster in der Zielspur ist nichts anzupassen',
+                })}
+                {item('pitchFollow', pitchFollow ? 'Tonhöhe mit anpassen ✓' : 'Tonhöhe mit anpassen (Key-Lock aus)', {
+                  icon: pitchFollow ? <Check size={11} /> : undefined,
+                  disabled: !tempoMatch,
+                  hint: 'Tonhöhe wandert mit dem Tempo wie auf dem Plattenteller; sonst hält der Vocoder die Tonhöhe',
+                })}
 
                 <div className="my-1 border-t border-[#22242d]" />
 

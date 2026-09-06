@@ -16,12 +16,15 @@
  *   5.  den Clip an einer beliebigen Stelle einfügen – dabei Pegel angleichen
  *   6.  darüberlegen – Übersteuerungsschutz, trockenes Material bleibt unangetastet
  *   7.  zwei Takte ersetzen – Länge bleibt, Rest unverändert
- *   8.  Bibliothekspflege und Ablage-Absichten (Duplizieren … Strg = Deck)
- *   9.  die letzten beiden Takte nach vorne ziehen
- *   10. Schritt zurück / wiederherstellen – samplegenau (Undo/Redo wie in der App)
- *   11. Projekt speichern und wieder öffnen (Spur + Bibliothek)
- *   12. Quelldatei unverändert (Read-Only-Zusage, SHA-256)
- *   13. Beweis-WAVs (quelle.wav, endstand.wav)
+ *   8.  denselben Clip in eine Spur mit anderem Tempo einfügen – 120 → 128 BPM,
+ *       Taktzahl bleibt, die Einschwingvorgänge sitzen auf dem Zielraster und die
+ *       Grundfrequenz hält (Key-Lock zu) bzw. wandert mit (Key-Lock auf)
+ *   9.  Bibliothekspflege und Ablage-Absichten (Duplizieren … Strg = Deck)
+ *   10. die letzten beiden Takte nach vorne ziehen
+ *   11. Schritt zurück / wiederherstellen – samplegenau (Undo/Redo wie in der App)
+ *   12. Projekt speichern und wieder öffnen (Spur + Bibliothek)
+ *   13. Quelldatei unverändert (Read-Only-Zusage, SHA-256)
+ *   14. Beweis-WAVs (quelle.wav, endstand.wav)
  *
  * Ausführen: npx tsx tests/workflow-real.test.ts   (bzw. npm run proof:workflow-real)
  */
@@ -40,8 +43,10 @@ import {
   buildClip,
   clipAudioOf,
   clipDisplayIndex,
+  clipDropNote,
   clipExportFileName,
   describeClip,
+  fitClipForTrack,
   dropModeFor,
   duplicateClip,
   ensureConsistentClip,
@@ -587,6 +592,159 @@ step(
   }
 );
 
+// ── 8. Tempowechsel: Clip aus einer 120-BPM-Spur in eine 128-BPM-Spur ──────
+
+const TARGET_BPM = 128;
+const TARGET_SPB = 60 / TARGET_BPM;
+const TARGET_BAR_SECONDS = TARGET_SPB * METER; // 1,875 s
+const TARGET_BAR_SAMPLES = Math.round(TARGET_BAR_SECONDS * SAMPLE_RATE); // 15000
+
+function gridAt(bpm: number, seconds: number): BeatGrid {
+  const spb = 60 / bpm;
+  const beats = Array.from({ length: Math.floor(seconds / spb) + 1 }, (_, i) => ({
+    index: i,
+    time: i * spb,
+    isBarStart: i % METER === 0,
+    barNumber: Math.floor(i / METER) + 1,
+    beatInBar: (i % METER) + 1,
+  }));
+  return { firstBeat: 0, bpm, meter: METER, origin: DataOrigin.LOCAL_ANALYSIS, beats };
+}
+
+/** Taktfolge im Zielraster – dieselbe unabhängige Messung, nur mit Taktlänge 128 BPM. */
+function targetBarsOf(pcm: PcmAudio): Array<number | null> {
+  const count = Math.floor(pcmSampleCount(pcm) / TARGET_BAR_SAMPLES);
+  const out: Array<number | null> = [];
+  for (let i = 0; i < count; i++) {
+    const found = identifyBar(pcm, i * TARGET_BAR_SAMPLES, TARGET_BAR_SAMPLES);
+    out.push(found.margin > 1.35 && found.ratio > 1.1 ? found.bar : null);
+  }
+  return out;
+}
+
+/** Größter Abstand zwischen lautestem Sample eines Takts und Taktanfang (in Samples). */
+function attackSlop(pcm: PcmAudio, barSamples: number, bars: number): number {
+  let worst = 0;
+  for (let bar = 0; bar < bars; bar++) {
+    const from = bar * barSamples;
+    const data = pcm.channels[0];
+    let best = from;
+    let bestValue = 0;
+    for (let i = from; i < from + barSamples && i < data.length; i++) {
+      const value = Math.abs(data[i]);
+      if (value > bestValue) {
+        bestValue = value;
+        best = i;
+      }
+    }
+    worst = Math.max(worst, best - from);
+  }
+  return worst;
+}
+
+step(
+  'Tempowechsel: Clip aus der 120-BPM-Spur in eine 128-BPM-Spur einfügen',
+  `genau 8 Takte des Zielrasters (8 · ${TARGET_BAR_SAMPLES} Samples) · Taktfolge 4…11 auf dem Zielraster erkennbar · Einschwingvorgang bleibt am Taktanfang · Grundfrequenz hält, mit Key-Lock auf wandert sie mit`,
+  () => {
+    const clipAudio = clipAudioOf(cutClip!);
+    expect(clipAudio !== null, 'Clip ohne Audiodaten');
+    expect(pcmSampleCount(clipAudio!) === CUT_BARS * BAR_SAMPLES, 'Clip umfasst nicht acht Quellentakte', String(pcmSampleCount(clipAudio!)));
+
+    const totalBars = 16;
+    const targetTrack: EditableAudio = {
+      audio: {
+        sampleRate: SAMPLE_RATE,
+        channels: [new Float32Array(totalBars * TARGET_BAR_SAMPLES), new Float32Array(totalBars * TARGET_BAR_SAMPLES)],
+      },
+      cues: [],
+      loops: [],
+      beatGrid: gridAt(TARGET_BPM, totalBars * TARGET_BAR_SECONDS),
+    };
+
+    // Absicht wie in der App: Clip an einer beliebigen Stelle ziehen, Rasterung
+    // an, Zielspur hat ein anderes Tempo – es wird also zeitlich angepasst.
+    const wanted = 4 * TARGET_BAR_SECONDS + 0.4;
+    const outcome = applyClipDrop(targetTrack, clipAudio!, wanted, {
+      quantize: true,
+      mode: 'insert',
+      sourceBpm: BPM,
+      tempoMatch: true,
+      pitchFollowsTempo: false,
+    });
+    // Rasterung nach oben: von 7,9 s geht es auf die nächste Taktgrenze – Takt 6.
+    const dropBar = 5;
+    expect(Math.abs(outcome.atSeconds - dropBar * TARGET_BAR_SECONDS) < 1e-9, 'Zielzeit rastet nicht auf die nächste Taktgrenze', outcome.atSeconds.toFixed(4));
+    expect(outcome.tempo.applied === true, 'Tempoangleichung unterblieben', String(outcome.tempo.skipped ?? 'ok'));
+    expect(outcome.tempo.method === 'vocoder', 'Tonhöhe würde mitwandern, obwohl Key-Lock zu ist', outcome.tempo.method);
+    expect(Math.abs(outcome.tempo.speed - TARGET_BPM / BPM) < 1e-9, 'Verhältnis rechnet falsch', String(outcome.tempo.speed));
+    expect(pcmSampleCount(outcome.placedAudio) === CUT_BARS * TARGET_BAR_SAMPLES, 'eingefügte Länge passt nicht auf das Zielraster', String(pcmSampleCount(outcome.placedAudio)));
+    expect(outcome.level.applied === true || outcome.level.skipped === 'über ziel', 'Pegel nicht geprüft', String(outcome.level.skipped ?? 'ok'));
+    expect(pcmPeak(outcome.placedAudio) <= CLIP_HEADROOM_CEILING + 1e-6, 'eingefügter Clip über der Obergrenze', pcmPeak(outcome.placedAudio).toFixed(4));
+
+    // Inhalt: Takt für Takt am *Ziel*raster identifizieren. Ohne Anpassung würden
+    // die Takte ab dem zweiten auseinanderlaufen und die Messung fände nichts mehr.
+    const order = targetBarsOf(outcome.placedAudio);
+    const expected = Array.from({ length: CUT_BARS }, (_, i) => CUT_START_BAR + i);
+    expect(fmtBars(order) === fmtBars(expected), 'Taktfolge sitzt nicht auf dem Zielraster', fmtBars(order));
+    expect(
+      Math.round(outcome.atSeconds * SAMPLE_RATE) % TARGET_BAR_SAMPLES === 0,
+      'Einfügestelle liegt nicht auf einer Ziel-Taktgrenze',
+      String(Math.round(outcome.atSeconds * SAMPLE_RATE))
+    );
+    expect(
+      pcmSampleCount(outcome.target.audio) === totalBars * TARGET_BAR_SAMPLES + CUT_BARS * TARGET_BAR_SAMPLES,
+      'Einfügen veränderte die Spurlänge falsch',
+      String(pcmSampleCount(outcome.target.audio))
+    );
+
+    // Zeitlage unabhängig von der Frequenzmessung: Der lauteste Moment eines Takts
+    // ist sein Anfang. Er darf nicht von der Taktgrenze wegdriften – gemessen gegen
+    // dieselbe Unschärfe, die das Material schon mitbringt (Vocoder-Rahmenlänge).
+    const slopTarget = attackSlop(outcome.placedAudio, TARGET_BAR_SAMPLES, CUT_BARS);
+    const slopSource = attackSlop(clipAudio!, BAR_SAMPLES, CUT_BARS);
+    expect(slopTarget <= slopSource + Math.round(0.05 * SAMPLE_RATE), 'Einschwingvorgangen driften vom Zielraster', `${slopTarget} Samples (Material selbst: ${slopSource}, Grenze ${slopSource + Math.round(0.05 * SAMPLE_RATE)})`);
+
+    // Tonhöhe: Key-Lock zu heißt, die Grundfrequenz bleibt, wo sie war.
+    let held = 0;
+    let moved = 0;
+    for (let bar = 0; bar < CUT_BARS; bar++) {
+      const start = (dropBar + bar) * TARGET_BAR_SAMPLES;
+      const freq = barFreq(CUT_START_BAR + bar);
+      held += tonePower(outcome.target.audio, start, TARGET_BAR_SAMPLES, freq);
+      moved += tonePower(outcome.target.audio, start, TARGET_BAR_SAMPLES, freq * (TARGET_BPM / BPM));
+    }
+    expect(moved > 0 && held / moved > 1.2, 'Grundfrequenz ist gewandert (Tonhöhe folgte dem Tempo)', `Verhältnis ${(held / Math.max(moved, 1e-12)).toFixed(3)}`);
+
+    // Gegentest: derselbe Clip mit Tonhöhe-folgt-an – jetzt muss die Frequenz wandern.
+    const withPitch = fitClipForTrack(clipAudio!, BPM, TARGET_BPM, { tempoMatch: true, pitchFollowsTempo: true });
+    expect(withPitch.tempo.method === 'resample', 'Key-Lock auf nutzt nicht den Resample-Weg', withPitch.tempo.method);
+    let heldHere = 0;
+    let movedHere = 0;
+    for (let bar = 0; bar < CUT_BARS; bar++) {
+      const start = bar * TARGET_BAR_SAMPLES;
+      const freq = barFreq(CUT_START_BAR + bar);
+      heldHere += tonePower(withPitch.pcm, start, TARGET_BAR_SAMPLES, freq);
+      movedHere += tonePower(withPitch.pcm, start, TARGET_BAR_SAMPLES, freq * (TARGET_BPM / BPM));
+    }
+    expect(movedHere / heldHere > 1.2, 'Tonhöhe wanderte trotz Key-Lock auf nicht', `Verhältnis ${(movedHere / Math.max(heldHere, 1e-12)).toFixed(3)}`);
+    expect(pcmSampleCount(withPitch.pcm) === CUT_BARS * TARGET_BAR_SAMPLES, 'Länge bei mitlaufender Tonhöhe falsch', String(pcmSampleCount(withPitch.pcm)));
+
+    // Und mit ausgeschalteter Angleichung bleibt die alte Länge – der Nachweis,
+    // dass die Rasterung ohne Tempoanpassung *nicht* aufgehen würde.
+    const plain = fitClipForTrack(clipAudio!, BPM, TARGET_BPM, { tempoMatch: false });
+    expect(pcmSampleCount(plain.pcm) === CUT_BARS * BAR_SAMPLES, 'trotz Aus gedehnt', String(pcmSampleCount(plain.pcm)));
+    expect(plain.tempo.skipped === 'aus', 'Abwesenheit nicht gemeldet', String(plain.tempo.skipped));
+    const plainOrder = targetBarsOf(plain.pcm);
+    const plainHits = plainOrder.filter((bar, index) => bar === expected[index]).length;
+    expect(plainHits < CUT_BARS, 'ohne Anpassung wäre der Nachweis wertlos', fmtBars(plainOrder));
+
+    const note = clipDropNote(outcome) ?? '';
+    expect(/Tempo an Zielspur angepasst/.test(note), `Rückmeldung ohne Tempo: ${note}`);
+    expect(/normalisiert|bleibt bei/.test(note), `Rückmeldung ohne Pegel: ${note}`);
+    return `Länge ${pcmSampleCount(clipAudio!)} → ${pcmSampleCount(outcome.placedAudio)} Samples (${CUT_BARS} Takte à ${TARGET_BAR_SECONDS.toFixed(3)} s), Drift des Taktanfangs ${slopTarget} Samples (Material selbst ${slopSource}), Grundfrequenz hält ${held.toFixed(2)} gegen ${moved.toFixed(2)} für f·${(TARGET_BPM / BPM).toFixed(3)}, Key-Lock auf: ${movedHere.toFixed(2)} > ${heldHere.toFixed(2)} · ${note}`;
+  }
+);
+
 // ── 7. Bibliothekspflege und Ablage-Absichten ───────────────────────────────
 
 step(
@@ -862,7 +1020,8 @@ fs.writeFileSync(
     '',
     'Durchlauf wie in der App: 8 Takte ausschneiden (vorher als Clip in die Bibliothek) →',
     'an einer beliebigen Stelle wieder einfügen (mit Pegelangleichung) → darüberlegen (mit',
-    'Übersteuerungsschutz) → zwei Takte ersetzen → Bibliothek pflegen → die letzten beiden',
+    'Übersteuerungsschutz) → zwei Takte ersetzen → denselben Clip in eine 128-BPM-Spur',
+    '(Tempo angleichen, Taktzahl halten, Tonhöhe halten bzw. mitlaufen lassen) → Bibliothek pflegen → die letzten beiden',
     'Takte nach vorne → Schritt zurück/wiederherstellen → Projekt speichern und öffnen →',
     'Quelldatei unverändert.',
     '',

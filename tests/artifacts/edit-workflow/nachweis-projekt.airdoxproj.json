@@ -13,7 +13,10 @@
     "quantize": true,
     "viewOffset": 4.5,
     "viewDuration": 12,
-    "paletteOpen": false
+    "paletteOpen": false,
+    "clipTempoMatch": false,
+    "clipPitchFollow": true,
+    "clipDeckOpen": true
   },
   "tracks": [
     {

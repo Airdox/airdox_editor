@@ -25,6 +25,7 @@ import {
   replaceRange,
   snapToGrid,
 } from './editOps';
+import { TempoFitReport, fitToTempo, planTempoFit, tempoFitNote } from './timeStretch';
 
 /** MIME-Typ des Drag-&-Drop-Payloads (eine einzige Quelle, keine Raterei). */
 export const CLIP_DND_MIME = 'application/x-airdox-clip';
@@ -77,6 +78,14 @@ export interface ClipGainReport {
   /** warum nicht? */
   skipped?: 'stumm' | 'über ziel' | 'ziel nicht erreichbar' | 'aus';
   note?: string;
+  /**
+   * Spitze direkt nach der Tempoangleichung, bevor der letzte Zug kam. Der
+   * Vocoder verbreitert Impulse – dadurch kann die Spitze über das Ziel wandern,
+   * obwohl der Clip vorher sauber aussteuerte.
+   */
+  peakAfterStretch?: number;
+  /** Faktor des letzten Zugs nach der Tempoangleichung (1 = nicht nötig). */
+  postStretchGain?: number;
 }
 
 /** Größter Ausschlag eines Clips – für Bibliothek, Tooltip und Menü. */
@@ -523,6 +532,12 @@ export function clipLevelNote(
   } else if (level.skipped === 'stumm') {
     parts.push('Clip ist still – keine Pegelanpassung');
   }
+  if (level.postStretchGain !== undefined && level.postStretchGain !== 1) {
+    parts.push(
+      `Spitze nach Tempoangleichung ${level.peakAfterStretch?.toFixed(3)} → nachgezogen auf ${level.peakAfter.toFixed(3)} ` +
+        `(${toDbfs(level.postStretchGain).toFixed(1)} dB)`
+    );
+  }
   if (mix?.attenuated) {
     parts.push(
       `Überlagerung auf ${mix.gainUsed.toFixed(3)} zurückgenommen (Bereichs-Peak ${mix.dryPeak.toFixed(3)}), ` +
@@ -565,28 +580,85 @@ export interface ClipDropOutcome {
   placedAudio: PcmAudio;
   /** Was die Pegelangleichung getan hat. */
   level: ClipGainReport;
+  /** Was die Tempoangleichung an die Zielspur getan hat. */
+  tempo: TempoFitReport;
   /** Beim Überlagern: wie der Kopfraum gerechnet wurde. */
   mix?: { gainUsed: number; dryPeak: number; peakAfter: number; regionScale: number; attenuated: boolean };
+}
+
+/** Einstellungen, die vor der Ablage gelten – Schalter der Oberfläche, hier gesammelt. */
+export interface ClipFitOptions {
+  normalize?: boolean;
+  ceiling?: number;
+  tempoMatch?: boolean;
+  pitchFollowsTempo?: boolean;
+}
+
+export interface ClipFitResult {
+  /** Material nach Pegel- und Tempoangleichung – genau das, was in die Spur kommt. */
+  pcm: PcmAudio;
+  level: ClipGainReport;
+  tempo: TempoFitReport;
+}
+
+/**
+ * Was einem Clip widerfährt, bevor er in einer Spur landet: erst der Pegel, dann
+ * das Tempo. Die Reihenfolge ist Absicht – die Pegelmessung soll das Material
+ * zeigen, das tatsächlich eingefügt wird, und die Tempoangleichung darf den
+ * Pegel nicht wieder verschieben (beide Wege normieren bzw. mischen linear).
+ */
+export function fitClipForTrack(
+  clipAudio: PcmAudio,
+  sourceBpm: number,
+  targetBpm: number,
+  options: ClipFitOptions = {}
+): ClipFitResult {
+  const normalized = normalizeClipAudio(clipAudio, { enabled: options.normalize !== false });
+  const tempo = fitToTempo(normalized.pcm, {
+    sourceBpm,
+    targetBpm,
+    enabled: options.tempoMatch !== false,
+    pitchFollowsTempo: options.pitchFollowsTempo === true,
+  });
+  const result: ClipFitResult = { pcm: tempo.pcm, level: normalized.report, tempo: tempo.report };
+  // Nach dem Dehnen kann die Spitze höher liegen als vorher: ein Phasenvocoder
+  // verteilt einen Impuls über mehrere Rahmen, und im Extremfall addieren sich die
+  // Rahmen an einer Stelle. Der Clip darf deshalb nicht über die Obergrenze –
+  // ein letzter Zug nach unten, nur wenn es nötig ist.
+  if (tempo.report.applied && options.normalize !== false) {
+    const ceiling = options.ceiling ?? CLIP_HEADROOM_CEILING;
+    const afterStretch = pcmPeak(tempo.pcm);
+    if (afterStretch > ceiling && afterStretch > 0) {
+      const post = ceiling / afterStretch;
+      const held = pcmScale(tempo.pcm, post);
+      result.pcm = held;
+      result.level = {
+        ...normalized.report,
+        peakAfter: pcmPeak(held),
+        peakAfterStretch: afterStretch,
+        postStretchGain: post,
+      };
+    }
+  }
+  return result;
 }
 
 /**
  * Was beim Ablagen eines Clips auf die Zeitachse passiert – genau diese Funktion
  * ruft auch die App, damit das Geprüfte und das Genutzte identisch sind.
  *
- * insert:  Timeline schiebt sich nach rechts, Rest der Spur bleibt erhalten
- * overdub: Clip wird über den vorhandenen Bereich gemischt (Länge gleich)
- * replace: Bereich wird getauscht (Länge = Clip, Rest rückt nicht)
- */
-/**
- * Was beim Ablagen eines Clips auf die Zeitachse passiert – genau diese Funktion
- * ruft auch die App, damit das Geprüfte und das Genutzte identisch sind.
+ * Vor jeder Ablage stehen zwei Anpassungen, immer in dieser Reihenfolge:
  *
- * Vor jeder Ablage steht die Pegelangleichung: Der Clip wird auf
- * CLIP_NORM_TARGET_PEAK (−1 dBFS) normalisiert, höchstens um CLIP_NORM_MAX_GAIN_DB
- * angehoben. Beim Darüberlegen wird zusätzlich der Kopfraum des Zielbereichs
- * gemessen und der Clip notfalls leiser gemischt – damit nach der Summation kein
- * Sample über CLIP_HEADROOM_CEILING liegt. Das Ergebnis wird nicht hart
- * begrenzt (kein Verzerren), sondern im Pegel angepasst.
+ * 1. Pegel: Der Clip wird auf CLIP_NORM_TARGET_PEAK (−1 dBFS) normalisiert,
+ *    höchstens um CLIP_NORM_MAX_GAIN_DB angehoben. Beim Darüberlegen wird
+ *    zusätzlich der Kopfraum des Zielbereichs gemessen und der Clip notfalls
+ *    leiser gemischt – damit nach der Summation kein Sample über
+ *    CLIP_HEADROOM_CEILING liegt. Es wird nichts hart begrenzt.
+ * 2. Tempo: Stammen Clip und Zielspur aus verschiedenen Tempi, wird die Dauer
+ *    des Clips auf das Zieltempo gebracht (`fitToTempo`). Ohne diesen Schritt
+ *    lägen die Beats des Clips nach zwei Takten meilenweit neben dem Raster der
+ *    Zielspur. Tonhöhe bleibt dabei stehen (Phasenvocoder); wer sie wie auf
+ *    einem Plattenspieler mitnehmen will, setzt `pitchFollowsTempo`.
  *
  * insert:  Timeline schiebt sich nach rechts, Rest der Spur bleibt erhalten
  * overdub: Clip wird über den vorhandenen Bereich gemischt (Länge gleich)
@@ -596,12 +668,27 @@ export function applyClipDrop(
   track: EditableAudio,
   clipAudio: PcmAudio,
   wantedSeconds: number,
-  options: { quantize?: boolean; mode: Exclude<ClipDropMode, 'deck'>; normalize?: boolean; ceiling?: number }
+  options: {
+    quantize?: boolean;
+    mode: Exclude<ClipDropMode, 'deck'>;
+    normalize?: boolean;
+    ceiling?: number;
+    /** Tempo, aus dem das Material stammt (die `bpm` des Clips). */
+    sourceBpm?: number;
+    /** Tempoangleichung an die Zielspur (Standard: an). */
+    tempoMatch?: boolean;
+    /** Tonhöhe folgt dem Tempo (Key-Lock aus). */
+    pitchFollowsTempo?: boolean;
+  }
 ): ClipDropOutcome {
   const mode = options.mode;
   const ceiling = options.ceiling ?? CLIP_HEADROOM_CEILING;
-  const normalized = normalizeClipAudio(clipAudio, { enabled: options.normalize !== false });
-  const block = normalized.pcm;
+  const fitted = fitClipForTrack(clipAudio, options.sourceBpm ?? 0, track.beatGrid?.bpm ?? 0, {
+    normalize: options.normalize !== false,
+    tempoMatch: options.tempoMatch !== false,
+    pitchFollowsTempo: options.pitchFollowsTempo === true,
+  });
+  const block = fitted.pcm;
   const trackEnd = pcmDuration(track.audio);
   const clipLength = pcmDuration(block);
   const placed = resolveClipTargetTime(wantedSeconds, track.beatGrid, {
@@ -638,7 +725,8 @@ export function applyClipDrop(
     reason: placed.reason,
     clipEndSeconds: at + clipLength,
     placedAudio: block,
-    level: normalized.report,
+    level: fitted.level,
+    tempo: fitted.tempo,
     mix: outcome.mix,
   };
 }
@@ -651,6 +739,43 @@ export function clipExportFileName(clips: PaletteClip[], clip: PaletteClip): str
   const index = clipDisplayIndex(clips, clip.id);
   const safeName = (clip.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60) || 'clip').replace(/_+$/, '');
   return `${String(Math.max(1, index)).padStart(2, '0')}_${safeName}.wav`;
+}
+
+/**
+ * Ein Satz für Statuszeile und Protokoll: was Pegel *und* Tempo getan haben.
+ * Ergänzung zu `clipLevelNote`, damit die Oberfläche beide Meldungen gleich
+ * formuliert – und keine Anpassung verschweigt.
+ */
+export function clipDropNote(outcome: {
+  level: ClipGainReport;
+  tempo?: TempoFitReport;
+  mix?: { gainUsed: number; dryPeak: number; peakAfter: number; regionScale: number; attenuated: boolean } | null;
+}): string | null {
+  const parts = [clipLevelNote(outcome.level, outcome.mix ?? null), outcome.tempo ? tempoFitNote(outcome.tempo) : null];
+  const kept = parts.filter((part): part is string => Boolean(part));
+  return kept.length > 0 ? kept.join('; ') : null;
+}
+
+/** Was beim nächsten Ablagen passiert – ohne zu rechnen, für Menü und Checkbox. */
+export function describeClipFit(
+  clip: PaletteClip,
+  targetBpm: number,
+  options: { tempoMatch?: boolean; pitchFollowsTempo?: boolean } = {}
+): string {
+  const plan = planTempoFit(clip.bpm, targetBpm, {
+    enabled: options.tempoMatch !== false,
+    pitchFollowsTempo: options.pitchFollowsTempo === true,
+  });
+  if (!plan.willApply) {
+    if (plan.reason === 'aus') return 'Tempoangleichung aus';
+    if (plan.reason === 'kein tempo') return 'kein Raster in Quell- oder Zielspur';
+    return 'Tempo gleich – keine Änderung';
+  }
+  const dauer = `${clip.duration.toFixed(3)} s → ${(clip.duration / plan.speed).toFixed(3)} s`;
+  return (
+    `${clip.bpm.toFixed(1)} → ${targetBpm.toFixed(1)} BPM (${plan.percent >= 0 ? '+' : '−'}${Math.abs(plan.percent).toFixed(1)} %, ${dauer}), ` +
+    (options.pitchFollowsTempo ? `Tonhöhe ${plan.pitchCents >= 0 ? '+' : '−'}${Math.abs(plan.pitchCents).toFixed(0)} Cent` : 'Tonhöhe bleibt')
+  );
 }
 
 /** Beschriftung für Rückmeldung und Protokoll. */

@@ -17,8 +17,18 @@ ein Spitzenpegel von −1 dBFS, höchstens +12 dB Boost, nichts über 0,999; bei
 Darüberlegen senkt der Headroom-Mischer den zugeführten Clip so weit ab, dass die
 Summe die Obergrenze nicht überschreitet.
 
+Landet der Clip in einer Spur mit anderem Tempo, wird seine Dauer auf das Zielraster
+gerechnet (`speed = Ziel-BPM / Quellen-BPM`) – standardmäßig mit gehaltener Tonhöhe
+(Phasenvocoder, entspricht Master Tempo mit Key-Lock); mit der Checkbox „Tonhöhe folgt
+dem Tempo“ wandert sie im gleichen Verhältnis mit (Neusampling, Key-Lock aus). Beide
+Schalter sitzen in der Leiste der Clip-Bibliothek und in deren Rechtsklick-Menü, die
+sich zu einer vollständigen Deck-Ansicht ausklappen lässt: Wellenform mit Playhead,
+Ein-/Ausstieg, Schleife, Vorschau mit oder ohne Angleichung, Einfügen in die
+aktive Spur – derselbe Spieler, der unten im Kontrollblock läuft.
+
 Stand und offene Punkte: [VORHABEN.md](VORHABEN.md) · Windows-Build: [BUILD-WINDOWS.md](BUILD-WINDOWS.md) ·
-Woher die Wellenform-Daten kommen: [WELLENFORM-DATEN.md](WELLENFORM-DATEN.md)
+Woher die Wellenform-Daten kommen: [WELLENFORM-DATEN.md](WELLENFORM-DATEN.md) ·
+Stem-Dateien (Recherche, nichts gebaut): [STEMS-RECHERCHE.md](STEMS-RECHERCHE.md)
 
 ## Entwicklung
 
@@ -27,9 +37,10 @@ npm install
 npm run dev        # Vite-Dev-Server (Browser-Modus, ohne Read-Only-Bridge)
 npm run desktop    # baut dist und startet die Electron-App
 npm run lint       # tsc --noEmit
-npm test           # XML-, ANLZ-, Last-, SQLCipher-, Edit-, Clip-, Farb-, Projekt- und Workflow-Suiten
+npm test           # XML-, ANLZ-, Last-, SQLCipher-, Edit-, Clip-, Farb-, Tempo-, Projekt- und Workflow-Suiten
 npm run proof:workflow-real  # Nachweis des echten Workflows: 8 Takte ausschneiden → als Clip
                              # einfügen (mit Pegelangleichung) → Ende nach vorne → Undo → Projekt
+npm run proof:tempo-pitch    # Nachweis Tempo- und Tonhöhenanpassung (Phasenvocoder, Key-Lock)
 npm run proof:edit-workflow  # Schnitt-Nachweis inklusive WAVs und NACHWEIS.md
 npm run proof:clip-library   # Clip-Bibliothek: Pegel, Konsistenz, Drag & Drop, Ablagezeit
 npm run proof:waveform-colors # Farbtreue der Wellenform (AMBER, BLUE, RGB, 3BAND)

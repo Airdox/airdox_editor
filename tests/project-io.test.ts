@@ -160,7 +160,16 @@ function projectFromTrack(track: EditableAudio, projectName: string) {
   return buildProjectFile({
     projectName,
     activeTrackId: 'nachweis-track',
-    view: { waveformMode: 'AMBER', quantize: true, viewOffset: 4.5, viewDuration: 12, paletteOpen: false },
+    view: {
+      waveformMode: 'AMBER',
+      quantize: true,
+      viewOffset: 4.5,
+      viewDuration: 12,
+      paletteOpen: false,
+      clipTempoMatch: false,
+      clipPitchFollow: true,
+      clipDeckOpen: true,
+    },
     tracks: [projectTrack],
     clips: [
       {
@@ -224,6 +233,10 @@ runTest('Projektdatei', 'ein Editierstand überlebt Speichern und Öffnen vollst
   assert.equal(restored.view.waveformMode, 'AMBER');
   assert.equal(restored.view.viewOffset, 4.5);
   assert.equal(restored.view.paletteOpen, false);
+  // Die Clip-Schalter gehören zur Ansicht: aus bleibt aus, an bleibt an.
+  assert.equal(restored.view.clipTempoMatch, false, 'Tempoangleichung nicht gespeichert');
+  assert.equal(restored.view.clipPitchFollow, true, 'Tonhöhe-Folgen nicht gespeichert');
+  assert.equal(restored.view.clipDeckOpen, true, 'Deck-Ansicht nicht gespeichert');
   assert.equal(restored.app.name, 'Airdox_intelligents_Editor');
   assert.equal(restored.tracks.length, 1);
   assert.equal(restored.clips.length, 1);
