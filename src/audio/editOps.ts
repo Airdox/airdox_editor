@@ -12,7 +12,7 @@
  * bleibt unberührt, geschnitten wird nur die Arbeitskopie.
  */
 
-import { BeatGrid, CuePoint, DataOrigin, LoopPoint } from '../types/rekordbox';
+import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint } from '../types/rekordbox';
 import {
   PcmAudio,
   clampRange,
@@ -93,12 +93,82 @@ export function secondsPerBeat(grid: BeatGrid): number {
   return 60.0 / (grid.bpm || 120);
 }
 
+/**
+ * Trägt das Raster die von Rekordbox gelieferten Beat-Zeiten (PQTZ in der
+ * ANLZ-Datei, fortdauernde `TEMPO`-Angaben aus der XML), sind **diese** Werte
+ * maßgeblich – eine aus BPM fortgeschriebene Rechnung ersetzt sie nicht.
+ * Eine leere Liste heißt: bewusst kompakt importiert (Sammlungsliste), dann ist
+ * die Fortschreibung dieselbe Rechnung wie in Rekordbox und keine Analyse.
+ */
+export function hasRealBeats(grid: BeatGrid): boolean {
+  return Array.isArray(grid.beats) && grid.beats.length > 0;
+}
+
+/** Mittlere Beatlänge – bei importierten Beats aus deren eigener Zeitspanne. */
+export function averageSecondsPerBeat(grid: BeatGrid): number {
+  const beats = grid.beats;
+  if (hasRealBeats(grid) && beats && beats.length > 1) {
+    const first = beats[0];
+    const last = beats[beats.length - 1];
+    const span = last.time - first.time;
+    const steps = last.index - first.index;
+    if (span > 0 && steps > 0) return span / steps;
+  }
+  return secondsPerBeat(grid);
+}
+
+/** Beatnummer (gebrochen) zu einer Zeit, interpoliert zwischen den echten Beats. */
+export function beatPosition(grid: BeatGrid, seconds: number): number {
+  const beats = grid.beats;
+  if (!hasRealBeats(grid) || !beats || beats.length === 0) {
+    return (seconds - grid.firstBeat) / secondsPerBeat(grid);
+  }
+  if (beats.length === 1) {
+    return beats[0].index + (seconds - beats[0].time) / secondsPerBeat(grid);
+  }
+  if (seconds <= beats[0].time) {
+    const step = beats[1].time > beats[0].time ? beats[1].time - beats[0].time : secondsPerBeat(grid);
+    return beats[0].index + (seconds - beats[0].time) / step;
+  }
+  const last = beats[beats.length - 1];
+  if (seconds >= last.time) {
+    return last.index + (seconds - last.time) / secondsPerBeat(grid);
+  }
+  let low = 0;
+  let high = beats.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (beats[mid].time <= seconds) low = mid;
+    else high = mid - 1;
+  }
+  const a = beats[low];
+  const b = beats[low + 1];
+  const step = b.time > a.time ? b.time - a.time : secondsPerBeat(grid);
+  return a.index + (seconds - a.time) / step;
+}
+
 export function beatTime(grid: BeatGrid, beatIndex: number): number {
+  const known = grid.beats?.[beatIndex];
+  if (known) return known.time;
   return grid.firstBeat + beatIndex * secondsPerBeat(grid);
 }
 
 export function nearestBeatIndex(grid: BeatGrid, seconds: number): number {
-  return Math.round((seconds - grid.firstBeat) / secondsPerBeat(grid));
+  const beats = grid.beats;
+  if (!hasRealBeats(grid) || !beats || beats.length === 0) {
+    return Math.round((seconds - grid.firstBeat) / secondsPerBeat(grid));
+  }
+  // nächstliegender Beat aus der importierten Liste (monoton nach Zeit)
+  let low = 0;
+  let high = beats.length - 1;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (beats[mid].time < seconds) low = mid + 1;
+    else high = mid;
+  }
+  const before = beats[Math.max(0, low - 1)];
+  const after = beats[low];
+  return Math.abs(before.time - seconds) <= Math.abs(after.time - seconds) ? before.index : after.index;
 }
 
 /** Auf Beat- oder Taktraster einrasten (Quantize des Editors). */
@@ -109,6 +179,32 @@ export function snapToGrid(
   direction: 'nearest' | 'up' = 'nearest'
 ): { seconds: number; snapped: boolean } {
   if (mode === 'off') return { seconds, snapped: false };
+  const beats = grid.beats;
+  // Rasten auf die Positionen, die Rekordbox selbst gesetzt hat – innerhalb der
+  // importierten Liste. Jenseits des letzten Beats gibt es keinen Importwert, dort
+  // wird das Raster fortgeschrieben (sonst könnte ans Ende nicht über die Länge
+  // hinaus gerastet werden).
+  if (hasRealBeats(grid) && beats && beats.length > 0 && seconds <= beats[beats.length - 1].time + 1e-9) {
+    const list = mode === 'bar' ? beats.filter((beat) => beat.isBarStart) : beats;
+    const pool = list.length > 0 ? list : beats;
+    const pick =
+      direction === 'up'
+        ? pool.find((beat) => beat.time >= seconds - 1e-9) ?? pool[pool.length - 1]
+        : (() => {
+            let low = 0;
+            let high = pool.length - 1;
+            while (low < high) {
+              const mid = (low + high) >> 1;
+              if (pool[mid].time < seconds) low = mid + 1;
+              else high = mid;
+            }
+            const before = pool[Math.max(0, low - 1)];
+            const after = pool[low];
+            return Math.abs(before.time - seconds) <= Math.abs(after.time - seconds) ? before : after;
+          })();
+    const snappedTime = Math.max(0, pick.time);
+    return { seconds: snappedTime, snapped: Math.abs(snappedTime - seconds) > 1e-9 };
+  }
   const spb = secondsPerBeat(grid);
   const unit = mode === 'bar' ? spb * Math.max(1, grid.meter) : spb;
   const raw = (seconds - grid.firstBeat) / unit;
@@ -119,16 +215,127 @@ export function snapToGrid(
 
 /** Beatgrid an die neue Länge anpassen; erster Beat und BPM bleiben erhalten. */
 export function regrowBeatGrid(grid: BeatGrid, durationSec: number): BeatGrid {
-  const spb = secondsPerBeat(grid);
-  const needed = Math.max(1, Math.ceil((durationSec - grid.firstBeat) / spb) + 1);
-  const beats = Array.from({ length: needed }, (_, i) => ({
-    index: i,
-    time: grid.firstBeat + i * spb,
-    isBarStart: i % grid.meter === 0,
-    barNumber: Math.floor(i / grid.meter) + 1,
-    beatInBar: (i % grid.meter) + 1,
-  }));
-  return { ...grid, beats, origin: grid.origin ?? DataOrigin.PROJECT };
+  // Importierte Beats behalten ihre Zeiten und bleiben innerhalb der neuen Länge
+  // stehen; nur das Ende wird gleichmäßig fortgeschrieben, damit die Spur bedeckt
+  // bleibt. Ohne importierte Liste entsteht dasselbe uniformes Raster wie vorher.
+  const kept = hasRealBeats(grid) ? grid.beats.filter((beat) => beat.time <= durationSec + 1e-9) : [];
+  return {
+    ...grid,
+    beats: fitBeats(grid, kept, durationSec),
+    origin: grid.origin ?? DataOrigin.PROJECT,
+  };
+}
+
+/** Verschiebungspläne, die ein Eingriff an der Timeline erzeugt. */
+export type GridRipple =
+  | { kind: 'remove'; startSec: number; endSec: number }
+  | { kind: 'insert'; atSec: number; lengthSec: number };
+
+/**
+ * Beatgrid durch die Eingriffe einer Operation schicken statt es neu zu erfinden:
+ * Beats innerhalb eines entfernten Bereichs entfallen, alle danach folgenden rücken
+ * um genau die Länge des Eingriffs – die *übrigen* Zeiten bleiben die von
+ * Rekordbox gelieferten (100-%-Regel: Originaldaten gewinnen immer).
+ */
+export function rippleBeatGrid(grid: BeatGrid, ripples: GridRipple[], durationSec: number): BeatGrid {
+  if (!hasRealBeats(grid)) return regrowBeatGrid(grid, durationSec);
+  let beats = grid.beats.map((beat) => ({ ...beat }));
+  for (const ripple of ripples) {
+    if (ripple.kind === 'remove') {
+      const lengthSec = Math.max(0, ripple.endSec - ripple.startSec);
+      const kept: BeatNode[] = [];
+      for (const beat of beats) {
+        if (beat.time >= ripple.startSec - 1e-9 && beat.time < ripple.endSec - 1e-9) continue;
+        kept.push(beat.time >= ripple.endSec - 1e-9 ? { ...beat, time: beat.time - lengthSec } : beat);
+      }
+      beats = kept;
+    } else {
+      const lengthSec = Math.max(0, ripple.lengthSec);
+      if (lengthSec <= 0) continue;
+      beats = beats.map((beat) => (beat.time >= ripple.atSec - 1e-9 ? { ...beat, time: beat.time + lengthSec } : beat));
+    }
+  }
+  return { ...grid, beats: fitBeats(grid, beats, durationSec), origin: grid.origin ?? DataOrigin.PROJECT };
+}
+
+/**
+ * Bereich an eine frühere Position setzen – die Beats des Blocks wandern mit,
+ * ihre Zeiten bleiben die importierten (nur um den Versatz verschoben).
+ */
+export function moveBeatGrid(
+  grid: BeatGrid,
+  fromStart: number,
+  fromEnd: number,
+  toStart: number,
+  durationSec: number
+): BeatGrid {
+  if (!hasRealBeats(grid)) return regrowBeatGrid(grid, durationSec);
+  const lengthSec = Math.max(0, fromEnd - fromStart);
+  const moved: BeatNode[] = [];
+  const rest: BeatNode[] = [];
+  for (const beat of grid.beats) {
+    if (beat.time >= fromStart - 1e-9 && beat.time < fromEnd - 1e-9) {
+      moved.push({ ...beat, time: toStart + (beat.time - fromStart) });
+    } else if (beat.time >= toStart - 1e-9 && beat.time < fromStart - 1e-9) {
+      rest.push({ ...beat, time: beat.time + lengthSec });
+    } else {
+      rest.push({ ...beat });
+    }
+  }
+  const beats = [...rest, ...moved].sort((a, b) => a.time - b.time);
+  return { ...grid, beats: fitBeats(grid, beats, durationSec), origin: grid.origin ?? DataOrigin.PROJECT };
+}
+
+/**
+ * Nummerierung neu setzen und den Rand auffüllen – die importierten Zeiten
+ * bleiben, wie sie sind. Gefüllt wird nach beiden Seiten aus dem Raster
+ * fortgeschrieben (dieselbe Rechnung wie Rekordbox, keine neue Analyse): nach
+ * vorne bis `firstBeat`, damit ein vorn eingefügter Block weiter auf Takt 1
+ * anfängt, und nach hinten bis zur neuen Länge.
+ */
+function fitBeats(grid: BeatGrid, beats: BeatNode[], durationSec: number): BeatNode[] {
+  const spb = averageSecondsPerBeat(grid);
+  const meter = Math.max(1, grid.meter);
+  const within = beats
+    .filter((beat) => beat.time <= durationSec + 1e-9)
+    .sort((a, b) => a.time - b.time);
+
+  const out: BeatNode[] = [...within];
+  const firstTime = out.length > 0 ? out[0].time : grid.firstBeat;
+  const before: BeatNode[] = [];
+  for (let time = firstTime - spb; time >= grid.firstBeat - 1e-9; time -= spb) {
+    before.push({ index: 0, time, isBarStart: false, barNumber: 0, beatInBar: 0 });
+  }
+  before.reverse();
+  out.unshift(...before);
+
+  // Abdeckung: das Raster folgt dem Material, nie darüber hinaus – nach vorn bis
+  // `firstBeat`, nach hinten bis zur neuen Länge.
+  if (out.length === 0) out.push({ index: 0, time: grid.firstBeat, isBarStart: true, barNumber: 1, beatInBar: 1 });
+  while (out[out.length - 1].time < durationSec - 1e-9) {
+    const i = out.length;
+    out.push({
+      index: i,
+      time: out[i - 1].time + spb,
+      isBarStart: false,
+      barNumber: 0,
+      beatInBar: 0,
+    });
+  }
+  while (out.length > 1 && out[out.length - 1].time > durationSec + 1e-9) out.pop();
+
+  // Bar-Bezüge: importierte Werte behalten, fortgeschriebene Takte aus dem Raster.
+  return out.map((beat, i) => {
+    const carried = within.find((candidate) => candidate.time === beat.time);
+    if (carried) return { ...beat, index: i };
+    return {
+      ...beat,
+      index: i,
+      isBarStart: i % meter === 0,
+      barNumber: Math.floor(i / meter) + 1,
+      beatInBar: (i % meter) + 1,
+    };
+  });
 }
 
 function shiftCues(
@@ -233,11 +440,14 @@ function reportBase(kind: EditKind, target: EditableAudio): EditReport {
 }
 
 function describeBeats(grid: BeatGrid, startSec: number, endSec: number) {
-  const spb = secondsPerBeat(grid);
+  // Beatlage aus dem importierten Raster (bei uniformem Raster identisch zur
+  // Teilung durch die Beatlänge).
+  const startBeat = beatPosition(grid, startSec);
+  const endBeat = beatPosition(grid, endSec);
   return {
-    startBeat: (startSec - grid.firstBeat) / spb,
-    endBeat: (endSec - grid.firstBeat) / spb,
-    barsCount: (endSec - startSec) / spb / Math.max(1, grid.meter),
+    startBeat,
+    endBeat,
+    barsCount: (endBeat - startBeat) / Math.max(1, grid.meter),
   };
 }
 
@@ -257,7 +467,11 @@ export function removeRange(target: EditableAudio, startSec: number, endSec: num
   const delta = -range.length / target.audio.sampleRate;
   const cues = shiftCues(target.cues, range.end, delta, { removeInside: [range.start, range.end] });
   const loops = shiftLoops(target.loops, range.end, delta, { removeInside: [range.start, range.end] });
-  const beatGrid = regrowBeatGrid(target.beatGrid, pcmDuration(audio));
+  const beatGrid = rippleBeatGrid(
+    target.beatGrid,
+    [{ kind: 'remove', startSec: range.start, endSec: range.end }],
+    pcmDuration(audio)
+  );
 
   const newTarget: EditableAudio = { audio, cues: cues.cues, loops: loops.loops, beatGrid };
   const beats = describeBeats(target.beatGrid, range.start, range.end);
@@ -413,7 +627,7 @@ export function moveRangeToStart(
     }
     if (end > start) loops.push({ ...loop, start, end, length: end - start });
   }
-  const beatGrid = regrowBeatGrid(target.beatGrid, pcmDuration(audio));
+  const beatGrid = moveBeatGrid(target.beatGrid, range.start, range.end, atSec, pcmDuration(audio));
 
   const newTarget: EditableAudio = { audio, cues, loops, beatGrid };
   const beats = describeBeats(target.beatGrid, range.start, range.end);
@@ -505,7 +719,11 @@ export function insertClipAt(target: EditableAudio, atSec: number, clip: PcmAudi
   const blockLenSec = clipSamples / target.audio.sampleRate;
   const cues = shiftCues(target.cues, atSec, blockLenSec);
   const loops = shiftLoops(target.loops, atSec, blockLenSec);
-  const beatGrid = regrowBeatGrid(target.beatGrid, pcmDuration(audio));
+  const beatGrid = rippleBeatGrid(
+    target.beatGrid,
+    [{ kind: 'insert', atSec, lengthSec: blockLenSec }],
+    pcmDuration(audio)
+  );
   const newTarget: EditableAudio = { audio, cues: cues.cues, loops: loops.loops, beatGrid };
 
   Object.assign(report, describeBeats(target.beatGrid, atSec, atSec + blockLenSec), {

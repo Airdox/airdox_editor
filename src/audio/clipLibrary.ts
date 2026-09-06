@@ -16,6 +16,7 @@
 import { BeatGrid, DataOrigin, PaletteClip } from '../types/rekordbox';
 import { PcmAudio, pcmDuration, pcmPeak, pcmSampleCount, pcmScale } from './pcm';
 import { extractMiniPeaksPcm } from '../waveform/analyzer';
+import { averageSecondsPerBeat } from './editOps';
 import {
   EditableAudio,
   EditReport,
@@ -501,7 +502,10 @@ export function resolveClipTargetTime(
   };
 }
 
+/** Beatlänge: bei importierter Beatliste deren eigener mittlerer Abstand. */
 function secondsPerBeatSafe(grid: BeatGrid): number {
+  const measured = averageSecondsPerBeat(grid);
+  if (measured > 0) return measured;
   return grid.bpm > 0 ? 60 / grid.bpm : 0.5;
 }
 

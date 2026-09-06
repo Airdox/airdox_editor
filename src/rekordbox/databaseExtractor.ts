@@ -19,7 +19,7 @@ import {
   TrackModel,
   WaveformAnalysisData,
 } from '../types/rekordbox';
-import { analyzeAudioBuffer } from '../waveform/analyzer';
+import { analyzeAudioBuffer, waveformModesFor } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
 import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
 
@@ -91,6 +91,16 @@ export function applyAnlzExtractionToTrack(
   const hasAnlzLoops = extraction.loops.length > 0;
   const hasAnlzPhrases = extraction.phrases.length > 0;
   const waveform = extraction.waveform ?? track.analysis;
+  // PQTZ trägt je Beat seine eigene Zeit (und damit Tempowechsel im Stück). Diese
+  // Liste ist die Aussage von Rekordbox und darf nicht durch ein aus BPM
+  // gleichmäßig fortgeschriebenes Raster ersetzt werden – fortgeschrieben wird nur,
+  // wenn die Datei keine schlaggenaue Liste enthält, und dann sagt das der Hinweis.
+  const realBeatGrid =
+    extraction.beatGrid && extraction.beatGrid.beats.length > 0 ? extraction.beatGrid : undefined;
+  const gridNote =
+    hasAnlzBeatgrid && !realBeatGrid
+      ? 'PQTZ ohne schlaggenaue Beatliste gelesen – Raster aus erstem Beat und BPM fortgeschrieben.'
+      : undefined;
 
   const phrases = hasAnlzPhrases
     ? extraction.phrases.map((phrase) => ({
@@ -124,20 +134,23 @@ export function applyAnlzExtractionToTrack(
     hotCuesCount: cues.filter((cue) => cue.type === 'HOT_CUE').length,
     loopsCount: (hasAnlzLoops ? extraction.loops : track.loops).length,
     waveformBuckets: waveform?.length ?? 0,
-    waveformModeSupported: waveform ? ['BLUE', 'RGB', '3BAND'] : [],
+    // Nur was in der Datei wirklich steht, darf als Modus angeboten werden.
+    waveformModeSupported: waveform ? waveformModesFor(waveform) : [],
     sampleRate: track.sampleRate,
     checksum: track.originalSha256,
     extractedAt: Date.now(),
     filePath: extraction.analysisPath ?? track.originalMedia?.resolvedPath,
-    anlzWarnings: extraction.warnings,
+    anlzWarnings: gridNote ? [...extraction.warnings, gridNote] : extraction.warnings,
   };
 
   return {
     ...track,
     bpm,
-    beatGrid: hasAnlzBeatgrid
-      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
-      : track.beatGrid,
+    beatGrid: realBeatGrid
+      ? { ...realBeatGrid, meter: realBeatGrid.meter || track.beatGrid.meter }
+      : hasAnlzBeatgrid
+        ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
+        : track.beatGrid,
     cues,
     loops: hasAnlzLoops ? extraction.loops : track.loops,
     phrases,

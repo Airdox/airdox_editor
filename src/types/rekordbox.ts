@@ -40,6 +40,12 @@ export interface BeatGrid {
   meter: number; // 4/4 = 4
   beats: BeatNode[];
   origin: DataOrigin;
+  /**
+   * `true`, wenn die Beatliste nicht aus der Datei stammt, sondern aus Anker und
+   * Tempo fortgeschrieben wurde. Die Zeiten sind dann eine Rechnung, kein
+   * Importwert – und muss so auch dargestellt werden.
+   */
+  beatsAreDerived?: boolean;
 }
 
 export interface CuePoint {
@@ -142,6 +148,12 @@ export interface WaveformAnalysisData {
   midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
   highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
   origin: DataOrigin;
+  /**
+   * Bereiche, in denen die Kurve nicht aus der importierten Datei stammt, sondern
+   * nach einem Eingriff neu gezeichnet wurde (in Sekunden der aktuellen Timeline).
+   * Leer bzw. undefined heißt: jeder Bucket ist ein Importwert.
+   */
+  recomputed?: { startSec: number; endSec: number }[];
 }
 
 /**
@@ -222,6 +234,8 @@ export interface EditHistoryEntry {
   beatGrid?: BeatGrid;
   /** Vollständiger Arbeitsstand vor dem Eingriff: der exakte Rückweg für Undo. */
   audio?: import('../audio/pcm').PcmAudio;
+  /** Die dazugehörige Wellenform – ohne sie wäre Undo ein Neuberechnen. */
+  analysis?: WaveformAnalysisData | null;
 }
 
 export interface MultiTrackLayer {

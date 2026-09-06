@@ -752,3 +752,61 @@ export function generateRealAnlzExtFixture(
   ];
   return assembleAnlzFile(tags);
 }
+
+/** Ein Schlag aus der PQTZ-Schlagliste (Zeit in Millisekunden, Tempo ×100). */
+export interface AnlzBeatEntry {
+  beatInBar: number;
+  tempo: number;
+  timeMs: number;
+}
+
+/**
+ * ANLZ-Datei mit frei vorgegebener Schlagliste und einer Dreier-PWV7-Kurve.
+ * Gebaut für die Frage „kommt der importierte Beat bitgenau an?“ – die Zeiten
+ * dürfen auch ungleichmäßig stehen (Tempo-Änderung im Stück), so wie Rekordbox
+ * es in echten Dateien tut.
+ */
+export function generateAnlzWithBeatTimes(beats: AnlzBeatEntry[], bpm: number): ArrayBuffer {
+  const tags: AnlzTag[] = [
+    encodePpth('C:\\Music\\Tempowechsel.wav'),
+    encodePqtz(bpm, beats.length > 0 ? beats[0].timeMs : 0, beats),
+    {
+      tag: 'PWV7',
+      lenHeader: 0x18,
+      body: (() => {
+        const w = new AnlzByteWriter();
+        w.u32(3).u32(600).u32(0x00960000);
+        for (let i = 0; i < 600; i++) {
+          w.u8(30 + Math.floor(50 * Math.abs(Math.sin(i * 0.07))));
+          w.u8(60 + Math.floor(40 * Math.abs(Math.cos(i * 0.09))));
+          w.u8(90 + Math.floor(30 * Math.abs(Math.sin(i * 0.05))));
+        }
+        return w.body;
+      })(),
+    },
+  ];
+  return assembleAnlzFile(tags);
+}
+
+/**
+ * ANLZ-Datei mit Wellenform aus genau einer Lage (PWAV, 5 Bit): low = mid = high
+ * = peak. Das ist der reale Fall „Auflösung ja, aber kein Farb-Bild“.
+ */
+export function generateAnlzMonoWaveform(beatCount: number, bpm: number = 128.0): ArrayBuffer {
+  const count = 400;
+  const tags: AnlzTag[] = [
+    encodePpth('C:\\Music\\NurEineLage.wav'),
+    encodePqtz(bpm, 0, standardBeatGrid(bpm, 0, Math.max(4, beatCount))),
+    {
+      tag: 'PWAV',
+      lenHeader: 0x14,
+      body: (() => {
+        const w = new AnlzByteWriter();
+        w.u32(count).u32(0x10000);
+        for (let i = 0; i < count; i++) w.u8(8 + (i % 24));
+        return w.body;
+      })(),
+    },
+  ];
+  return assembleAnlzFile(tags);
+}

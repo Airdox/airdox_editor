@@ -309,7 +309,10 @@ export function buildDeckTrackFromDatabase(
     originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
     isOriginalUntouched: true,
     audioBuffer: null,
-    beatGrid: buildBeatGridFromTempo(0, bpm, duration, 4, DataOrigin.REKORDBOX_DB),
+    // `master.db` nennt nur das mittlere Tempo, keine Beatliste – das Raster ist
+    // hier eine Fortschreibung ab Sekunde 0 und wird als eigene Herleitung
+    // ausgewiesen. Die schlaggenauen Zeiten kommen aus der ANLZ-Datei (PQTZ).
+    beatGrid: buildBeatGridFromTempo(0, bpm, duration, 4, DataOrigin.GENERATED_FALLBACK),
     cues: partial.cues || [],
     loops: partial.loops || [],
     analysis: null,

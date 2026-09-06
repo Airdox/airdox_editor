@@ -154,175 +154,175 @@
             "index": 8,
             "time": 3.75,
             "isBarStart": true,
-            "barNumber": 3,
+            "barNumber": 4,
             "beatInBar": 1
           },
           {
             "index": 9,
             "time": 4.21875,
             "isBarStart": false,
-            "barNumber": 3,
+            "barNumber": 4,
             "beatInBar": 2
           },
           {
             "index": 10,
             "time": 4.6875,
             "isBarStart": false,
-            "barNumber": 3,
+            "barNumber": 4,
             "beatInBar": 3
           },
           {
             "index": 11,
             "time": 5.15625,
             "isBarStart": false,
-            "barNumber": 3,
+            "barNumber": 4,
             "beatInBar": 4
           },
           {
             "index": 12,
             "time": 5.625,
             "isBarStart": true,
-            "barNumber": 4,
+            "barNumber": 5,
             "beatInBar": 1
           },
           {
             "index": 13,
             "time": 6.09375,
             "isBarStart": false,
-            "barNumber": 4,
+            "barNumber": 5,
             "beatInBar": 2
           },
           {
             "index": 14,
             "time": 6.5625,
             "isBarStart": false,
-            "barNumber": 4,
+            "barNumber": 5,
             "beatInBar": 3
           },
           {
             "index": 15,
             "time": 7.03125,
             "isBarStart": false,
-            "barNumber": 4,
+            "barNumber": 5,
             "beatInBar": 4
           },
           {
             "index": 16,
             "time": 7.5,
             "isBarStart": true,
-            "barNumber": 5,
+            "barNumber": 6,
             "beatInBar": 1
           },
           {
             "index": 17,
             "time": 7.96875,
             "isBarStart": false,
-            "barNumber": 5,
+            "barNumber": 6,
             "beatInBar": 2
           },
           {
             "index": 18,
             "time": 8.4375,
             "isBarStart": false,
-            "barNumber": 5,
+            "barNumber": 6,
             "beatInBar": 3
           },
           {
             "index": 19,
             "time": 8.90625,
             "isBarStart": false,
-            "barNumber": 5,
+            "barNumber": 6,
             "beatInBar": 4
           },
           {
             "index": 20,
             "time": 9.375,
             "isBarStart": true,
-            "barNumber": 6,
+            "barNumber": 7,
             "beatInBar": 1
           },
           {
             "index": 21,
             "time": 9.84375,
             "isBarStart": false,
-            "barNumber": 6,
+            "barNumber": 7,
             "beatInBar": 2
           },
           {
             "index": 22,
             "time": 10.3125,
             "isBarStart": false,
-            "barNumber": 6,
+            "barNumber": 7,
             "beatInBar": 3
           },
           {
             "index": 23,
             "time": 10.78125,
             "isBarStart": false,
-            "barNumber": 6,
+            "barNumber": 7,
             "beatInBar": 4
           },
           {
             "index": 24,
             "time": 11.25,
             "isBarStart": true,
-            "barNumber": 7,
+            "barNumber": 8,
             "beatInBar": 1
           },
           {
             "index": 25,
             "time": 11.71875,
             "isBarStart": false,
-            "barNumber": 7,
+            "barNumber": 8,
             "beatInBar": 2
           },
           {
             "index": 26,
             "time": 12.1875,
             "isBarStart": false,
-            "barNumber": 7,
+            "barNumber": 8,
             "beatInBar": 3
           },
           {
             "index": 27,
             "time": 12.65625,
             "isBarStart": false,
-            "barNumber": 7,
+            "barNumber": 8,
             "beatInBar": 4
           },
           {
             "index": 28,
             "time": 13.125,
             "isBarStart": true,
-            "barNumber": 8,
+            "barNumber": 9,
             "beatInBar": 1
           },
           {
             "index": 29,
             "time": 13.59375,
             "isBarStart": false,
-            "barNumber": 8,
+            "barNumber": 9,
             "beatInBar": 2
           },
           {
             "index": 30,
             "time": 14.0625,
             "isBarStart": false,
-            "barNumber": 8,
+            "barNumber": 9,
             "beatInBar": 3
           },
           {
             "index": 31,
             "time": 14.53125,
             "isBarStart": false,
-            "barNumber": 8,
+            "barNumber": 9,
             "beatInBar": 4
           },
           {
             "index": 32,
             "time": 15,
             "isBarStart": true,
-            "barNumber": 9,
+            "barNumber": 10,
             "beatInBar": 1
           }
         ]

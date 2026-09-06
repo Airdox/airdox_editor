@@ -27,7 +27,11 @@ Ein-/Ausstieg, Schleife, Vorschau mit oder ohne Angleichung, Einfügen in die
 aktive Spur – derselbe Spieler, der unten im Kontrollblock läuft.
 
 Stand und offene Punkte: [VORHABEN.md](VORHABEN.md) · Windows-Build: [BUILD-WINDOWS.md](BUILD-WINDOWS.md) ·
-Woher die Wellenform-Daten kommen: [WELLENFORM-DATEN.md](WELLENFORM-DATEN.md) ·
+Maßstab für jede Daten-Änderung: Rekordbox ist die Analyse-Engine – Beatgrid,
+Tempo, Cues und alle Wellenform-Auflösungen werden eingelesen und dargestellt,
+nichts davon wird neu erfunden. Ausnahmen sind am Wert beschriftet
+(`origin`, `recomputed`) und im Editor sichtbar. Nachweis:
+`npm run proof:source-of-truth`. Details in [WELLENFORM-DATEN.md](WELLENFORM-DATEN.md) ·
 Stem-Dateien (Recherche, nichts gebaut): [STEMS-RECHERCHE.md](STEMS-RECHERCHE.md)
 
 ## Entwicklung
@@ -45,6 +49,7 @@ npm run proof:edit-workflow  # Schnitt-Nachweis inklusive WAVs und NACHWEIS.md
 npm run proof:clip-library   # Clip-Bibliothek: Pegel, Konsistenz, Drag & Drop, Ablagezeit
 npm run proof:waveform-colors # Farbtreue der Wellenform (AMBER, BLUE, RGB, 3BAND)
 npm run proof:project        # Projektdatei: Speichern, Öffnen, Validierung
+npm run proof:source-of-truth  # Nachweis: alle Werte kommen aus ANLZ/DB, Eigenrechnung nur als ausgewiesener Ausnahmefall
 ```
 
 ## Windows-Paket (ohne Visual Studio)

@@ -39,6 +39,62 @@ export function buildBeatGridFromTempo(
     meter,
     beats,
     origin,
+    // Diese Liste ist per Definition eine Fortschreibung: Jede Datei mit eigenen
+    // Beatzeiten (PQTZ) gewinnt und wird unverändert übernommen.
+    beatsAreDerived: true,
+  };
+}
+
+/**
+ * Beatgrid aus der TEMPO-Liste der XML. Jeder Eintrag verankert einen Schlag an
+ * seiner `Inizio`-Zeit und gilt bis zum nächsten Eintrag – die Beatlage folgt
+ * damit den importierten Ankerpunkten und nicht einem einzigen mittleren Tempo.
+ * Fortgeschrieben wird nur zwischen den Ankern (`beatsAreDerived`).
+ */
+export function buildBeatGridFromTempoPoints(
+  points: { startTime: number; bpm: number; meter?: number }[],
+  totalDurationSec: number,
+  meter: number = 4,
+  origin: DataOrigin = DataOrigin.REKORDBOX_XML
+): BeatGrid {
+  const anchors = points
+    .filter((point) => point.bpm > 0)
+    .sort((a, b) => a.startTime - b.startTime);
+  if (anchors.length === 0) {
+    return buildBeatGridFromTempo(0, 120, totalDurationSec, meter, origin);
+  }
+  const beats: BeatNode[] = [];
+  const push = (time: number) => {
+    const index = beats.length;
+    beats.push({
+      index,
+      time,
+      isBarStart: index % meter === 0,
+      barNumber: Math.floor(index / meter) + 1,
+      beatInBar: (index % meter) + 1,
+    });
+  };
+  for (let s = 0; s < anchors.length; s++) {
+    const secondsPerBeat = 60.0 / anchors[s].bpm;
+    const limit = s + 1 < anchors.length ? anchors[s + 1].startTime : totalDurationSec;
+    let time = anchors[s].startTime;
+    while (time < limit - 1e-9) {
+      push(time);
+      time += secondsPerBeat;
+    }
+    if (s + 1 >= anchors.length) {
+      // Wie bisher ein Schlag über das Ende hinaus, damit die letzte Zeitspanne
+      // des Stücks ein Raster hat.
+      push(time);
+    }
+  }
+  return {
+    firstBeat: anchors[0].startTime,
+    bpm: anchors[0].bpm,
+    meter,
+    beats,
+    origin,
+    beatsAreDerived: true,
   };
 }
 
@@ -222,24 +278,43 @@ function parseSingleTrackNode(
     }
   }
 
-  // Parse TEMPO (Beatgrid)
-  const tempoEl = el.querySelector('TEMPO');
+  // Parse TEMPO (Beatgrid) – alle Einträge, nicht nur den ersten: jeder gilt ab
+  // seiner `Inizio`-Zeit, und `Metro` nennt das Taktmaß. Beides steht in der
+  // Datei und wird deshalb benutzt; nur die Schläge dazwischen sind Rechnung.
+  const tempoEntries: { startTime: number; bpm: number; meter: number }[] = [];
+  el.querySelectorAll('TEMPO').forEach((tempoEl: any) => {
+    const entryBpm = parseFloat(tempoEl.getAttribute('Bpm') || '0');
+    if (!(entryBpm > 0)) return;
+    const entryStart = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
+    const metro = String(tempoEl.getAttribute('Metro') || '').match(/^\s*(\d+)\s*\/\s*(\d+)/);
+    tempoEntries.push({
+      startTime: Number.isFinite(entryStart) ? entryStart : 0,
+      bpm: entryBpm,
+      meter: metro ? Math.max(1, parseInt(metro[1], 10)) : 4,
+    });
+  });
+  tempoEntries.sort((a, b) => a.startTime - b.startTime);
+
   let firstBeat = 0.0;
   let tempoBpm = bpm;
-  if (tempoEl) {
-    firstBeat = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
-    tempoBpm = parseFloat(tempoEl.getAttribute('Bpm') || bpm.toString());
+  let meter = 4;
+  if (tempoEntries.length > 0) {
+    firstBeat = tempoEntries[0].startTime;
+    tempoBpm = tempoEntries[0].bpm;
+    meter = tempoEntries[0].meter;
   }
 
   // A complete grid contains hundreds of objects per song.  Keep collection
   // imports compact; the full grid is reconstructed only for the track loaded
   // into a deck.
   const beatGrid = buildDenseBeatGrid
-    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, 4, DataOrigin.REKORDBOX_XML)
+    ? tempoEntries.length > 1
+      ? buildBeatGridFromTempoPoints(tempoEntries, duration, meter, DataOrigin.REKORDBOX_XML)
+      : buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
     : {
         firstBeat,
         bpm: tempoBpm,
-        meter: 4,
+        meter,
         beats: [],
         origin: DataOrigin.REKORDBOX_XML,
       };

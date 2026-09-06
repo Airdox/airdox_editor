@@ -290,6 +290,26 @@ function createWaveform(
 // PQTZ beat grid
 // ---------------------------------------------------------------------------
 
+/** Häufigster Abstand zweier Taktanfänge aus der importierten Beatliste. */
+function inferMeter(beats: BeatNode[]): number {
+  const starts = beats.filter((beat) => beat.isBarStart).map((beat) => beat.index);
+  if (starts.length < 2) return 4;
+  const gaps = new Map<number, number>();
+  for (let i = 1; i < starts.length; i++) {
+    const gap = starts[i] - starts[i - 1];
+    if (gap > 0) gaps.set(gap, (gaps.get(gap) ?? 0) + 1);
+  }
+  let best = 4;
+  let bestCount = 0;
+  for (const [gap, count] of gaps) {
+    if (count > bestCount) {
+      best = gap;
+      bestCount = count;
+    }
+  }
+  return best > 0 && best <= 32 ? best : 4;
+}
+
 function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid | undefined {
   // Real layout: len_header 0x18; u4 unknown, u4 unknown2, u4 len_beats,
   // then 8-byte entries (u2 beat, u2 tempo*100, u4 time ms).
@@ -315,7 +335,9 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
   return {
     firstBeat: beats[0].time,
     bpm: view.getUint16(entriesStart + 2, false) / 100,
-    meter: 4,
+    // Taktmaß aus den importierten Werten ablesen (häufigster Abstand zweier
+    // Taktanfänge) statt 4/4 anzunehmen; ohne Taktanfänge bleibt 4.
+    meter: inferMeter(beats),
     beats,
     origin: DataOrigin.REKORDBOX_ANLZ,
   };

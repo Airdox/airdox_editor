@@ -15,10 +15,12 @@ import {
   DataOrigin,
   EditHistoryEntry,
   CuePoint,
+  WaveformAnalysisData,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { logger } from './utils/logger';
 import { analyzeAudioBuffer, analyzePcm } from './waveform/analyzer';
+import { carryAnalysisThroughEdit, type AnalysisEdit } from './waveform/editAnalysis';
 import {
   CLIP_LIBRARY_LABEL,
   addClip,
@@ -144,7 +146,9 @@ function buildCollectionTrackModel(
     originalSha256: pt.originalSha256 || `sha256-rb-${idx}`,
     isOriginalUntouched: true,
     audioBuffer: pt.audioBuffer || null,
-    beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration),
+    // Kein Importwert bekannt (Anker 0 s, nur ein BPM) – also als eigene
+    // Herleitung beschriften, nicht als Bibliotheksdatum.
+    beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration, 4, DataOrigin.GENERATED_FALLBACK),
     cues: pt.cues || [],
     loops: pt.loops || [],
     analysis: pt.analysis || null,
@@ -165,6 +169,39 @@ function buildCollectionTrackModel(
       },
     ],
   };
+}
+
+/**
+ * Zuordnung Editier-Protokoll → Wellenform-Eingriff. Was hier nicht auftaucht,
+ * wird vollständig neu gezeichnet und bleibt als PROJECT beschriftet – still-
+ * schweigend ersetzen gibt es nicht.
+ */
+function analysisEditFor(report: EditReport): AnalysisEdit | undefined {
+  switch (report.kind) {
+    case 'REMOVE_RANGE':
+      return { kind: 'remove', startSec: report.sourceStart, endSec: report.sourceEnd };
+    case 'MOVE_TO_START':
+      return {
+        kind: 'move',
+        fromStart: report.sourceStart,
+        fromEnd: report.sourceEnd,
+        toStart: report.targetStart,
+      };
+    case 'INSERT_CLIP':
+    case 'PASTE_AT':
+    case 'COPY_TO_END':
+      return {
+        kind: 'insert',
+        atSec: report.targetStart,
+        lengthSec: Math.max(0, report.targetEnd - report.targetStart),
+      };
+    case 'REPLACE_RANGE':
+    case 'OVERDUB_RANGE':
+    case 'SILENCE_RANGE':
+      return { kind: 'overlay', startSec: report.targetStart, endSec: report.targetEnd };
+    default:
+      return undefined;
+  }
 }
 
 export default function App() {
@@ -283,25 +320,53 @@ export default function App() {
    * Wiedergabepuffer und Schmutz-Markierung. Das Original (audioBuffer) bleibt.
    */
   const commitEditable = useCallback(
-    (trackId: string, next: EditableAudio, options: { selection?: SelectionRange | null; touch?: boolean } = {}) => {
+    (
+      trackId: string,
+      next: EditableAudio,
+      options: {
+        selection?: SelectionRange | null;
+        touch?: boolean;
+        /** Der Eingriff dahinter – damit die importierte Kurve getragen wird. */
+        analysisEdit?: AnalysisEdit;
+        /** Fertige Kurve aus der Geschichte (Undo/Redo): nichts wird neu gerechnet. */
+        analysis?: WaveformAnalysisData | null;
+      } = {}
+    ) => {
       const ctx = audioEngine.getContext();
       const buffer = pcmToAudioBuffer(ctx, next.audio);
       setWorkingPcm(next.audio);
       setWorkingAudioBuffer(buffer);
+      const nextDuration = Math.round(pcmDuration(next.audio) * 1e6) / 1e6;
       setTracks((prev) =>
-        prev.map((track) =>
-          track.id === trackId
-            ? {
-                ...track,
-                workingPcm: next.audio,
-                duration: Math.round(pcmDuration(next.audio) * 1e6) / 1e6,
-                cues: next.cues,
-                loops: next.loops,
-                beatGrid: next.beatGrid,
-                analysis: analyzePcm(next.audio, DataOrigin.PROJECT),
-              }
-            : track
-        )
+        prev.map((track) => {
+          if (track.id !== trackId) return track;
+          // Kein Neuanalyse-Zwang nach einem Eingriff: die importierten Buckets
+          // werden im Bucket-Raster mitgetragen, nur das berührte Fenster wird in
+          // der Auflösung der importierten Spur neu gezeichnet.
+          const carried =
+            options.analysis === undefined && options.analysisEdit
+              ? carryAnalysisThroughEdit(
+                  track.analysis,
+                  track.duration,
+                  options.analysisEdit,
+                  next.audio,
+                  nextDuration
+                )
+              : null;
+          const analysis =
+            options.analysis !== undefined
+              ? options.analysis
+              : carried?.analysis ?? analyzePcm(next.audio, DataOrigin.PROJECT);
+          return {
+            ...track,
+            workingPcm: next.audio,
+            duration: nextDuration,
+            cues: next.cues,
+            loops: next.loops,
+            beatGrid: next.beatGrid,
+            analysis,
+          };
+        })
       );
       if (options.selection !== undefined) setSelection(options.selection);
       if (options.touch !== false) setIsDirty(true);
@@ -551,6 +616,7 @@ export default function App() {
       loops: activeTrack.loops.map((l) => ({ ...l })),
       beatGrid: activeTrack.beatGrid,
       audio: trackPcm(activeTrack) ?? undefined,
+      analysis: activeTrack.analysis ?? null,
     };
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
     setRedoStack([]);
@@ -571,6 +637,7 @@ export default function App() {
       loops: activeTrack.loops.map((l) => ({ ...l })),
       beatGrid: activeTrack.beatGrid,
       audio: trackPcm(activeTrack) ?? undefined,
+      analysis: activeTrack.analysis ?? null,
     };
     setRedoStack((prev) => [...prev, currentSnapshot]);
 
@@ -583,7 +650,7 @@ export default function App() {
           loops: previous.loops ?? [],
           beatGrid: previous.beatGrid ?? activeTrack.beatGrid,
         },
-        { selection: previous.selection }
+        { selection: previous.selection, analysis: previous.analysis }
       );
     } else if (activeTrack.audioBuffer) {
       // Alter Stand ohne Sample-Snapshot: aus den Segmenten neu aufbauen.
@@ -609,6 +676,7 @@ export default function App() {
       loops: activeTrack.loops.map((l) => ({ ...l })),
       beatGrid: activeTrack.beatGrid,
       audio: trackPcm(activeTrack) ?? undefined,
+      analysis: activeTrack.analysis ?? null,
     };
     setUndoStack((prev) => [...prev, currentSnapshot]);
 
@@ -621,7 +689,7 @@ export default function App() {
           loops: next.loops ?? [],
           beatGrid: next.beatGrid ?? activeTrack.beatGrid,
         },
-        { selection: next.selection }
+        { selection: next.selection, analysis: next.analysis }
       );
     } else if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
@@ -648,6 +716,7 @@ export default function App() {
     const outcome = operation(editable);
     commitEditable(activeTrack.id, outcome.target, {
       selection: options.newSelection === undefined ? selection : options.newSelection,
+      analysisEdit: analysisEditFor(outcome.report),
     });
     reportFeedback(activeTrack, outcome.report, title);
     if (outcome.report.warnings.length > 0) {

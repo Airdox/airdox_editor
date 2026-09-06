@@ -238,7 +238,11 @@ runTest('Deck expansion', 'Builds a playable-format TrackModel without synthetic
   assertEqual(deck.audioBuffer, null, 'No synthetic audio');
   assertEqual(deck.beatGrid.bpm, 128, 'Beat grid bpm');
   assert(deck.beatGrid.beats.length > 0, 'Dense grid generated on load');
-  assertEqual(deck.beatGrid.origin, DataOrigin.REKORDBOX_DB, 'Beat grid DB origin');
+  // Die `master.db` nennt nur das mittlere Tempo, keine Beatliste: das Raster ab
+  // Sekunde 0 ist eine Fortschreibung und muss als eigene Herleitung ausgewiesen
+  // bleiben. Schlaggenaue Beatzeiten kommen aus PQTZ der ANLZ-Datei (100-%-Regel:
+  // kein Rekordbox-Herkunftsetikett für Werte, die Rekordbox nicht geliefert hat).
+  assertEqual(deck.beatGrid.origin, DataOrigin.GENERATED_FALLBACK, 'Beat grid origin marks own derivation');
   assertEqual(deck.origin, DataOrigin.REKORDBOX_DB, 'Track DB origin');
   assertEqual(deck.originalSha256, 'NOT_COMPUTED_READ_ONLY_SOURCE', 'Read-only checksum marker');
 });

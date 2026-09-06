@@ -17,6 +17,8 @@ import {
   SelectionRange,
   CuePoint,
 } from '../types/rekordbox';
+import { analysisSourceLabel } from '../waveform/analyzer';
+import { recomputedBucketCount } from '../waveform/editAnalysis';
 import {
   AMBER_ACCENT,
   AMBER_ACCENT_LINE,
@@ -694,6 +696,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     }
   };
 
+  // Wie viele Buckets nicht aus der Importkurve stammen – nach einem Eingriff der
+  // ehrliche Hinweis darauf, dass nur dieses Fenster neu gezeichnet wurde.
+  const drawnBuckets = track.analysis ? recomputedBucketCount(track.analysis, track.duration) : 0;
+  const gridLabel = track.beatGrid.beatsAreDerived
+    ? `GRID ${track.beatGrid.bpm.toFixed(1)} BPM · FORTGESCHRIEBEN`
+    : `GRID ${track.beatGrid.bpm.toFixed(1)} BPM · IMPORTIERT`;
+
   return (
     <div
       ref={containerRef}
@@ -993,7 +1002,14 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             </span>
             <span className="text-neutral-600">•</span>
             <span className="text-neutral-400">
-              {track.analysis?.length || 0} WAVEFORM BUCKETS
+              {track.analysis?.length || 0} WAVEFORM BUCKETS · {analysisSourceLabel(track.analysis?.origin)}
+              {drawnBuckets > 0 && (
+                <span className="text-amber-400"> · {drawnBuckets} NEU GEZEICHNET</span>
+              )}
+            </span>
+            <span className="text-neutral-600">•</span>
+            <span className={track.beatGrid.beatsAreDerived ? 'text-amber-400' : 'text-neutral-400'}>
+              {gridLabel}
             </span>
             {track.phrases && track.phrases.length > 0 && (
               <>

@@ -32,7 +32,7 @@ Ziel: 128 BPM → Verhältnis 1.066667 (Soll-Länge 661500 Samples = 8 Takte à 
 | 19 | Ersetzen in fremdes Tempo: Taktzahl bleibt, Rest der Spur rückt nicht | Länge der Spur gleich, Inhalt 8 Takte | ersetzt ab 7.5000 s über 661500 Samples, Spur bleibt 1323000 Samples | ✓ |
 | 20 | describeClipFit: Text der Oberfläche rechnet wie die Ablage | Plan-Text mit Ziel-BPM und Prozent | 120.0 → 128.0 BPM (+6.7 %, 16.000 s → 15.000 s), Tonhöhe bleibt | ✓ |
 | 21 | WSOLA: für kurzes Material brauchbar, Länge stimmt | ±1 Rahmen um 661500 | Fallback-Methode vocoder; WSOLA am langen Clip: 661500 Samples (Δ 0), 651 Rahmen | ✓ |
-| 22 | Kosten: acht Takte Material in nützlicher Frist | unter 4 s für 16 s Material in Stereo | 1149 ms für 16.0 s Stereo bei 44100 Hz (72 ms pro Sekunde Audio) | ✓ |
+| 22 | Kosten: acht Takte Material in nützlicher Frist | unter 4 s für 16 s Material in Stereo | 869 ms für 16.0 s Stereo bei 44100 Hz (54 ms pro Sekunde Audio) | ✓ |
 
 Wege: `phaseVocodeStretch` (Tonhöhe bleibt – Rahmenlänge 46 ms, 75 % Überlappung,
 Phasenfortschritt je Tonne auf den Synthesefahrplan gerechnet), `resamplePcm`

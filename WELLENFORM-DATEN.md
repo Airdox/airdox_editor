@@ -21,6 +21,43 @@ entweder die ANLZ-Datei der Rekordbox gelesen oder das Audio selbst analysiert w
 Ein Track, dem beides fehlt, bleibt ein reiner Metadaten-Track mit `analysis: null`,
 und das Deck zeigt den Hinweis „Kein Track geladen“ statt einer erfundenen Kurve.
 
+## Regel: 100 % Rekordbox-Daten
+
+Project Goal dieses Projekts ist: „Alle visuellen und zeitlichen Daten müssen zu
+100 % aus den realen Rekordbox/Hackerblocks-Daten stammen … Eine eigene
+Analyse-Engine ist nicht das Ziel." Daraus folgt für den Code-Pfad:
+
+* **Rekordbox analysiert, wir importieren, modellieren, zeichnen und schneiden.**
+  `analyzePcm` in `src/waveform/analyzer.ts` ist die einzige Stelle, die selbst
+  rechnet, und sie arbeitet ausschließlich dort, wo Rekordbox nichts geliefert hat
+  (eigene WAV-Datei, Demospur) oder wo ein Eingriff Material erzeugt hat, das in
+  keiner Importkurve steht.
+* **Originaldaten gewinnen.** Steht ein Wert in der Datei, wird genau dieser Wert
+  dargestellt: Beatzeit aus PQTZ (nicht `firstBeat + i · 60/bpm`), Bucket aus
+  PWAV/PWV3…PWV7, Taktanfang und Schlag-im-Takt aus den importierten Einträgen,
+  Taktmaß aus dem Abstand der Taktanfänge (`inferMeter` in `anlzParser.ts`) bzw.
+  aus `Metro` der XML; in der XML zählt jeder `<TEMPO>`-Eintrag, nicht nur der
+  erste (`buildBeatGridFromTempoPoints` in `xmlParser.ts`).
+* **Kein stillschweigender Fallback.** Jede Abweichung trägt ein Etikett:
+  `origin` an Analyse und Beatgrid, `beatGrid.beatsAreDerived` für Raster, die aus
+  Anker und Tempo fortgeschrieben statt eingelesen wurden (im Editor:
+  „GRID 128.0 BPM · FORTGESCHRIEBEN"),"  `recomputed` an der Kurve (Zeiträume eigener
+  Rechnung) und der Klartext daneben in der Detail-Wellenform
+  (`analysisSourceLabel`: „AUS DER ANALYSE-DATEI", „NACH DEM SCHNITT NEU
+  GEZEICHNET", „EIGENBERECHNUNG – KEINE REKORDBOX-DATEN" …). Ein Raster, das nur
+  aus dem mittleren Tempo der `master.db` fortgeschrieben wurde, heißt
+  `GENERATED_FALLBACK` und nicht `REKORDBOX_DB`.
+* **Nur anbieten, was die Daten hergeben.** `waveformModesFor` meldet `RGB` und
+  `3BAND` nur, wenn tatsächlich verschiedene Bänder (bzw. getrennte Kanäle)
+  importiert wurden; eine Kurve aus einer Lage (PWAV/PWV2) bleibt `BLUE`.
+* **Bearbeiten ≠ neu analysieren.** Eingriffe tragen die Importkurve im
+  Bucket-Raster mit (`src/waveform/editAnalysis.ts`), siehe Schritt 4.
+* Nachweis: `npm run proof:source-of-truth`
+  (`tests/rekordbox-source-of-truth.test.ts`, Messwerte in
+  `tests/artifacts/rekordbox-source-of-truth/NACHWEIS.md`) – die Suite ist in
+  `npm test` eingebunden und enthält Negativkontrollen: Ein fortgeschriebenes
+  Raster müsste an den Fixture-Werten mit Tempo-Wechsel scheitern.
+
 ## Schritt 1 – XML-Import: die Bibliothek wird gefüllt, die Welle noch nicht
 
 `handleImportXmlFile` → `loadXmlFile(file)` → `parseRekordboxXmlAsync(text, onProgress)`:
@@ -126,21 +163,38 @@ Tonträger ab (Ordner `<Dateiname>.<Endung>/ANLZ/…`). Die App **rät diesen Pf
 sondern fragt im Dialog nach – so kann eine Verwechslung mit einem anderen Track gar
 nicht erst passieren.
 
-## Schritt 4 – Nach jedem Schnitt wird neu gerechnet
+## Schritt 4 – Nach einem Schnitt wird die Kurve getragen
 
 Der einzige Weg, Audio zu ändern, ist `commitEditable(trackId, target, …)` in
 `src/App.tsx`:
 
 1. `workingPcm` (PCM der Arbeitskopie) ist Maß aller Dinge.
-2. Daraus entstehen `audioBuffer` für die Wiedergabe (`pcmToAudioBuffer`) und
-   `analysis = analyzePcm(next.audio, …)`.
-3. `workingSegments` ist nur noch Provenienz-Protokoll fürs Projekt, nicht die
+2. Daraus entsteht `audioBuffer` für die Wiedergabe (`pcmToAudioBuffer`).
+3. Die Wellenform wird **nicht** pauschal neu gerechnet. `applyEdit` übergibt den
+   Eingriff als `AnalysisEdit` (`analysisEditFor(report)`), und
+   `carryAnalysisThroughEdit` (`src/waveform/editAnalysis.ts`) überträgt die
+   vorhandene Kurve im Bucket-Raster: Zeit pro Bucket bleibt
+   `Spurdauer / Bucketanzahl`, also sind Schnitt, Einfügen, Überlagern und
+   Verschub im Eimer-Raster dasselbe Wegnehmen, Einfügen, Ersetzen und Umhängen
+   bei ganzzahligen Indizes. Unberührte Eimer bleiben Bit für Bit dieselben
+   Importwerte; gerechnet wird nur das Fenster, das das Material selbst nicht mehr
+   hergibt – mit `analyzePcmWindow` in genau der Auflösung der importierten Spur.
+   Ein reiner Verschub rechnet gar nichts.
+4. Was trotzdem gerechnet werden musste, steht als `analysis.recomputed` (Liste von
+   Zeitbereichen) und erscheint neben den Buckets als „n NEU GEZEICHNET".
+5. `workingSegments` ist nur noch Provenienz-Protokoll fürs Projekt, nicht die
    Zeichengrundlage.
+6. Undo/Redo stellen den kompletten Schnappschuss wieder her – seit diese Phase
+   gehört die Wellenform dazu (`EditHistoryEntry.analysis`): Zurücknehmen wirft
+   die Importkurve nicht weg, sondern setzt sie exakt wieder ein.
+7. Nur wenn gar nichts zu tragen ist (eigene WAV-Datei, Demospur, Kurve fehlt)
+   rechnet `analyzePcm(next.audio, DataOrigin.PROJECT)` die Spur vollständig – das
+   ist der ausgewiesene Ausnahmefall, kein Umbiegen der Daten.
 
-Das heißt: Nach Einfügen, Löschen, Darüberlegen, Ersetzen oder einem Undo steht die
-Wellenform wieder mit den Samples in Einklang – es werden keine Buckets verschoben
-oder alt weitergereicht. Undo/Redo stellen den kompletten Schnappschuss
-(Samples, Marker, Loops, Grid) wieder her, und die Analyse läuft erneut.
+Quantisierung, ehrlich benannt: Ein Schnitt, der nicht auf einer Bucketgrenze
+liegt, verschibt den Rest um höchstens einen Eimer (bei einer 8019-Eimer-Kurve
+eines Drei-Minuten-Stücks sind das ~0,4 ms). Das Beatgrid wird davon nicht
+berührt: Es folgt den Zeiten, nicht den Eimern.
 
 ## Schritt 5 – Projektdatei
 
@@ -150,6 +204,16 @@ dekodiert (`decodeAudioBlock`), als `AudioBuffer` aufbereitet und mit
 `analyzePcm(pcm, DataOrigin.PROJECT)` neu analysiert. Die Wellenform eines geöffneten
 Projekts ist also dieselbe Rechnung wie bei Schritt 2, nur auf der gespeicherten
 Arbeitskopie – und quantisiert durch 16 Bit um höchstens ein halbes LSB.
+
+**Bekannte Grenze (offen, nicht stillschweigend):** Die Projektdatei speichert die
+importierten Eimer nicht, weil 8000 Eimer × 6 Bänder den JSON-Block aufblähen
+würden. Nach dem Öffnen eines Projekts ist die Kurve deshalb eine Eigenzeichnung
+(`PROJECT`, im Editor beschriftet), obwohl die Originalkurve in der ANLZ-Datei
+weiter existiert. Zwei Wege, das zu schließen – beide am Datenpfad, keiner als
+neue Analyse-Engine: (a) die ANLZ-Datei beim Laden erneut lesen, wenn sie neben
+dem Tonträger liegt, oder (b) die importierten Eimer komprimiert (Int16-Paare pro
+Bucket) in den Projektblock legen. Schritt (a) ist bevorzugt, weil er nichts
+Dubliziert.
 
 ## Schritt 6 – Darstellung
 
