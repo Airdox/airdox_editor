@@ -27,6 +27,7 @@ interface MenuBarProps {
   browserOpen: boolean;
   onToggleBrowser: () => void;
   onShowInfo: () => void;
+  onShowAbout?: () => void;
   onOpenDatabaseInspector?: () => void;
   onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
@@ -51,6 +52,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   browserOpen,
   onToggleBrowser,
   onShowInfo,
+  onShowAbout,
   onOpenDatabaseInspector,
   onOpenXmlCollection,
   onOpenSystemLogs,
@@ -279,10 +281,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 Rekordbox Daten & Originalschutz...
               </button>
               <button
-                onClick={() => { setActiveMenu(null); }}
+                onClick={() => { onShowAbout?.(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
               >
-                Über Rekordbox DJ Audio Editor
+                Über Airdox Smart Editor
               </button>
               <div className="border-t border-[#2b2d35] my-1" />
               <button

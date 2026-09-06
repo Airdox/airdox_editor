@@ -1,13 +1,18 @@
 /**
  * @license
- * Rekordbox TitleBar Component
- * Windows-style title bar with Rekordbox logo and window controls
+ * Airdox TitleBar Component
+ * Windows-style title bar with app branding, version badge and window controls
  */
 
 import React from 'react';
 import { Minus, Square, X } from 'lucide-react';
+import { APP_NAME, APP_VERSION_LABEL } from '../version';
 
-export const TitleBar: React.FC = () => {
+interface TitleBarProps {
+  onShowAbout?: () => void;
+}
+
+export const TitleBar: React.FC<TitleBarProps> = ({ onShowAbout }) => {
   return (
     <div className="h-7 bg-[#0a0b0d] border-b border-[#18191d] flex items-center justify-between px-2 text-xs select-none z-50">
       {/* Left: Pioneer Rekordbox branding logo & name */}
@@ -17,8 +22,15 @@ export const TitleBar: React.FC = () => {
           <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
         </div>
         <span className="font-semibold text-neutral-300 tracking-tight text-[11px] font-sans">
-          rekordbox
+          {APP_NAME}
         </span>
+        <button
+          onClick={onShowAbout}
+          className="px-1.5 rounded-sm text-[10px] font-mono text-neutral-500 hover:text-white hover:bg-[#202228] transition-colors"
+          title={`Über ${APP_NAME}`}
+        >
+          {APP_VERSION_LABEL}
+        </button>
       </div>
 
       {/* Right: Windows window controls */}

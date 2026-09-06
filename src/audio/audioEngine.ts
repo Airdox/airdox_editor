@@ -5,8 +5,9 @@
  * Non-destructive Edit Graph playback, and WAV export.
  */
 
-import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
+import { EditSegment, EffectTrack, TrackModel, PaletteClip } from '../types/rekordbox';
 import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
+import { applyEffectTracks } from './effectEngine';
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -173,7 +174,8 @@ class AudioEngine {
    */
   public renderWorkingAudio(
     originalBuffer: AudioBuffer,
-    segments: EditSegment[]
+    segments: EditSegment[],
+    effectTracks?: EffectTrack[]
   ): AudioBuffer {
     const ctx = this.init();
     if (!segments || segments.length === 0) {
@@ -226,6 +228,10 @@ class AudioEngine {
             }
           }
         }
+      }
+
+      if (effectTracks && effectTracks.length > 0) {
+        applyEffectTracks(outCh, effectTracks, sampleRate);
       }
     }
 

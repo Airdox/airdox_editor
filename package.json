@@ -1,8 +1,8 @@
 {
-  "name": "airdox_editor",
+  "name": "airdox_smart_editor",
   "private": true,
-  "version": "0.1.0",
-  "description": "Professional Rekordbox-style DJ audio editor with non-destructive Rekordbox XML/ANLZ/DB import and desktop export.",
+  "version": "0.2.0",
+  "description": "Airdox Smart Editor - non-destructive DJ audio editor with Rekordbox XML/ANLZ/DB import and desktop export.",
   "author": "Airdox",
   "type": "module",
   "main": "electron/main.cjs",
@@ -17,7 +17,7 @@
     "clean": "rm -rf dist server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && tsx tests/effect-engine.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -50,24 +50,28 @@
     "better-sqlite3-multiple-ciphers": "^12.11.1"
   },
   "build": {
-    "appId": "info.airdox.rekordboxdesktopimport",
-    "productName": "Rekordbox Desktop Import",
+    "appId": "info.airdox.smarteditor",
+    "productName": "Airdox Smart Editor",
     "files": [
       "dist/**/*",
       "electron/**/*",
       "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "npmRebuild": false,
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,

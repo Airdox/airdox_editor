@@ -45,6 +45,7 @@ import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
+import { AboutModal } from './components/Modals/AboutModal';
 import { ExportModal } from './components/Modals/ExportModal';
 import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
 import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportModal';
@@ -230,6 +231,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
+  const [aboutModalOpen, setAboutModalOpen] = useState<boolean>(false);
   const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
   const [dbExtractionModalOpen, setDbExtractionModalOpen] = useState<boolean>(false);
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
@@ -1799,7 +1801,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* 1. Top Windows-style Titlebar */}
-      <TitleBar />
+      <TitleBar onShowAbout={() => setAboutModalOpen(true)} />
 
       {/* 2. Menu bar (Datei, Bearbeiten, Betrachten, Hilfe) */}
       <MenuBar
@@ -1824,6 +1826,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         browserOpen={browserOpen}
         onToggleBrowser={() => setBrowserOpen(!browserOpen)}
         onShowInfo={() => setInfoModalOpen(true)}
+        onShowAbout={() => setAboutModalOpen(true)}
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
@@ -1997,6 +2000,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
+      {aboutModalOpen && <AboutModal onClose={() => setAboutModalOpen(false)} />}
+
       {activeTrack && (
         <>
           <ProjectInfoModal

@@ -130,6 +130,39 @@ export interface EditSegment {
   gain: number;
 }
 
+export type EffectType = 'GAIN' | 'LOWPASS' | 'ECHO';
+
+export interface EffectParams {
+  /** GAIN: linear factor (1 = unchanged). */
+  amount?: number;
+  /** LOWPASS: -3 dB corner frequency in Hz. */
+  cutoffHz?: number;
+  /** ECHO: delay time in seconds. */
+  delayTime?: number;
+  /** ECHO: feedback amount [0, 0.95). */
+  feedback?: number;
+  /** ECHO: wet/dry mix [0, 1]. */
+  mix?: number;
+}
+
+export interface EffectSegment {
+  id: string;
+  type: EffectType;
+  /** Project timeline start in seconds. */
+  startTime: number;
+  /** Project timeline end in seconds. */
+  endTime: number;
+  params: EffectParams;
+  bypass?: boolean;
+}
+
+export interface EffectTrack {
+  id: string;
+  name: string;
+  muted?: boolean;
+  segments: EffectSegment[];
+}
+
 export interface WaveformAnalysisData {
   length: number;
   peaks: Float32Array; // max amplitude per bucket

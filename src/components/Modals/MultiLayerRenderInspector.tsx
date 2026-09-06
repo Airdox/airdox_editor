@@ -8,7 +8,7 @@
  * - Sequential render step progress and final master packaging
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Layers, 
   Sparkles, 
@@ -23,12 +23,20 @@ import {
   Zap,
   Clock
 } from 'lucide-react';
-import { TrackModel, PaletteClip } from '../../types/rekordbox';
+import { TrackModel, PaletteClip, EditOperationType } from '../../types/rekordbox';
+
+export type RenderLayerType =
+  | 'ORIGINAL_STEM'
+  | 'AUDIO_CLIP'
+  | 'REPLACE'
+  | 'OVERDUB'
+  | 'CUT'
+  | 'MASTER_CHAIN';
 
 export interface RenderLayerItem {
   id: string;
   name: string;
-  type: 'ORIGINAL_STEM' | 'AUDIO_CLIP' | 'COLOR_FX' | 'BEAT_FX' | 'MASTER_CHAIN';
+  type: RenderLayerType;
   sourceFile: string;
   timeRange: string;
   startSec: number;
@@ -47,6 +55,34 @@ interface MultiLayerRenderInspectorProps {
   onCancel: () => void;
 }
 
+/** mm:ss.d */
+function formatTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+}
+
+const LAYER_META: Record<
+  RenderLayerType,
+  { label: string; accentColor: string }
+> = {
+  ORIGINAL_STEM: { label: 'Original-Abschnitt', accentColor: '#0088ff' },
+  AUDIO_CLIP: { label: 'Eingefügter Schnipsel', accentColor: '#10b981' },
+  REPLACE: { label: 'Ersetzter Bereich', accentColor: '#f59e0b' },
+  OVERDUB: { label: 'Overdub-Auflage', accentColor: '#ec4899' },
+  CUT: { label: 'Schnitt', accentColor: '#ef4444' },
+  MASTER_CHAIN: { label: 'Master-Summe', accentColor: '#8b5cf6' },
+};
+
+const SEGMENT_TYPE_MAP: Record<EditOperationType, RenderLayerType> = {
+  ORIGINAL: 'ORIGINAL_STEM',
+  INSERT: 'AUDIO_CLIP',
+  REPLACE: 'REPLACE',
+  OVERDUB: 'OVERDUB',
+  CUT: 'CUT',
+};
+
 export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps> = ({
   isOpen,
   track,
@@ -60,81 +96,99 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [isDone, setIsDone] = useState<boolean>(false);
 
-  // Generate multi-layer breakdown dynamically based on the current track and clips
-  const totalDur = track.duration || 357.5;
-  const clip1 = clips[0] || { name: 'Intro Kick 4B', sourceTrackName: track.title, duration: 7.38 };
-  const clip2 = clips[1] || { name: '8-Bit Arp 8B', sourceTrackName: track.title, duration: 14.76 };
-  const clip3 = clips[2] || { name: 'Main Drop 8B', sourceTrackName: track.title, duration: 14.76 };
+  // Real, non-invented layer model: every entry below is derived from the
+  // track's actual working segments (the non-destructive edit graph).
+  const segments = track.workingSegments ?? [];
 
-  const layers: RenderLayerItem[] = [
-    {
-      id: 'layer-original',
-      name: 'Schicht 1: Original Audio-Quelle (Grundspur)',
-      type: 'ORIGINAL_STEM',
-      sourceFile: track.originalMedia?.location || `${track.title.replace(/\s+/g, '_')}.mp3`,
-      timeRange: `00:00.0 – ${Math.floor(totalDur / 60)}:${Math.floor(totalDur % 60).toString().padStart(2, '0')}.0`,
-      startSec: 0,
-      durationSec: totalDur,
-      description: `Unverändertes Original-Master. SHA-256: ${track.originalSha256.slice(0, 10)}... (Read-Only)`,
-      accentColor: '#0088ff',
-      status: renderProgress > 20 ? 'COMPLETED' : renderProgress > 5 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-clips',
-      name: 'Schicht 2: Audio-Schnipsel & Palette Inserts',
-      type: 'AUDIO_CLIP',
-      sourceFile: `${clip1.name}, ${clip2.name}, ${clip3.name}`,
-      timeRange: `03:19.3 – 03:48.8 (Takt 109 – 125)`,
-      startSec: 199.3,
-      durationSec: 29.5,
-      description: `Schnipsel stammen aus der Originaldatei und wurden mit phasenreinem Crossfade eingepflegt.`,
-      accentColor: '#10b981',
-      status: renderProgress > 50 ? 'COMPLETED' : renderProgress > 25 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-colorfx',
-      name: 'Schicht 3: Sound Color FX Kette (Filter & Space)',
-      type: 'COLOR_FX',
-      sourceFile: 'Pioneer DJM-V10 Color FX Engine (Halbautomatisiert)',
-      timeRange: '01:00.0 – 03:00.0 (Pre-Drop Phase)',
-      startSec: 60.0,
-      durationSec: 120.0,
-      description: `Dynamische Low-Pass Resonance & Space Reverb Sweep mit automatisierter Cutoff-Hüllkurve.`,
-      accentColor: '#f59e0b',
-      status: renderProgress > 75 ? 'COMPLETED' : renderProgress > 50 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-beatfx',
-      name: 'Schicht 4: Beat FX Zug (Quantized Roll & Echo 1/2)',
-      type: 'BEAT_FX',
-      sourceFile: 'Pioneer Beat FX Modul (130.05 BPM Synchronized)',
-      timeRange: '03:15.0 – 03:26.7 (Breakdown Transition)',
-      startSec: 195.0,
-      durationSec: 11.7,
-      description: `1/2 Beat Roll & Ping-Pong Delay exakt auf Takt 113.1 quantisiert.`,
-      accentColor: '#ec4899',
-      status: renderProgress > 90 ? 'COMPLETED' : renderProgress > 75 ? 'PROCESSING' : 'PENDING',
-    },
-    {
+  const segmentsEnd = segments.reduce(
+    (max, seg) => Math.max(max, seg.projectStart + seg.projectDuration),
+    0
+  );
+  const totalDur = Math.max(track.duration || 0, segmentsEnd) || 1;
+
+  const clipNameById = new Map(clips.map((c) => [c.id, c.name]));
+
+  const layers: RenderLayerItem[] = useMemo(() => {
+    const items: RenderLayerItem[] = [];
+    const count = segments.length;
+
+    segments.forEach((seg, index) => {
+      const layerType = SEGMENT_TYPE_MAP[seg.type] ?? 'ORIGINAL_STEM';
+      const meta = LAYER_META[layerType];
+
+      // Progress is distributed evenly across the real segments, the master
+      // bus taking the final 15%.
+      const share = count > 0 ? (85 / count) : 85;
+      const doneAt = share * (index + 1);
+      const startAt = share * index;
+
+      const clipLabel = seg.clipId ? clipNameById.get(seg.clipId) : undefined;
+      const sourceFile =
+        seg.type === 'ORIGINAL' || seg.type === 'CUT'
+          ? track.originalMedia?.location ||
+            `${track.title.replace(/\s+/g, '_')} (Originalquelle)`
+          : clipLabel
+            ? `Palette-Clip: ${clipLabel}`
+            : seg.clipBuffer
+              ? 'Audio-Puffer aus der Palette'
+              : 'Unbekannte Quelle';
+
+      const gainDb = seg.gain > 0 ? 20 * Math.log10(seg.gain) : -Infinity;
+      const gainLabel =
+        seg.gain === 1
+          ? 'Gain 0.0 dB (unverändert)'
+          : Number.isFinite(gainDb)
+            ? `Gain ${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)} dB`
+            : 'Gain -∞ dB (stumm)';
+
+      items.push({
+        id: seg.id,
+        name: `Schicht ${index + 1}: ${meta.label}`,
+        type: layerType,
+        sourceFile,
+        timeRange: `${formatTime(seg.projectStart)} – ${formatTime(
+          seg.projectStart + seg.projectDuration
+        )}`,
+        startSec: seg.projectStart,
+        durationSec: seg.projectDuration,
+        description:
+          `Quellbereich ${formatTime(seg.sourceStart)} – ${formatTime(seg.sourceEnd)}, ` +
+          `Dauer ${seg.projectDuration.toFixed(2)} s, ${gainLabel}.`,
+        accentColor: meta.accentColor,
+        status:
+          renderProgress >= doneAt
+            ? 'COMPLETED'
+            : renderProgress > startAt
+              ? 'PROCESSING'
+              : 'PENDING',
+      });
+    });
+
+    items.push({
       id: 'layer-master',
-      name: 'Schicht 5: Master Mastering & Headroom Limiter',
+      name: `Schicht ${items.length + 1}: Master-Summierung`,
       type: 'MASTER_CHAIN',
-      sourceFile: 'Studio Master Bus (32-Bit Float Summing -> 16-Bit Dither)',
-      timeRange: 'Vollständige Spur (00:00 - Ende)',
+      sourceFile: 'Master-Bus (Float32-Summierung → 16-Bit PCM)',
+      timeRange: `0:00.0 – ${formatTime(totalDur)}`,
       startSec: 0,
       durationSec: totalDur,
-      description: `Summierung aller Spuren mit -0.3 dB True-Peak Ceiling und Rekordbox Beatgrid-Synchronisation.`,
-      accentColor: '#8b5cf6',
-      status: renderProgress >= 100 ? 'COMPLETED' : renderProgress > 90 ? 'PROCESSING' : 'PENDING',
-    },
-  ];
+      description:
+        `Alle ${count} Arbeitssegmente werden in einen Ausgabepuffer von ` +
+        `${totalDur.toFixed(2)} s summiert. Die Originaldatei bleibt unverändert.`,
+      accentColor: LAYER_META.MASTER_CHAIN.accentColor,
+      status:
+        renderProgress >= 100 ? 'COMPLETED' : renderProgress > 85 ? 'PROCESSING' : 'PENDING',
+    });
+
+    return items;
+  }, [segments, renderProgress, totalDur, track.title, track.originalMedia?.location]);
 
   const steps = [
-    'Quellspuren & Schnipsel-Zuordnung analysieren...',
-    'Phasenreine Audio-Buffer & Crossfades berechnen...',
-    'Sound Color FX & Beat FX Automationsketten anwenden...',
-    '32-Bit Floating Point Audio-Summierung rendern...',
-    'Beatgrid, Cue-Punkte & Rekordbox Metadaten verifizieren...',
+    `${segments.length} Arbeitssegmente aus dem Edit-Graph einlesen...`,
+    'Quellbereiche und Palette-Puffer zuordnen...',
+    'Segment-Gains anwenden und in den Ausgabepuffer schreiben...',
+    'Overdub-Schichten summieren...',
+    'Metadaten und Originalreferenz verifizieren...',
     `Master-Datei (${format}) fertiggestellt!`,
   ];
 
@@ -147,7 +201,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
       return;
     }
 
-    setSelectedLayerId('layer-clips');
+    setSelectedLayerId((prev) => prev ?? null);
 
     // Simulate precise multi-layer rendering progression
     const interval = setInterval(() => {
@@ -169,7 +223,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
 
   if (!isOpen) return null;
 
-  const activeLayer = layers.find((l) => l.id === selectedLayerId) || layers[1];
+  const activeLayer = layers.find((l) => l.id === selectedLayerId) || layers[0];
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 select-none p-4 animate-in fade-in duration-200">
@@ -227,23 +281,19 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 flex items-center space-x-1">
                 <Sliders size={12} className="text-[#0088ff]" />
-                <span>Timeline Mehrschichten-Modell (00:00 – {Math.floor(totalDur / 60)}:{Math.floor(totalDur % 60).toString().padStart(2, '0')})</span>
+                <span>Timeline Mehrschichten-Modell (0:00.0 – {formatTime(totalDur)})</span>
               </span>
               <span className="text-[9.5px] font-mono text-neutral-500">
-                130.05 BPM • 4/4 Beatgrid synchron
+                {track.bpm ? `${track.bpm.toFixed(2)} BPM` : 'BPM unbekannt'} • {segments.length}{' '}
+                Arbeitssegmente
               </span>
             </div>
 
             {/* Time ruler */}
             <div className="relative h-4 border-b border-[#202538] mb-2 text-[8.5px] font-mono text-neutral-500 flex justify-between px-1">
-              <span>0:00</span>
-              <span>1:00 (Bar 32)</span>
-              <span>2:00 (Bar 65)</span>
-              <span>3:00 (Bar 97)</span>
-              <span className="text-[#00e5ff]">3:26 (Bar 113 Drop)</span>
-              <span>4:00 (Bar 130)</span>
-              <span>5:00</span>
-              <span>5:57</span>
+              {Array.from({ length: 6 }, (_, i) => (
+                <span key={i}>{formatTime((totalDur / 5) * i)}</span>
+              ))}
             </div>
 
             {/* Visual Layer Tracks */}
@@ -373,7 +423,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                 </div>
                 <div className="text-[10px] text-[#00e5ff] mt-1 flex items-center space-x-1">
                   <ArrowRight size={10} />
-                  <span>Beatgrid-synchronisiert (130.05 BPM)</span>
+                  <span>Segmenttyp: {activeLayer.type}</span>
                 </div>
               </div>
 
@@ -407,7 +457,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
           <div className="flex items-center space-x-3">
             <span className="text-[11px] text-neutral-400">
               {isDone
-                ? 'Alle 5 Schichten erfolgreich gerendert und verifiziert.'
+                ? `Alle ${layers.length} Schichten erfolgreich gerendert und verifiziert.`
                 : 'Schichten werden sukzessive im Audio-Buffer summiert...'}
             </span>
 
