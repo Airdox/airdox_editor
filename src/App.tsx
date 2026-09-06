@@ -17,6 +17,7 @@ import {
   CuePoint,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
+import { extendBeatGrid, beatGridFromTimes, snapTimeToBeat, barAndBeatAt, timeToBeatPosition, beatPositionToTime } from './rekordbox/beatGridUtils';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
@@ -173,13 +174,26 @@ async function rebuildTrackFromSerialized(
     originalSha256: st.originalSha256,
     isOriginalUntouched: st.isOriginalUntouched,
     audioBuffer: embeddedOriginal ?? null,
-    beatGrid: buildBeatGridFromTempo(
-      st.beatGrid.firstBeat,
-      st.beatGrid.bpm,
-      st.duration,
-      st.beatGrid.meter,
-      st.origin
-    ),
+    // Keep measured beats from the saved project; only synthesise a grid when
+    // the project stored nothing but tempo metadata.
+    beatGrid: st.beatGrid.beatTimesMs && st.beatGrid.beatTimesMs.length > 1
+      ? extendBeatGrid(
+          beatGridFromTimes(
+            st.beatGrid.beatTimesMs,
+            st.beatGrid.meter,
+            st.beatGrid.bpm,
+            st.origin,
+            st.beatGrid.firstBeatInBar
+          ),
+          st.duration
+        )
+      : buildBeatGridFromTempo(
+          st.beatGrid.firstBeat,
+          st.beatGrid.bpm,
+          st.duration,
+          st.beatGrid.meter,
+          st.origin
+        ),
     cues: st.cues,
     loops: st.loops,
     analysis: null,
@@ -491,10 +505,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!activeTrack) return;
     const existingMems = activeTrack.cues.filter((c) => c.type === 'MEMORY');
     const nextIndex = existingMems.length + 1;
-    const spb = 60.0 / activeTrack.bpm;
-    const beatIndex = Math.max(0, Math.round((currentTime - (activeTrack.beatGrid.firstBeat || 0)) / spb));
-    const barNumber = Math.floor(beatIndex / 4) + 1;
-    const beatNumber = (beatIndex % 4) + 1;
+    const { bar: barNumber, beat: beatNumber } = barAndBeatAt(activeTrack.beatGrid, currentTime);
 
     const newCue: CuePoint = {
       id: `mem-${Date.now()}`,
@@ -705,22 +716,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleBeatSelect = (beats: number) => {
     if (!activeTrack) return;
     const bg = activeTrack.beatGrid;
-    const spb = 60.0 / bg.bpm;
 
     // Start from either current playhead or snapped bar start
     let startSec = currentTime;
     if (quantize) {
-      const beatIndex = Math.round((startSec - bg.firstBeat) / spb);
-      startSec = Math.max(0, bg.firstBeat + beatIndex * spb);
+      startSec = snapTimeToBeat(bg, startSec);
     }
-    const endSec = Math.min(activeTrack.duration, startSec + beats * spb);
-    const actualBeats = (endSec - startSec) / spb;
+    // Walk `beats` beats along the real grid instead of assuming constant tempo.
+    const startBeatPos = timeToBeatPosition(bg, startSec);
+    const endSec = Math.min(
+      activeTrack.duration,
+      beatPositionToTime(bg, startBeatPos + beats)
+    );
+    const endBeatPos = timeToBeatPosition(bg, endSec);
+    const actualBeats = endBeatPos - startBeatPos;
 
     setSelection({
       start: startSec,
       end: endSec,
-      startBeat: (startSec - bg.firstBeat) / spb,
-      endBeat: (endSec - bg.firstBeat) / spb,
+      startBeat: startBeatPos,
+      endBeat: endBeatPos,
       beatsCount: actualBeats,
       barsCount: actualBeats / bg.meter,
       duration: endSec - startSec,
@@ -731,9 +746,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleHalfSelection = () => {
     if (!selection || !activeTrack) return;
     const bg = activeTrack.beatGrid;
-    const spb = 60.0 / bg.bpm;
     const newBeats = Math.max(0.5, selection.beatsCount / 2);
-    const newEnd = selection.start + newBeats * spb;
+    const newEnd = beatPositionToTime(bg, selection.startBeat + newBeats);
 
     setSelection({
       start: selection.start,
@@ -749,9 +763,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleDoubleSelection = () => {
     if (!selection || !activeTrack) return;
     const bg = activeTrack.beatGrid;
-    const spb = 60.0 / bg.bpm;
-    const newBeats = Math.min((activeTrack.duration - selection.start) / spb, selection.beatsCount * 2);
-    const newEnd = selection.start + newBeats * spb;
+    const maxBeats = timeToBeatPosition(bg, activeTrack.duration) - selection.startBeat;
+    const newBeats = Math.min(maxBeats, selection.beatsCount * 2);
+    const newEnd = beatPositionToTime(bg, selection.startBeat + newBeats);
 
     setSelection({
       start: selection.start,
@@ -1426,13 +1440,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         // Collection entries intentionally retain only compact beatgrid
         // metadata. Expand it when this one track is actually loaded,
         // keeping the source origin (XML or Rekordbox DB).
-        beatGrid: buildBeatGridFromTempo(
-          firstBeatDef,
-          selectedDef.beatGrid?.bpm ?? bpm,
-          duration,
-          selectedDef.beatGrid?.meter ?? 4,
-          selectedDef.origin ?? DataOrigin.REKORDBOX_XML
-        ),
+        // A collection entry that already carries measured beats (XML tempo
+        // regions or an ANLZ grid) must keep them — re-deriving from a single
+        // BPM is what made the grid drift away from the waveform.
+        beatGrid: selectedDef.beatGrid && selectedDef.beatGrid.beats.length > 1
+          ? extendBeatGrid(selectedDef.beatGrid, duration)
+          : buildBeatGridFromTempo(
+              firstBeatDef,
+              selectedDef.beatGrid?.bpm ?? bpm,
+              duration,
+              selectedDef.beatGrid?.meter ?? 4,
+              selectedDef.origin ?? DataOrigin.REKORDBOX_XML
+            ),
         cues: selectedDef.cues || [],
         loops: selectedDef.loops || [],
         analysis,

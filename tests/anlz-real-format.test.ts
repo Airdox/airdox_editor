@@ -110,6 +110,18 @@ runTest('Real ANLZ .DAT', 'Decodes 2-byte RGB + height PWV5 waveform entries', (
   assertEqual(result.waveform!.origin, DataOrigin.REKORDBOX_ANLZ, 'Waveform origin');
   const peak = result.waveform!.peaks[100];
   assert(peak >= 0 && peak <= 1, `Peak normalized [0..1], got ${peak}`);
+
+  // Scroll waveforms are sampled at a fixed 150 entries/second. Without this
+  // the renderer falls back to duration/buckets and the drawn waveform slowly
+  // separates from the audio and beat grid as you scroll into the track.
+  assert(
+    result.waveform!.secPerBucket !== undefined,
+    'PWV5 scroll waveform must expose a fixed time base'
+  );
+  assert(
+    Math.abs(result.waveform!.secPerBucket! - 1 / 150) < 1e-9,
+    `Expected 1/150 s per entry, got ${result.waveform!.secPerBucket}`
+  );
 });
 
 // ─── SUITE 2: .EXT (PCO2-PCP2, PWV3/PWV7, masked PSSI) ──────────────────────
@@ -163,6 +175,11 @@ runTest('Real ANLZ .EXT', 'PWV7 three-band detail wins over PWV3', () => {
   assertEqual(result.waveform!.length, 900, 'Highest priority waveform kept');
   // PWV7 entries are stored mid, high, low.
   assert(result.waveform!.midEnergy[10] >= 0 && result.waveform!.midEnergy[10] <= 1, 'Mid band normalized');
+  assert(
+    result.waveform!.secPerBucket !== undefined &&
+      Math.abs(result.waveform!.secPerBucket - 1 / 150) < 1e-9,
+    'PWV7 scroll waveform must use the fixed 150 entries/second time base'
+  );
 });
 
 runTest('Real ANLZ .EXT', 'Unmasked PSSI (pre-Rekordbox 6) parses identically', () => {

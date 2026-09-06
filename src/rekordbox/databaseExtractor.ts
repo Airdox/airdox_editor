@@ -21,6 +21,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
+import { extendBeatGrid } from './beatGridUtils';
 import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
 
 /**
@@ -132,12 +133,24 @@ export function applyAnlzExtractionToTrack(
     anlzWarnings: extraction.warnings,
   };
 
+  // The ANLZ PQTZ tag carries a timestamp for *every* beat. That measured grid
+  // is authoritative: rebuilding it from a single average BPM would reintroduce
+  // the drift it exists to describe. Only fall back to constant tempo when the
+  // analysis file has no beat list at all.
+  const anlzGrid = extraction.beatGrid;
+  const beatGrid = anlzGrid && anlzGrid.beats.length > 1
+    ? extendBeatGrid(
+        { ...anlzGrid, meter: anlzGrid.meter || track.beatGrid.meter },
+        track.duration
+      )
+    : hasAnlzBeatgrid
+      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
+      : track.beatGrid;
+
   return {
     ...track,
     bpm,
-    beatGrid: hasAnlzBeatgrid
-      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
-      : track.beatGrid,
+    beatGrid,
     cues,
     loops: hasAnlzLoops ? extraction.loops : track.loops,
     phrases,

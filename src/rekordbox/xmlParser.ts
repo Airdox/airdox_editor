@@ -7,6 +7,13 @@
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
 
+/** One <TEMPO> marker of a Rekordbox XML track. */
+export interface TempoMarker {
+  inizio: number;
+  bpm: number;
+  battito: number;
+}
+
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
   bpm: number,
@@ -36,6 +43,95 @@ export function buildBeatGridFromTempo(
   return {
     firstBeat: firstBeatSec,
     bpm,
+    meter,
+    beats,
+    origin,
+  };
+}
+
+/**
+ * Builds a beat grid from *all* <TEMPO> markers of a track.
+ *
+ * A Rekordbox XML may contain many TEMPO nodes. Each one anchors a tempo
+ * region at `Inizio` and is valid until the next marker. Honouring only the
+ * first marker makes the grid drift apart from the audio the further you move
+ * from the start of the track, which is exactly the symptom of a variable
+ * tempo recording imported as if it had a single constant BPM.
+ */
+export function buildBeatGridFromTempoMarkers(
+  markers: TempoMarker[],
+  totalDurationSec: number,
+  meter: number = 4,
+  origin: DataOrigin = DataOrigin.REKORDBOX_XML
+): BeatGrid {
+  const usable = markers
+    .filter((m) => m.bpm > 0)
+    .sort((a, b) => a.inizio - b.inizio);
+
+  if (usable.length === 0) {
+    return buildBeatGridFromTempo(0, 130, totalDurationSec, meter, origin);
+  }
+
+  // Single marker => classic constant tempo grid.
+  if (usable.length === 1) {
+    const m = usable[0];
+    const spb = 60.0 / m.bpm;
+    let firstBeat = m.inizio - (m.battito - 1) * spb;
+    while (firstBeat < 0) firstBeat += spb;
+    return buildBeatGridFromTempo(firstBeat, m.bpm, totalDurationSec, meter, origin);
+  }
+
+  const beats: BeatNode[] = [];
+  const first = usable[0];
+  const firstSpb = 60.0 / first.bpm;
+
+  // Walk backwards from the first marker so the grid starts at the top of a bar.
+  let startTime = first.inizio;
+  let beatInBar = first.battito >= 1 ? first.battito : 1;
+  while (startTime - firstSpb >= 0 && beatInBar > 1) {
+    startTime -= firstSpb;
+    beatInBar -= 1;
+  }
+
+  let time = startTime;
+  let index = 0;
+  let barNumber = 1;
+  let currentBeatInBar = beatInBar;
+
+  for (let seg = 0; seg < usable.length && time <= totalDurationSec; seg++) {
+    const marker = usable[seg];
+    const next = usable[seg + 1];
+    const spb = 60.0 / marker.bpm;
+    // The last region runs to the end of the track.
+    const regionEnd = next ? next.inizio : totalDurationSec + spb;
+
+    // Re-anchor exactly on the marker to stop rounding error carrying over
+    // from the previous region.
+    if (seg > 0) time = marker.inizio;
+
+    while (time < regionEnd - 1e-9 && time <= totalDurationSec + spb) {
+      beats.push({
+        index,
+        time,
+        isBarStart: currentBeatInBar === 1,
+        barNumber,
+        beatInBar: currentBeatInBar,
+      });
+      index += 1;
+      time += spb;
+      currentBeatInBar = (currentBeatInBar % meter) + 1;
+      if (currentBeatInBar === 1) barNumber += 1;
+    }
+  }
+
+  if (beats.length === 0) {
+    return buildBeatGridFromTempo(startTime, first.bpm, totalDurationSec, meter, origin);
+  }
+
+  return {
+    firstBeat: beats[0].time,
+    // Reported BPM stays the dominant/first tempo for display purposes.
+    bpm: first.bpm,
     meter,
     beats,
     origin,
@@ -223,48 +319,42 @@ function parseSingleTrackNode(
   }
 
   // Parse TEMPO (Beatgrid)
-  // Rekordbox tracks may have multiple <TEMPO> nodes (dynamic grid / markers)
+  // A track may carry many <TEMPO> nodes. Each anchors a tempo region at
+  // `Inizio`; all of them together describe the real, possibly drifting grid.
   const tempoElements = el.querySelectorAll ? el.querySelectorAll('TEMPO') : [];
   let firstBeat = 0.0;
   let tempoBpm = bpm;
   let meter = 4;
+  const tempoMarkers: TempoMarker[] = [];
+
+  const collectMarker = (tEl: any) => {
+    const bpmVal = parseFloat(tEl.getAttribute('Bpm') || '0.0');
+    if (!(bpmVal > 0)) return;
+    const metroStr = tEl.getAttribute('Metro') || '4/4';
+    if (metroStr.startsWith('3/')) meter = 3;
+    tempoMarkers.push({
+      inizio: parseFloat(tEl.getAttribute('Inizio') || '0.0') || 0.0,
+      bpm: bpmVal,
+      battito: parseInt(tEl.getAttribute('Battito') || '1', 10) || 1,
+    });
+  };
 
   if (tempoElements && tempoElements.length > 0) {
-    let chosenTempoEl = tempoElements[0];
-    for (let t = 0; t < tempoElements.length; t++) {
-      const tEl = tempoElements[t];
-      const ini = parseFloat(tEl.getAttribute('Inizio') || '0.0');
-      const bpmVal = parseFloat(tEl.getAttribute('Bpm') || '0.0');
-      if (bpmVal > 0) {
-        if (ini > 0 && parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0') === 0.0) {
-          chosenTempoEl = tEl;
-        }
-      }
-    }
-
-    const inizio = parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0');
-    tempoBpm = parseFloat(chosenTempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
-    const battitoStr = chosenTempoEl.getAttribute('Battito') || '1';
-    const battito = parseInt(battitoStr, 10) || 1;
-    const metroStr = chosenTempoEl.getAttribute('Metro') || '4/4';
-    if (metroStr.startsWith('3/')) meter = 3;
-    else meter = 4;
-
-    const spb = 60.0 / tempoBpm;
-    let rawFirstBeat = inizio - (battito - 1) * spb;
-    while (rawFirstBeat < 0) rawFirstBeat += spb;
-    firstBeat = rawFirstBeat;
+    for (let t = 0; t < tempoElements.length; t++) collectMarker(tempoElements[t]);
   } else {
     const tempoEl = el.querySelector('TEMPO');
-    if (tempoEl) {
-      const inizio = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
-      tempoBpm = parseFloat(tempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
-      const battito = parseInt(tempoEl.getAttribute('Battito') || '1', 10) || 1;
-      const spb = 60.0 / tempoBpm;
-      let rawFirstBeat = inizio - (battito - 1) * spb;
-      while (rawFirstBeat < 0) rawFirstBeat += spb;
-      firstBeat = rawFirstBeat;
-    }
+    if (tempoEl) collectMarker(tempoEl);
+  }
+
+  tempoMarkers.sort((a, b) => a.inizio - b.inizio);
+
+  if (tempoMarkers.length > 0) {
+    const anchor = tempoMarkers[0];
+    tempoBpm = anchor.bpm;
+    const spb = 60.0 / tempoBpm;
+    let rawFirstBeat = anchor.inizio - (anchor.battito - 1) * spb;
+    while (rawFirstBeat < 0) rawFirstBeat += spb;
+    firstBeat = rawFirstBeat;
   }
 
   // Parse POSITION_MARK
@@ -285,14 +375,26 @@ function parseSingleTrackNode(
     const spb = 60.0 / tempoBpm;
     let rawFirstBeat = firstBeatCueAnchor;
     while (rawFirstBeat >= spb) rawFirstBeat -= spb;
+    const shift = rawFirstBeat - firstBeat;
     firstBeat = rawFirstBeat;
+    // Keep the tempo regions locked to the corrected downbeat.
+    if (tempoMarkers.length > 0 && Math.abs(shift) > 1e-9) {
+      for (const marker of tempoMarkers) marker.inizio += shift;
+    }
   }
 
   // A complete grid contains hundreds of objects per song.  Keep collection
   // imports compact; the full grid is reconstructed only for the track loaded
   // into a deck.
   const beatGrid = buildDenseBeatGrid
-    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
+    ? buildBeatGridFromTempoMarkers(
+        tempoMarkers.length > 0
+          ? tempoMarkers
+          : [{ inizio: firstBeat, bpm: tempoBpm, battito: 1 }],
+        duration,
+        meter,
+        DataOrigin.REKORDBOX_XML
+      )
     : {
         firstBeat,
         bpm: tempoBpm,

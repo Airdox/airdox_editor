@@ -136,7 +136,24 @@ interface WaveformSpec {
   entryCount: number;
   dataOffset: number;
   style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
+  /**
+   * Seconds represented by one entry, when the format defines a fixed rate.
+   *
+   * Rekordbox scroll waveforms (PWV3 / PWV4 / PWV5 detail data) are sampled at
+   * a constant 150 entries per second, *not* stretched across the track
+   * length. Preview waveforms (PWAV / PWV2 / PWV6) instead squeeze the whole
+   * track into a fixed number of columns and therefore have no fixed rate.
+   *
+   * Deriving the time base as `duration / entryCount` for a scroll waveform
+   * scales the whole display by a constant factor: it looks right at 0:00 and
+   * is increasingly wrong the further into the track you scroll — the audio,
+   * the beat grid and the drawn waveform slowly separate.
+   */
+  secPerEntry?: number;
 }
+
+/** Rekordbox detail/scroll waveforms are fixed at 150 entries per second. */
+const SCROLL_WAVEFORM_ENTRIES_PER_SEC = 150;
 
 function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: string): WaveformSpec | null {
   // Marked fallback: the project's legacy test fixture stores a 3-byte
@@ -203,17 +220,18 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
   ) {
     return null;
   }
+  const secPerEntry = 1 / SCROLL_WAVEFORM_ENTRIES_PER_SEC;
   if (tag === 'PWV3' && entryBytes === 1) {
-    return { entryBytes, entryCount, dataOffset, style: 'MONO_5BIT' };
+    return { entryBytes, entryCount, dataOffset, style: 'MONO_5BIT', secPerEntry };
   }
   if (tag === 'PWV4' && entryBytes === 6) {
-    return { entryBytes, entryCount, dataOffset, style: 'COLOR_6BYTE' };
+    return { entryBytes, entryCount, dataOffset, style: 'COLOR_6BYTE', secPerEntry };
   }
   if (tag === 'PWV5' && entryBytes === 2) {
-    return { entryBytes, entryCount, dataOffset, style: 'RGB_5BIT' };
+    return { entryBytes, entryCount, dataOffset, style: 'RGB_5BIT', secPerEntry };
   }
   if (tag === 'PWV7' && entryBytes === 3) {
-    return { entryBytes, entryCount, dataOffset, style: 'TRIPLE_BYTE' };
+    return { entryBytes, entryCount, dataOffset, style: 'TRIPLE_BYTE', secPerEntry };
   }
   return null;
 }
@@ -283,6 +301,7 @@ function createWaveform(
     midEnergy,
     highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
+    ...(spec.secPerEntry ? { secPerBucket: spec.secPerEntry } : {}),
   };
 }
 

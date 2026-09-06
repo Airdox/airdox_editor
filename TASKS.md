@@ -4,6 +4,14 @@ Arbeitsliste für Airdox Smart Editor. Erledigte Punkte bleiben mit Häkchen
 stehen, damit der Verlauf nachvollziehbar ist. Versionsbezug siehe
 [CHANGELOG.md](./CHANGELOG.md).
 
+## Erledigt (0.3)
+
+- [x] Ursache für auseinanderlaufendes Beatgrid gefunden und behoben
+      (nur ein `<TEMPO>`-Marker ausgewertet; gemessene ANLZ-Grids verworfen)
+- [x] Feste Zeitbasis (150 Einträge/s) für Rekordbox-Scroll-Wellenformen
+- [x] Gemessene Beat-Zeiten in der Projektdatei persistiert
+- [x] `beatGridUtils` als gemeinsame Grundlage für Snapping, Raster und Labels
+
 ## Erledigt (0.2)
 
 - [x] Rebranding zu „Airdox Smart Editor" (Paketname, `appId`, `productName`, README)
@@ -24,6 +32,8 @@ stehen, damit der Verlauf nachvollziehbar ist. Versionsbezug siehe
 - [ ] Effekt-Spuren in der Projektdatei speichern und laden
 - [ ] Effekt-Spuren beim WAV-Export berücksichtigen
 - [ ] Automationskurven statt konstanter Parameter pro Segment
+- [ ] Beatgrid im Editor nachjustieren können (Downbeat setzen, Grid dehnen)
+- [ ] Variables Tempo auch beim WAV-Export und beim Time-Stretch berücksichtigen
 
 ## Später
 

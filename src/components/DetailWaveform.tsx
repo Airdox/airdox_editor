@@ -10,6 +10,7 @@
  * - Context menu with real editing actions
  */
 
+import { snapTimeToBeat, beatsInRange, timeToBeatPosition, barAndBeatAt } from '../rekordbox/beatGridUtils';
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
   TrackModel,
@@ -137,10 +138,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const snapTime = useCallback(
     (t: number) => {
       if (!quantize || !track) return t;
-      const bg = track.beatGrid;
-      const spb = 60.0 / bg.bpm;
-      const beatIndex = Math.round((t - bg.firstBeat) / spb);
-      return Math.max(0, bg.firstBeat + beatIndex * spb);
+      return snapTimeToBeat(track.beatGrid, t);
     },
     [quantize, track]
   );
@@ -203,16 +201,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
       const bg = track.beatGrid;
       const secondsPerBeat = 60.0 / bg.bpm;
-      const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
-      const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+      // Draw the *measured* beats so the grid tracks tempo drift instead of
+      // walking away from the audio over the length of the track.
+      const visibleBeats = beatsInRange(
+        bg,
+        viewOffset - secondsPerBeat,
+        viewOffset + viewDuration + secondsPerBeat
+      );
 
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
+      for (const beat of visibleBeats) {
+        const beatTime = beat.time;
         const x = timeToPixel(beatTime, width);
         if (x < -20 || x > width + 20) continue;
 
-        const isBar = b % bg.meter === 0;
-        const barNumber = Math.floor(b / bg.meter) + 1;
+        const isBar = beat.isBarStart;
+        const barNumber = beat.barNumber;
 
         if (isBar) {
           // Rekordbox authentic solid white Bar vertical downbeat line
@@ -339,7 +342,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         for (let i = 0; i < numCols; i++) {
           const x = i * 2;
           const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
+          const beatPos = timeToBeatPosition(bg, t);
           const beatFract = ((beatPos % 1) + 1) % 1;
           const barIndex = Math.floor(beatPos / 4);
           // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
@@ -376,11 +379,10 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+      for (const beat of visibleBeats) {
+        const x = timeToPixel(beat.time, width);
         if (x < -10 || x > width + 10) continue;
-        const isBar = b % bg.meter === 0;
+        const isBar = beat.isBarStart;
 
         if (isBar) {
           ctx.strokeStyle = '#ffffff';
@@ -527,16 +529,15 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
       if (track && hoveredTime !== null) {
         const bg = track.beatGrid;
-        const spb = 60.0 / bg.bpm;
         const snappedTime = snapTime(hoveredTime);
         const snappedX = timeToPixel(snappedTime, width);
         const rawX = timeToPixel(hoveredTime, width);
 
         if (snappedX >= 0 && snappedX <= width) {
-          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
-          const isBar = beatIndex % bg.meter === 0;
-          const barNum = Math.floor(beatIndex / bg.meter) + 1;
-          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
+          const marker = barAndBeatAt(bg, snappedTime);
+          const isBar = marker.beat === 1;
+          const barNum = marker.bar;
+          const beatInBar = marker.beat;
 
           // Subtle glowing translucent beam along the snapped grid line
           const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
@@ -709,9 +710,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const updateSelectionRange = (start: number, end: number) => {
     if (!track) return;
     const bg = track.beatGrid;
-    const spb = 60.0 / bg.bpm;
-    const startBeat = Math.max(0, (start - bg.firstBeat) / spb);
-    const endBeat = Math.max(0, (end - bg.firstBeat) / spb);
+    const startBeat = Math.max(0, timeToBeatPosition(bg, start));
+    const endBeat = Math.max(0, timeToBeatPosition(bg, end));
     const beatsCount = Math.max(0, endBeat - startBeat);
     const barsCount = beatsCount / bg.meter;
 

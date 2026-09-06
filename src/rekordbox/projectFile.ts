@@ -121,6 +121,14 @@ export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
+  /**
+   * Measured beat times in milliseconds (integers, keeps the file small).
+   * Present whenever the track carries a real Rekordbox grid; without it a
+   * reloaded project would fall back to constant tempo and drift again.
+   */
+  beatTimesMs?: number[];
+  /** Beat-in-bar of the first entry in `beatTimesMs`, 1-based. */
+  firstBeatInBar?: number;
 }
 
 export interface SerializedSegment {
@@ -253,6 +261,12 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
+      ...(track.beatGrid && track.beatGrid.beats.length > 1
+        ? {
+            beatTimesMs: track.beatGrid.beats.map((b) => Math.round(b.time * 1000)),
+            firstBeatInBar: track.beatGrid.beats[0].beatInBar,
+          }
+        : {}),
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],
