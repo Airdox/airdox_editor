@@ -19,8 +19,20 @@ export function analyzeAudioBuffer(
   // Aim for ~200 buckets per second for ultra-crisp DJ zoom alignment
   const bucketsPerSecond = 200;
   const totalBuckets = Math.max(100, Math.floor((length / sampleRate) * bucketsPerSecond));
-  const samplesPerBucket = Math.max(1, Math.floor(length / totalBuckets));
-  const secPerBucket = samplesPerBucket / sampleRate;
+
+  // The exact (fractional) number of samples each bucket represents.
+  //
+  // Rounding this down before deriving the time base is a cumulative error:
+  // the renderer positions bucket b at `b * secPerBucket`, so every bucket is
+  // drawn a little too early and the deficit adds up over the length of the
+  // track. At 44.1 kHz the exact value is 220.5 samples — flooring to 220
+  // loses 0.5 samples per bucket, which is ~0.8 s by the end of a six minute
+  // track (and exactly 0 at 48 kHz, which is why it can hide for a long time).
+  //
+  // Keep the fractional stride for the time base and for bucket boundaries.
+  const samplesPerBucketExact = length / totalBuckets;
+  const secPerBucket = samplesPerBucketExact / sampleRate;
+  const samplesPerBucket = Math.max(1, Math.round(samplesPerBucketExact));
 
   const peaks = new Float32Array(totalBuckets);
   const peaksL = new Float32Array(totalBuckets);
@@ -32,8 +44,10 @@ export function analyzeAudioBuffer(
   let prevSL = 0;
 
   for (let b = 0; b < totalBuckets; b++) {
-    const startIdx = b * samplesPerBucket;
-    const endIdx = Math.min(startIdx + samplesPerBucket, length);
+    // Derive both edges from the exact stride so bucket n always covers the
+    // audio that is actually drawn at time n * secPerBucket.
+    const startIdx = Math.floor(b * samplesPerBucketExact);
+    const endIdx = Math.min(Math.floor((b + 1) * samplesPerBucketExact), length);
 
     let maxL = 0;
     let maxR = 0;
@@ -100,12 +114,14 @@ export function analyzeAudioBuffer(
 export function extractMiniPeaks(buffer: AudioBuffer, numBuckets: number = 64): number[] {
   const left = buffer.getChannelData(0);
   const len = left.length;
-  const step = Math.floor(len / numBuckets);
+  // Fractional stride: flooring it would leave the tail of the clip unscanned
+  // (e.g. 64 buckets over 100 000 samples would only cover 99 968 of them).
+  const step = len / numBuckets;
   const result: number[] = [];
 
   for (let b = 0; b < numBuckets; b++) {
-    const start = b * step;
-    const end = Math.min(start + step, len);
+    const start = Math.floor(b * step);
+    const end = Math.min(Math.floor((b + 1) * step), len);
     let max = 0;
     for (let i = start; i < end; i += 4) {
       const val = Math.abs(left[i]);

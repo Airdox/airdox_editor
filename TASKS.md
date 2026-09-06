@@ -4,6 +4,14 @@ Arbeitsliste für Airdox Smart Editor. Erledigte Punkte bleiben mit Häkchen
 stehen, damit der Verlauf nachvollziehbar ist. Versionsbezug siehe
 [CHANGELOG.md](./CHANGELOG.md).
 
+## Erledigt (0.4)
+
+- [x] Eigentliche Drift-Ursache gefunden: abgerundete `samplesPerBucket` in der
+      Wellenform-Analyse (0,82 s Versatz bei 6 min / 44,1 kHz, 0 s bei 48 kHz)
+- [x] Zeitbasis und Bucket-Grenzen auf exakte gebrochene Schrittweite umgestellt
+- [x] Gleicher Rundungsfehler in `extractMiniPeaks` behoben
+- [x] Regressionstests über mehrere Sampleraten
+
 ## Erledigt (0.3)
 
 - [x] Ursache für auseinanderlaufendes Beatgrid gefunden und behoben

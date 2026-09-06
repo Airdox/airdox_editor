@@ -3,6 +3,28 @@
 Alle nennenswerten Änderungen an diesem Projekt werden hier dokumentiert.
 Zum Versionsschema siehe [VERSIONING.md](./VERSIONING.md).
 
+## [0.4] – 2026-09-06
+
+### Behoben
+- **Wellenform driftete weiterhin vom Audio weg — die eigentliche Ursache.**
+  In `analyzeAudioBuffer` wurde `samplesPerBucket` per `Math.floor` abgerundet,
+  *bevor* daraus die Zeitbasis `secPerBucket` abgeleitet wurde. Da die Anzeige
+  Bucket *b* an Position `b × secPerBucket` zeichnet, fehlt pro Bucket ein
+  Sekundenbruchteil, der sich über zehntausende Buckets aufsummiert: am Anfang
+  exakt null, am Ende maximal.
+  - Bei 44,1 kHz beträgt die exakte Schrittweite 220,5 Samples. Das Abrunden
+    auf 220 kostet **0,82 s bei 6 Minuten** und **1,36 s bei 10 Minuten**.
+  - Bei 48 kHz ist die Schrittweite mit 240 Samples ganzzahlig, der Fehler also
+    exakt null — deshalb blieb der Bug bei 48-kHz-Material unsichtbar und trat
+    nur bei den üblichen 44,1-kHz-Dateien auf.
+  - Zeitbasis und Bucket-Grenzen nutzen jetzt die exakte gebrochene
+    Schrittweite; der Versatz liegt für alle Sampleraten unter 1 ms.
+- Derselbe Rundungsfehler in `extractMiniPeaks` (Vorschau der Palette-Clips)
+  ließ das Ende jedes Clips ungescannt; ebenfalls auf exakte Schrittweite
+  umgestellt.
+- Neue Regressionstests `tests/waveform-timebase.test.ts` prüfen die Zeitbasis
+  bei 22,05/32/44,1/48/96 kHz und lokalisieren Marker spät im Track.
+
 ## [0.3] – 2026-09-06
 
 ### Behoben
