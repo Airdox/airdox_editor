@@ -17,7 +17,7 @@
     "clean": "rm -rf dist server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
