@@ -14,9 +14,17 @@
  */
 
 import { BeatGrid, DataOrigin, PaletteClip } from '../types/rekordbox';
-import { PcmAudio, pcmDuration, pcmSampleCount } from './pcm';
+import { PcmAudio, pcmDuration, pcmPeak, pcmSampleCount, pcmScale } from './pcm';
 import { extractMiniPeaksPcm } from '../waveform/analyzer';
-import { EditableAudio, EditReport, insertClipAt, overdubRange, replaceRange, snapToGrid } from './editOps';
+import {
+  EditableAudio,
+  EditReport,
+  OverdubOutcome,
+  insertClipAt,
+  overdubRange,
+  replaceRange,
+  snapToGrid,
+} from './editOps';
 
 /** MIME-Typ des Drag-&-Drop-Payloads (eine einzige Quelle, keine Raterei). */
 export const CLIP_DND_MIME = 'application/x-airdox-clip';
@@ -31,6 +39,157 @@ export const CLIP_MINI_PEAK_BUCKETS = 48;
 export const CLIP_COLORS = ['#ff9500', '#ffb74d', '#f2c14e', '#7ad3a2', '#5bb8ff', '#b98bff', '#ff6b6b'];
 
 export type ClipDropMode = 'insert' | 'overdub' | 'replace' | 'deck';
+
+// ── Pegel: Normalisierung und Übersteuerungsschutz ────────────────────────
+
+/**
+ * Ziel-Pegelspitze eines Clips, bevor er in eine Spur kommt. 0,89 sind −1 dBFS:
+ * laut genug, um in einer bereits vollen Spur zu sitzen, aber mit genug Luft,
+ * dass ein darübergelegter Overdub nicht sofort übersteuert.
+ */
+export const CLIP_NORM_TARGET_PEAK = 0.89;
+
+/** Höchstens so viel Lautstärke wird zugegeben – sonst wird der Rauschtebel mit hochgezogen. */
+export const CLIP_NORM_MAX_GAIN_DB = 12;
+
+/** Harte Obergrenze für jede Summe; kein Sample einer Änderung liegt danach darüber. */
+export const CLIP_HEADROOM_CEILING = 0.999;
+
+/** Linearer Pegelwert zu dBFS (0 → −∞). */
+export function toDbfs(peak: number): number {
+  return peak > 0 ? 20 * Math.log10(Math.min(1, peak)) : Number.NEGATIVE_INFINITY;
+}
+
+export function fromDbfs(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
+export interface ClipGainReport {
+  /** Verstärkung, die auf den Clip angewendet wurde (1 = unverändert) */
+  gain: number;
+  gainDb: number;
+  peakBefore: number;
+  peakAfter: number;
+  targetPeak: number;
+  ceiling: number;
+  /** true, wenn die Samples wirklich angefasst wurden */
+  applied: boolean;
+  /** warum nicht? */
+  skipped?: 'stumm' | 'über ziel' | 'ziel nicht erreichbar' | 'aus';
+  note?: string;
+}
+
+/** Größter Ausschlag eines Clips – für Bibliothek, Tooltip und Menü. */
+export function clipPeakOf(clip: PaletteClip): number {
+  const audio = clipAudioOf(clip);
+  return audio ? pcmPeak(audio) : 0;
+}
+
+/** Knapper Pegeltext, z. B. „Peak 0,412 (−7,7 dBFS) → 0,890 (−1,0 dBFS), +6,8 dB“. */
+export function describeClipLevel(clip: PaletteClip, targetPeak = CLIP_NORM_TARGET_PEAK): string {
+  const peak = clipPeakOf(clip);
+  if (peak <= 0) return 'Peak 0 (stumm)';
+  const plan = planClipGain(peak, targetPeak);
+  const ziel = plan.gain === 1 ? peak : Math.min(targetPeak, peak * plan.gain);
+  return (
+    `Peak ${peak.toFixed(3)} (${fmtDb(toDbfs(peak))} dBFS) → ${ziel.toFixed(3)} (${fmtDb(toDbfs(ziel))} dBFS), ` +
+    `${fmtDb(20 * Math.log10(plan.gain || 1))} dB${plan.limited ? ' (begrenzt)' : ''}`
+  );
+}
+
+function fmtDb(value: number): string {
+  if (!Number.isFinite(value)) return '−∞';
+  return `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(1)}`;
+}
+
+/**
+ * Wie stark darf der Clip angehoben werden? Begrenzt auf das Ziel und auf
+ * CLIP_NORM_MAX_GAIN dB – ein fast stiller Clip wird nicht auf Gebrüll gezogen.
+ */
+export function planClipGain(
+  peakBefore: number,
+  targetPeak = CLIP_NORM_TARGET_PEAK,
+  maxGainDb = CLIP_NORM_MAX_GAIN_DB
+): { gain: number; limited: boolean } {
+  if (!(peakBefore > 0)) return { gain: 1, limited: false };
+  const wanted = targetPeak / peakBefore;
+  const cap = fromDbfs(maxGainDb);
+  if (wanted <= 1) return { gain: 1, limited: false };
+  if (wanted > cap) return { gain: cap, limited: true };
+  return { gain: wanted, limited: false };
+}
+
+/**
+ * Normalisiert Audiomaterial auf den Ziel-Pegel. Gibt neue Samples zurück – das
+ * Original (und damit der Bibliotheks-Eintrag) bleibt unberührt.
+ */
+export function normalizeClipAudio(
+  pcm: PcmAudio,
+  options: { targetPeak?: number; maxGainDb?: number; enabled?: boolean } = {}
+): { pcm: PcmAudio; report: ClipGainReport } {
+  const targetPeak = options.targetPeak ?? CLIP_NORM_TARGET_PEAK;
+  const maxGainDb = options.maxGainDb ?? CLIP_NORM_MAX_GAIN_DB;
+  const before = pcmPeak(pcm);
+  const base: ClipGainReport = {
+    gain: 1,
+    gainDb: 0,
+    peakBefore: before,
+    peakAfter: before,
+    targetPeak,
+    ceiling: CLIP_HEADROOM_CEILING,
+    applied: false,
+  };
+  if (options.enabled === false) return { pcm, report: { ...base, skipped: 'aus' } };
+  if (!(before > 0)) return { pcm, report: { ...base, skipped: 'stumm', note: 'Der Clip ist still – es gibt nichts anzupassen.' } };
+  if (before >= targetPeak) {
+    return {
+      pcm,
+      report: {
+        ...base,
+        skipped: 'über ziel',
+        note: `Peak ${before.toFixed(3)} liegt bereits über dem Ziel ${targetPeak.toFixed(3)} – der Clip wird nicht lauter, beim Überlagern greift der Kopfraum.`,
+      },
+    };
+  }
+  const plan = planClipGain(before, targetPeak, maxGainDb);
+  const scaled = pcmScale(pcm, plan.gain);
+  const after = pcmPeak(scaled);
+  return {
+    pcm: scaled,
+    report: {
+      gain: plan.gain,
+      gainDb: 20 * Math.log10(plan.gain),
+      peakBefore: before,
+      peakAfter: after,
+      targetPeak,
+      ceiling: CLIP_HEADROOM_CEILING,
+      applied: Math.abs(plan.gain - 1) > 1e-12,
+      skipped: plan.gain >= 1 && after < targetPeak ? 'ziel nicht erreichbar' : undefined,
+      note: plan.limited
+        ? `Anhebung auf ${CLIP_NORM_MAX_GAIN_DB.toFixed(0)} dB begrenzt – Peak danach ${after.toFixed(3)}.`
+        : undefined,
+    },
+  };
+}
+
+/** Pegelangleichung direkt am Bibliotheks-Eintrag (Vorschau wird mitgerechnet). */
+export function normalizeClip(
+  clip: PaletteClip,
+  options: { targetPeak?: number; maxGainDb?: number } = {}
+): { clip: PaletteClip; report: ClipGainReport } {
+  const audio = clipAudioOf(clip);
+  if (!audio) throw new Error(`Clip „${clip.name}“ enthält keine Audiodaten.`);
+  const result = normalizeClipAudio(audio, options);
+  return {
+    clip: {
+      ...clip,
+      clipPcm: result.pcm,
+      audioBuffer: undefined,
+      miniPeaks: extractMiniPeaksPcm(result.pcm, CLIP_MINI_PEAK_BUCKETS),
+    },
+    report: result.report,
+  };
+}
 
 /** Beschreibung der Drop-Absicht (Tastenzustand beim Loslassen). */
 export function dropModeFor(modifiers: { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): ClipDropMode {
@@ -343,12 +502,51 @@ function clampToTrack(seconds: number, maxSeconds: number | undefined, fallback:
   return Math.min(Math.max(0, seconds), Math.max(0, maxSeconds - 1e-9) || maxSeconds);
 }
 
+/**
+ * Ein Satz für Rückmeldung und Protokoll: was der Pegel getan hat. Liefert null,
+ * wenn nichts zu melden ist – die Oberfläche erfindet hier keine Formulierungen.
+ */
+export function clipLevelNote(
+  level: ClipGainReport,
+  mix?: { gainUsed: number; dryPeak: number; peakAfter: number; regionScale: number; attenuated: boolean } | null
+): string | null {
+  const parts: string[] = [];
+  if (level.applied) {
+    parts.push(
+      `Clip vor dem Einfügen normalisiert: Peak ${level.peakBefore.toFixed(3)} → ${level.peakAfter.toFixed(3)} ` +
+        `(${signedDb(level.gainDb)}) auf ${toDbfs(level.targetPeak).toFixed(1)} dBFS-Ziel`
+    );
+  } else if (level.skipped === 'über ziel') {
+    parts.push(`Clip bleibt bei Peak ${level.peakBefore.toFixed(3)} – schon über dem Ziel von ${level.targetPeak.toFixed(3)}`);
+  } else if (level.skipped === 'ziel nicht erreichbar') {
+    parts.push(`Anhebung auf ${CLIP_NORM_MAX_GAIN_DB.toFixed(0)} dB begrenzt – Peak danach ${level.peakAfter.toFixed(3)}`);
+  } else if (level.skipped === 'stumm') {
+    parts.push('Clip ist still – keine Pegelanpassung');
+  }
+  if (mix?.attenuated) {
+    parts.push(
+      `Überlagerung auf ${mix.gainUsed.toFixed(3)} zurückgenommen (Bereichs-Peak ${mix.dryPeak.toFixed(3)}), ` +
+        `Ergebnis-Peak ${mix.peakAfter.toFixed(3)} – kein Clipping`
+    );
+  }
+  if (mix && mix.regionScale < 1) {
+    parts.push(`Überlappungsbereich auf ${toDbfs(mix.peakAfter).toFixed(1)} dBFS angeglichen`);
+  }
+  return parts.length > 0 ? parts.join('; ') : null;
+}
+
+function signedDb(value: number): string {
+  if (!Number.isFinite(value)) return '−∞ dB';
+  return `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(1)} dB`;
+}
+
 /** Knapper Beschreibungstext für Rückmeldung und Protokoll. */
 export function describeClip(clip: PaletteClip): string {
   const samples = clip.clipPcm ? pcmSampleCount(clip.clipPcm) : 0;
   return (
     `${clip.name}: ${clip.duration.toFixed(3)} s, ${clip.beats} Beats (${clip.bars} Takte) @ ${clip.bpm.toFixed(1)} BPM, ` +
-    `${clip.key}, ${samples} Samples @ ${clip.clipPcm?.sampleRate ?? 0} Hz`
+    `${clip.key}, ${samples} Samples @ ${clip.clipPcm?.sampleRate ?? 0} Hz, Peak ${clipPeakOf(clip).toFixed(3)} ` +
+    `(${Number.isFinite(toDbfs(clipPeakOf(clip))) ? toDbfs(clipPeakOf(clip)).toFixed(1) : '−∞'} dBFS)`
   );
 }
 
@@ -363,6 +561,12 @@ export interface ClipDropOutcome {
   snapped: boolean;
   reason?: string;
   clipEndSeconds: number;
+  /** Die Samples, die tatsächlich in die Spur geschrieben wurden (normalisiert). */
+  placedAudio: PcmAudio;
+  /** Was die Pegelangleichung getan hat. */
+  level: ClipGainReport;
+  /** Beim Überlagern: wie der Kopfraum gerechnet wurde. */
+  mix?: { gainUsed: number; dryPeak: number; peakAfter: number; regionScale: number; attenuated: boolean };
 }
 
 /**
@@ -373,15 +577,33 @@ export interface ClipDropOutcome {
  * overdub: Clip wird über den vorhandenen Bereich gemischt (Länge gleich)
  * replace: Bereich wird getauscht (Länge = Clip, Rest rückt nicht)
  */
+/**
+ * Was beim Ablagen eines Clips auf die Zeitachse passiert – genau diese Funktion
+ * ruft auch die App, damit das Geprüfte und das Genutzte identisch sind.
+ *
+ * Vor jeder Ablage steht die Pegelangleichung: Der Clip wird auf
+ * CLIP_NORM_TARGET_PEAK (−1 dBFS) normalisiert, höchstens um CLIP_NORM_MAX_GAIN_DB
+ * angehoben. Beim Darüberlegen wird zusätzlich der Kopfraum des Zielbereichs
+ * gemessen und der Clip notfalls leiser gemischt – damit nach der Summation kein
+ * Sample über CLIP_HEADROOM_CEILING liegt. Das Ergebnis wird nicht hart
+ * begrenzt (kein Verzerren), sondern im Pegel angepasst.
+ *
+ * insert:  Timeline schiebt sich nach rechts, Rest der Spur bleibt erhalten
+ * overdub: Clip wird über den vorhandenen Bereich gemischt (Länge gleich)
+ * replace: Bereich wird getauscht (Länge = Clip, Rest rückt nicht)
+ */
 export function applyClipDrop(
   track: EditableAudio,
   clipAudio: PcmAudio,
   wantedSeconds: number,
-  options: { quantize?: boolean; mode: Exclude<ClipDropMode, 'deck'> }
+  options: { quantize?: boolean; mode: Exclude<ClipDropMode, 'deck'>; normalize?: boolean; ceiling?: number }
 ): ClipDropOutcome {
-  const trackEnd = pcmDuration(track.audio);
-  const clipLength = pcmDuration(clipAudio);
   const mode = options.mode;
+  const ceiling = options.ceiling ?? CLIP_HEADROOM_CEILING;
+  const normalized = normalizeClipAudio(clipAudio, { enabled: options.normalize !== false });
+  const block = normalized.pcm;
+  const trackEnd = pcmDuration(track.audio);
+  const clipLength = pcmDuration(block);
   const placed = resolveClipTargetTime(wantedSeconds, track.beatGrid, {
     quantize: options.quantize,
     mode,
@@ -389,14 +611,22 @@ export function applyClipDrop(
   });
   const at = placed.seconds;
   const end = Math.min(trackEnd, at + clipLength);
+  const blockLengthSamples = Math.max(1, pcmSampleCount(block));
 
-  let outcome: { target: EditableAudio; report: EditReport };
+  let outcome: { target: EditableAudio; report: EditReport; mix?: OverdubOutcome['mix'] };
   if (mode === 'insert') {
-    outcome = insertClipAt(track, at, clipAudio);
+    outcome = insertClipAt(track, at, block);
   } else if (mode === 'replace') {
-    outcome = replaceRange(track, at, Math.max(end, at + 1 / (clipAudio.sampleRate || 44100)), clipAudio);
+    outcome = replaceRange(track, at, Math.max(end, at + 1 / (block.sampleRate || 44100)), block);
   } else {
-    outcome = overdubRange(track, at, Math.max(end, at + 1 / (clipAudio.sampleRate || 44100)), clipAudio, 0.85);
+    outcome = overdubRange(
+      track,
+      at,
+      Math.max(end, at + blockLengthSamples / (block.sampleRate || 44100)),
+      block,
+      1,
+      { ceiling }
+    );
   }
 
   return {
@@ -407,7 +637,20 @@ export function applyClipDrop(
     snapped: placed.snapped,
     reason: placed.reason,
     clipEndSeconds: at + clipLength,
+    placedAudio: block,
+    level: normalized.report,
+    mix: outcome.mix,
   };
+}
+
+/**
+ * Dateiname für den WAV-Export eines Clips („07_Name.wav“). Eine Quelle für
+ * Einzel- und Massenexport, damit beide gleich benennen.
+ */
+export function clipExportFileName(clips: PaletteClip[], clip: PaletteClip): string {
+  const index = clipDisplayIndex(clips, clip.id);
+  const safeName = (clip.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60) || 'clip').replace(/_+$/, '');
+  return `${String(Math.max(1, index)).padStart(2, '0')}_${safeName}.wav`;
 }
 
 /** Beschriftung für Rückmeldung und Protokoll. */

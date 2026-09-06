@@ -22,13 +22,14 @@
     "clean": "node tools/clean.cjs",
     "icon": "npx --yes png2icons app-resources/icon.png app-resources/icon -icowe",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && node tests/db-reader-keys.test.mjs && tsx tests/edit-workflow.test.ts && node tests/sqlcipher-js-reader.test.mjs && tsx tests/clip-library.test.ts && tsx tests/project-io.test.ts && tsx tests/waveform-colors.test.ts && node tests/desktop-bridge.test.mjs",
+    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && node tests/db-reader-keys.test.mjs && tsx tests/edit-workflow.test.ts && node tests/sqlcipher-js-reader.test.mjs && tsx tests/clip-library.test.ts && tsx tests/project-io.test.ts && tsx tests/waveform-colors.test.ts && node tests/desktop-bridge.test.mjs && tsx tests/workflow-real.test.ts",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "native:windows-hint": "node tools/windows-native-hint.cjs",
     "proof:edit-workflow": "tsx tests/edit-workflow.test.ts",
     "proof:project": "tsx tests/project-io.test.ts",
     "proof:clip-library": "tsx tests/clip-library.test.ts",
-    "proof:waveform-colors": "tsx tests/waveform-colors.test.ts"
+    "proof:waveform-colors": "tsx tests/waveform-colors.test.ts",
+    "proof:workflow-real": "tsx tests/workflow-real.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

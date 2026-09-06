@@ -25,13 +25,14 @@ import {
   buildClip,
   normalizeLibrary,
   clipAudioOf as pcmOfClip,
-  clipDisplayIndex,
   describeClip,
   dropModeFor,
   duplicateClip,
   ensureConsistentClip,
   applyClipDrop,
   clipDropTitle,
+  clipExportFileName,
+  clipLevelNote,
   moveClip,
   nextClipId,
   readClipDragPayload,
@@ -748,7 +749,15 @@ export default function App() {
       return;
     }
     // Dieselbe Rechnung wie in tests/clip-library.test.ts: rastern, klemmen, einfügen.
+    // Vor der Ablage normalisiert der Kern den Clip-Pegel und hält beim Überlagern
+    // den Kopfraum frei – was er getan hat, steht mit im Bericht.
     const outcome = applyClipDrop(editableFrom(activeTrack, source), audio, wantedSeconds, { quantize, mode });
+    const levelNote = clipLevelNote(outcome.level, outcome.mix ?? null);
+    if (levelNote) {
+      const base = outcome.report.description.replace(/\s*\(?\s*–\s*.*$/, '').replace(/\.$/, '');
+      outcome.report.description = `${base} – ${levelNote}.`;
+      logger.info('EDITING', `[Pegel] ${levelNote}`);
+    }
     applyEdit(clipDropTitle(clip, mode), () => ({ target: outcome.target, report: outcome.report }));
     const at = outcome.atSeconds;
     const clipEnd = outcome.clipEndSeconds;
@@ -953,6 +962,28 @@ export default function App() {
     setSelection(null);
   };
 
+  /** Einen einzelnen Clip als WAV speichern – Dateiname wie beim Massenexport. */
+  const handleExportClip = async (clipId: string) => {
+    const clip = paletteClips.find((entry) => entry.id === clipId);
+    if (!clip) return;
+    const audio = clipAudioOf(clip);
+    if (!audio) {
+      alert(`Clip „${clip.name}“ enthält keine Audiodaten.`);
+      return;
+    }
+    try {
+      const written = await saveBinaryFile({
+        suggestedName: clipExportFileName(paletteClips, clip),
+        bytes: encodeWav(audio),
+        kind: 'wav',
+      });
+      if (!written) return;
+      logger.info('UI', `Clip exportiert: ${describeClip(clip)} → ${written.target}`);
+    } catch (err) {
+      alert(`Export fehlgeschlagen: ${(err as Error).message}`);
+    }
+  };
+
   // ── Palette-Clips als einzelne WAVs exportieren ───────────────────────────
   const handleExportPaletteClips = async () => {
     if (!activeTrack) return;
@@ -965,10 +996,8 @@ export default function App() {
     clips.forEach((clip) => {
       const audio = clipAudioOf(clip);
       if (!audio) return;
-      const safeName = clip.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60);
-      const index = clipDisplayIndex(clips, clip.id);
       files.push({
-        name: `${String(index).padStart(2, '0')}_${safeName}.wav`,
+        name: clipExportFileName(clips, clip),
         bytes: encodeWav(audio),
       });
     });
@@ -1991,6 +2020,9 @@ export default function App() {
           onLoadIntoDeck={handleLoadClipIntoDeck}
           onInsertAtPlayhead={(id) => handleInsertClipFromLibrary(id, 'insert')}
           onRenameClip={handleRenameClip}
+          onApplyClipAt={(id, mode) => handleInsertClipFromLibrary(id, mode)}
+          onExportClip={(id) => void handleExportClip(id)}
+          onUnloadFromDeck={handleUnloadDeckClip}
           onDuplicateClip={handleDuplicateClip}
           onMoveClip={handleMoveClip}
           onDeleteClip={handleDeleteClip}

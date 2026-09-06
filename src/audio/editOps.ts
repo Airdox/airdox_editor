@@ -19,7 +19,7 @@ import {
   pcmConcat,
   pcmDuration,
   pcmInsertSamples,
-  pcmMixAt,
+  pcmMixHeadroom,
   pcmOverwrite,
   pcmRemoveSamples,
   pcmSampleCount,
@@ -75,6 +75,18 @@ export interface EditReport {
 export interface EditOutcome {
   target: EditableAudio;
   report: EditReport;
+}
+
+/** Overdub kennt die Pegel-Rechnung und weist sie aus – für Oberfläche und Tests. */
+export interface OverdubOutcome extends EditOutcome {
+  mix: {
+    gainUsed: number;
+    gainRequested: number;
+    dryPeak: number;
+    peakAfter: number;
+    regionScale: number;
+    attenuated: boolean;
+  };
 }
 
 export function secondsPerBeat(grid: BeatGrid): number {
@@ -535,26 +547,58 @@ export function replaceRange(target: EditableAudio, startSec: number, endSec: nu
 }
 
 /** Overdub: Clip über den gewählten Bereich mischen (Sättigung statt Clipping). */
+/**
+ * Clip über einen Bereich mischen (Overdub). Länge, Cues, Loops und Beatgrid
+ * bleiben unangetastet.
+ *
+ * Pegel: linear addieren, aber nie über die Obergrenze. Früher begrenzte ein
+ * tanh die Summe – das verbog jedes Sample im Überlappungsbereich, auch die
+ * leisen des Vorhandenen. Jetzt wird nur der zugeführte Clip so weit leiser
+ * gerechnet, dass |dry| + |wet| garantiert unter `ceiling` bleibt; das
+ * vorhandene Material bleibt bitgenau, außer es wäre ohne Zutun schon darüber –
+ * dann geht der Bereich als Ganzes auf die Obergrenze (`regionScale`) und der
+ * Bericht sagt das.
+ */
 export function overdubRange(
   target: EditableAudio,
   startSec: number,
   endSec: number,
   clip: PcmAudio,
-  gain = 0.85
-): EditOutcome {
+  gain = 1,
+  options: { ceiling?: number } = {}
+): OverdubOutcome {
   const total = pcmSampleCount(target.audio);
   const range = clampRange(target.audio.sampleRate, total, startSec, endSec);
   const report = reportBase('OVERDUB_RANGE', target);
-  const audio = pcmMixAt(target.audio, range.startSample, clip, gain, range.length);
+  const mix = pcmMixHeadroom(target.audio, range.startSample, clip, gain, range.length, options.ceiling ?? 0.999);
+  const audio = mix.pcm;
   const newTarget: EditableAudio = { audio, cues: target.cues, loops: target.loops, beatGrid: target.beatGrid };
+  const notes: string[] = [];
+  if (mix.attenuated) {
+    notes.push(
+      `Clip-Pegel von ${gain.toFixed(3)} auf ${mix.gainUsed.toFixed(3)} gesenkt (${dbText(mix.gainUsed / gain)}) – ` +
+        'die Summe bleibt unter der Obergrenze'
+    );
+  }
+  if (mix.regionScale < 1) {
+    notes.push(`Überlappungsbereich um ${dbText(mix.regionScale)} abgesenkt, weil das vorhandene Material bereits über der Obergrenze lag`);
+    report.warnings.push('Vorhandenes Material war übersteuernd – Bereich angeglichen, Clip nicht hart begrenzt.');
+  }
   Object.assign(report, describeBeats(target.beatGrid, range.start, range.end), {
     targetStart: range.start,
     targetEnd: range.end,
     durationSec: range.length / target.audio.sampleRate,
     samplesAfter: pcmSampleCount(audio),
-    description: `Clip mit Verstärkung ${gain.toFixed(2)} über ${range.start.toFixed(3)}–${range.end.toFixed(3)} s gemischt (tanh-limitiert).`,
+    description:
+      `Clip mit Verstärkung ${mix.gainUsed.toFixed(3)} über ${range.start.toFixed(3)}–${range.end.toFixed(3)} s gemischt ` +
+      `(Peak danach ${mix.peakAfter.toFixed(3)})${notes.length ? ' – ' + notes.join('; ') : ''}.`,
   });
-  return { target: newTarget, report };
+  return { target: newTarget, report, mix };
+}
+
+function dbText(ratio: number): string {
+  if (!(ratio > 0) || !Number.isFinite(ratio)) return '−∞ dB';
+  return `${(20 * Math.log10(ratio)).toFixed(1)} dB`;
 }
 
 /** Bereich stummschalten (Clear), Länge und Beatgrid bleiben unangetastet. */

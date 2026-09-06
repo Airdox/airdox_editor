@@ -196,32 +196,129 @@ export function pcmSilenceRange(pcm: PcmAudio, startSample: number, endSample: n
   return pcmOverwrite(pcm, startSample, endSample, null);
 }
 
+/** Was eine Überlagerung pegeltechnisch getan hat – für Bericht, Oberfläche, Tests. */
+export interface MixHeadroomResult {
+  pcm: PcmAudio;
+  /** tatsächlich genutzte Verstärkung des zugeführten Blocks */
+  gainUsed: number;
+  /** angeforderte Verstärkung */
+  gainRequested: number;
+  /** größter Ausschlag des trockenen Materials im Überlappungsbereich vorher */
+  dryPeak: number;
+  /** Peak des Ergebnisses im Überlappungsbereich */
+  peakAfter: number;
+  /** < 1, wenn der Bereich wegen vorhandener Übersteuerung gesenkt wurde */
+  regionScale: number;
+  /** true, wenn der Clip leiser gemischt werden musste */
+  attenuated: boolean;
+}
+
 /**
- * Mischt einen Block über den vorhandenen Inhalt. Die Sättigung folgt dem
- * etablierten Verhalten des Editors (tanh), damit Überlagerungen nicht clippen.
+ * Lineare Überlagerung mit Kopfraum – der einzige Mischweg des Editors.
+ *
+ * Früher: `tanh(dry + wet)`. Das begrenzt zwar hartes Clipping, verbiegt aber
+ * jedes Sample des Überlappungsbereichs (auch die leisen) und verändert damit
+ * vorhandenes Material. Hier bleibt das trockene Material bitgenau:
+ *
+ *   1. Der zugeführte Block wird höchstens so weit eingemischt, dass
+ *      |dry| + |wet| · gain die Obergrenze nicht überschreitet
+ *      (Dreiecksungleichung – Übersteuerung ist damit ausgeschlossen, nicht nur gedämpft).
+ *   2. Liegt das trockene Material bereits über der Obergrenze, wird der
+ *      Überlappungsbereich als Ganzes auf die Obergrenze skaliert (`regionScale`).
  */
-export function pcmMixAt(
+export function pcmMixHeadroom(
   pcm: PcmAudio,
   atSample: number,
   block: PcmAudio,
-  gain = 0.85,
-  limitSamples?: number
-): PcmAudio {
+  gain = 1,
+  limitSamples?: number,
+  ceiling = 0.999
+): MixHeadroomResult {
   const out = pcmClone(pcm);
   const blockLength = pcmSampleCount(block);
   const maxByRange = limitSamples === undefined ? blockLength : Math.max(0, limitSamples);
-  const limit = Math.min(blockLength, maxByRange, out.channels[0]?.length ? out.channels[0].length - atSample : 0);
+  const destLength = out.channels[0] ? out.channels[0].length - atSample : 0;
+  const limit = Math.max(0, Math.min(blockLength, maxByRange, destLength));
+  const start = Math.max(0, atSample);
+  const end = start + limit;
 
-  for (let ch = 0; ch < out.channels.length; ch++) {
-    const dest = out.channels[ch];
+  const dryPeak = limit > 0 ? pcmPeak(out, start, end) : 0;
+  const clipPeak = pcmPeak(block);
+  const wetPeak = clipPeak * Math.abs(gain);
+
+  // 1) Bereich, der ohne Zutun schon über der Obergrenze liegt, absenken.
+  let regionScale = 1;
+  if (dryPeak > ceiling) {
+    regionScale = ceiling / dryPeak;
+    scaleRange(out, start, end, regionScale);
+  }
+  const dryAfterScale = dryPeak * regionScale;
+
+  // 2) Zugeführten Block nur so weit einmischen, dass die Summe sicher bleibt.
+  let gainUsed = gain;
+  if (dryAfterScale + wetPeak > ceiling) {
+    gainUsed = clipPeak > 0 && gain !== 0 ? (gain * Math.max(0, ceiling - dryAfterScale)) / wetPeak : 0;
+  }
+  mixInto(out, start, block, gainUsed, limit);
+
+  return {
+    pcm: out,
+    gainUsed,
+    gainRequested: gain,
+    dryPeak,
+    peakAfter: limit > 0 ? pcmPeak(out, start, end) : dryAfterScale,
+    regionScale,
+    attenuated: Math.abs(gainUsed - gain) > 1e-12,
+  };
+}
+
+function scaleRange(pcm: PcmAudio, start: number, end: number, factor: number): void {
+  if (factor === 1) return;
+  for (const ch of pcm.channels) {
+    for (let i = start; i < end; i++) ch[i] *= factor;
+  }
+}
+
+function mixInto(pcm: PcmAudio, atSample: number, block: PcmAudio, gain: number, limit: number): void {
+  if (gain === 0 || limit <= 0) return;
+  for (let ch = 0; ch < pcm.channels.length; ch++) {
+    const dest = pcm.channels[ch];
     const src = block.channels[Math.min(ch, block.channels.length - 1)];
     for (let i = 0; i < limit; i++) {
       const at = atSample + i;
       if (at >= dest.length) break;
-      dest[at] = Math.tanh(dest[at] + src[i] * gain);
+      dest[at] += src[i] * gain;
     }
   }
-  return out;
+}
+
+/** Größter Ausschlag (Maximalbetrag) eines Bereichs, 0 bei leerem Material. */
+export function pcmPeak(pcm: PcmAudio, startSample = 0, endSample?: number): number {
+  const total = pcmSampleCount(pcm);
+  const a = Math.max(0, Math.floor(Number.isFinite(startSample) ? startSample : 0));
+  const b = Math.min(total, Math.floor(Number.isFinite(endSample) ? (endSample as number) : total));
+  let peak = 0;
+  for (const ch of pcm.channels) {
+    for (let i = a; i < b; i++) {
+      const v = Math.abs(ch[i]);
+      if (v > peak) peak = v;
+    }
+  }
+  return peak;
+}
+
+/** Alles um einen Faktor lauter/leiser – neue Arrays, das Original bleibt unverändert. */
+export function pcmScale(pcm: PcmAudio, gain: number): PcmAudio {
+  const factor = Number.isFinite(gain) ? gain : 1;
+  if (factor === 1) return pcmClone(pcm);
+  return {
+    sampleRate: pcm.sampleRate,
+    channels: pcm.channels.map((ch) => {
+      const out = new Float32Array(ch.length);
+      for (let i = 0; i < ch.length; i++) out[i] = ch[i] * factor;
+      return out;
+    }),
+  };
 }
 
 /**

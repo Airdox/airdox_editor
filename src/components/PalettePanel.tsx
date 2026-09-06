@@ -14,7 +14,7 @@
  * dieses Bauteil erfindet keine Felder, es zeigt nur, was der Kern berechnet hat.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { PaletteClip } from '../types/rekordbox';
 import {
   Trash2,
@@ -25,6 +25,10 @@ import {
   ChevronLeft,
   Copy,
   Pencil,
+  Download,
+  Gauge,
+  Layers,
+  Replace,
   Disc3,
   CornerUpRight,
   ArrowUp,
@@ -33,7 +37,16 @@ import {
 } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
 import { AMBER_HOT_GLOW, amberColorCss } from '../waveform/colors';
-import { CLIP_DND_MIME, CLIP_LIBRARY_LABEL, encodeClipDragPayload, clipAudioOf } from '../audio/clipLibrary';
+import {
+  CLIP_DND_MIME,
+  CLIP_DROP_LABELS,
+  CLIP_LIBRARY_LABEL,
+  ClipDropMode,
+  clipAudioOf,
+  describeClip,
+  describeClipLevel,
+  encodeClipDragPayload,
+} from '../audio/clipLibrary';
 import { pcmToAudioBuffer } from '../audio/pcm';
 
 interface PalettePanelProps {
@@ -54,7 +67,30 @@ interface PalettePanelProps {
   onRenameClip?: (id: string, name: string) => void;
   onDuplicateClip?: (id: string) => void;
   onMoveClip?: (id: string, delta: number) => void;
+  /**
+   * Clip aus dem Kontextmenü an der aktuellen Zielzeit ablegen – dieselben
+   * Modi wie beim Ablage-Weg per Drag & Drop (einfügen / darüberlegen / ersetzen).
+   */
+  onApplyClipAt?: (id: string, mode: Exclude<ClipDropMode, 'deck'>) => void;
+  /** Clip als WAV-Datei speichern (Dialog in der Desktop-App, Download im Browser). */
+  onExportClip?: (id: string) => void;
+  /** Clip aus dem Deck-Spieler entladen. */
+  onUnloadFromDeck?: () => void;
 }
+
+/** Aktionen des Kontextmenüs – Reihenfolge ist zugleich die Tastenreihenfolge. */
+type ClipMenuAction =
+  | 'insert'
+  | 'overdub'
+  | 'replace'
+  | 'deck'
+  | 'unload'
+  | 'export'
+  | 'duplicate'
+  | 'rename'
+  | 'up'
+  | 'down'
+  | 'delete';
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
   isOpen,
@@ -72,11 +108,76 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   onRenameClip,
   onDuplicateClip,
   onMoveClip,
+  onApplyClipAt,
+  onExportClip,
+  onUnloadFromDeck,
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draggedId, setDraggedId] = useState<string | null>(null);
+  /** Offenes Kontextmenü (rechte Maustaste) – Position in Kundenkoordinaten. */
+  const [menu, setMenu] = useState<{ x: number; y: number; clipId: string } | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenu(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menu]);
+
+  const openMenu = (clip: PaletteClip, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectClip(clip);
+    const width = 252;
+    const height = 322;
+    setMenu({
+      x: Math.max(6, Math.min(event.clientX, window.innerWidth - width - 6)),
+      y: Math.max(6, Math.min(event.clientY, Math.max(6, window.innerHeight - height - 6))),
+      clipId: clip.id,
+    });
+  };
+
+  const runMenuAction = (action: ClipMenuAction) => {
+    const clip = menu ? clips.find((entry) => entry.id === menu.clipId) ?? null : null;
+    setMenu(null);
+    if (!clip) return;
+    switch (action) {
+      case 'insert':
+      case 'overdub':
+      case 'replace':
+        onApplyClipAt?.(clip.id, action);
+        break;
+      case 'deck':
+        onLoadIntoDeck?.(clip.id);
+        break;
+      case 'unload':
+        onUnloadFromDeck?.();
+        break;
+      case 'export':
+        onExportClip?.(clip.id);
+        break;
+      case 'duplicate':
+        onDuplicateClip?.(clip.id);
+        break;
+      case 'rename':
+        setEditingId(clip.id);
+        setDraftName(clip.name);
+        break;
+      case 'up':
+        onMoveClip?.(clip.id, -1);
+        break;
+      case 'down':
+        onMoveClip?.(clip.id, 1);
+        break;
+      case 'delete':
+        onDeleteClip(clip.id);
+        break;
+    }
+  };
 
   const bufferOf = (clip: PaletteClip): AudioBuffer | null => {
     if (clip.audioBuffer) return clip.audioBuffer;
@@ -195,6 +296,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                 }}
                 onDragEnd={() => setDraggedId(null)}
                 onClick={() => onSelectClip(clip)}
+                onContextMenu={(event) => openMenu(clip, event)}
                 onDoubleClick={() => {
                   setEditingId(clip.id);
                   setDraftName(clip.name);
@@ -206,7 +308,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                 } ${isDragging ? 'opacity-40 border-dashed' : ''}`}
                 title={
                   hasAudio
-                    ? 'Ziehen: auf die Wellenform = einfügen · Alt = darüberlegen · Umschalt = ersetzen · Strg = in den Deck-Spieler'
+                    ? 'Ziehen: auf die Wellenform = einfügen · Alt = darüberlegen · Umschalt = ersetzen · Strg = in den Deck-Spieler · Rechtsklick = Aktionen'
                     : 'Dieser Clip hat keine Audiodaten'
                 }
               >
@@ -400,6 +502,111 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
           <span className="text-[11px] font-medium">Clip hinzufügen</span>
         </button>
       </div>
+
+      {/* Kontextmenü (rechte Maustaste auf einen Clip): was mit dem Clip passieren soll */}
+      {menu &&
+        (() => {
+          const clip = clips.find((entry) => entry.id === menu.clipId);
+          if (!clip) return null;
+          const clipHasAudio = clipAudioOf(clip) !== null;
+          const clipIndex = clips.findIndex((entry) => entry.id === menu.clipId);
+          const isDeckClip = deckClipId === clip.id;
+          const item = (
+            action: ClipMenuAction,
+            label: string,
+            options: { icon?: React.ReactNode; disabled?: boolean; hint?: string; danger?: boolean } = {}
+          ) => (
+            <button
+              key={action}
+              onClick={() => runMenuAction(action)}
+              disabled={options.disabled}
+              title={options.hint}
+              className={`w-full flex items-center gap-2 px-2 py-1 text-left text-[11px] rounded-xs transition-colors disabled:opacity-30 ${
+                options.danger
+                  ? 'text-[#ff8a8a] hover:bg-[#2a1416] hover:text-white'
+                  : 'text-neutral-300 hover:bg-[#20222c] hover:text-white'
+              } disabled:hover:bg-transparent`}
+            >
+              <span className="w-3 flex-shrink-0 text-center">{options.icon}</span>
+              <span className="truncate">{label}</span>
+            </button>
+          );
+          return (
+            <>
+              {/* Fläche dahinter: jeder Klick außerhalb schließt das Menü */}
+              <div
+                className="fixed inset-0 z-[70]"
+                onMouseDown={() => setMenu(null)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu(null);
+                }}
+              />
+              <div
+                className="fixed z-[71] w-64 bg-[#14151a] border border-[#2b2d38] rounded-sm shadow-2xl py-1 select-none"
+                style={{ left: menu.x, top: menu.y }}
+                role="menu"
+                aria-label={`Aktionen für Clip ${clip.name}`}
+              >
+                <div className="px-2 pb-1.5 mb-1 border-b border-[#22242d]">
+                  <div className="text-[11px] font-bold text-white truncate" title={clip.name}>
+                    {clip.name}
+                  </div>
+                  <div className="text-[9px] font-mono text-neutral-500 truncate" title={describeClip(clip)}>
+                    {clip.duration.toFixed(3)} s · {clip.beats} Beats · {clip.bpm.toFixed(1)} BPM
+                  </div>
+                  <div className="text-[9px] font-mono text-[#ffb74d] flex items-center gap-1 mt-0.5" title="Pegel vor und nach der Einfüge-Normalisierung">
+                    <Gauge size={9} className="flex-shrink-0" />
+                    <span className="truncate">{describeClipLevel(clip)}</span>
+                  </div>
+                </div>
+
+                {item('insert', 'In die Spur einfügen', {
+                  icon: <CornerUpRight size={11} />,
+                  disabled: !clipHasAudio,
+                  hint: CLIP_DROP_LABELS.insert,
+                })}
+                {item('overdub', 'Darüberlegen (Pegel wird angepasst)', {
+                  icon: <Layers size={11} />,
+                  disabled: !clipHasAudio,
+                  hint: `${CLIP_DROP_LABELS.overdub} – der Clip wird maximal so laut gemischt, dass nichts übersteuert`,
+                })}
+                {item('replace', 'Auswahl ersetzen', {
+                  icon: <Replace size={11} />,
+                  disabled: !clipHasAudio,
+                  hint: CLIP_DROP_LABELS.replace,
+                })}
+                {isDeckClip
+                  ? item('unload', 'Aus dem Deck-Spieler entladen', { icon: <Square size={11} />, hint: 'Strg+Shift+X' })
+                  : item('deck', 'In den Deck-Spieler laden', {
+                      icon: <Disc3 size={11} />,
+                      disabled: !clipHasAudio,
+                      hint: CLIP_DROP_LABELS.deck,
+                    })}
+
+                <div className="my-1 border-t border-[#22242d]" />
+
+                {item('export', 'Als WAV-Datei exportieren', {
+                  icon: <Download size={11} />,
+                  disabled: !clipHasAudio,
+                  hint: 'Nur die Samples dieses Clips – die Quellspur bleibt unverändert',
+                })}
+                {item('duplicate', 'Duplizieren', { icon: <Copy size={11} />, hint: 'Kopie direkt unter dem Original' })}
+                {item('rename', 'Umbenennen', { icon: <Pencil size={11} />, hint: 'Name in der Bibliothek ändern' })}
+                {item('up', 'In der Liste nach oben', { icon: <ArrowUp size={11} />, disabled: clipIndex <= 0 })}
+                {item('down', 'In der Liste nach unten', { icon: <ArrowDown size={11} />, disabled: clipIndex >= clips.length - 1 })}
+
+                <div className="my-1 border-t border-[#22242d]" />
+
+                {item('delete', 'Aus der Bibliothek entfernen', {
+                  icon: <Trash2 size={11} />,
+                  danger: true,
+                  hint: 'Nur der Bibliotheks-Eintrag – Originaldatei und Spur bleiben unberührt',
+                })}
+              </div>
+            </>
+          );
+        })()}
     </div>
   );
 };
