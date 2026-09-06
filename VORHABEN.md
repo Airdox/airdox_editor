@@ -1,6 +1,6 @@
 # Vorhaben: Rekordbox-Desktop-Importpfad
 
-**Stand: 05.09.2026**
+**Stand: 06.09.2026**
 
 Die Anwendung wird schrittweise zu einer Windows-Desktop-App ausgebaut. Rekordbox-XML liefert Bibliothek, Metadaten und Dateipfade. Rekordbox-Datenbank- und ANLZ-Daten haben Vorrang für Waveform, Beatgrid, Cues und Songstruktur. Eigene Berechnungen sind ausschließlich gekennzeichnete Fallbacks.
 
@@ -41,4 +41,16 @@ Der Lese-Pfad (XML → ANLZ → Datenbank) wird um den Schreib-Pfad ergänzt, de
 - `Datei → Projekt speichern/öffnen` (Ctrl+S / Ctrl+Shift+O) sowie der Speichern-Button im Transport werden an die echte Projekt-Persistenz angebunden; der `ExportModal` nutzt im Desktop-Modus den nativen Speichern-Dialog (Browser-Fallback bleibt erhalten).
 - Tests: `project-file.test.ts` (10 Checks: WAV-Kodierung, Roundtrip, keine Duplizierung quellgestützter Tracks, Versions-/Format-Validierung) und `path-guard.test.mjs` (Überschreib-Schutz).
 
-**Verifikation mit Rekordbox 7:** Die Schlüssellogik und das Schema-Mapping sind gegen die veröffentlichten Spezifikationen getestet (12 + 12 + 6 + 11.000-Track-Checks); die tatsächliche Entschlüsselung einer echten `master.db`/`exportLibrary.db` sollte auf dem Windows-Rechner einmalig gegen die eigene Bibliothek bestätigt werden (Analysepfade/Standorte können je nach Rekordbox-7-Einstellungen abweichen).
+**Verifikation mit Rekordbox 7:** Die Schlüssellogik und das Schema-Mapping sind gegen die veröffentlichten Spezifikationen getestet (12 + 12 + 6 + 11.000-Track-Checks). Die Entschlüsselung selbst ist jetzt ebenfalls maschinell abgedeckt: `tests/db-reader-open.test.mjs` schreibt eine echte SQLCipher-`master.db`, liest sie über `electron/dbReader.cjs` zurück und prüft die Fehlerpfade (12 Checks). Offen bleibt die einmalige Gegenprobe gegen die eigene Bibliothek auf dem Windows-Rechner (Analysepfade/Standorte können je nach Rekordbox-7-Einstellungen abweichen).
+
+## Phase 5 – Testdaten-Paket & Korrektur des Extraktionspfads ✅
+
+Der Lese-Pfad ist jetzt vollständig durch einen reproduzierbaren Datensatz abgedeckt. `tools/extract-20-eintraege.mts` erzeugt 20 Einzel-Einträge mit allen zugehörigen Daten in den Ordnern `Testdateien/` (Einzel-XML + Voll-JSON + Sammel-XML), `Audio/` (16-bit-PCM-WAV im Track-BPM) und `Datenbanken/` (SQLCipher-`master.db` + `exportLibrary.db`, Klartext-Dumps, `ANLZ/` mit `.DAT` und `.EXT`). Jeder Eintrag durchläuft die echte Pipeline: `xmlParser` → `waveform/analyzer` → `databaseExtractor` → `anlzParser` → `dbReader` → `dbParser`.
+
+Dabei sind drei Fehler im Extraktionspfad aufgefallen und behoben:
+
+- `electron/dbReader.cjs`: `openRekordboxDb()` lieferte `{ db, dbType }` ohne `available`, wodurch `readRekordboxDatabase()` jede *erfolgreich* entschlüsselte Bibliothek als Fehlschlag behandelte und den Dateihandle offen ließ – der Datenbank-Import war damit faktisch tot. Jetzt `{ available: true, db, dbType }`.
+- `databaseExtractor.extractTrackFromRekordboxXml()`: Genre, Label, Rating, Play Count, Jahr, Kommentar, Remixer, die Roh-Attribute und die Read-Only-Referenz auf das Original fehlten im erzeugten `TrackModel` und gingen beim Laden in ein Deck verloren.
+- `anlzParser.parseAnlzBinary()`: mehrere Cue-Sektionen derselben Quelle und Kategorie überschrieben sich still (letzte Sektion gewann). Sie werden jetzt zusammengeführt; `PCO2` hat unabhängig von der Sektionsreihenfolge Vorrang vor `PCOB`.
+
+Tests: `extraction-completeness.test.ts` (8 Checks: Metadaten-Vollständigkeit, Sektions-Merge, PCO2-Vorrang bei umgekehrter Reihenfolge, Trennung Hot/Memory) und `db-reader-open.test.mjs` (12 Checks). Die erzeugten Datenbanken werden mit dem Projekt-Reader entschlüsselt (je 20 Tracks, 263 Cues); ohne installiertes `better-sqlite3-multiple-ciphers` meldet der Reader weiterhin nachvollziehbar `available: false` und der XML-Pfad bleibt funktionsfähig.

@@ -591,10 +591,17 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     }
   }
 
-  // Track the best cue list per category so that PCO2 (if present) takes
-  // priority over PCOB, and hot/memory lists are merged.
-  let rawMemoryCues: AnlzCueEntry[] = [];
-  let rawHotCues: AnlzCueEntry[] = [];
+  // Cue-Listen getrennt nach Quelle sammeln. PCO2 (nxs2) hat Vorrang vor PCOB
+  // – unabhängig von der Reihenfolge der Sektionen in der Datei. Mehrere
+  // Sektionen derselben Quelle und Kategorie werden zusammengeführt, statt
+  // sich still zu überschreiben (z. B. Memory Cues und Loops in getrennten
+  // Memory-Banken).
+  const cueLists: Record<'pcobMemory' | 'pcobHot' | 'pco2Memory' | 'pco2Hot', AnlzCueEntry[]> = {
+    pcobMemory: [],
+    pcobHot: [],
+    pco2Memory: [],
+    pco2Hot: [],
+  };
   let beatGrid: BeatGrid | undefined;
   let waveformPriority = 0;
 
@@ -675,8 +682,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         // An empty real cue list is valid; preserve a previous list instead
         // of replacing it with nothing.
         if (decoded.length > 0) {
-          if (isHot) rawHotCues = decoded;
-          else rawMemoryCues = decoded;
+          (isHot ? cueLists.pcobHot : cueLists.pcobMemory).push(...decoded);
         }
       } else if (legacyShape) {
         // Legacy fixture layout (24-byte entries) used by older regression
@@ -701,8 +707,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         }
         if (decoded.length > 0) {
           const isHot = decoded.some((e) => e.hotCue > 0);
-          if (isHot) rawHotCues = decoded;
-          else rawMemoryCues = decoded;
+          (isHot ? cueLists.pcobHot : cueLists.pcobMemory).push(...decoded);
         }
       } else {
         result.warnings.push('PCOB: unbekannte Cue-Struktur übersprungen.');
@@ -723,8 +728,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
           cursor += view.getUint32(cursor + 0x08, false) || 0x28;
         }
         if (decoded.length > 0) {
-          if (isHot) rawHotCues = decoded;
-          else rawMemoryCues = decoded;
+          (isHot ? cueLists.pco2Hot : cueLists.pco2Memory).push(...decoded);
         }
       } else {
         result.warnings.push('PCO2: erweitertes Cue-Layout nicht lesbar.');
@@ -778,6 +782,11 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
 
     offset += chunkSize;
   }
+
+  // PCO2 (nxs2) gewinnt gegen PCOB, sobald für die jeweilige Kategorie
+  // erweiterte Einträge vorhanden sind – unabhängig von der Sektionsreihenfolge.
+  const rawMemoryCues = cueLists.pco2Memory.length > 0 ? cueLists.pco2Memory : cueLists.pcobMemory;
+  const rawHotCues = cueLists.pco2Hot.length > 0 ? cueLists.pco2Hot : cueLists.pcobHot;
 
   result.rawHotCues = rawHotCues;
   result.rawMemoryCues = rawMemoryCues;

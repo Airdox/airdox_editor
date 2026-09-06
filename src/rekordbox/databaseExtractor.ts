@@ -267,6 +267,18 @@ export function extractTrackFromRekordboxXml(
     title: rawTrack.title || 'Extracted Track',
     artist: rawTrack.artist || 'Unknown Artist',
     album: rawTrack.album || 'Rekordbox Collection',
+    // Bibliografische Metadaten aus dem XML-Eintrag mitnehmen: ohne sie gingen
+    // Genre, Label, Rating, Play Count, Jahr, Kommentar und die Read-Only-
+    // Referenz auf das Original beim Laden in ein Deck verloren.
+    genre: rawTrack.genre,
+    label: rawTrack.label,
+    rating: rawTrack.rating,
+    playCount: rawTrack.playCount,
+    year: rawTrack.year || undefined,
+    comments: rawTrack.comments || undefined,
+    dateAdded: rawTrack.dateAdded || undefined,
+    remixer: rawTrack.remixer || undefined,
+    isrc: rawTrack.isrc,
     bpm,
     key: rawTrack.key || '2A',
     duration,
@@ -282,6 +294,8 @@ export function extractTrackFromRekordboxXml(
     phrases,
     origin: DataOrigin.REKORDBOX_XML,
     databaseRecord: dbRecord,
+    rawXmlAttributes: rawTrack.rawXmlAttributes,
+    originalMedia: rawTrack.originalMedia,
     workingSegments: [
       {
         id: `seg-init-${Date.now()}`,

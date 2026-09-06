@@ -560,25 +560,11 @@ function main() {
     } as unknown as AudioBuffer;
     const waveformFromAudio = analyzeAudioBuffer(fakeAudioBuffer, DataOrigin.LOCAL_ANALYSIS);
 
-    // Komplette Extraktion über die Projektpipeline
+    // Komplette Extraktion über die Projektpipeline. Rating, Play Count, Jahr,
+    // Kommentar, Genre, Remixer, Roh-Attribute und die Read-Only-Referenz
+    // liefert extractTrackFromRekordboxXml() inzwischen selbst.
     const { track, record } = extractTrackFromRekordboxXml(singleXml, 0, fakeAudioBuffer);
     track.analysis = waveformFromAudio;
-
-    // extractTrackFromRekordboxXml() reicht Rating, Play Count, Kommentar, Genre,
-    // Label, Jahr und die Original-Referenz nicht weiter – hier werden sie aus dem
-    // geparsten XML-Eintrag ergänzt, damit kein Eintrag Daten verliert.
-    Object.assign(track, {
-      genre: partial.genre ?? track.genre,
-      label: partial.label ?? partial.rawXmlAttributes?.Label ?? track.label,
-      rating: partial.rating ?? track.rating,
-      playCount: partial.playCount ?? track.playCount,
-      year: partial.year || track.year,
-      comments: partial.comments || track.comments,
-      dateAdded: partial.dateAdded || track.dateAdded,
-      remixer: partial.remixer || track.remixer,
-      originalMedia: partial.originalMedia ?? track.originalMedia,
-      rawXmlAttributes: partial.rawXmlAttributes ?? track.rawXmlAttributes,
-    });
 
     // ANLZ-Dateien aus den echten Track-Daten erzeugen
     const spb = 60 / bpm;
@@ -713,7 +699,7 @@ function main() {
     const albumId = idFor(albums, finalTrack.album, 1);
     const genreId = idFor(genres, finalTrack.genre || 'Electronic', 1);
     const keyId = idFor(keys, finalTrack.key, 1);
-    const labelId = idFor(labels, finalTrack.label || finalTrack.album || 'n/a', 1);
+    const labelId = idFor(labels, finalTrack.label || partial.rawXmlAttributes?.Label || 'n/a', 1);
     const contentId = Number(finalTrack.id) || 1000 + i;
     const lengthMs = Math.round(finalTrack.duration * 1000);
 
