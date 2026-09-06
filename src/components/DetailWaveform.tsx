@@ -115,6 +115,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
 
   // Time to pixel / pixel to time conversions
   const timeToPixel = useCallback(
@@ -213,32 +215,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const barNumber = Math.floor(b / bg.meter) + 1;
 
         if (isBar) {
-          // Prominent Bar vertical downbeat line
-          ctx.strokeStyle = 'rgba(235, 50, 50, 0.7)';
-          ctx.lineWidth = 1.3;
+          // Rekordbox authentic solid white Bar vertical downbeat line
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.2;
           ctx.beginPath();
-          ctx.moveTo(x, 18);
+          ctx.moveTo(x, 0);
           ctx.lineTo(x, height);
           ctx.stroke();
 
-          // Rekordbox authentic Bar badge in top ruler
-          ctx.fillStyle = '#b91c1c';
-          ctx.fillRect(x - 1, 2, 20, 14);
+          // Rekordbox Bar number in top ruler (e.g. 109, 113)
           ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 9px monospace';
-          ctx.fillText(`${barNumber}`, x + 2.5, 12.5);
-
-          // Red triangle pointing down from ruler
-          ctx.beginPath();
-          ctx.moveTo(x - 3, 16);
-          ctx.lineTo(x + 3, 16);
-          ctx.lineTo(x, 20);
-          ctx.closePath();
-          ctx.fillStyle = '#b91c1c';
-          ctx.fill();
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillText(`${barNumber}`, x + 3, 14);
         } else {
-          // Intermediate beat lines
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+          // Intermediate beat lines (beats 2, 3, 4)
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -249,7 +240,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.strokeStyle = '#606578';
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(x, 11);
+          ctx.moveTo(x, 12);
           ctx.lineTo(x, 18);
           ctx.stroke();
         }
@@ -284,16 +275,17 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const analysis = track.analysis;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
-        const secPerBucket = track.duration / buckets;
-        const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket));
-        const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket));
+        const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
+        const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
+        const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
 
         const maxHalfH = height * 0.42;
 
         for (let b = startBucket; b <= endBucket; b++) {
           const t = b * secPerBucket;
-          const x = timeToPixel(t, width);
-          const nextX = timeToPixel(t + secPerBucket, width);
+          const centerT = t + secPerBucket * 0.5;
+          const x = timeToPixel(centerT, width);
+          const nextX = timeToPixel(centerT + secPerBucket, width);
           const colW = Math.max(1.2, nextX - x);
 
           const peak = analysis.peaks[b];
@@ -304,46 +296,44 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           if (waveformMode === 'BLUE') {
             // High-contrast electric blue waveform
             const barH = Math.max(2, peak * maxHalfH);
-            // Core transient
             ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, colW, barH * 2);
-            // Highlight spikes
+            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
             ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, colW, barH * 0.7);
+            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
           } else if (waveformMode === 'RGB') {
-            // Frequency color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
+            // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
             const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 255 + mid * 70));
+            const r = Math.min(255, Math.floor(low * 270 + mid * 35));
             const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-            const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
+            const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
 
             ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, colW, barH * 2);
+            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
 
             // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.7, high * 0.8)})`;
-            ctx.fillRect(x, centerY - 2, colW, 4);
+            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
+            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
           } else {
             // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.8);
+            const lowH = Math.max(1, low * maxHalfH * 0.85);
             const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.6);
+            const highH = Math.max(1, high * maxHalfH * 0.55);
 
             // Lows (Red)
             ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - lowH, colW, lowH * 2);
+            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
             // Mids (Cyan/Green)
             ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - midH * 0.6, colW, midH * 1.2);
+            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
             // Highs (White/Ice Blue)
             ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - highH * 0.3, colW, highH * 0.6);
+            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
           }
         }
       } else {
         // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
         const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130;
+        const bpm = bg.bpm || 130.05;
         const secondsPerBeat = 60 / bpm;
         const numCols = Math.ceil(width / 2);
         for (let i = 0; i < numCols; i++) {
@@ -352,10 +342,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const beatPos = (t - bg.firstBeat) / secondsPerBeat;
           const beatFract = ((beatPos % 1) + 1) % 1;
           const barIndex = Math.floor(beatPos / 4);
-          const isBreak = (barIndex >= 24 && barIndex < 32) || (barIndex >= 48 && barIndex < 56);
-          const kickEnv = isBreak ? 0.08 : Math.exp(-beatFract * 10) * 0.85;
-          const subBass = isBreak ? 0.12 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.25;
+          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
+          const isBreak = (barIndex >= 96 && barIndex < 112);
+          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
+          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
+          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
           const peak = Math.min(1.0, kickEnv + subBass + hiHat);
 
           const barH = Math.max(2, peak * maxHalfH);
@@ -384,7 +375,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 3b. Beatgrid overlay lines over waveform (ensures beatgrid lines cut cleanly through loud transients)
+      // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
       for (let b = startBeat; b <= endBeat; b++) {
         const beatTime = bg.firstBeat + b * secondsPerBeat;
         const x = timeToPixel(beatTime, width);
@@ -392,15 +383,15 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const isBar = b % bg.meter === 0;
 
         if (isBar) {
-          ctx.strokeStyle = 'rgba(255, 60, 60, 0.65)';
-          ctx.lineWidth = 1.0;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 18);
           ctx.lineTo(x, height);
           ctx.stroke();
         } else {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
-          ctx.lineWidth = 0.6;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+          ctx.lineWidth = 0.7;
           ctx.beginPath();
           ctx.moveTo(x, 18);
           ctx.lineTo(x, height);
@@ -533,7 +524,75 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 7. Draw Playhead (White vertical hairline)
+      // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
+      if (track && hoveredTime !== null) {
+        const bg = track.beatGrid;
+        const spb = 60.0 / bg.bpm;
+        const snappedTime = snapTime(hoveredTime);
+        const snappedX = timeToPixel(snappedTime, width);
+        const rawX = timeToPixel(hoveredTime, width);
+
+        if (snappedX >= 0 && snappedX <= width) {
+          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
+          const isBar = beatIndex % bg.meter === 0;
+          const barNum = Math.floor(beatIndex / bg.meter) + 1;
+          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
+
+          // Subtle glowing translucent beam along the snapped grid line
+          const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
+          glowGrad.addColorStop(0, 'rgba(0, 229, 255, 0)');
+          glowGrad.addColorStop(0.5, isBar ? 'rgba(0, 229, 255, 0.22)' : 'rgba(0, 229, 255, 0.12)');
+          glowGrad.addColorStop(1, 'rgba(0, 229, 255, 0)');
+          ctx.fillStyle = glowGrad;
+          ctx.fillRect(snappedX - 12, 18, 24, height - 18);
+
+          // Vivid snap vertical line
+          ctx.strokeStyle = isBar ? '#00e5ff' : '#00b4d8';
+          ctx.lineWidth = isBar ? 1.8 : 1.2;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(snappedX, 18);
+          ctx.lineTo(snappedX, height);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Snap cursor indicator arrow at top insertion ruler
+          ctx.fillStyle = '#00e5ff';
+          ctx.beginPath();
+          ctx.moveTo(snappedX - 4, 18);
+          ctx.lineTo(snappedX + 4, 18);
+          ctx.lineTo(snappedX, 23);
+          ctx.closePath();
+          ctx.fill();
+
+          // If raw cursor differs from snapped line, show subtle connector
+          if (Math.abs(rawX - snappedX) > 2) {
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.45)';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(rawX, height - 12);
+            ctx.lineTo(snappedX, height - 12);
+            ctx.stroke();
+          }
+
+          // Floating Tooltip Badge above ruler or near cursor
+          const badgeText = `${isBar ? `BAR ${barNum}` : `B${barNum}.${beatInBar}`} • ${snappedTime.toFixed(2)}s`;
+          ctx.font = 'bold 9.5px monospace';
+          const badgeW = ctx.measureText(badgeText).width + 12;
+          const badgeX = Math.max(4, Math.min(width - badgeW - 4, snappedX - badgeW / 2));
+          
+          ctx.fillStyle = 'rgba(10, 15, 24, 0.92)';
+          ctx.fillRect(badgeX, 3, badgeW, 14);
+          ctx.strokeStyle = isBar ? '#00e5ff' : '#0096c7';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(badgeX, 3, badgeW, 14);
+
+          ctx.fillStyle = isBar ? '#ffffff' : '#90e0ef';
+          ctx.fillText(badgeText, badgeX + 6, 13.5);
+        }
+      }
+
+      // 8. Draw Playhead (White vertical hairline)
       const playX = timeToPixel(currentTime, width);
       if (playX >= 0 && playX <= width) {
         ctx.strokeStyle = '#ffffff';
@@ -565,10 +624,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     viewDuration,
     waveformMode,
     selection,
+    hoveredTime,
+    snapTime,
     timeToPixel,
   ]);
 
-  // Mouse interaction: Scrubbing / Selecting
+  // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!track) return;
     if (e.button === 2) {
@@ -610,12 +671,19 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!track || !isSelecting || dragStartSec === null) return;
+    if (!track) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const currX = e.clientX - rect.left;
+    const currY = e.clientY - rect.top;
     const rawTime = pixelToTime(currX, rect.width);
+
+    // Track hover position for snap-to-beat guide
+    setHoveredTime(rawTime);
+    setHoveredPos({ x: currX, y: currY });
+
+    if (!isSelecting || dragStartSec === null) return;
     const currTime = snapTime(rawTime);
 
     const start = Math.min(dragStartSec, currTime);
@@ -624,6 +692,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     if (end - start > 0.05) {
       updateSelectionRange(start, end);
     }
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredTime(null);
+    setHoveredPos(null);
+    setIsSelecting(false);
+    setDragStartSec(null);
   };
 
   const handleMouseUp = () => {
@@ -869,9 +944,19 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
           onContextMenu={handleContextMenu}
           className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
         />
+
+        {/* Top-Left Authentic Rekordbox BPM Badge */}
+        {track && (
+          <div className="absolute top-1 left-2 z-10 select-none pointer-events-none flex items-center">
+            <span className="text-[12px] font-mono font-bold text-white/95 bg-[#12141a]/85 border border-[#2d3142]/80 px-1.5 py-0.5 rounded-xs tracking-wider shadow-sm">
+              {track.bpm.toFixed(2)}
+            </span>
+          </div>
+        )}
 
         {/* Empty State Overlay */}
         {!track && (

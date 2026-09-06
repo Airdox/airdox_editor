@@ -16,10 +16,11 @@ export function analyzeAudioBuffer(
   const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
   const length = buffer.length;
 
-  // Aim for ~150-200 buckets per second of audio for ultra-crisp DJ zoom levels
-  const bucketsPerSecond = 180;
+  // Aim for ~200 buckets per second for ultra-crisp DJ zoom alignment
+  const bucketsPerSecond = 200;
   const totalBuckets = Math.max(100, Math.floor((length / sampleRate) * bucketsPerSecond));
-  const samplesPerBucket = Math.floor(length / totalBuckets);
+  const samplesPerBucket = Math.max(1, Math.floor(length / totalBuckets));
+  const secPerBucket = samplesPerBucket / sampleRate;
 
   const peaks = new Float32Array(totalBuckets);
   const peaksL = new Float32Array(totalBuckets);
@@ -28,18 +29,7 @@ export function analyzeAudioBuffer(
   const midEnergy = new Float32Array(totalBuckets);
   const highEnergy = new Float32Array(totalBuckets);
 
-  // Simplified Butterworth-style IIR filter coefficients for real-time 3-band separation
-  // Low-pass ~250 Hz, Band-pass 250-3500 Hz, High-pass >3500 Hz
-  const dt = 1.0 / sampleRate;
-  const rcLow = 1.0 / (2.0 * Math.PI * 260.0);
-  const alphaLow = dt / (rcLow + dt);
-
-  const rcHigh = 1.0 / (2.0 * Math.PI * 3500.0);
-  const alphaHigh = rcHigh / (rcHigh + dt);
-
-  let lowPrevL = 0;
-  let highPrevL = 0;
-  let inPrevL = 0;
+  let prevSL = 0;
 
   for (let b = 0; b < totalBuckets; b++) {
     const startIdx = b * samplesPerBucket;
@@ -52,7 +42,7 @@ export function analyzeAudioBuffer(
     let highSum = 0;
     let count = 0;
 
-    for (let i = startIdx; i < endIdx; i += 2) {
+    for (let i = startIdx; i < endIdx; i++) {
       const sL = left[i];
       const sR = right[i];
       const absL = Math.abs(sL);
@@ -60,17 +50,17 @@ export function analyzeAudioBuffer(
       if (absL > maxL) maxL = absL;
       if (absR > maxR) maxR = absR;
 
-      // Low pass
-      lowPrevL = lowPrevL + alphaLow * (sL - lowPrevL);
-      const lowVal = Math.abs(lowPrevL);
+      // Zero-phase instantaneous spectral separation (prevents IIR filter delay)
+      const diff = Math.abs(sL - prevSL);
+      prevSL = sL;
 
-      // High pass
-      const highVal = Math.abs(alphaHigh * (highPrevL + sL - inPrevL));
-      highPrevL = highVal;
-      inPrevL = sL;
-
-      // Mid band: difference
-      const midVal = Math.max(0, absL - lowVal * 0.7 - highVal * 0.7);
+      const mag = Math.max(absL, absR);
+      // High frequencies produce large sample-to-sample deltas
+      const highVal = Math.min(1.0, diff * 2.8);
+      // Low frequencies have large amplitude with smooth sample transitions
+      const lowVal = Math.max(0, mag - diff * 1.5);
+      // Mid frequencies capture harmonic vocals and synth presence
+      const midVal = Math.max(0, mag * 0.9 - lowVal * 0.6 - highVal * 0.4);
 
       lowSum += lowVal;
       midSum += midVal;
@@ -85,8 +75,8 @@ export function analyzeAudioBuffer(
     if (count > 0) {
       // Normalize and amplify band energies for vibrant Rekordbox visualization
       lowEnergy[b] = Math.min(1.0, (lowSum / count) * 2.8);
-      midEnergy[b] = Math.min(1.0, (midSum / count) * 3.2);
-      highEnergy[b] = Math.min(1.0, (highSum / count) * 4.2);
+      midEnergy[b] = Math.min(1.0, (midSum / count) * 3.0);
+      highEnergy[b] = Math.min(1.0, (highSum / count) * 3.8);
     }
   }
 
@@ -99,6 +89,8 @@ export function analyzeAudioBuffer(
     midEnergy,
     highEnergy,
     origin,
+    secPerBucket,
+    samplesPerBucket,
   };
 }
 

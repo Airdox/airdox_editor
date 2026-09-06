@@ -192,11 +192,11 @@ export default function App() {
 
         const initialTrack: TrackModel = {
           id: rawTrack.id || 'track-1',
-          title: rawTrack.title || 'Terminator (Original Mix)',
-          artist: rawTrack.artist || 'Sound Beats',
-          album: rawTrack.album || 'Terminator EP',
+          title: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
+          artist: rawTrack.artist || 'La Roux',
+          album: rawTrack.album || 'Quicksand',
           bpm,
-          key: rawTrack.key || '2A',
+          key: rawTrack.key || '3A',
           duration: synthBuf.duration,
           sampleRate: synthBuf.sampleRate,
           channels: synthBuf.numberOfChannels,
@@ -223,7 +223,7 @@ export default function App() {
           ],
         };
 
-        // Extract palette clips from this authentic audio buffer matching screenshot 01
+        // Extract palette clips from this authentic audio buffer matching screenshot
         const secPerBeat = 60 / bpm;
         const makeClip = (id: string, name: string, startBeat: number, numBeats: number, color: string): PaletteClip => {
           const startSec = startBeat * secPerBeat;
@@ -242,14 +242,14 @@ export default function App() {
             id,
             name,
             sourceTrackId: rawTrack.id || 'track-1',
-            sourceTrackName: rawTrack.title || 'Terminator (Original Mix)',
+            sourceTrackName: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
             sourceStart: startSec,
             sourceEnd: startSec + durSec,
             duration: durSec,
             beats: numBeats,
             bars: Math.max(1, Math.round(numBeats / 4)),
             bpm,
-            key: '2A',
+            key: '3A',
             color,
             audioBuffer: subBuf,
             miniPeaks: extractMiniPeaks(subBuf, 64),
@@ -258,16 +258,22 @@ export default function App() {
         };
 
         const sampleClips: PaletteClip[] = [
-          makeClip('clip-1', 'Kick Loop 4B', 0, 4, '#ff2b2b'),
-          makeClip('clip-2', 'Synth Hook 8B', 16, 8, '#00a2ff'),
-          makeClip('clip-3', 'Vocal Outro 4B', 32, 4, '#10b981'),
-          makeClip('clip-4', 'Breakdown 16B', 44, 16, '#f59e0b'),
+          makeClip('clip-1', 'Intro Kick 4B', 0, 16, '#ff2b2b'),
+          makeClip('clip-2', '8-Bit Arp 8B', 432, 32, '#00a2ff'),
+          makeClip('clip-3', 'Main Drop 8B', 448, 32, '#10b981'),
+          makeClip('clip-4', 'Breakdown 16B', 384, 64, '#f59e0b'),
         ];
 
         setTracks([initialTrack]);
         setActiveTrackId(initialTrack.id);
         setWorkingAudioBuffer(synthBuf);
         setPaletteClips(sampleClips);
+
+        // Position initial viewport to match the authentic Rekordbox EDIT mode reference (Bar 109 to 117)
+        const dropTime = 112 * 4 * (60 / bpm); // ~206.69s (Bar 113)
+        setCurrentTime(dropTime);
+        setViewOffset(Math.max(0, dropTime - 9.85));
+        setViewDuration(14.76);
       }
     } catch (err) {
       console.error('Fehler bei der Initialisierung des Referenz-Tracks:', err);
@@ -419,6 +425,105 @@ export default function App() {
       })
     );
   }, [activeTrack, currentTime]);
+
+  // Set Beat 1.1 at current playhead position (Pioneer Rekordbox "Set 1.1 Here")
+  const handleSetFirstBeatHere = useCallback(() => {
+    if (!activeTrack) return;
+    const newFirstBeat = Math.max(0, currentTime);
+    const spb = 60.0 / activeTrack.bpm;
+
+    setTracks((prev) =>
+      prev.map((t) => {
+        if (t.id === activeTrack.id) {
+          const totalBeats = Math.floor((t.duration - newFirstBeat) / spb);
+          const newBeats = Array.from({ length: Math.max(0, totalBeats) }, (_, i) => ({
+            index: i,
+            time: newFirstBeat + i * spb,
+            isBarStart: i % 4 === 0,
+            barNumber: Math.floor(i / 4) + 1,
+            beatInBar: (i % 4) + 1,
+          }));
+
+          return {
+            ...t,
+            beatGrid: {
+              ...t.beatGrid,
+              firstBeat: newFirstBeat,
+              beats: newBeats,
+              origin: DataOrigin.USER_EDIT,
+            },
+            isModified: true,
+          };
+        }
+        return t;
+      })
+    );
+  }, [activeTrack, currentTime]);
+
+  // Fine-tune Beatgrid offset (Pioneer Rekordbox Grid Shift: +/- 1ms or 10ms)
+  const handleShiftBeatgrid = useCallback((deltaSeconds: number) => {
+    if (!activeTrack) return;
+    const currentFirstBeat = activeTrack.beatGrid.firstBeat || 0;
+    const newFirstBeat = Math.max(0, currentFirstBeat + deltaSeconds);
+    const spb = 60.0 / activeTrack.bpm;
+
+    setTracks((prev) =>
+      prev.map((t) => {
+        if (t.id === activeTrack.id) {
+          const totalBeats = Math.floor((t.duration - newFirstBeat) / spb);
+          const newBeats = Array.from({ length: Math.max(0, totalBeats) }, (_, i) => ({
+            index: i,
+            time: newFirstBeat + i * spb,
+            isBarStart: i % 4 === 0,
+            barNumber: Math.floor(i / 4) + 1,
+            beatInBar: (i % 4) + 1,
+          }));
+
+          return {
+            ...t,
+            beatGrid: {
+              ...t.beatGrid,
+              firstBeat: newFirstBeat,
+              beats: newBeats,
+              origin: DataOrigin.USER_EDIT,
+            },
+            isModified: true,
+          };
+        }
+        return t;
+      })
+    );
+  }, [activeTrack]);
+
+  // Auto-align Beatgrid to nearest transient peak
+  const handleAutoAlignBeatgrid = useCallback(() => {
+    if (!activeTrack) return;
+    const analysis = activeTrack.analysis;
+    if (!analysis || analysis.peaks.length === 0) return;
+
+    const secPerBucket = analysis.secPerBucket || (activeTrack.duration / analysis.length);
+    const searchCenterBucket = Math.round(currentTime / secPerBucket);
+    const searchRadius = Math.round(0.1 / secPerBucket); // search within +/- 100ms
+    const minBucket = Math.max(0, searchCenterBucket - searchRadius);
+    const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
+
+    let maxPeak = -1;
+    let bestBucket = searchCenterBucket;
+    for (let b = minBucket; b <= maxBucket; b++) {
+      const peakVal = analysis.lowEnergy[b] * 0.7 + analysis.peaks[b] * 0.3;
+      if (peakVal > maxPeak) {
+        maxPeak = peakVal;
+        bestBucket = b;
+      }
+    }
+
+    const alignedTime = bestBucket * secPerBucket;
+    const spb = 60.0 / activeTrack.bpm;
+    const currentFirst = activeTrack.beatGrid.firstBeat || 0;
+    const beatDistance = (alignedTime - currentFirst) % spb;
+    const shift = beatDistance > spb / 2 ? beatDistance - spb : beatDistance;
+    handleShiftBeatgrid(shift);
+  }, [activeTrack, currentTime, handleShiftBeatgrid]);
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
@@ -1529,6 +1634,9 @@ export default function App() {
           onPrevMemoryCue={handlePrevMemoryCue}
           onNextMemoryCue={handleNextMemoryCue}
           onAddMemoryCue={handleAddMemoryCue}
+          onSetFirstBeatHere={handleSetFirstBeatHere}
+          onShiftBeatgrid={handleShiftBeatgrid}
+          onAutoAlignBeatgrid={handleAutoAlignBeatgrid}
           onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
@@ -1642,6 +1750,7 @@ export default function App() {
             isOpen={exportModalOpen}
             onClose={() => setExportModalOpen(false)}
             track={activeTrack}
+            clips={paletteClips}
             workingAudioBuffer={workingAudioBuffer}
             onExportComplete={showOperationFeedback}
           />

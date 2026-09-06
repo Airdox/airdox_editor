@@ -140,6 +140,8 @@ export interface WaveformAnalysisData {
   midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
   highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
   origin: DataOrigin;
+  secPerBucket?: number;
+  samplesPerBucket?: number;
 }
 
 /**

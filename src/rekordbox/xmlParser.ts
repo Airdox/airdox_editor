@@ -595,24 +595,24 @@ function escapeXml(unsafe: string): string {
 }
 
 /**
- * Bundled default Rekordbox XML dataset representing "Terminator (Original Mix)"
- * exactly as presented in the authoritative screenshots.
+ * Bundled default Rekordbox XML dataset representing "La Roux - Quicksand (Boy 8 Bit mix)"
+ * exactly as presented in the authoritative Rekordbox EDIT mode reference.
  */
 export const DEFAULT_REKORDBOX_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <DJ_PLAYLISTS Version="1.0.0">
   <PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/>
   <COLLECTION Entries="2">
-    <TRACK TrackID="1" Name="Terminator (Original Mix)" Artist="Sound Beats" Album="Terminator EP" TotalTime="326" AverageBpm="130.00" Tonality="2A" BitRate="320" SampleRate="44100" Comments="Visual Locked Reference Track" DateAdded="2026-09-04">
-      <TEMPO Inizio="0.000" Bpm="130.00" Metro="4/4" Battito="1"/>
-      <POSITION_MARK Name="First Beat" Type="0" Start="0.000" Num="-1" Red="255" Green="120" Blue="0"/>
-      <POSITION_MARK Name="Intro Beat" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255"/>
-      <POSITION_MARK Name="Drop 1" Type="0" Start="14.769" Num="1" Red="255" Green="50" Blue="50"/>
-      <POSITION_MARK Name="Breakdown" Type="0" Start="44.307" Num="-1" Red="255" Green="200" Blue="0"/>
-      <POSITION_MARK Name="Main Drop" Type="0" Start="59.076" Num="2" Red="0" Green="230" Blue="100"/>
-      <POSITION_MARK Name="Loop 8 Bars" Type="4" Start="14.769" End="29.538" Num="-1"/>
+    <TRACK TrackID="1" Name="Quicksand (Boy 8 Bit mix)" Artist="La Roux" Album="Quicksand" TotalTime="357.5" AverageBpm="130.05" Tonality="3A" BitRate="320" SampleRate="44100" Comments="Visual Locked Reference Track" DateAdded="2026-09-05">
+      <TEMPO Inizio="0.000" Bpm="130.05" Metro="4/4" Battito="1"/>
+      <POSITION_MARK Name="E" Type="0" Start="0.000" Num="-1" Red="255" Green="120" Blue="0"/>
+      <POSITION_MARK Name="Intro" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255"/>
+      <POSITION_MARK Name="Verse 1" Type="0" Start="59.054" Num="1" Red="0" Green="230" Blue="100"/>
+      <POSITION_MARK Name="Breakdown" Type="0" Start="177.162" Num="-1" Red="255" Green="200" Blue="0"/>
+      <POSITION_MARK Name="Main Drop" Type="0" Start="206.690" Num="2" Red="255" Green="50" Blue="50"/>
+      <POSITION_MARK Name="Loop 8 Bars" Type="4" Start="206.690" End="221.453" Num="-1"/>
     </TRACK>
-    <TRACK TrackID="2" Name="Hyperdrive (Club Edit)" Artist="Cyber Pulse" Album="Pulse Sessions" TotalTime="284" AverageBpm="128.00" Tonality="4A" BitRate="320" SampleRate="44100" Comments="High energy club remix" DateAdded="2026-09-04">
-      <TEMPO Inizio="0.000" Bpm="128.00" Metro="4/4" Battito="1"/>
+    <TRACK TrackID="2" Name="Terminator (Original Mix)" Artist="Sound Beats" Album="Terminator EP" TotalTime="326.0" AverageBpm="130.00" Tonality="2A" BitRate="320" SampleRate="44100" Comments="Club remix" DateAdded="2026-09-04">
+      <TEMPO Inizio="0.000" Bpm="130.00" Metro="4/4" Battito="1"/>
       <POSITION_MARK Name="Intro Kick" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255"/>
       <POSITION_MARK Name="Synth Hook" Type="0" Start="15.000" Num="1" Red="255" Green="200" Blue="0"/>
       <POSITION_MARK Name="Vocal Outro" Type="0" Start="60.000" Num="-1" Red="255" Green="50" Blue="50"/>

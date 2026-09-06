@@ -1,14 +1,14 @@
 /**
  * @license
- * High-fidelity DJ procedural track generator: "Terminator (Original Mix)"
- * Generates genuine 130.00 BPM 4/4 electronic track with kick, bassline,
- * synth stabs, hi-hats, claps, and breakdown sections for authentic audio editing.
+ * High-fidelity DJ procedural track generator: "La Roux - Quicksand (Boy 8 Bit mix)"
+ * Generates genuine 130.05 BPM 4/4 electro track with 8-bit chip synths, punchy kicks,
+ * running basslines, and breakdown/drop structures matching the Rekordbox EDIT mode reference.
  */
 
 export function generateElectronicDjTrack(
   audioCtx: AudioContext,
-  bpm: number = 130.0,
-  bars: number = 64,
+  bpm: number = 130.05,
+  bars: number = 194,
   firstBeatSec: number = 0.0
 ): AudioBuffer {
   const sampleRate = audioCtx.sampleRate;
@@ -16,7 +16,7 @@ export function generateElectronicDjTrack(
   const totalBeats = bars * beatsPerBar;
   const secondsPerBeat = 60.0 / bpm;
   const normalizedFirstBeat = Math.max(0.0, firstBeatSec);
-  const totalDuration = normalizedFirstBeat + totalBeats * secondsPerBeat; // e.g. 64 bars @ 130 bpm = ~118.15s
+  const totalDuration = normalizedFirstBeat + totalBeats * secondsPerBeat; // ~357.5s for 194 bars @ 130.05 bpm
   const totalSamples = Math.floor(sampleRate * totalDuration);
 
   const buffer = audioCtx.createBuffer(2, totalSamples, sampleRate);
@@ -25,124 +25,137 @@ export function generateElectronicDjTrack(
 
   const sixteenthSamples = Math.max(1, Math.round((secondsPerBeat / 4) * sampleRate));
 
-  // Key: 2A (E-flat minor / D# minor)
-  // Frequencies: Eb1=38.89Hz, Eb2=77.78Hz, Gb2=92.50Hz, Ab2=110Hz, Bb2=116.54Hz, Db3=138.59Hz
-  const rootFreq = 38.89; // Sub-bass
-  const bassNotes = [rootFreq, rootFreq, rootFreq * 1.5, rootFreq * 1.2, rootFreq, rootFreq * 1.33, rootFreq, rootFreq * 1.2];
-  const chordNotes = [311.13, 369.99, 466.16]; // Eb4, Gb4, Bb4
+  // Key: 3A (B-flat minor / A# minor)
+  // Bb1=58.27Hz, Bb2=116.54Hz, Db3=138.59Hz, Eb3=155.56Hz, F3=174.61Hz, Ab3=207.65Hz
+  const rootFreq = 58.27; // Bb1
+  const bassNotes = [rootFreq, rootFreq, rootFreq * 1.2, rootFreq, rootFreq * 1.33, rootFreq, rootFreq * 1.5, rootFreq * 1.2];
+  // 8-bit chip arpeggio notes (Bb4, Db5, F5, Ab5)
+  const arpNotes = [466.16, 554.37, 698.46, 830.61, 932.33, 830.61, 698.46, 554.37];
 
   for (let beat = 0; beat < totalBeats; beat++) {
     const bar = Math.floor(beat / 4);
     const beatInBar = beat % 4;
     const startSample = Math.round((normalizedFirstBeat + beat * secondsPerBeat) * sampleRate);
     if (startSample >= totalSamples) break;
-    const isBreakdown = (bar >= 24 && bar < 32) || (bar >= 48 && bar < 56);
-    const isBuildUp = (bar >= 30 && bar < 32) || (bar >= 54 && bar < 56);
 
-    // 1. KICK DRUM (on every beat, absent during breakdown)
-    if (!isBreakdown || isBuildUp) {
-      const kickLen = Math.floor(0.28 * sampleRate);
+    // Authentic song structure matching screenshot:
+    // Bars 0-32: Intro build
+    // Bars 33-96: Verse 1 and driving groove
+    // Bars 97-112: The Breakdown (NO KICKS, pure 8-bit arpeggios in green/cyan, rising snare roll at 109-112)
+    // Bars 113-160: THE MAIN DROP (Intense kicks, fiery red/orange waveform, distorted bass)
+    // Bars 161-194: Outro groove & fade
+    const isBreakdown = (bar >= 96 && bar < 112) || (bar >= 168 && bar < 176);
+    const isBuildUp = (bar >= 108 && bar < 112); // Bars 109-112: intense rising snare & sweep
+    const isDrop = (bar >= 112 && bar < 144); // Bar 113+ is drop
+
+    // 1. KICK DRUM (Absent in breakdown, hits hard on every quarter beat in groove & drop)
+    if (!isBreakdown) {
+      const kickLen = Math.floor(0.32 * sampleRate);
+      const intensity = isDrop ? 1.0 : 0.85;
+
       for (let i = 0; i < kickLen && startSample + i < totalSamples; i++) {
         const t = i / sampleRate;
-        // Pitch drop envelope from 150Hz down to 42Hz
-        const f = 42 + 120 * Math.exp(-t * 26);
-        const phase = 2 * Math.PI * f * t;
-        const env = Math.exp(-t * 14);
-        const kickSample = Math.sin(phase) * env * 0.75;
-        // Click transient
-        const click = (Math.random() * 2 - 1) * Math.exp(-t * 80) * 0.15;
-        const total = (kickSample + click) * 0.85;
+        // Pitch drop envelope from 160Hz down to 48Hz
+        const f = 48 + 125 * Math.exp(-t * 30);
+        // Using cosine ensures maximum punch/transient amplitude occurs precisely at t=0 (sample 0 of beat)
+        const kickBody = Math.cos(2 * Math.PI * f * t) * Math.exp(-t * 16) * 0.78;
+        // Immediate transient click at t=0
+        const click = Math.cos(2 * Math.PI * 900 * t) * Math.exp(-t * 60) * 0.22;
+        const total = (kickBody + click) * intensity;
 
         left[startSample + i] += total;
         right[startSample + i] += total;
       }
     }
 
-    // 2. SNARE / CLAP (on beats 2 & 4 = beatInBar 1 & 3)
-    if ((beatInBar === 1 || beatInBar === 3) && (!isBreakdown || isBuildUp)) {
-      const clapLen = Math.floor(0.2 * sampleRate);
+    // 2. SNARE / CLAP (on beats 2 & 4; rolls during buildup 109-112)
+    const isClapBeat = beatInBar === 1 || beatInBar === 3 || (isBuildUp && (beatInBar === 0 || beatInBar === 2));
+    if (isClapBeat && (!isBreakdown || isBuildUp)) {
+      const clapLen = Math.floor(0.22 * sampleRate);
+      const clapAmp = isBuildUp ? 0.35 + ((bar - 108) / 4) * 0.45 : 0.6;
+
       for (let i = 0; i < clapLen && startSample + i < totalSamples; i++) {
         const t = i / sampleRate;
-        const env = Math.exp(-t * 22);
-        // Multi-tap clap bursts
-        let tap = 0;
-        if (t < 0.03) {
-          tap = Math.sin(t * 1200) * 0.3;
-        }
-        const noise = (Math.random() * 2 - 1) * 0.45;
-        const body = Math.sin(2 * Math.PI * 220 * t) * 0.25;
-        const val = (noise + tap + body) * env * 0.55;
+        const env = Math.exp(-t * 24);
+        const noise = (Math.random() * 2 - 1) * 0.5;
+        const tone = Math.sin(2 * Math.PI * 240 * t) * 0.3;
+        const val = (noise + tone) * env * clapAmp;
 
         left[startSample + i] += val * 0.9;
         right[startSample + i] += val * 1.0;
       }
     }
 
-    // 3. HI-HATS (16th notes: closed & open on the off-beat)
+    // 3. 8-BIT CHIP ARPEGGIO & SYNTH (Active throughout, especially dominant in breakdown 109-112)
     for (let sub = 0; sub < 4; sub++) {
       const subStart = startSample + sub * sixteenthSamples;
-      const isOpen = sub === 2; // off-beat open hat
-      const hatLen = Math.floor((isOpen ? 0.16 : 0.04) * sampleRate);
-      const amp = isOpen ? 0.28 : 0.12;
+      const arpIdx = (beat * 4 + sub) % arpNotes.length;
+      const freq = arpNotes[arpIdx];
+      const noteLen = Math.floor(0.12 * sampleRate);
+      const arpAmp = isBreakdown ? 0.42 : 0.25;
 
-      for (let i = 0; i < hatLen && subStart + i < totalSamples; i++) {
+      for (let i = 0; i < noteLen && subStart + i < totalSamples; i++) {
         const t = i / sampleRate;
-        const decay = isOpen ? 18 : 65;
-        const env = Math.exp(-t * decay);
-        // High-passed noise
-        const n1 = Math.random() * 2 - 1;
-        const n2 = Math.sin(2 * Math.PI * 8500 * t) * 0.3;
-        const hatVal = (n1 + n2) * env * amp;
+        const env = Math.exp(-t * 18);
+        // Authentic 8-bit pulse wave (25% duty cycle)
+        const phase = (t * freq) % 1;
+        const pulse = phase < 0.25 ? 1.0 : -0.33;
+        const val = pulse * env * arpAmp;
 
-        // Stereo pan alternating
-        const pan = sub % 2 === 0 ? 0.85 : 1.15;
-        left[subStart + i] += hatVal * (2 - pan) * 0.5;
-        right[subStart + i] += hatVal * pan * 0.5;
+        // Stereo ping-pong
+        const panL = sub % 2 === 0 ? 1.1 : 0.7;
+        const panR = sub % 2 === 0 ? 0.7 : 1.1;
+        left[subStart + i] += val * panL;
+        right[subStart + i] += val * panR;
       }
     }
 
-    // 4. SYNTH BASSLINE (running 16th groove)
+    // 4. HI-HATS (16th notes: closed & off-beat open)
+    if (!isBreakdown || bar >= 110) {
+      for (let sub = 0; sub < 4; sub++) {
+        const subStart = startSample + sub * sixteenthSamples;
+        const isOpen = sub === 2; // off-beat hat
+        const hatLen = Math.floor((isOpen ? 0.18 : 0.05) * sampleRate);
+        const amp = isOpen ? 0.26 : 0.14;
+
+        for (let i = 0; i < hatLen && subStart + i < totalSamples; i++) {
+          const t = i / sampleRate;
+          const decay = isOpen ? 16 : 60;
+          const env = Math.exp(-t * decay);
+          const noise = Math.random() * 2 - 1;
+          const metal = Math.sin(2 * Math.PI * 9200 * t) * 0.35;
+          const hatVal = (noise + metal) * env * amp;
+
+          left[subStart + i] += hatVal * 0.8;
+          right[subStart + i] += hatVal * 1.0;
+        }
+      }
+    }
+
+    // 5. DISTORTED 8-BIT BASSLINE (Pumping on off-beats, absent in breakdown)
     if (!isBreakdown) {
       for (let sub = 0; sub < 4; sub++) {
         const subStart = startSample + sub * sixteenthSamples;
         const noteIdx = (beat * 4 + sub) % bassNotes.length;
-        const freq = bassNotes[noteIdx];
-        const bassLen = Math.floor(0.12 * sampleRate);
+        const bFreq = bassNotes[noteIdx];
+        const bassLen = Math.floor(0.14 * sampleRate);
 
         for (let i = 0; i < bassLen && subStart + i < totalSamples; i++) {
           const t = i / sampleRate;
-          const env = Math.exp(-t * 18);
-          // Sawtooth waveform with low-pass resonance
-          const saw = (2 * ((t * freq) % 1) - 1);
-          const subOsc = Math.sin(2 * Math.PI * freq * t);
-          const bVal = (saw * 0.35 + subOsc * 0.65) * env * 0.38;
+          const env = Math.exp(-t * 14);
+          // Sawtooth with slight saturation
+          const saw = 2 * ((t * bFreq) % 1) - 1;
+          const square = ((t * bFreq) % 1) < 0.5 ? 0.6 : -0.6;
+          const bVal = (saw * 0.5 + square * 0.5) * env * (isDrop ? 0.48 : 0.35);
 
           left[subStart + i] += bVal;
           right[subStart + i] += bVal;
         }
       }
     }
-
-    // 5. SYNTH CHORD STABS (every 2 bars or breakdown atmospheric chords)
-    if (bar % 2 === 0 && beatInBar === 0) {
-      const stabLen = Math.floor(0.65 * sampleRate);
-      for (let i = 0; i < stabLen && startSample + i < totalSamples; i++) {
-        const t = i / sampleRate;
-        const env = Math.exp(-t * 4.5);
-        let chordVal = 0;
-        for (const cf of chordNotes) {
-          const saw = 2 * ((t * cf) % 1) - 1;
-          chordVal += saw * 0.12;
-        }
-        const spreadL = chordVal * env * 0.4;
-        const spreadR = chordVal * env * 0.45;
-        left[startSample + i] += spreadL;
-        right[startSample + i] += spreadR;
-      }
-    }
   }
 
-  // Normalize / Soft clip to prevent harsh distortion
+  // Normalize / Soft clip
   for (let i = 0; i < totalSamples; i++) {
     left[i] = Math.tanh(left[i]);
     right[i] = Math.tanh(right[i]);

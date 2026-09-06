@@ -5,16 +5,18 @@
  */
 
 import React, { useState } from 'react';
-import { X, Download, FileAudio, FileCode, CheckCircle2 } from 'lucide-react';
-import { TrackModel } from '../../types/rekordbox';
+import { X, Download, FileAudio, FileCode, CheckCircle2, Layers } from 'lucide-react';
+import { TrackModel, PaletteClip } from '../../types/rekordbox';
 import { audioEngine } from '../../audio/audioEngine';
 import { exportToRekordboxXml } from '../../rekordbox/xmlParser';
 import { OperationTelemetry } from './OperationFeedbackModal';
+import { MultiLayerRenderInspector } from './MultiLayerRenderInspector';
 
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   track: TrackModel;
+  clips?: PaletteClip[];
   workingAudioBuffer: AudioBuffer | null;
   onExportComplete?: (telemetry: OperationTelemetry) => void;
 }
@@ -23,16 +25,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   isOpen,
   onClose,
   track,
+  clips = [],
   workingAudioBuffer,
   onExportComplete,
 }) => {
   const [format, setFormat] = useState<'WAV' | 'XML' | 'JSON'>('WAV');
   const [isExporting, setIsExporting] = useState(false);
+  const [showLayerInspector, setShowLayerInspector] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleExport = () => {
+  const triggerActualDownload = () => {
+    setShowLayerInspector(false);
     setIsExporting(true);
     setSuccessMsg(null);
 
@@ -112,6 +117,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const handleStartRenderFlow = () => {
+    // Open multi-layer timeline inspection animation first
+    setShowLayerInspector(true);
   };
 
   return (
@@ -198,15 +208,25 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </button>
 
           <button
-            onClick={handleExport}
+            onClick={handleStartRenderFlow}
             disabled={isExporting}
-            className="px-4 py-1.5 bg-[#0088ff] hover:bg-[#0070d6] text-white rounded-xs font-semibold text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-50"
+            className="px-4 py-1.5 bg-[#0088ff] hover:bg-[#0070d6] text-white rounded-xs font-semibold text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-50 shadow-md hover:shadow-[#0088ff]/20"
           >
-            <Download size={13} />
-            <span>{isExporting ? 'Exportiere...' : 'Jetzt Exportieren'}</span>
+            <Layers size={13} className="text-[#99d5ff]" />
+            <span>{isExporting ? 'Exportiere...' : 'Rendern & Schichten prüfen'}</span>
           </button>
         </div>
       </div>
+
+      {/* Multi-Layer Composition Animation & Inspector Modal */}
+      <MultiLayerRenderInspector
+        isOpen={showLayerInspector}
+        track={track}
+        clips={clips}
+        format={format}
+        onStartDownload={triggerActualDownload}
+        onCancel={() => setShowLayerInspector(false)}
+      />
     </div>
   );
 };

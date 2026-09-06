@@ -211,7 +211,7 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                     : 'bg-[#181a22] text-neutral-300 border-[#2a2d3a] hover:bg-[#222530]'
                 }`}
               >
-                Terminator (130 BPM)
+                Quicksand (130.05 BPM)
               </button>
               <button
                 onClick={() => onLoadTrackByIndex(1)}
