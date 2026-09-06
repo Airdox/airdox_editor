@@ -10,6 +10,8 @@ import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
   onNewProject: () => void;
+  onSaveProject: () => void;
+  onOpenProject: () => void;
   onImportXml: () => void;
   onImportAudio: () => void;
   onExportWav: () => void;
@@ -32,6 +34,8 @@ interface MenuBarProps {
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
+  onSaveProject,
+  onOpenProject,
   onImportXml,
   onImportAudio,
   onExportWav,
@@ -92,6 +96,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               >
                 <span>Neues Projekt</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+N</span>
+              </button>
+              <button
+                onClick={() => { onOpenProject(); setActiveMenu(null); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+              >
+                <span>Projekt öffnen...</span>
+                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Shift+O</span>
+              </button>
+              <button
+                onClick={() => { onSaveProject(); setActiveMenu(null); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+              >
+                <span>Projekt speichern...</span>
+                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+S</span>
               </button>
               <div className="h-px bg-[#262830] my-1" />
               {onOpenDatabaseInspector && (

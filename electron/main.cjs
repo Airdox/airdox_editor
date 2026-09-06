@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
-const { access, readFile, stat } = require('node:fs/promises');
+const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
@@ -7,6 +7,7 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
+const { isProtectedTarget } = require('./pathGuard.cjs');
 
 let mainWindow;
 
@@ -145,6 +146,76 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
   const data = await readFile(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    path: localPath,
+    size: details.size,
+    modifiedAt: details.mtimeMs,
+    accessMode: 'READ_ONLY',
+  };
+});
+
+ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
+  const { data, defaultName, kind, protectedPaths } = payload || {};
+  if (!data || typeof data.byteLength !== 'number' || data.byteLength === 0) {
+    throw new Error('Keine Exportdaten übergeben.');
+  }
+
+  const kindFilters = {
+    WAV: { name: 'WAV Audio', extensions: ['wav'] },
+    XML: { name: 'Rekordbox XML', extensions: ['xml'] },
+    JSON: { name: 'JSON', extensions: ['json'] },
+    PROJECT: { name: 'Airdox Projekt', extensions: ['airdox.json', 'json'] },
+  }[kind] || { name: 'Datei', extensions: ['*'] };
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export speichern (nur neue Datei)',
+    defaultPath: typeof defaultName === 'string' ? defaultName : 'export',
+    filters: [kindFilters, { name: 'All files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) {
+    return { saved: false };
+  }
+
+  const targetPath = path.resolve(result.filePath);
+
+  // The single hard rule of the write path: never overwrite an original
+  // Rekordbox source (audio / XML / ANLZ / database). Everything else is a
+  // fresh file the user explicitly chose in the save dialog.
+  if (isProtectedTarget(targetPath, protectedPaths)) {
+    throw new Error(
+      'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
+    );
+  }
+
+  const buffer = Buffer.from(data);
+  await writeFile(targetPath, buffer);
+  return { saved: true, path: targetPath, bytes: buffer.length, accessMode: 'WRITE_NEW_ONLY' };
+});
+
+ipcMain.handle('rekordbox:open-project-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Projekt öffnen (nur lesend)',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Airdox Projekt', extensions: ['airdox.json', 'json'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled) return null;
+
+  const localPath = path.resolve(result.filePaths[0]);
+  await access(localPath, constants.R_OK);
+  const details = await stat(localPath);
+  if (!details.isFile()) throw new Error('Die Projektdatei ist keine Datei.');
+
+  // Project documents are metadata + small embedded slices; 64 MB is a very
+  // generous ceiling that still protects the renderer from accidental misuse.
+  if (details.size > 64 * 1024 * 1024) {
+    throw new Error('Die Projektdatei ist größer als 64 MB und wird nicht geladen.');
+  }
+
+  const data = await readFile(localPath, 'utf-8');
+  return {
+    data,
     path: localPath,
     size: details.size,
     modifiedAt: details.mtimeMs,
