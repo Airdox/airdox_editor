@@ -5,9 +5,22 @@ Es entstehen zwei Artefakte (im Ordner `release/`):
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `Rekordbox Desktop Import Setup 0.1.0.exe` |
-| `npm run package:win:portable` | Einzelne portable `.exe` (`Rekordbox Desktop Import-0.1.0-portable.exe`) |
+| `npm run package:win:nsis` | Installer `Airdox Smart Editor Setup 0.2.0.exe` |
+| `npm run package:win:portable` | Einzelne portable `.exe` (`Airdox Smart Editor-0.2.0-portable.exe`) |
 | `npm run package:win` | beide Varianten |
+
+## Automatischer Build (ohne Windows-Rechner)
+
+Der Workflow [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)
+baut beide Artefakte bei jedem Push auf einem echten Windows-Runner. Die
+fertigen `.exe`-Dateien liegen danach unter
+**Actions → Windows-Build → Artifacts** zum Download bereit:
+
+- `airdox-smart-editor-setup` – NSIS-Installer
+- `airdox-smart-editor-portable` – portable EXE
+
+Der Workflow lässt sich unter Actions auch manuell über
+*Run workflow* starten.
 
 ## Voraussetzungen (auf dem Windows-Rechner)
 
