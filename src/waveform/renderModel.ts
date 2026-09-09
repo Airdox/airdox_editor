@@ -7,7 +7,7 @@
  * it. Covered by tests/waveform-variants.test.ts.
  */
 
-import { BeatNode } from '../types/rekordbox';
+import { BeatGrid, BeatNode, DataOrigin, WaveformAnalysisData } from '../types/rekordbox';
 
 /** First index with beats[i].time >= time (beat nodes are time-ordered). */
 export function beatIndexAtOrAfter(beats: BeatNode[], time: number): number {
@@ -96,4 +96,111 @@ function indexOfMax(values: number[]): number {
     if (values[i] > values[best]) best = i;
   }
   return best;
+}
+
+/** Structural view of a TrackModel that the renderer selection needs. */
+export interface RenderTrackWaveformSource {
+  duration: number;
+  analysis?: WaveformAnalysisData | null;
+  analysisVariants?: WaveformAnalysisData[];
+}
+
+/**
+ * Resolves the genuine waveform a renderer must draw for the current zoom.
+ *
+ * Only real data is ever returned: the ANLZ variants attached to the track
+ * (plus the plain `analysis` variant). When the track carries no Rekordbox
+ * waveform at all this returns null and the renderer shows the honest empty
+ * state — it never synthesizes columns from BPM/beatgrid.
+ */
+export function selectTrackWaveform(
+  track: RenderTrackWaveformSource,
+  viewDurationSec: number,
+  widthPx: number
+): WaveformAnalysisData | null {
+  const candidates =
+    track.analysisVariants && track.analysisVariants.length > 0
+      ? track.analysisVariants
+      : track.analysis
+        ? [track.analysis]
+        : [];
+  if (candidates.length === 0) return null;
+  const index = selectWaveformVariant(
+    candidates.map((candidate) => candidate.length),
+    viewDurationSec,
+    track.duration,
+    widthPx
+  );
+  return index >= 0 ? candidates[index] : null;
+}
+
+/**
+ * Human-readable missing-waveform status (honest empty state). Distinguishes
+ * Rekordbox-sourced tracks (their waveform may only come from ANLZ, so a
+ * missing waveform means "no Rekordbox analysis data found") from local
+ * tracks without an analysis.
+ */
+export function waveformMissingNotice(track: { origin?: DataOrigin }): {
+  title: string;
+  hint: string;
+} {
+  const origin = track.origin;
+  const isRekordbox =
+    origin === DataOrigin.REKORDBOX_XML ||
+    origin === DataOrigin.REKORDBOX_DB ||
+    origin === DataOrigin.REKORDBOX_ANLZ;
+  return isRekordbox
+    ? {
+        title: 'Keine Rekordbox-Waveformdaten vorhanden.',
+        hint: 'Keine Rekordbox-Analysedaten gefunden – ANLZ über DATA zuordnen oder AnalysisDataPath prüfen.',
+      }
+    : {
+        title: 'Keine Waveformdaten vorhanden.',
+        hint: 'Für diesen Track existiert keine Wellenform-Analyse.',
+      };
+}
+
+export interface GridRenderSelection {
+  beats: VisibleBeat[];
+  /** True only when no stored beat nodes existed (documented uniform case). */
+  uniformFallback: boolean;
+}
+
+/**
+ * Resolves the beat lines a renderer must draw for a view window.
+ *
+ * Original Rekordbox beat nodes (PQTZ / persisted dense grid) have priority
+ * and are used verbatim — their exact times are never re-quantized. The
+ * uniform firstBeat+bpm reconstruction runs ONLY for grids without stored
+ * nodes (the documented compact-entry case) and reports itself through
+ * `uniformFallback` so views can mark the difference.
+ */
+export function selectGridRenderBeats(
+  beatGrid: Pick<BeatGrid, 'beats' | 'firstBeat' | 'bpm' | 'meter'>,
+  winStart: number,
+  winEnd: number,
+  cap: number = 50000
+): GridRenderSelection {
+  if (beatGrid.beats && beatGrid.beats.length > 0) {
+    return {
+      beats: collectVisibleBeats(beatGrid.beats, winStart, winEnd, cap),
+      uniformFallback: false,
+    };
+  }
+  const bpm = beatGrid.bpm > 0 ? beatGrid.bpm : 130;
+  const meter = beatGrid.meter > 0 ? beatGrid.meter : 4;
+  const secondsPerBeat = 60.0 / bpm;
+  const startBeat = Math.max(0, Math.floor((winStart - beatGrid.firstBeat) / secondsPerBeat));
+  const endBeat = Math.ceil((winEnd - beatGrid.firstBeat) / secondsPerBeat);
+  const beats: VisibleBeat[] = [];
+  for (let b = startBeat; b <= endBeat; b++) {
+    beats.push({
+      time: beatGrid.firstBeat + b * secondsPerBeat,
+      isBar: b % meter === 0,
+      barNumber: Math.floor(b / meter) + 1,
+      tail: false,
+    });
+    if (beats.length >= cap) break;
+  }
+  return { beats, uniformFallback: true };
 }

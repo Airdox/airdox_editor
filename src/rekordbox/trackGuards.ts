@@ -69,19 +69,29 @@ const GRID_EDIT_LABELS: Record<GridEditSource, string> = {
  * Builds the user-facing change notice for a manual grid edit (shown in the
  * operation feedback and the system log). The original state stays recoverable
  * through Undo, which snapshots the grid before the edit.
+ *
+ * When the edited grid originated from a Rekordbox analysis (XML TEMPO /
+ * PQTZ / DB parameters), the notice explicitly states that the grid now
+ * deviates from the imported Rekordbox analysis — the verbatim original stays
+ * reachable through Undo.
  */
 export function describeGridEdit(
   source: GridEditSource,
   oldFirstBeat: number,
   newFirstBeat: number,
-  nodeCount: number
+  nodeCount: number,
+  editedRekordboxGrid: boolean = false
 ): string {
   const deltaMs = (newFirstBeat - oldFirstBeat) * 1000;
   const sign = deltaMs >= 0 ? '+' : '';
+  const deviation = editedRekordboxGrid
+    ? ' Beatgrid wurde gegenüber der importierten Rekordbox-Analyse verändert (Originalzustand per Undo wiederherstellbar).'
+    : '';
   return (
     `${GRID_EDIT_LABELS[source]}: Beatgrid um ${sign}${deltaMs.toFixed(1)} ms verschoben ` +
     `(First Beat ${oldFirstBeat.toFixed(3)}s → ${newFirstBeat.toFixed(3)}s, ${nodeCount} Beats, ` +
-    `Originalintervalle erhalten, als USER_EDIT markiert). Der vorherige Stand ist per Undo wiederherstellbar.`
+    `Originalintervalle erhalten, als USER_EDIT markiert). Der vorherige Stand ist per Undo wiederherstellbar.` +
+    deviation
   );
 }
 

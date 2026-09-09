@@ -746,7 +746,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       source,
       currentFirstBeat,
       newFirstBeat,
-      hadNodes ? activeTrack.beatGrid.beats.length : 0
+      hadNodes ? activeTrack.beatGrid.beats.length : 0,
+      isRekordboxOrigin(activeTrack.beatGrid.origin)
     );
     showOperationFeedback({
       title: 'Beatgrid manuell angepasst (USER_EDIT)',
@@ -1711,11 +1712,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // is unreadable loads metadata-only, and the UI states what is missing
       // (XML-exclusive workflow guarantee).
       const duration = originalAudio ? originalAudio.duration : durationDef;
-      // RB-exclusive: never run own analysis here; the waveform arrives only
-      // via ANLZ (auto-resolved below for DB tracks, manually assigned else).
-      const analysis = rbExclusive
-        ? (selectedDef.analysis ?? null)
-        : (selectedDef.analysis || (originalAudio ? analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS) : null));
+      // Own audio analysis is REMOVED from this deck-load path: the function
+      // only ever consumes analysis that already exists — the collection
+      // entry's attached data and, for Rekordbox tracks, the ANLZ container
+      // auto-resolved below. Local audio files get their single LOCAL_ANALYSIS
+      // run in their own import path (loadAudioFile), never here.
+      const analysis = selectedDef.analysis ?? null;
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
         : (selectedDef.originalSha256 || 'NOT_COMPUTED_READ_ONLY_SOURCE');
@@ -1779,7 +1781,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             console.info(
               `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} ` +
                 `(${anlzLookup.scanned} ANLZ-Dateien in ${anlzLookup.folders} Ordner(n) gescannt) – ` +
-                `Track bleibt auf VORSCHAU (manuelle ANLZ-Zuordnung über DATA möglich).`
+                `Track bleibt ohne Rekordbox-Waveform (manuelle ANLZ-Zuordnung über DATA möglich).`
             );
           }
         }
@@ -1805,9 +1807,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         originalSha256: sha256,
         isOriginalUntouched: true,
         audioBuffer: originalAudio,
-        // Collection entries intentionally retain only compact beatgrid
-        // metadata. Expand it when this one track is actually loaded,
-        // keeping the source origin (XML or Rekordbox DB).
+        // Documented fallback case (no detailed beat data): collection
+        // entries intentionally retain only compact beatgrid metadata (XML
+        // TEMPO scalars / DB BPM+FirstBeat). Expanding to a dense grid at
+        // deck load is the single permitted buildBeatGridFromTempo use in the
+        // Rekordbox track path — the source origin (REKORDBOX_XML/DB) is
+        // kept. When a genuine ANLZ container with PQTZ nodes is resolved
+        // below (tryAutoLoadAnlz), applyAnlzExtractionToTrack replaces this
+        // uniform grid with the original PQTZ beat positions verbatim.
         beatGrid: buildBeatGridFromTempo(
           firstBeatDef,
           selectedDef.beatGrid?.bpm ?? bpm,

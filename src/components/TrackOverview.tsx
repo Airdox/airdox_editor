@@ -7,7 +7,10 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
-import { selectWaveformVariant } from '../waveform/renderModel';
+import {
+  selectTrackWaveform,
+  waveformMissingNotice,
+} from '../waveform/renderModel';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -62,20 +65,10 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     const targetCols = width;
 
     // Zoom-matched variant (the overview shows the full track): genuine ANLZ
-    // data only — the selector just picks the fitting resolution.
-    const candidates =
-      track.analysisVariants && track.analysisVariants.length > 0
-        ? track.analysisVariants
-        : track.analysis
-          ? [track.analysis]
-          : [];
-    const variantIdx = selectWaveformVariant(
-      candidates.map((c) => c.length),
-      duration,
-      track.duration,
-      targetCols
-    );
-    const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
+    // data only — the selector just picks the fitting resolution. Tracks
+    // without any waveform render the honest empty state below (never a
+    // synthesized contour from BPM/beatgrid).
+    const analysis = selectTrackWaveform(track, duration, targetCols);
 
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
@@ -131,34 +124,15 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         }
       }
     } else {
-      // Vorschau-Kontur wenn keine ANLZ-Daten vorhanden: Beatgrid-basierte Hüllkurve
-      const bg = track.beatGrid;
-      const bpm = bg.bpm || 130.05;
-      const secondsPerBeat = 60 / bpm;
-      const centerY = height / 2;
-      ctx.globalAlpha = 0.5;
-      for (let col = 0; col < targetCols; col++) {
-        const t = (col / targetCols) * duration;
-        const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-        const beatFract = ((beatPos % 1) + 1) % 1;
-        const barIndex = Math.floor(beatPos / 4);
-        const isBreak = barIndex >= 96 && barIndex < 112;
-        const kickEnv = isBreak ? 0.06 : Math.exp(-beatFract * 14) * 0.9;
-        const sub = isBreak ? 0.08 : 0.18 + 0.12 * Math.sin(t * 16);
-        const peak = Math.min(1, kickEnv + sub + 0.06);
-        const barH = Math.max(2, peak * (height - 6));
-        const yTop = (height - barH) / 2;
-        const r = Math.min(255, Math.floor(kickEnv * 260 + sub * 60));
-        const g = Math.min(255, Math.floor(sub * 220 + 30));
-        const bCol = Math.min(255, Math.floor(kickEnv * 60 + 90));
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-        ctx.fillRect(col, yTop, 1, barH);
-        if (col % 2 === 0) {
-          ctx.fillStyle = 'rgba(255,255,255,0.18)';
-          ctx.fillRect(col, centerY - 1, 1, 2);
-        }
-      }
-      ctx.globalAlpha = 1;
+      // Honest empty state: no waveform is invented when no Rekordbox ANLZ
+      // data is attached. The cue markers, phrase bar and viewport frame still
+      // draw on top; a clear status label keeps the lane readable.
+      const notice = waveformMissingNotice(track);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(notice.title, width / 2, height / 2 + 3);
+      ctx.textAlign = 'left';
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
