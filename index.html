@@ -9,13 +9,78 @@
     <meta property="og:description" content="Professional Rekordbox-style DJ audio editor with beatgrid synchronization, real audio engine, XML parsing, palette clips, multi-track, and non-destructive editing." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <!--
+      Sicherheits-Hinweis: Google-Fonts werden nur in der Browser-Vorschau geladen.
+      In der Desktop-App (file://) werden Fonts bei Bedarf vom Betriebssystem
+      bezogen; die App bleibt auch ohne Netzwerkverbindung vollständig nutzbar.
+    -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Segoe+UI:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+      /*
+       * Notfall-Styling: falls das Bundle jemals nicht lädt oder beim Start
+       * einen Fehler wirft, zeigt #root statt einem leeren weissen Fenster
+       * eine sichtbare Lade-/Fehlermeldung an.
+       */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #0a0b0d;
+        color: #c8c9ce;
+        overflow: hidden;
+      }
+      #root:empty::before {
+        content: "Airdox Editor wird geladen…";
+        display: flex;
+        width: 100%;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #7c828f;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      #root.fatal {
+        padding: 24px;
+        box-sizing: border-box;
+        overflow: auto !important;
+        font: 12px/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace;
+        color: #ff6b6b;
+        white-space: pre-wrap;
+      }
+    </style>
   </head>
-  <body class="bg-[#0e0e10] text-[#cccccc] select-none overflow-hidden antialiased">
+  <body>
     <div id="root"></div>
+    <script>
+      // Globaler Schutz gegen einen komplett weissen Bildschirm bei
+      // Startfehlern, die VOR dem Mounten von React auftreten.
+      window.addEventListener('error', function (ev) {
+        var root = document.getElementById('root');
+        if (!root) return;
+        root.classList.add('fatal');
+        var msg = (ev.error && ev.error.stack) || ev.message || String(ev.error) || 'Unbekannter Fehler';
+        root.textContent =
+          'Airdox Editor – Startfehler\n\n' +
+          msg +
+          '\n\nDrücke F12, um die Entwicklerwerkzeuge zu öffnen und Details zu sehen.';
+      });
+      window.addEventListener('unhandledrejection', function (ev) {
+        var root = document.getElementById('root');
+        if (!root) return;
+        if (root.classList.contains('fatal')) return; // bereits ein Fehler angezeigt
+        root.classList.add('fatal');
+        var reason = ev.reason && (ev.reason.stack || ev.reason.message || String(ev.reason));
+        root.textContent =
+          'Airdox Editor – Unbehandelter Promise-Fehler\n\n' +
+          (reason || String(ev.reason)) +
+          '\n\nDrücke F12, um die Entwicklerwerkzeuge zu öffnen.';
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

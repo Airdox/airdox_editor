@@ -17,6 +17,7 @@ function createWindow() {
     height: 960,
     minWidth: 1024,
     minHeight: 720,
+    backgroundColor: '#0a0b0d',
     title: 'Rekordbox Desktop Import',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -29,11 +30,38 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
 
+  // Renderer-Abstürze und fehlgeschlagene Ladungen protokollieren, damit ein
+  // weisser Bildschirm künftig nicht mehr stumm auftritt.
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Electron] Renderer-Prozess abgestürzt:', details);
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[Electron] Laden fehlgeschlagen (${errorCode}) bei ${validatedURL}: ${errorDescription}`);
+  });
+
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
   if (developmentUrl) {
     mainWindow.loadURL(developmentUrl);
+    // DevTools nur in der Entwicklungsumgebung automatisch öffnen.
+    if (process.env.SHOW_DEVTOOLS === 'true') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+    // WICHTIG: loadFile erzeugt eine file://-URL. Damit Vite-Assets mit
+    // base:"." korrekt aufgelöst werden, zusätzlich als explizite URL laden.
+    mainWindow.loadFile(indexPath).catch((err) => {
+      console.error('[Electron] Konnte dist/index.html nicht laden:', err);
+    });
+    // In der veröffentlichten App F12 zum Öffnen der DevTools erlauben (für
+    // Diagnose bei Anwendern) – sie bleiben normalerweise geschlossen.
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.key === 'F12' && input.type === 'keyDown') {
+        mainWindow.webContents.isDevToolsOpened()
+          ? mainWindow.webContents.closeDevTools()
+          : mainWindow.webContents.openDevTools({ mode: 'detach' });
+      }
+    });
   }
 }
 
