@@ -19,16 +19,21 @@ import {
 } from '../types/rekordbox';
 import {
   BAR_SHADE_FILL,
-  bandColumnBars,
   beatIndexAtOrAfter,
   collectVisibleBeats,
   columnDrawWidth,
   isBarShaded,
   MONO_PREVIEW_BLUE,
   MONO_PREVIEW_CORE,
+  monoBlueColor,
   PREVIEW_ALPHA,
   previewBeatHalfHeight,
+  pwv4BackColor,
+  pwv4FrontColor,
+  rgbColumnColor,
+  rgbCss,
   selectWaveformVariant,
+  threeBandLayers,
   VisibleBeat,
 } from '../waveform/renderModel';
 import {
@@ -428,36 +433,46 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
-          if (waveformMode === 'BLUE' || isMonoPreview) {
-            // High-contrast electric blue waveform (also the authentic look
-            // for mono preview variants, matching Rekordbox's preview blue)
-            const barH = Math.max(2, peak * maxHalfH);
-            ctx.fillStyle = MONO_PREVIEW_BLUE;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = MONO_PREVIEW_CORE;
-            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else {
-            // RGB & 3BAND: verbatim visualization of the stored ANLZ band
-            // values as nested centered bars (low = red outer, mid = green,
-            // high = blue core) — no recombination, heights exactly as
-            // stored (reference 01/02).
-            const bars = bandColumnBars(low, mid, high, maxHalfH);
-            for (const bar of bars) {
-              if (bar.halfHeight <= 0) continue;
-              ctx.fillStyle = `rgb(${bar.color.r}, ${bar.color.g}, ${bar.color.b})`;
-              ctx.fillRect(x - colW * 0.5, centerY - bar.halfHeight, colW, bar.halfHeight * 2);
-              if (waveformMode === '3BAND') {
-                // Separate the bands visually with a dark outline.
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-                ctx.lineWidth = 1;
-                ctx.strokeRect(
-                  x - colW * 0.5 + 0.5,
-                  centerY - bar.halfHeight + 0.5,
-                  Math.max(1, colW - 1),
-                  Math.max(1, bar.halfHeight * 2 - 1)
-                );
-              }
+          const colX = x - colW * 0.5;
+
+          if (waveformMode === '3BAND') {
+            // Documented 3-band look (PWV6/PWV7): same axis, lows dark blue,
+            // mids amber translucent, highs white last.
+            for (const layer of threeBandLayers(low, mid, high, maxHalfH)) {
+              if (layer.halfHeight <= 0) continue;
+              ctx.globalAlpha = layer.alpha;
+              ctx.fillStyle = rgbCss(layer.color);
+              ctx.fillRect(colX, centerY - layer.halfHeight, colW, layer.halfHeight * 2);
             }
+            ctx.globalAlpha = 1;
+          } else if (waveformMode === 'BLUE') {
+            // Documented blue waveform: stored height + stored whiteness.
+            const w = analysis.whiteness ? analysis.whiteness[b] : peak;
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(monoBlueColor(w));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
+          } else if (analysis.frontPeaks && analysis.luminance && analysis.backPeaks) {
+            // Documented PWV4 two-tone: back column rgb·luminance at the back
+            // height, brighter front column at the stored front height.
+            const lum = analysis.luminance[b];
+            const backH = Math.max(1, analysis.backPeaks[b] * maxHalfH);
+            ctx.fillStyle = rgbCss(pwv4BackColor(low, mid, high, lum));
+            ctx.fillRect(colX, centerY - backH, colW, backH * 2);
+            const frontH = Math.max(1, analysis.frontPeaks[b] * maxHalfH);
+            ctx.fillStyle = rgbCss(pwv4FrontColor(low, mid, high, lum));
+            ctx.fillRect(colX, centerY - frontH, colW, frontH * 2);
+          } else if (isMonoPreview) {
+            // Mono variant in RGB mode: the documented blue ramp.
+            const w = analysis.whiteness ? analysis.whiteness[b] : peak;
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(monoBlueColor(w));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
+          } else {
+            // Documented PWV5: stored RGB is the column color, stored 5-bit
+            // value the column height.
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(rgbColumnColor(low, mid, high));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
           }
         }
 

@@ -138,13 +138,29 @@ export interface EditSegment {
 
 export interface WaveformAnalysisData {
   length: number;
-  peaks: Float32Array; // max amplitude per bucket
+  peaks: Float32Array; // stored column height per bucket (0..1)
   peaksL: Float32Array;
   peaksR: Float32Array;
-  // Spectral energies for RGB and 3BAND modes
-  lowEnergy: Float32Array; // 20 - 250 Hz (bass/kicks - RED)
-  midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
-  highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
+  /**
+   * Per-bucket color/band components exactly as stored in the ANLZ source
+   * (0..1): for PWV5/PWV4 these are the red/green/blue components of the
+   * column color, for PWV6/PWV7 the low/mid/high band heights. They are
+   * visualized verbatim, never recombined.
+   */
+  lowEnergy: Float32Array; // red (PWV5/PWV4) / low band (PWV6/PWV7)
+  midEnergy: Float32Array; // green / mid band
+  highEnergy: Float32Array; // blue / high band
+  /**
+   * PWAV/PWV3 (MONO_5BIT): the three high-order bits, 0 = darkest blue …
+   * 7 = near white (documented whiteness of the blue waveform).
+   */
+  whiteness?: Float32Array;
+  /** PWV4 byte 1: luminance boost of the color columns (/127). */
+  luminance?: Float32Array;
+  /** PWV4: back column height = max(d2, red, green) (/127). */
+  backPeaks?: Float32Array;
+  /** PWV4: front column height = blue component d5 (/127). */
+  frontPeaks?: Float32Array;
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;

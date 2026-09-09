@@ -8,13 +8,16 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
 import {
-  bandColumnBars,
   collectVisibleBeats,
   MONO_PREVIEW_BLUE,
-  MONO_PREVIEW_CORE,
+  monoBlueColor,
   peakHoldColumn,
   PREVIEW_ALPHA,
   previewBeatHalfHeight,
+  pwv4BackColor,
+  pwv4FrontColor,
+  rgbColumnColor,
+  rgbCss,
   selectWaveformVariant,
 } from '../waveform/renderModel';
 
@@ -131,26 +134,31 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
           analysis.midEnergy,
           analysis.highEnergy,
           startB,
-          endB
+          endB,
+          analysis.luminance,
+          analysis.backPeaks,
+          analysis.frontPeaks
         );
+        const maxHalf = (height - 4) / 2;
 
-        if (isMonoPreview) {
-          // Classic Rekordbox preview blue for mono variants
-          const barH = Math.max(2, held.peak * (height - 4));
-          const yTop = (height - barH) / 2;
-          ctx.fillStyle = MONO_PREVIEW_BLUE;
-          ctx.fillRect(col, yTop, 1, barH);
-          ctx.fillStyle = MONO_PREVIEW_CORE;
-          ctx.fillRect(col, yTop + barH * 0.3, 1, barH * 0.4);
+        if (analysis.frontPeaks && analysis.luminance && analysis.backPeaks) {
+          // Documented PWV4 two-tone look, peak-held per column.
+          const backH = Math.max(1, held.back * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4BackColor(held.low, held.mid, held.high, held.lum));
+          ctx.fillRect(col, centerY - backH, 1, backH * 2);
+          const frontH = Math.max(1, held.front * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4FrontColor(held.low, held.mid, held.high, held.lum));
+          ctx.fillRect(col, centerY - frontH, 1, frontH * 2);
+        } else if (isMonoPreview) {
+          // Documented blue ramp for mono variants.
+          const barH = Math.max(1, held.peak * maxHalf);
+          ctx.fillStyle = rgbCss(monoBlueColor(held.peak));
+          ctx.fillRect(col, centerY - barH, 1, barH * 2);
         } else {
-          // Verbatim nested band bars (low = red, mid = green, high = blue
-          // core) — the stored ANLZ values visualized without recombination.
-          const bars = bandColumnBars(held.low, held.mid, held.high, (height - 4) / 2);
-          for (const bar of bars) {
-            if (bar.halfHeight <= 0) continue;
-            ctx.fillStyle = `rgb(${bar.color.r}, ${bar.color.g}, ${bar.color.b})`;
-            ctx.fillRect(col, centerY - bar.halfHeight, 1, bar.halfHeight * 2);
-          }
+          // Documented PWV5: stored RGB is the color, stored height the size.
+          const barH = Math.max(1, held.peak * maxHalf);
+          ctx.fillStyle = rgbCss(rgbColumnColor(held.low, held.mid, held.high));
+          ctx.fillRect(col, centerY - barH, 1, barH * 2);
         }
       }
 

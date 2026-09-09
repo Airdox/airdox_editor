@@ -781,10 +781,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const minBucket = Math.max(0, searchCenterBucket - searchRadius);
     const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
 
+    // Transient search uses the stored ANLZ column heights verbatim — no
+    // self-computed weighting of channels.
     let maxPeak = -1;
     let bestBucket = searchCenterBucket;
     for (let b = minBucket; b <= maxBucket; b++) {
-      const peakVal = analysis.lowEnergy[b] * 0.7 + analysis.peaks[b] * 0.3;
+      const peakVal = analysis.peaks[b];
       if (peakVal > maxPeak) {
         maxPeak = peakVal;
         bestBucket = b;

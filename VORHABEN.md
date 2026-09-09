@@ -75,12 +75,16 @@ Tests: `tests/log-writer.test.mjs` (Format, Zeilensicherheit, Zirkular-Schutz, T
 
 Die ANLZ-Daten werden unverändert übernommen; sämtliche Abweichung zum Original lag in der Visualisierung und wurde gegen die Referenz-Screenshots (`reference/01–03`) beseitigt:
 
-- **RGB/3BAND ohne Eigenberechnung**: Die gespeicherten Bandwerte werden verbatim als geschachtelte, zentrierte Band-Balken gezeichnet (Low = rot außen, Mid = grün, High = blauer Kern – exakt der blaue Kern, der im Original in lauten roten Spalten sichtbar ist). Die frühere eigene Spektral-Mischformel und die erfundene weiße Mittel-Linie sind entfernt (`bandColumnBars` in `src/waveform/renderModel.ts`, genutzt von `DetailWaveform` und `TrackOverview`).
+- **Dokumentierte Visualisierungen statt Eigenberechnung** (Deep Symmetry / crate-digger, `src/waveform/renderModel.ts`):
+  - **PWV5 (RGB-Detail)**: Die gespeicherten 3-Bit-Komponenten SIND die Spaltenfarbe (`rgbColumnColor`), der 5-Bit-Wert die Spaltenhöhe — keine Mischformel, keine geschachtelten Balken, keine erfundene Spine.
+  - **PWAV/PWV2/PWV3 (blau)**: 5-Bit-Höhe + dokumentierte 3-Bit-Whiteness → Blau-Rampe „dunkelstes Blau bis fast Weiß“ (`monoBlueColor`); die Whiteness-Bits wurden früher verworfen und durch eine feste Kern-Linie ersetzt.
+  - **PWV4 (Farb-Preview)**: 6-Byte-Layout (Luminanz, Blau-Intensität, R, G, B) → zweitonige Spalten: hinten `rgb·Luminanz` mit `max(d2,r,g)`-Höhe, vorn geboostet mit gespeicherter Front-Höhe (`pwv4BackColor`/`pwv4FrontColor`).
+  - **PWV6/PWV7 (3-Band)**: dokumentierte Farben Low = dunkelblau, Mid = amber (transluzent, Überlappung wirkt braun), High = weiß, auf derselben Achse, High zuletzt (`threeBandLayers`).
 - **Kamm-Geometrie**: Spalten breiter als 2 px erhalten eine 1-px-schwarze Lücke wie im Original (`columnDrawWidth`).
 - **Alternierende Takt-Schattierung** hinter der Wellenform (`isBarShaded` + `BAR_SHADE_FILL`) sowie dunkle Takt-Ticks auf der Overview.
 - **Scharfes Canvas**: Beide Wellenform-Canvases werden mit `devicePixelRatio`-Skalierung (ResizeObserver) hinterlegt statt gestrecktem 1200×320-Bitmap.
-- Mono-Varianten (PWAV/PWV2/PWV3) bleiben im authentischen Rekordbox-Vorschau-Blau (`MONO_PREVIEW_BLUE`/`MONO_PREVIEW_CORE`).
 - **Honest Preview statt Eigenberechnung**: Der frühere ANLZ-lose Fallback hat eine selbst berechnete Pseudo-Wellenform (Kick/Sub/Hat-Hüllkurven, erfundene Break-Takte) gezeichnet — entfernt. Ohne ANLZ wird jetzt ausschließlich die importierte Takt/Beat-Struktur mit festen Höhen bei 55 % Alpha visualisiert (`previewBeatHalfHeight`, `PREVIEW_ALPHA`), weiterhin als „VORSCHAU“ beschriftet.
-- **Overview ohne Mittelung**: Downsampling nimmt die gespeicherten Werte verbatim per Peak-Hold (`peakHoldColumn`), kein selbst berechneter Durchschnitt.
+- **Overview ohne Mittelung**: Downsampling nimmt die gespeicherten Werte verbatim per Peak-Hold (`peakHoldColumn`, inkl. Luminanz/Back/Front-Kanäle), kein selbst berechneter Durchschnitt.
+- **Auto-Align** nutzt für die Transientensuche ausschließlich die gespeicherten Spaltenhöhen (`peaks`), keine eigene Kanal-Gewichtung.
 
-Tests: `tests/render-look.test.ts` (R1–R7: Band-Farben/-Reihenfolge, Höhen verbatim, stille Bänder zeichnen nichts, Kamm-Geometrie, Takt-Schattierung, PWV5-Bit-Packing-End-to-End-Pass-through, Mono-Konstanten, Preview nur aus Beatgrid-Struktur, Peak-Hold statt Mittelung).
+Tests: `tests/render-look.test.ts` (R1–R8: PWV5-Farb-Pass-through, Blau-Rampe, PWV4-Zweiton-Formeln, 3-Band-Farben/-Reihenfolge, Kamm-Geometrie, Takt-Schattierung, PWV5-End-to-End-Pass-through, Preview nur aus Beatgrid-Struktur, Peak-Hold statt Mittelung).
