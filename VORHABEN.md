@@ -55,3 +55,14 @@ Für Tracks mit Rekordbox-Herkunft (`REKORDBOX_XML`, `REKORDBOX_DB`, `REKORDBOX_
 - **Keine Demo-/Testdaten in der App**: kein Demo-Starttrack und keine synthetischen Fallbacks — Demo-Bootstrap, `DEFAULT_REKORDBOX_XML`, `src/audio/synthesizerTrack.ts`, `generateRekordboxPhrases` (Template-Phrasen) und `generateAnalysisFromMetadata` (Pseudo-Waveform) wurden entfernt; die App startet stringent leer. `GENERATED_FALLBACK` bleibt ausschließlich als ehrliche Herkunftsmarkierung im Typ-Enum bestehen. Test-Fixtures liegen unter `tests/fixtures/`, nicht im App-Quelltext (`src/`).
 
 Tests: `tests/xml-exclusive-import.test.ts` (PQTZ-Erhalt, Tail-Ergänzung, Legacy-Grid, Synthese-Verbot), `tests/anlz-ext-merge.test.ts` (Sibling-Ableitung DAT↔EXT, Merge-Prioritäten, Track-Integration), `tests/import-simulation.test.ts` (u. a. Synthese-Verbot: keine Waveform/Phrasen ohne echte Quelle). Fixtures: `tests/fixtures/testDatasets.ts`.
+
+## Log-Datei (Diagnose aller entscheidenden Parameter)
+
+Jeder Eintrag des In-App-Logs wird in der Desktop-Version zusätzlich **dauerhaft** in eine Datei gespiegelt, damit eine fehlende Waveform nachträglich eindeutig diagnostizierbar ist:
+
+- **Ort**: `<userData>/airdox-smart-editor.log` (Windows: `%APPDATA%/airdox_SMART_Editor/airdox-smart-editor.log`); Rotation bei 5 MB → `airdox-smart-editor.prev.log`. Der Pfad steht im **System-Log-Modal** mit Button „Im Ordner zeigen".
+- **Format** (`electron/logWriter.cjs`): eine Zeile pro Eintrag `ISO-Zeitstempel LEVEL [KATEGORIE] Nachricht | {JSON-Details}`, zeilensicher, abgeschnitten bei 2.000/4.000 Zeichen; Schreibfehler brechen niemals die App.
+- **Gespiegelte Entscheidungsparameter**: ANLZ-Auflösung (`analysisDataPath`, `sourceDbDir`, `resolved`), Dateigrößen, Tags, **Waveform-Varianten je Tag inkl. Bucket-Anzahl**, beste Variante, Beat-Knoten/BPM/First-Beat, Cues/Loops/Phrasen-Zählung, PPTH-Plausibilität, Schwesterdatei (EXT: geladen/Grund des Fehlschlags), Merge-Ergebnis auf dem Track (`waveformSource`, `variants`, `beatGridOrigin`), Deck-Ladung (Origin, Media-Status, `hasAudio`, Dauer, Regel `ANLZ_ONLY`), DB-/XML-Import-Zählwerte inkl. Link-Index — plus explizite Warnungen bei **ANLZ ohne PWV-Variante** und **Rekordbox-Track ohne Waveform**.
+- Bricht der Waveform-Pfad, zeigt die Datei exakt den fehlgeschlagenen Schritt (Auflösung → Lesen → PWV-Parsing → Merge → Renderer-Regel `ANLZ_ONLY`).
+
+Tests: `tests/log-writer.test.mjs` (Format, Zeilensicherheit, Zirkular-Schutz, Trunkierung, Rotation, Never-Throws).

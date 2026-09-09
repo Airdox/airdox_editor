@@ -32,7 +32,8 @@ import {
   XmlImportProgress,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
-import { applyAnlzExtractionToTrack, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { applyAnlzExtractionToTrack, AnlzExtractionResult, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { initFileLogging } from './utils/fileLog';
 import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import {
@@ -131,17 +132,43 @@ function buildCollectionTrackModel(
 async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
   const anlzPath = track.rawXmlAttributes?.analysisDataPath?.trim();
   if (!anlzPath || !window.rekordboxDesktop) return track;
+  const sourceDbDir = track.rawXmlAttributes?.sourceDbDir;
   // Deterministic resolution only: <dbDir>/share/PIONEER/USBANLZ/... or a
   // verbatim absolute path. Unresolvable values fall back to manual ANLZ
   // assignment — never to searching or guessing.
-  const resolved = resolveAnalysisFilePath(track.rawXmlAttributes?.sourceDbDir, anlzPath);
+  const resolved = resolveAnalysisFilePath(sourceDbDir, anlzPath);
+  logger.info('DATABASE', `[ANLZ Auto] Auflösung „${track.title}"`, {
+    analysisDataPath: anlzPath,
+    sourceDbDir: sourceDbDir ?? null,
+    resolved: resolved ?? null,
+  });
   if (!resolved) {
+    logger.warn('DATABASE', '[ANLZ Auto] Keine deterministische Auflösung — manuelle ANLZ-Zuordnung erforderlich.', {
+      analysisDataPath: anlzPath,
+      sourceDbDir: sourceDbDir ?? null,
+    });
     console.info(`[ANLZ Auto] Keine deterministische Auflösung für AnalysisDataPath (${anlzPath}); manuelle ANLZ-Zuordnung erforderlich.`);
     return track;
   }
+  const variantSummary = (e: AnlzExtractionResult) =>
+    e.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length }));
   try {
     const source = await window.rekordboxDesktop.readAnalysisFile(resolved);
     let extraction = parseAnlzBinary(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
+    logger.info('DATABASE', '[ANLZ Auto] Primärcontainer gelesen', {
+      path: resolved,
+      bytes: source.size ?? null,
+      tags: extraction.tagsFound.join(','),
+      waveformVariants: variantSummary(extraction),
+      bestWaveform: extraction.waveform ? `${extraction.waveform.sourceTag}:${extraction.waveform.length}` : null,
+      beatNodes: extraction.beatGrid?.beats.length ?? 0,
+      bpm: extraction.bpm ?? null,
+      firstBeat: extraction.firstBeat ?? null,
+      cues: extraction.cues.length,
+      loops: extraction.loops.length,
+      phrases: extraction.phrases.length,
+      ppth: extraction.analysisPath ?? null,
+    });
     // Rekordbox splits every analysis across sibling containers: the resolved
     // file (usually ANLZnnnn.DAT) plus ANLZnnnn.EXT in the same folder. The
     // EXT carries the full-resolution color waveform (PWV5), PSSI phrases and
@@ -160,10 +187,24 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
         extraction = /\.ext$/i.test(sibling)
           ? mergeAnlzExtractions(extraction, extExtraction)
           : mergeAnlzExtractions(extExtraction, extraction);
-        console.info(`[ANLZ Auto] +Schwesterdatei ${sibling} → ${extExtraction.tagsFound.join(', ')}`);
-      } catch {
+        logger.info('DATABASE', '[ANLZ Auto] Schwesterdatei gelesen & gemergt', {
+          path: sibling,
+          bytes: extSource.size ?? null,
+          tags: extExtraction.tagsFound.join(','),
+          waveformVariants: variantSummary(extExtraction),
+          mergedVariants: variantSummary(extraction),
+          phrases: extExtraction.phrases.length,
+          cues: extExtraction.cues.length,
+        });
+      } catch (siblingError) {
+        logger.warn('DATABASE', '[ANLZ Auto] Schwesterdatei nicht lesbar — Farb-Waveform (PWV5)/Phrasen (PSSI) ggf. nicht verfügbar.', {
+          path: sibling,
+          error: siblingError instanceof Error ? siblingError.message : String(siblingError),
+        });
         console.info(`[ANLZ Auto] Keine Schwesterdatei (${sibling}); Farb-Waveform (PWV5)/Phrasen (PSSI) ggf. nicht verfügbar.`);
       }
+    } else {
+      logger.info('DATABASE', '[ANLZ Auto] Keine Schwesterdatei abgeleitet (Ziel-Extension bereits vorhanden).', { path: resolved });
     }
     const merged = applyAnlzExtractionToTrack(track, extraction);
     // Plausibility guard: the PPTH source path should reference the same audio file.
@@ -176,9 +217,31 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
         merged.databaseRecord.anlzWarnings = [...(merged.databaseRecord.anlzWarnings ?? []), ppthNote];
       }
     }
+    logger.info('DATABASE', '[ANLZ Auto] Übernommen', {
+      title: track.title,
+      waveform: merged.analysis ? `${merged.analysis.sourceTag ?? 'ANLZ'}:${merged.analysis.length}` : null,
+      waveformVariants: merged.analysisVariants?.length ?? 0,
+      beatGridOrigin: merged.beatGrid.origin,
+      beatNodes: merged.beatGrid.beats?.length ?? 0,
+      cues: merged.cues.length,
+      loops: merged.loops.length,
+      phrases: merged.phrases?.length ?? 0,
+      warnings: extraction.warnings,
+    });
+    if (!merged.analysis) {
+      logger.warn('DATABASE', '[ANLZ Auto] ANLZ enthält KEINE Waveform-Variante (kein PWAV/PWV-Tag) — Deck zeigt ehrlichen Leerzustand.', {
+        title: track.title,
+        resolved,
+        tags: extraction.tagsFound.join(','),
+      });
+    }
     console.info(`[ANLZ Auto] ${resolved} → ${extraction.tagsFound.join(', ')}`);
     return merged;
   } catch (error) {
+    logger.error('DATABASE', '[ANLZ Auto] ANLZ-Datei nicht lesbar — Track bleibt ohne ANLZ-Daten.', {
+      resolved,
+      error: error instanceof Error ? error.message : String(error),
+    });
     console.warn(`[ANLZ Auto] ANLZ-Datei nicht lesbar (${resolved}); Track bleibt ohne ANLZ-Daten.`, error);
     return track;
   }
@@ -342,6 +405,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Stringent empty project: no demo bootstrap. The deck starts empty and
   // only genuine Rekordbox/local data loads it (XML-exclusive guarantee:
   // no synthetic reference track, no generated previews, no template data).
+
+  // Durable file logging: mirrors every decisive pipeline parameter into the
+  // desktop log file (idempotent, browser-safe).
+  useEffect(() => initFileLogging(), []);
 
   // Real-time animation loop for playhead progress and VU stereo meters
   useEffect(() => {
@@ -1184,6 +1251,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(file.name);
+      logger.info('XML_IMPORT', '[XML Import] Collection gelesen', {
+        fileName: file.name,
+        tracks: fullTrackModels.length,
+        withLocation: fullTrackModels.filter((t) => t.originalMedia?.location).length,
+      });
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should
@@ -1226,6 +1298,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     try {
       let extraction = parseAnlzBinary(ensureArrayBuffer(data));
+      logger.info('DATABASE', '[ANLZ Import] Container gelesen', {
+        fileName,
+        sourcePath: sourcePath ?? null,
+        bytes: data.byteLength,
+        tags: extraction.tagsFound.join(','),
+        waveformVariants: extraction.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length })),
+        bestWaveform: extraction.waveform ? `${extraction.waveform.sourceTag}:${extraction.waveform.length}` : null,
+        beatNodes: extraction.beatGrid?.beats.length ?? 0,
+        cues: extraction.cues.length,
+        loops: extraction.loops.length,
+        phrases: extraction.phrases.length,
+        ppth: extraction.analysisPath ?? null,
+      });
       // Same sibling rule as the auto path: a manually assigned ANLZnnnn.DAT
       // is merged with its ANLZnnnn.EXT (color waveform/phrases) when the
       // desktop bridge knows the file path.
@@ -1241,13 +1326,42 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             extraction = /\.ext$/i.test(sibling)
               ? mergeAnlzExtractions(extraction, extExtraction)
               : mergeAnlzExtractions(extExtraction, extraction);
+            logger.info('DATABASE', '[ANLZ Import] Schwesterdatei gelesen & gemergt', {
+              path: sibling,
+              bytes: extSource.size ?? null,
+              tags: extExtraction.tagsFound.join(','),
+              waveformVariants: extExtraction.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length })),
+              phrases: extExtraction.phrases.length,
+            });
             console.info(`[ANLZ Import] +Schwesterdatei ${sibling}`);
-          } catch {
+          } catch (siblingError) {
+            logger.warn('DATABASE', '[ANLZ Import] Schwesterdatei nicht lesbar; nur Primärcontainer importiert.', {
+              path: sibling,
+              error: siblingError instanceof Error ? siblingError.message : String(siblingError),
+            });
             console.info(`[ANLZ Import] Keine Schwesterdatei (${sibling}); importiere nur ${fileName}.`);
           }
         }
       }
       const enrichedTrack = applyAnlzExtractionToTrack(activeTrack, extraction);
+      logger.info('DATABASE', '[ANLZ Import] Übernommen', {
+        fileName,
+        title: enrichedTrack.title,
+        waveform: enrichedTrack.analysis ? `${enrichedTrack.analysis.sourceTag ?? 'ANLZ'}:${enrichedTrack.analysis.length}` : null,
+        waveformVariants: enrichedTrack.analysisVariants?.length ?? 0,
+        beatGridOrigin: enrichedTrack.beatGrid.origin,
+        beatNodes: enrichedTrack.beatGrid.beats?.length ?? 0,
+        cues: enrichedTrack.cues.length,
+        loops: enrichedTrack.loops.length,
+        phrases: enrichedTrack.phrases?.length ?? 0,
+        warnings: extraction.warnings,
+      });
+      if (!enrichedTrack.analysis) {
+        logger.warn('DATABASE', '[ANLZ Import] Importierte Datei enthält KEINE Waveform-Variante (kein PWAV/PWV-Tag).', {
+          fileName,
+          tags: extraction.tagsFound.join(','),
+        });
+      }
       // Same plausibility guard as the auto path: the PPTH source path inside
       // the container should reference this track's audio file.
       const expectedPath = activeTrack.originalMedia?.resolvedPath || activeTrack.originalMedia?.location || '';
@@ -1275,6 +1389,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
       console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
     } catch (error) {
+      logger.error('DATABASE', '[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden.', {
+        fileName,
+        error: error instanceof Error ? error.message : String(error),
+      });
       console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
     }
   };
@@ -1339,6 +1457,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
       setXmlCollectionModalOpen(true);
+      logger.info('DATABASE', '[DB Import] Rekordbox-Datenbank gelesen', {
+        dbPath,
+        sourceDbDir,
+        dbType: result.dbType ?? null,
+        tracks: fullTrackModels.length,
+        memoryCues: mapped.stats.memoryCues,
+        hotCues: mapped.stats.hotCues,
+        loops: mapped.stats.loops,
+        withAnalysisDataPath: fullTrackModels.filter((t) => t.rawXmlAttributes?.analysisDataPath?.trim()).length,
+        linkIndexSize: dbAnalysisIndexRef.current.size,
+      });
 
       showOperationFeedback({
         title: 'Rekordbox-Datenbank importiert (Read-Only)',
@@ -1513,6 +1642,40 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         const before = loadedTrack;
         loadedTrack = await tryAutoLoadAnlz(loadedTrack);
         anlzApplied = loadedTrack !== before;
+      }
+
+      // Decisive deck-load parameters, durably logged: waveform must come
+      // from Rekordbox-analyzed data (ANLZ) only — never from own analysis.
+      logger.info('XML_IMPORT', `[Deck] „${loadedTrack.title}" geladen`, {
+        origin: loadedTrack.origin,
+        mediaStatus: loadedTrack.originalMedia?.status ?? null,
+        location: loadedTrack.originalMedia?.location ?? null,
+        resolvedPath: loadedTrack.originalMedia?.resolvedPath ?? null,
+        hasAudio: !!loadedTrack.audioBuffer,
+        durationSec: Number(loadedTrack.duration.toFixed(3)),
+        bpm: loadedTrack.bpm,
+        key: loadedTrack.key,
+        sampleRate: loadedTrack.sampleRate,
+        channels: loadedTrack.channels,
+        anlzAutoApplied: anlzApplied,
+        waveformSource: loadedTrack.analysis?.sourceTag ?? null,
+        waveformBuckets: loadedTrack.analysis?.length ?? 0,
+        waveformVariants: loadedTrack.analysisVariants?.length ?? 0,
+        beatGridOrigin: loadedTrack.beatGrid.origin,
+        beatNodes: loadedTrack.beatGrid.beats?.length ?? 0,
+        cues: loadedTrack.cues.length,
+        loops: loadedTrack.loops.length,
+        phrases: loadedTrack.phrases?.length ?? 0,
+        waveformRule: rbExclusive ? 'ANLZ_ONLY (keine eigene Analyse)' : 'LOCAL_ALLOWED',
+      });
+      if (rbExclusive && !loadedTrack.analysis) {
+        logger.warn('XML_IMPORT', `[Deck] „${loadedTrack.title}": KEINE Waveform — Rekordbox-Track ohne ANLZ-Daten; ehrlicher Leerzustand aktiv.`, {
+          title: loadedTrack.title,
+          origin: loadedTrack.origin,
+          analysisDataPath: loadedTrack.rawXmlAttributes?.analysisDataPath ?? null,
+          sourceDbDir: loadedTrack.rawXmlAttributes?.sourceDbDir ?? null,
+          hint: 'ANLZ-Datei (ANLZnnnn.DAT/.EXT) über DATA-Panel zuordnen oder AnalysisDataPath in der DB prüfen.',
+        });
       }
 
       setTracks((prev) => {

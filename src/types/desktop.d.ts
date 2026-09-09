@@ -29,6 +29,18 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
+      /** Durable diagnostic log: appends one structured entry to the desktop log file (append-only, never throws). */
+      appendLog(entry: {
+        ts?: number;
+        level?: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
+        category?: string;
+        message: string;
+        data?: unknown;
+      }): Promise<boolean>;
+      /** Absolute path of the durable desktop log file (null when unavailable). */
+      getLogFilePath(): Promise<string | null>;
+      /** Reveals the durable desktop log file in the OS file manager. */
+      revealLogFile(): Promise<boolean>;
       chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
