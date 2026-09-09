@@ -26,6 +26,8 @@ import {
   isBarShaded,
   MONO_PREVIEW_BLUE,
   MONO_PREVIEW_CORE,
+  PREVIEW_ALPHA,
+  previewBeatHalfHeight,
   selectWaveformVariant,
   VisibleBeat,
 } from '../waveform/renderModel';
@@ -469,47 +471,24 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.textAlign = 'left';
         }
       } else {
-        // Fallback-Vorschau wenn keine ANLZ-Waveform vorhanden ist:
-        // Beatgrid-synthetisierte Vorschau (keine Peak-Analyse, nur BPM/Bar-Struktur)
-        // – bleibt visuell als Vorschau erkennbar, verhindert aber leere Spur.
+        // Honest fallback preview when no ANLZ waveform is assigned:
+        // visualize ONLY the imported bar/beat structure with fixed heights —
+        // no envelopes, no invented peaks, no analyzeAudioBuffer.
         const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        ctx.globalAlpha = 0.55;
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          const isBreak = barIndex >= 96 && barIndex < 112;
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : 0.2 + 0.15 * Math.sin(t * 18);
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
+        ctx.globalAlpha = PREVIEW_ALPHA;
+        for (let i = 0; i < visibleBeats.length; i++) {
+          const vb = visibleBeats[i];
+          const nextTime =
+            i + 1 < visibleBeats.length ? visibleBeats[i + 1].time : viewOffset + viewDuration + 1;
+          const x1 = timeToPixel(vb.time, width);
+          const x2 = timeToPixel(nextTime, width);
+          if (x2 < 0 || x1 > width) continue;
+          const colW = columnDrawWidth(Math.max(1, x2 - x1));
+          const barH = Math.max(2, previewBeatHalfHeight(vb.isBar, maxHalfH));
+          ctx.fillStyle = MONO_PREVIEW_BLUE;
+          ctx.fillRect(x1, centerY - barH, colW, barH * 2);
+          ctx.fillStyle = MONO_PREVIEW_CORE;
+          ctx.fillRect(x1, centerY - barH * 0.35, colW, barH * 0.7);
         }
         ctx.globalAlpha = 1;
         // Dezenter Hinweis dass dies eine Vorschau ist – echte ANLZ-Daten fehlen

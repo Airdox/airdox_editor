@@ -30,6 +30,11 @@ import {
   isBarShaded,
   MONO_PREVIEW_BLUE,
   MONO_PREVIEW_CORE,
+  peakHoldColumn,
+  PREVIEW_ALPHA,
+  PREVIEW_BAR_FRACTION,
+  PREVIEW_BEAT_FRACTION,
+  previewBeatHalfHeight,
 } from '../src/waveform/renderModel';
 import { parseAnlzBinary } from '../src/rekordbox/databaseExtractor';
 
@@ -171,6 +176,35 @@ runTest('R4 pass-through', 'Red-only, green-only, blue-only PWV5 columns stay pu
 runTest('R5 mono', 'Authentic preview blue pinned', () => {
   assertEqual(MONO_PREVIEW_BLUE, '#00a2ff', 'Preview blue');
   assertEqual(MONO_PREVIEW_CORE, '#b3e5fc', 'Preview core');
+});
+
+// ─── R6: honest preview = beatgrid structure only ──────────────────────────
+runTest('R6 preview', 'Heights come solely from bar/beat structure, deterministic', () => {
+  const maxHalfH = 100;
+  const barH = previewBeatHalfHeight(true, maxHalfH);
+  const beatH = previewBeatHalfHeight(false, maxHalfH);
+  assertEqual(barH, PREVIEW_BAR_FRACTION * maxHalfH, 'Bar height is a fixed fraction');
+  assertEqual(beatH, PREVIEW_BEAT_FRACTION * maxHalfH, 'Beat height is a fixed fraction');
+  assert(barH > beatH, 'Bars emphasized over beats');
+  assertEqual(previewBeatHalfHeight(true, maxHalfH), barH, 'No hidden time dependence (bar)');
+  assertEqual(previewBeatHalfHeight(false, maxHalfH), beatH, 'No hidden time dependence (beat)');
+  assertEqual(PREVIEW_ALPHA, 0.55, 'Preview alpha pinned');
+});
+
+// ─── R7: overview downsampling = peak-hold, never averaging ────────────────
+runTest('R7 peak-hold', 'Column takes stored maxima, never averages', () => {
+  // Binary-exact values so Float32 storage is lossless.
+  const peaks = Float32Array.from([0.25, 0.75, 0.5]);
+  const low = Float32Array.from([0.125, 0.5, 0.25]);
+  const mid = Float32Array.from([0.25, 0.125, 0.5]);
+  const high = Float32Array.from([0.0625, 0.25, 0.875]);
+  const held = peakHoldColumn(peaks, low, mid, high, 0, 3);
+  assertEqual(held.peak, 0.75, 'peak = stored max');
+  assertEqual(held.low, 0.5, 'low = stored max (average would be ~0.29)');
+  assertEqual(held.mid, 0.5, 'mid = stored max');
+  assertEqual(held.high, 0.875, 'high = stored max');
+  const empty = peakHoldColumn(peaks, low, mid, high, 1, 1);
+  assertEqual(empty.peak, 0, 'Empty range yields silence');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

@@ -164,3 +164,48 @@ export function isBarShaded(barNumber: number): boolean {
 
 /** Background tone painted behind shaded (even) bars. */
 export const BAR_SHADE_FILL = '#101117';
+
+// ---------------------------------------------------------------------------
+// Honest preview (no ANLZ assigned): visualize ONLY the imported beatgrid
+// structure — bar/beat columns with fixed heights. No envelopes, no invented
+// audio, no analyzeAudioBuffer. Pinned by tests/render-look.test.ts (R6).
+// ---------------------------------------------------------------------------
+
+export const PREVIEW_ALPHA = 0.55;
+export const PREVIEW_BAR_FRACTION = 0.6;
+export const PREVIEW_BEAT_FRACTION = 0.35;
+
+/** Preview contour height purely from the imported bar/beat structure. */
+export function previewBeatHalfHeight(isBar: boolean, maxHalfH: number): number {
+  return (isBar ? PREVIEW_BAR_FRACTION : PREVIEW_BEAT_FRACTION) * maxHalfH;
+}
+
+/**
+ * Peak-hold downsampling for the overview: takes the stored values verbatim
+ * (per-band maximum inside the column) — no averaging, no smoothing, nothing
+ * computed beyond selecting stored samples. Pinned by R7.
+ */
+export function peakHoldColumn(
+  peaks: Float32Array,
+  lowEnergy: Float32Array,
+  midEnergy: Float32Array,
+  highEnergy: Float32Array,
+  start: number,
+  end: number
+): { peak: number; low: number; mid: number; high: number } {
+  let peak = 0;
+  let low = 0;
+  let mid = 0;
+  let high = 0;
+  for (let b = start; b < end; b++) {
+    const p = peaks[b] || 0;
+    if (p > peak) peak = p;
+    const l = lowEnergy[b] || 0;
+    if (l > low) low = l;
+    const m = midEnergy[b] || 0;
+    if (m > mid) mid = m;
+    const h = highEnergy[b] || 0;
+    if (h > high) high = h;
+  }
+  return { peak, low, mid, high };
+}

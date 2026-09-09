@@ -80,5 +80,7 @@ Die ANLZ-Daten werden unverändert übernommen; sämtliche Abweichung zum Origin
 - **Alternierende Takt-Schattierung** hinter der Wellenform (`isBarShaded` + `BAR_SHADE_FILL`) sowie dunkle Takt-Ticks auf der Overview.
 - **Scharfes Canvas**: Beide Wellenform-Canvases werden mit `devicePixelRatio`-Skalierung (ResizeObserver) hinterlegt statt gestrecktem 1200×320-Bitmap.
 - Mono-Varianten (PWAV/PWV2/PWV3) bleiben im authentischen Rekordbox-Vorschau-Blau (`MONO_PREVIEW_BLUE`/`MONO_PREVIEW_CORE`).
+- **Honest Preview statt Eigenberechnung**: Der frühere ANLZ-lose Fallback hat eine selbst berechnete Pseudo-Wellenform (Kick/Sub/Hat-Hüllkurven, erfundene Break-Takte) gezeichnet — entfernt. Ohne ANLZ wird jetzt ausschließlich die importierte Takt/Beat-Struktur mit festen Höhen bei 55 % Alpha visualisiert (`previewBeatHalfHeight`, `PREVIEW_ALPHA`), weiterhin als „VORSCHAU“ beschriftet.
+- **Overview ohne Mittelung**: Downsampling nimmt die gespeicherten Werte verbatim per Peak-Hold (`peakHoldColumn`), kein selbst berechneter Durchschnitt.
 
-Tests: `tests/render-look.test.ts` (R1–R5: Band-Farben/-Reihenfolge, Höhen verbatim, stille Bänder zeichnen nichts, Kamm-Geometrie, Takt-Schattierung, PWV5-Bit-Packing-End-to-End-Pass-through, Mono-Konstanten).
+Tests: `tests/render-look.test.ts` (R1–R7: Band-Farben/-Reihenfolge, Höhen verbatim, stille Bänder zeichnen nichts, Kamm-Geometrie, Takt-Schattierung, PWV5-Bit-Packing-End-to-End-Pass-through, Mono-Konstanten, Preview nur aus Beatgrid-Struktur, Peak-Hold statt Mittelung).

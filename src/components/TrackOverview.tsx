@@ -12,6 +12,9 @@ import {
   collectVisibleBeats,
   MONO_PREVIEW_BLUE,
   MONO_PREVIEW_CORE,
+  peakHoldColumn,
+  PREVIEW_ALPHA,
+  previewBeatHalfHeight,
   selectWaveformVariant,
 } from '../waveform/renderModel';
 
@@ -120,29 +123,20 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       for (let col = 0; col < targetCols; col++) {
         const startB = Math.floor(col * bucketsPerCol);
         const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
-
-        let maxPeak = 0;
-        let sumLow = 0;
-        let sumMid = 0;
-        let sumHigh = 0;
-        let count = 0;
-
-        for (let b = startB; b < endB; b++) {
-          const p = analysis.peaks[b] || 0;
-          if (p > maxPeak) maxPeak = p;
-          sumLow += analysis.lowEnergy[b] || 0;
-          sumMid += analysis.midEnergy[b] || 0;
-          sumHigh += analysis.highEnergy[b] || 0;
-          count++;
-        }
-
-        const low = count > 0 ? sumLow / count : 0;
-        const mid = count > 0 ? sumMid / count : 0;
-        const high = count > 0 ? sumHigh / count : 0;
+        // Peak-hold: take the stored values verbatim (per-band maximum),
+        // no averaging or smoothing of our own.
+        const held = peakHoldColumn(
+          analysis.peaks,
+          analysis.lowEnergy,
+          analysis.midEnergy,
+          analysis.highEnergy,
+          startB,
+          endB
+        );
 
         if (isMonoPreview) {
           // Classic Rekordbox preview blue for mono variants
-          const barH = Math.max(2, maxPeak * (height - 4));
+          const barH = Math.max(2, held.peak * (height - 4));
           const yTop = (height - barH) / 2;
           ctx.fillStyle = MONO_PREVIEW_BLUE;
           ctx.fillRect(col, yTop, 1, barH);
@@ -151,7 +145,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         } else {
           // Verbatim nested band bars (low = red, mid = green, high = blue
           // core) — the stored ANLZ values visualized without recombination.
-          const bars = bandColumnBars(low, mid, high, (height - 4) / 2);
+          const bars = bandColumnBars(held.low, held.mid, held.high, (height - 4) / 2);
           for (const bar of bars) {
             if (bar.halfHeight <= 0) continue;
             ctx.fillStyle = `rgb(${bar.color.r}, ${bar.color.g}, ${bar.color.b})`;
@@ -172,31 +166,22 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         }
       }
     } else {
-      // Vorschau-Kontur wenn keine ANLZ-Daten vorhanden: Beatgrid-basierte Hüllkurve
+      // Honest preview when no ANLZ data is assigned: pure bar/beat
+      // structure with fixed heights — no envelopes, no invented audio.
       const bg = track.beatGrid;
-      const bpm = bg.bpm || 130.05;
-      const secondsPerBeat = 60 / bpm;
       const centerY = height / 2;
-      ctx.globalAlpha = 0.5;
-      for (let col = 0; col < targetCols; col++) {
-        const t = (col / targetCols) * duration;
-        const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-        const beatFract = ((beatPos % 1) + 1) % 1;
-        const barIndex = Math.floor(beatPos / 4);
-        const isBreak = barIndex >= 96 && barIndex < 112;
-        const kickEnv = isBreak ? 0.06 : Math.exp(-beatFract * 14) * 0.9;
-        const sub = isBreak ? 0.08 : 0.18 + 0.12 * Math.sin(t * 16);
-        const peak = Math.min(1, kickEnv + sub + 0.06);
-        const barH = Math.max(2, peak * (height - 6));
-        const yTop = (height - barH) / 2;
-        const r = Math.min(255, Math.floor(kickEnv * 260 + sub * 60));
-        const g = Math.min(255, Math.floor(sub * 220 + 30));
-        const bCol = Math.min(255, Math.floor(kickEnv * 60 + 90));
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-        ctx.fillRect(col, yTop, 1, barH);
-        if (col % 2 === 0) {
-          ctx.fillStyle = 'rgba(255,255,255,0.18)';
-          ctx.fillRect(col, centerY - 1, 1, 2);
+      ctx.globalAlpha = PREVIEW_ALPHA;
+      if (bg.beats && bg.beats.length > 0) {
+        const vis = collectVisibleBeats(bg.beats, 0, duration, 4000);
+        for (let i = 0; i < vis.length; i++) {
+          const vb = vis[i];
+          const nextT = i + 1 < vis.length ? vis[i + 1].time : duration;
+          const x1 = Math.round((vb.time / duration) * width);
+          const x2 = Math.round((nextT / duration) * width);
+          if (x2 <= x1) continue;
+          const barH = Math.max(1, previewBeatHalfHeight(vb.isBar, (height - 4) / 2));
+          ctx.fillStyle = MONO_PREVIEW_BLUE;
+          ctx.fillRect(x1, centerY - barH, x2 - x1 - 1, barH * 2);
         }
       }
       ctx.globalAlpha = 1;
