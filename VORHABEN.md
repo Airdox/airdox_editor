@@ -70,3 +70,15 @@ Jeder Eintrag des In-App-Logs wird in der Desktop-Version zusätzlich **dauerhaf
 - Bricht der Waveform-Pfad, zeigt die Datei exakt den fehlgeschlagenen Schritt (Auflösung → Lesen → PWV-Parsing → Merge → Renderer-Regel `ANLZ_ONLY`).
 
 Tests: `tests/log-writer.test.mjs` (Format, Zeilensicherheit, Zirkular-Schutz, Trunkierung, Rotation, Never-Throws).
+
+## Phase 5 – Visueller Lock auf das Rekordbox-Original ✅
+
+Die ANLZ-Daten werden unverändert übernommen; sämtliche Abweichung zum Original lag in der Visualisierung und wurde gegen die Referenz-Screenshots (`reference/01–03`) beseitigt:
+
+- **RGB/3BAND ohne Eigenberechnung**: Die gespeicherten Bandwerte werden verbatim als geschachtelte, zentrierte Band-Balken gezeichnet (Low = rot außen, Mid = grün, High = blauer Kern – exakt der blaue Kern, der im Original in lauten roten Spalten sichtbar ist). Die frühere eigene Spektral-Mischformel und die erfundene weiße Mittel-Linie sind entfernt (`bandColumnBars` in `src/waveform/renderModel.ts`, genutzt von `DetailWaveform` und `TrackOverview`).
+- **Kamm-Geometrie**: Spalten breiter als 2 px erhalten eine 1-px-schwarze Lücke wie im Original (`columnDrawWidth`).
+- **Alternierende Takt-Schattierung** hinter der Wellenform (`isBarShaded` + `BAR_SHADE_FILL`) sowie dunkle Takt-Ticks auf der Overview.
+- **Scharfes Canvas**: Beide Wellenform-Canvases werden mit `devicePixelRatio`-Skalierung (ResizeObserver) hinterlegt statt gestrecktem 1200×320-Bitmap.
+- Mono-Varianten (PWAV/PWV2/PWV3) bleiben im authentischen Rekordbox-Vorschau-Blau (`MONO_PREVIEW_BLUE`/`MONO_PREVIEW_CORE`).
+
+Tests: `tests/render-look.test.ts` (R1–R5: Band-Farben/-Reihenfolge, Höhen verbatim, stille Bänder zeichnen nichts, Kamm-Geometrie, Takt-Schattierung, PWV5-Bit-Packing-End-to-End-Pass-through, Mono-Konstanten).

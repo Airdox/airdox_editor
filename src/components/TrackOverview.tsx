@@ -7,7 +7,13 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
-import { selectWaveformVariant } from '../waveform/renderModel';
+import {
+  bandColumnBars,
+  collectVisibleBeats,
+  MONO_PREVIEW_BLUE,
+  MONO_PREVIEW_CORE,
+  selectWaveformVariant,
+} from '../waveform/renderModel';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -29,6 +35,29 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [fitTick, setFitTick] = useState(0);
+
+  // Crisp canvas: back the CSS box with devicePixelRatio-scaled pixels.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
+    const fit = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        setFitTick((t) => t + 1);
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
 
   // Draw overview canvas
   useEffect(() => {
@@ -86,6 +115,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         analysis.sourceTag === 'PWV2' ||
         analysis.sourceTag === 'PWV3';
       const bucketsPerCol = buckets / targetCols;
+      const centerY = height / 2;
 
       for (let col = 0; col < targetCols; col++) {
         const startB = Math.floor(col * bucketsPerCol);
@@ -110,24 +140,35 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const mid = count > 0 ? sumMid / count : 0;
         const high = count > 0 ? sumHigh / count : 0;
 
-        const barH = Math.max(2, maxPeak * (height - 4));
-        const yTop = (height - barH) / 2;
-
         if (isMonoPreview) {
           // Classic Rekordbox preview blue for mono variants
-          ctx.fillStyle = '#00a2ff';
+          const barH = Math.max(2, maxPeak * (height - 4));
+          const yTop = (height - barH) / 2;
+          ctx.fillStyle = MONO_PREVIEW_BLUE;
           ctx.fillRect(col, yTop, 1, barH);
-          ctx.fillStyle = '#b3e5fc';
+          ctx.fillStyle = MONO_PREVIEW_CORE;
           ctx.fillRect(col, yTop + barH * 0.3, 1, barH * 0.4);
         } else {
-          // Rekordbox RGB spectral styling: bass orange-red, mids green,
-          // highs ice blue; full-spectrum columns render to white.
-          const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
-          const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
-          const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
+          // Verbatim nested band bars (low = red, mid = green, high = blue
+          // core) — the stored ANLZ values visualized without recombination.
+          const bars = bandColumnBars(low, mid, high, (height - 4) / 2);
+          for (const bar of bars) {
+            if (bar.halfHeight <= 0) continue;
+            ctx.fillStyle = `rgb(${bar.color.r}, ${bar.color.g}, ${bar.color.b})`;
+            ctx.fillRect(col, centerY - bar.halfHeight, 1, bar.halfHeight * 2);
+          }
+        }
+      }
 
-          ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-          ctx.fillRect(col, yTop, 1, barH);
+      // Authentic per-bar separators (reference 01: dark ticks on the strip)
+      if (track.beatGrid.beats && track.beatGrid.beats.length > 0) {
+        const barTicks = collectVisibleBeats(track.beatGrid.beats, 0, duration, 4000).filter(
+          (v) => v.isBar
+        );
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        for (const vbar of barTicks) {
+          const bx = Math.round((vbar.time / duration) * width);
+          ctx.fillRect(bx, 0, 1, height);
         }
       }
     } else {
@@ -228,7 +269,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, height);
     ctx.stroke();
-  }, [track, currentTime, viewOffset, viewDuration]);
+  }, [track, currentTime, viewOffset, viewDuration, fitTick]);
 
   // Handle click or drag on overview to seek / pan
   const handlePointerInteraction = useCallback(

@@ -18,8 +18,14 @@ import {
   CuePoint,
 } from '../types/rekordbox';
 import {
+  BAR_SHADE_FILL,
+  bandColumnBars,
   beatIndexAtOrAfter,
   collectVisibleBeats,
+  columnDrawWidth,
+  isBarShaded,
+  MONO_PREVIEW_BLUE,
+  MONO_PREVIEW_CORE,
   selectWaveformVariant,
   VisibleBeat,
 } from '../waveform/renderModel';
@@ -152,6 +158,26 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
   const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Crisp canvas: back the CSS box with devicePixelRatio-scaled pixels so the
+  // visual lock stays sharp on HiDPI displays instead of a stretched bitmap.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
+    const fit = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
 
   // Time to pixel / pixel to time conversions
   const timeToPixel = useCallback(
@@ -316,6 +342,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
+      // 2a. Authentic alternating bar shading behind the waveform
+      // (reference 01/02: even bars sit on a slightly lighter ground).
+      const barStarts = visibleBeats.filter((v) => v.isBar);
+      for (let i = 0; i < barStarts.length; i++) {
+        const a = barStarts[i];
+        if (!isBarShaded(a.barNumber)) continue;
+        const nextTime =
+          i + 1 < barStarts.length ? barStarts[i + 1].time : viewOffset + viewDuration + 1;
+        const x1 = Math.max(0, timeToPixel(a.time, width));
+        const x2 = Math.min(width, timeToPixel(nextTime, width));
+        if (x2 - x1 <= 0) continue;
+        ctx.fillStyle = BAR_SHADE_FILL;
+        ctx.fillRect(x1, 18, x2 - x1, height - 18);
+      }
+
       // 2b. Rekordbox Phrase Blocks (PSSI Song Structure)
       if (track.phrases && track.phrases.length > 0) {
         track.phrases.forEach((p) => {
@@ -377,50 +418,44 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const centerT = t + secPerBucket * 0.5;
           const x = timeToPixel(centerT, width);
           const nextX = timeToPixel(centerT + secPerBucket, width);
-          const colW = Math.max(1.2, nextX - x);
+          // Comb look: 1 px black gap between columns once zoomed in enough.
+          const colW = columnDrawWidth(Math.max(1, nextX - x));
 
           const peak = analysis.peaks[b];
           const low = analysis.lowEnergy[b];
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
-          if (waveformMode === 'BLUE' || (waveformMode === 'RGB' && isMonoPreview)) {
+          if (waveformMode === 'BLUE' || isMonoPreview) {
             // High-contrast electric blue waveform (also the authentic look
             // for mono preview variants, matching Rekordbox's preview blue)
             const barH = Math.max(2, peak * maxHalfH);
-            ctx.fillStyle = '#00a2ff';
+            ctx.fillStyle = MONO_PREVIEW_BLUE;
             ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
+            ctx.fillStyle = MONO_PREVIEW_CORE;
             ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB spectral mapping: bass orange-red, mids
-            // green, highs ice blue; full-spectrum columns render to white.
-            const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
-            const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
-            const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
-
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
-            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
           } else {
-            // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.85);
-            const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.55);
-
-            // Lows (Red)
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
-            // Mids (Cyan/Green)
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
+            // RGB & 3BAND: verbatim visualization of the stored ANLZ band
+            // values as nested centered bars (low = red outer, mid = green,
+            // high = blue core) — no recombination, heights exactly as
+            // stored (reference 01/02).
+            const bars = bandColumnBars(low, mid, high, maxHalfH);
+            for (const bar of bars) {
+              if (bar.halfHeight <= 0) continue;
+              ctx.fillStyle = `rgb(${bar.color.r}, ${bar.color.g}, ${bar.color.b})`;
+              ctx.fillRect(x - colW * 0.5, centerY - bar.halfHeight, colW, bar.halfHeight * 2);
+              if (waveformMode === '3BAND') {
+                // Separate the bands visually with a dark outline.
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(
+                  x - colW * 0.5 + 0.5,
+                  centerY - bar.halfHeight + 0.5,
+                  Math.max(1, colW - 1),
+                  Math.max(1, bar.halfHeight * 2 - 1)
+                );
+              }
+            }
           }
         }
 

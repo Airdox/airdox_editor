@@ -97,3 +97,70 @@ function indexOfMax(values: number[]): number {
   }
   return best;
 }
+
+// ---------------------------------------------------------------------------
+// Authentic visual lock (reference/01–03): the renderers must visualize the
+// stored ANLZ band values verbatim — no recombination, no invented spectral
+// formulas. Pinned by tests/render-look.test.ts.
+// ---------------------------------------------------------------------------
+
+export interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+/** Authentic Rekordbox band colors: low = red, mid = green, high = blue. */
+export const BAND_COLOR_LOW: Rgb = { r: 255, g: 0, b: 0 };
+export const BAND_COLOR_MID: Rgb = { r: 0, g: 230, b: 0 };
+export const BAND_COLOR_HIGH: Rgb = { r: 0, g: 90, b: 255 };
+
+/** Classic Rekordbox preview blue for mono (PWAV/PWV2/PWV3) variants. */
+export const MONO_PREVIEW_BLUE = '#00a2ff';
+export const MONO_PREVIEW_CORE = '#b3e5fc';
+
+export interface BandBar {
+  color: Rgb;
+  /** Half height of the centered bar in px; 0 = band silent, nothing drawn. */
+  halfHeight: number;
+}
+
+/**
+ * Verbatim pass-through visualization of decoded ANLZ band values: each
+ * stored band value becomes one centered bar in its authentic band color,
+ * drawn in low → mid → high order so the high band forms the blue core that
+ * is visible inside loud red columns (reference 01/02). The values are used
+ * exactly as stored; only a 1 px minimum keeps non-silent bands visible.
+ */
+export function bandColumnBars(
+  low: number,
+  mid: number,
+  high: number,
+  maxHalfH: number
+): BandBar[] {
+  const scale = (v: number) =>
+    v > 0 ? Math.max(1, Math.min(1, v) * maxHalfH) : 0;
+  return [
+    { color: BAND_COLOR_LOW, halfHeight: scale(low) },
+    { color: BAND_COLOR_MID, halfHeight: scale(mid) },
+    { color: BAND_COLOR_HIGH, halfHeight: scale(high) },
+  ];
+}
+
+/**
+ * Comb look from the reference: once a column slot is wider than 2 px a 1 px
+ * black gap separates neighbouring columns; narrow columns stay solid.
+ */
+export function columnDrawWidth(slotWidth: number): number {
+  if (!(slotWidth > 0)) return 1;
+  if (slotWidth <= 2) return slotWidth;
+  return Math.max(1, slotWidth - 1);
+}
+
+/** Rekordbox shades alternate bars slightly lighter behind the waveform. */
+export function isBarShaded(barNumber: number): boolean {
+  return barNumber % 2 === 0;
+}
+
+/** Background tone painted behind shaded (even) bars. */
+export const BAR_SHADE_FILL = '#101117';
