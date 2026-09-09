@@ -25,17 +25,14 @@ import {
   DbAnalysisRef,
   deriveSiblingExtension,
 } from './rekordbox/analysisResolver';
-import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
 import {
-  parseRekordboxXml,
   parseRekordboxXmlAsync,
   XmlImportProgress,
-  DEFAULT_REKORDBOX_XML,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
-import { applyAnlzExtractionToTrack, generateRekordboxPhrases, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { applyAnlzExtractionToTrack, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
 import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import {
@@ -342,117 +339,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
 
-  // Auto-bootstrap default reference track and palette clips from DEFAULT_REKORDBOX_XML
-  // Ensures waveform, beatgrid, cues, and palette are immediately rendered and functional
-  useEffect(() => {
-    if (tracks.length > 0) return;
-    try {
-      const parsed = parseRekordboxXml(DEFAULT_REKORDBOX_XML);
-      if (parsed.tracks.length > 0) {
-        const rawTrack = parsed.tracks[0];
-        const audioCtx = audioEngine.getContext();
-        const bpm = rawTrack.bpm || 130.0;
-        const firstBeat = rawTrack.beatGrid?.firstBeat || 0.0;
-        const duration = rawTrack.duration || 326.0;
-        const bars = Math.max(32, Math.ceil(duration / (240 / bpm)));
-        const synthBuf = generateElectronicDjTrack(audioCtx, bpm, bars, firstBeat);
-        // Demo bootstrap: synthetic audio + own analysis, honestly labeled as
-        // GENERATED_FALLBACK (never as Rekordbox data).
-        const analysis = analyzeAudioBuffer(synthBuf, DataOrigin.GENERATED_FALLBACK);
-        const sha256 = audioEngine.computeBufferChecksum(synthBuf);
-        const phrases = generateRekordboxPhrases(bpm, synthBuf.duration, firstBeat);
-
-        const initialTrack: TrackModel = {
-          id: rawTrack.id || 'track-1',
-          title: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
-          artist: rawTrack.artist || 'La Roux',
-          album: rawTrack.album || 'Quicksand',
-          bpm,
-          key: rawTrack.key || '3A',
-          duration: synthBuf.duration,
-          sampleRate: synthBuf.sampleRate,
-          channels: synthBuf.numberOfChannels,
-          originalSha256: sha256,
-          isOriginalUntouched: true,
-          audioBuffer: synthBuf,
-          // Synthetic demo track: grid values mirror the XML snippet, but the
-          // sounding track is generated, so the origin is a labeled fallback.
-          beatGrid: buildBeatGridFromTempo(firstBeat, bpm, synthBuf.duration, 4, DataOrigin.GENERATED_FALLBACK),
-          cues: rawTrack.cues || [],
-          loops: rawTrack.loops || [],
-          analysis,
-          phrases,
-          origin: DataOrigin.GENERATED_FALLBACK,
-          workingSegments: [
-            {
-              id: 'seg-init-1',
-              type: 'ORIGINAL',
-              trackId: rawTrack.id || 'track-1',
-              sourceStart: 0,
-              sourceEnd: synthBuf.duration,
-              projectStart: 0,
-              projectDuration: synthBuf.duration,
-              gain: 1.0,
-            },
-          ],
-        };
-
-        // Extract palette clips from this authentic audio buffer matching screenshot
-        const secPerBeat = 60 / bpm;
-        const makeClip = (id: string, name: string, startBeat: number, numBeats: number, color: string): PaletteClip => {
-          const startSec = startBeat * secPerBeat;
-          const durSec = numBeats * secPerBeat;
-          const startSample = Math.floor(startSec * synthBuf.sampleRate);
-          const numSamples = Math.floor(durSec * synthBuf.sampleRate);
-          const subBuf = audioCtx.createBuffer(2, numSamples, synthBuf.sampleRate);
-          for (let ch = 0; ch < 2; ch++) {
-            const src = synthBuf.getChannelData(ch);
-            const dest = subBuf.getChannelData(ch);
-            for (let i = 0; i < numSamples; i++) {
-              dest[i] = src[startSample + i] || 0;
-            }
-          }
-          return {
-            id,
-            name,
-            sourceTrackId: rawTrack.id || 'track-1',
-            sourceTrackName: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
-            sourceStart: startSec,
-            sourceEnd: startSec + durSec,
-            duration: durSec,
-            beats: numBeats,
-            bars: Math.max(1, Math.round(numBeats / 4)),
-            bpm,
-            key: '3A',
-            color,
-            audioBuffer: subBuf,
-            miniPeaks: extractMiniPeaks(subBuf, 64),
-            origin: DataOrigin.GENERATED_FALLBACK,
-          };
-        };
-
-        const sampleClips: PaletteClip[] = [
-          makeClip('clip-1', 'Intro Kick 4B', 0, 16, '#ff2b2b'),
-          makeClip('clip-2', '8-Bit Arp 8B', 432, 32, '#00a2ff'),
-          makeClip('clip-3', 'Main Drop 8B', 448, 32, '#10b981'),
-          makeClip('clip-4', 'Breakdown 16B', 384, 64, '#f59e0b'),
-        ];
-
-        setTracks([initialTrack]);
-        setActiveTrackId(initialTrack.id);
-        setWorkingAudioBuffer(synthBuf);
-        setPaletteClips(sampleClips);
-
-        // Position initial viewport to match the authentic Rekordbox EDIT mode reference (Bar 109 to 117)
-        const dropTime = 112 * 4 * (60 / bpm); // ~206.69s (Bar 113)
-        setCurrentTime(dropTime);
-        setViewOffset(Math.max(0, dropTime - 9.85));
-        setViewDuration(14.76);
-      }
-    } catch (err) {
-      console.error('Fehler bei der Initialisierung des Referenz-Tracks:', err);
-    }
-  }, []);
+  // Stringent empty project: no demo bootstrap. The deck starts empty and
+  // only genuine Rekordbox/local data loads it (XML-exclusive guarantee:
+  // no synthetic reference track, no generated previews, no template data).
 
   // Real-time animation loop for playhead progress and VU stereo meters
   useEffect(() => {
@@ -1535,13 +1424,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const durationDef = selectedDef.duration || 300.0;
       const firstBeatDef = selectedDef.beatGrid?.firstBeat || 0.0;
 
-      // Synthetic provisioning exists only for non-Rekordbox definitions; a
-      // Rekordbox track without readable audio loads metadata-only.
-      if (!originalAudio && !rbExclusive) {
-        const bars = Math.max(16, Math.ceil(durationDef / (240 / bpm)));
-        originalAudio = generateElectronicDjTrack(audioCtx, bpm, bars, firstBeatDef);
-      }
-
+      // No replacement audio is ever generated: a track whose original file
+      // is unreadable loads metadata-only, and the UI states what is missing
+      // (XML-exclusive workflow guarantee).
       const duration = originalAudio ? originalAudio.duration : durationDef;
       // RB-exclusive: never run own analysis here; the waveform arrives only
       // via ANLZ (auto-resolved below for DB tracks, manually assigned else).
@@ -1551,10 +1436,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
         : (selectedDef.originalSha256 || 'NOT_COMPUTED_READ_ONLY_SOURCE');
-      // RB-exclusive: no template phrases; PSSI from ANLZ only.
+      // No template phrases: only genuine PSSI data (from ANLZ) or phrases
+      // already attached to the collection entry are shown.
       const phrases = selectedDef.phrases && selectedDef.phrases.length > 0
         ? selectedDef.phrases
-        : (rbExclusive ? [] : generateRekordboxPhrases(bpm, duration, firstBeatDef));
+        : [];
 
       // Deterministic XML→DB analysis link: when the collection entry carries
       // no AnalysisDataPath of its own, attach the DB reference whose audio
@@ -1876,7 +1762,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         ],
         loops: [],
         analysis,
-        phrases: generateRekordboxPhrases(130.0, decoded.duration),
+        // No template phrases: local audio carries no Rekordbox analysis, so
+        // no PSSI song structure exists (phrases stay empty, never invented).
+        phrases: [],
         origin: DataOrigin.LOCAL_ANALYSIS,
         workingSegments: [
           {

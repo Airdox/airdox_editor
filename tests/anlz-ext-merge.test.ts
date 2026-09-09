@@ -31,7 +31,7 @@ import {
   generateRealAnlzDatFixture,
   generateRealAnlzExtFixture,
   SCENARIO_TECHNO_XML,
-} from '../src/rekordbox/testDatasets';
+} from './fixtures/testDatasets';
 import { DataOrigin } from '../src/types/rekordbox';
 
 interface TestResult {

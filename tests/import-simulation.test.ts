@@ -13,7 +13,7 @@ import {
   SCENARIO_EDGE_CASES_XML,
   generatePcmWavArrayBuffer,
   generateSyntheticAnlzBuffer,
-} from '../src/rekordbox/testDatasets';
+} from './fixtures/testDatasets';
 import { parseRekordboxXml, buildBeatGridFromTempo, unescapeXml } from '../src/rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, extractTrackFromRekordboxXml, parseAnlzBinary } from '../src/rekordbox/databaseExtractor';
 import { DataOrigin } from '../src/types/rekordbox';
@@ -152,12 +152,11 @@ runTest('Phrases & Cues', 'Scenario 3 (DnB): High tempo 174 BPM & 8 Memory Cues'
   const memCues = track.cues!.filter((c) => c.type === 'MEMORY');
   assertEqual(memCues.length, 8, '8 Memory Cues extracted');
 
-  // Full Track Extraction with Waveform and Phrases
+  // Full Track Extraction: template phrases are never generated — PSSI song
+  // structure exists only after a genuine ANLZ merge (XML-exclusive rule).
   const { track: fullTrack } = extractTrackFromRekordboxXml(SCENARIO_DNB_XML, 0);
   assert(fullTrack !== null, 'Full track extracted');
-  assert(fullTrack.phrases.length >= 6, 'PSSI phrase sections synthesized');
-  assertEqual(fullTrack.phrases[0].name, 'INTRO', 'First phrase is INTRO');
-  assertEqual(fullTrack.phrases[0].endBar - fullTrack.phrases[0].startBar, 16, 'Intro length is 16 bars');
+  assertEqual(fullTrack.phrases.length, 0, 'No template phrases without ANLZ PSSI');
 });
 
 // ─── SUITE 4: Edge Cases, Unicode & Entity Decoding ────────────────────────
@@ -180,20 +179,19 @@ runTest('Edge Cases', 'Scenario 4: Decode XML entities & special characters', ()
 });
 
 // ─── SUITE 5: Waveform Analysis & Visualization Data Extraction ────────────
-runTest('Waveform Extractor', 'Synthesize multi-band spectral waveform buckets', () => {
+runTest('Waveform Extractor', 'Never synthesizes waveform buckets (honest empty state)', () => {
   const { track: fullTrack } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   assert(fullTrack !== null, 'Full track extracted');
-  assert(fullTrack.analysis !== undefined, 'Waveform analysis object created');
-  assert(fullTrack.analysis.peaks.length >= 800, 'At least 800 overview peak buckets');
-  assert(fullTrack.analysis.lowEnergy.length >= 800, 'Frequency band energy generated');
 
-  // Verify amplitude range [0..1]
-  const samplePeak = fullTrack.analysis.peaks[100];
-  assert(samplePeak >= 0 && samplePeak <= 1, 'Peak amplitude is normalized within [0..1]');
-
-  assert(fullTrack.analysis.lowEnergy[100] >= 0 && fullTrack.analysis.lowEnergy[100] <= 1, 'Low band [0..1]');
-  assert(fullTrack.analysis.midEnergy[100] >= 0 && fullTrack.analysis.midEnergy[100] <= 1, 'Mid band [0..1]');
-  assert(fullTrack.analysis.highEnergy[100] >= 0 && fullTrack.analysis.highEnergy[100] <= 1, 'High band [0..1]');
+  // Without readable audio or an ANLZ container the track carries no
+  // waveform: own peak/metadata synthesis was removed — renderers show the
+  // honest empty state instead of invented energy.
+  assertEqual(fullTrack.analysis, null, 'No waveform without genuine source data');
+  assertEqual(fullTrack.phrases.length, 0, 'No template phrases');
+  assertEqual(fullTrack.databaseRecord!.anlzTagsFound.length, 0, 'No invented ANLZ tags');
+  assertEqual(fullTrack.databaseRecord!.waveformBuckets, 0, 'Bucket count 0 without waveform');
+  assertEqual(fullTrack.databaseRecord!.memoryCuesCount, 6, 'Genuine XML memory cues still counted');
+  assertEqual(fullTrack.databaseRecord!.databaseSource, 'REKORDBOX_XML', 'Real source recorded');
 });
 
 // ─── SUITE 6: Binary ANLZ Parser ───────────────────────────────────────────
