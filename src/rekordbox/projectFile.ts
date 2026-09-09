@@ -117,10 +117,28 @@ export function audioBufferToWavBase64(buffer: AudioBufferLike): string {
 // Serialized (persisted) shapes
 // ---------------------------------------------------------------------------
 
+export interface SerializedBeatNode {
+  time: number;
+  isBarStart: boolean;
+  barNumber: number;
+  beatInBar: number;
+  tailExtended?: boolean;
+}
+
 export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
+  /**
+   * Grid provenance (may differ from the track origin, e.g. an ANLZ grid on
+   * an XML track). Absent in files saved before beat persistence existed.
+   */
+  origin?: DataOrigin;
+  /**
+   * Verbatim beat nodes. Absent in older files (uniform rebuild fallback) and
+   * for tracks whose grid was never expanded beyond its scalars.
+   */
+  beats?: SerializedBeatNode[];
 }
 
 export interface SerializedSegment {
@@ -253,6 +271,18 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
+      // Verbatim persistence: PQTZ/USER_EDIT node times and the grid origin
+      // must survive the save/load cycle (never a silent uniform rebuild).
+      origin: track.beatGrid?.origin,
+      beats: (track.beatGrid?.beats?.length ?? 0) > 0
+        ? track.beatGrid.beats.map((node) => ({
+            time: node.time,
+            isBarStart: node.isBarStart,
+            barNumber: node.barNumber,
+            beatInBar: node.beatInBar,
+            ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
+          }))
+        : undefined,
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],

@@ -18,6 +18,12 @@ import {
   CuePoint,
 } from '../types/rekordbox';
 import {
+  beatIndexAtOrAfter,
+  collectVisibleBeats,
+  selectWaveformVariant,
+  VisibleBeat,
+} from '../waveform/renderModel';
+import {
   Plus,
   Minus,
   RotateCcw,
@@ -133,11 +139,18 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     [viewOffset, viewDuration]
   );
 
-  // Helper to snap time to nearest beat
+  // Helper to snap time to nearest beat (prefers original Rekordbox beat
+  // nodes; uniform reconstruction only when no nodes are stored).
   const snapTime = useCallback(
     (t: number) => {
       if (!quantize || !track) return t;
       const bg = track.beatGrid;
+      if (bg.beats && bg.beats.length > 0) {
+        const idx = beatIndexAtOrAfter(bg.beats, t);
+        const after = bg.beats[Math.min(idx, bg.beats.length - 1)].time;
+        const before = bg.beats[Math.max(0, idx - 1)].time;
+        return Math.max(0, Math.abs(after - t) < Math.abs(t - before) ? after : before);
+      }
       const spb = 60.0 / bg.bpm;
       const beatIndex = Math.round((t - bg.firstBeat) / spb);
       return Math.max(0, bg.firstBeat + beatIndex * spb);
@@ -201,22 +214,40 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
+      // Original Rekordbox beat nodes (PQTZ/XML) have priority; the uniform
+      // firstBeat+bpm reconstruction runs only for compact grids without nodes.
       const bg = track.beatGrid;
       const secondsPerBeat = 60.0 / bg.bpm;
-      const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
-      const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+      let visibleBeats: VisibleBeat[];
+      if (bg.beats && bg.beats.length > 0) {
+        visibleBeats = collectVisibleBeats(bg.beats, viewOffset - 1, viewOffset + viewDuration + 1);
+      } else {
+        const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
+        const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+        visibleBeats = [];
+        for (let b = startBeat; b <= endBeat; b++) {
+          visibleBeats.push({
+            time: bg.firstBeat + b * secondsPerBeat,
+            isBar: b % bg.meter === 0,
+            barNumber: Math.floor(b / bg.meter) + 1,
+            tail: false,
+          });
+        }
+      }
 
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+      for (const vb of visibleBeats) {
+        const x = timeToPixel(vb.time, width);
         if (x < -20 || x > width + 20) continue;
 
-        const isBar = b % bg.meter === 0;
-        const barNumber = Math.floor(b / bg.meter) + 1;
+        const isBar = vb.isBar;
+        const barNumber = vb.barNumber;
+        // Uniform tail continuations (appended after the last verbatim beat)
+        // render dimmed so genuine Rekordbox beats stay distinguishable.
+        const tail = vb.tail;
 
         if (isBar) {
           // Rekordbox authentic solid white Bar vertical downbeat line
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = tail ? 'rgba(255, 255, 255, 0.45)' : '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 0);
@@ -224,12 +255,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.stroke();
 
           // Rekordbox Bar number in top ruler (e.g. 109, 113)
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = tail ? 'rgba(255, 255, 255, 0.55)' : '#ffffff';
           ctx.font = 'bold 11px sans-serif';
           ctx.fillText(`${barNumber}`, x + 3, 14);
         } else {
           // Intermediate beat lines (beats 2, 3, 4)
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.strokeStyle = tail ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.22)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -272,7 +303,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 3. Render Waveform (BLUE / RGB / 3BAND)
-      const analysis = track.analysis;
+      // Zoom-matched variant: every candidate is genuine ANLZ data — the
+      // selector only decides which resolution fits the current view.
+      const candidates =
+        track.analysisVariants && track.analysisVariants.length > 0
+          ? track.analysisVariants
+          : track.analysis
+            ? [track.analysis]
+            : [];
+      const variantIdx = selectWaveformVariant(
+        candidates.map((c) => c.length),
+        viewDuration,
+        track.duration,
+        width
+      );
+      const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
@@ -330,67 +375,56 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
           }
         }
-      } else {
-        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
-        const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
-          const isBreak = (barIndex >= 96 && barIndex < 112);
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
 
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            // 3BAND
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
+        // Active variant provenance (zoom-dependent), drawn in-canvas so it
+        // never lags the rendered frame.
+        if (analysis.sourceTag) {
+          ctx.textAlign = 'right';
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.font = '9px monospace';
+          ctx.fillText(analysis.sourceTag, width - 6, height - 6);
+          ctx.textAlign = 'left';
         }
+      } else {
+        // No waveform data: honest empty state. Renderers must never synthesize
+        // waveform content (XML-exclusive workflow guarantee) — missing
+        // Rekordbox/ANLZ data is shown as missing.
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.font = '12px sans-serif';
+        ctx.fillText(
+          track.audioBuffer
+            ? 'Keine Rekordbox-Waveform vorhanden – ANLZ-Datei über DATA zuordnen'
+            : 'Kein Audio / keine Waveform – Originaldatei bzw. ANLZ zuordnen',
+          width / 2,
+          centerY - 8
+        );
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(
+          'Beatgrid & Cues stammen aus den Rekordbox-Importdaten',
+          width / 2,
+          centerY + 10
+        );
+        ctx.textAlign = 'left';
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+      for (const vb of visibleBeats) {
+        const x = timeToPixel(vb.time, width);
         if (x < -10 || x > width + 10) continue;
-        const isBar = b % bg.meter === 0;
+        const isBar = vb.isBar;
+        const tail = vb.tail;
 
         if (isBar) {
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = tail ? 'rgba(255, 255, 255, 0.45)' : '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 18);
           ctx.lineTo(x, height);
           ctx.stroke();
         } else {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+          ctx.strokeStyle = tail ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.2)';
           ctx.lineWidth = 0.7;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -1012,7 +1046,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             </span>
             <span className="text-neutral-600">•</span>
             <span className="text-neutral-400">
+              {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : ''}
               {track.analysis?.length || 0} WAVEFORM BUCKETS
+              {track.analysisVariants && track.analysisVariants.length > 1
+                ? ` • ${track.analysisVariants.length} VARIANTEN`
+                : ''}
             </span>
             {track.phrases && track.phrases.length > 0 && (
               <>

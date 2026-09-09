@@ -22,7 +22,7 @@ import {
 
 export interface OperationTelemetry {
   title: string;
-  operationType: 'INSERT' | 'REPLACE' | 'OVERDUB' | 'DELETE' | 'CLEAR' | 'EXPORT' | 'CUE';
+  operationType: 'INSERT' | 'REPLACE' | 'OVERDUB' | 'DELETE' | 'CLEAR' | 'EXPORT' | 'CUE' | 'GRID';
   description: string;
   timeRangeSec?: { start: number; end: number; duration: number };
   barsCount?: number;
@@ -60,6 +60,7 @@ export const OperationFeedbackModal: React.FC<OperationFeedbackModalProps> = ({
       case 'OVERDUB': return 'bg-[#8b5cf6]/15 border-[#8b5cf6]/30 text-[#8b5cf6]';
       case 'DELETE': return 'bg-[#ef4444]/15 border-[#ef4444]/30 text-[#ef4444]';
       case 'EXPORT': return 'bg-[#10b981]/15 border-[#10b981]/30 text-[#10b981]';
+      case 'GRID': return 'bg-[#00e5ff]/15 border-[#00e5ff]/30 text-[#00e5ff]';
       default: return 'bg-[#0088ff]/15 border-[#0088ff]/30 text-[#0088ff]';
     }
   };

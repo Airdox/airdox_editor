@@ -7,6 +7,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
+import { selectWaveformVariant } from '../waveform/renderModel';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -56,10 +57,25 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       return;
     }
 
-    const analysis = track.analysis;
     const duration = Math.max(1, track.duration);
 
     const targetCols = width;
+
+    // Zoom-matched variant (the overview shows the full track): genuine ANLZ
+    // data only — the selector just picks the fitting resolution.
+    const candidates =
+      track.analysisVariants && track.analysisVariants.length > 0
+        ? track.analysisVariants
+        : track.analysis
+          ? [track.analysis]
+          : [];
+    const variantIdx = selectWaveformVariant(
+      candidates.map((c) => c.length),
+      duration,
+      track.duration,
+      targetCols
+    );
+    const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
 
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
@@ -101,58 +117,13 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         ctx.fillRect(col, yTop, 1, barH);
       }
     } else {
-      // Natural organic DJ energy contour (intro, verse, drop, breakdown, main drop, outro)
-      // Never a rigid, symmetric mathematical sine wave!
-      const bpm = track.bpm || 130;
-      const beatsTotal = (duration / 60) * bpm;
-      for (let col = 0; col < targetCols; col++) {
-        const progress = col / targetCols;
-        const beatAtCol = progress * beatsTotal;
-        const barAtCol = beatAtCol / 4;
-
-        // Realistic 64-bar DJ electronic song structure:
-        // 0-16 bars: Intro build
-        // 16-32 bars: Drop 1
-        // 32-44 bars: Breakdown (lower bass, airy synths)
-        // 44-48 bars: Build-up snare roll
-        // 48-60 bars: Main Peak Drop
-        // 60+ bars: Outro
-        let baseEnergy = 0.5;
-        let isBreak = false;
-        const normBar = barAtCol % 64;
-        if (normBar < 16) {
-          baseEnergy = 0.35 + (normBar / 16) * 0.35;
-        } else if (normBar < 32) {
-          baseEnergy = 0.85;
-        } else if (normBar < 44) {
-          baseEnergy = 0.3; // Breakdown
-          isBreak = true;
-        } else if (normBar < 48) {
-          baseEnergy = 0.5 + ((normBar - 44) / 4) * 0.45; // Buildup
-        } else if (normBar < 60) {
-          baseEnergy = 0.95; // Main drop
-        } else {
-          baseEnergy = 0.8 - ((normBar - 60) / 4) * 0.4; // Outro
-        }
-
-        // Add transient kick spikes every beat
-        const beatFract = beatAtCol % 1;
-        const kickTransient = Math.exp(-beatFract * 12) * (isBreak ? 0.1 : 0.35);
-        const noise = (Math.sin(col * 13.7) * 0.5 + 0.5) * 0.12;
-
-        const peak = Math.min(1.0, Math.max(0.12, baseEnergy * 0.65 + kickTransient + noise));
-        const barH = Math.max(2, peak * (height - 4));
-        const yTop = (height - barH) / 2;
-
-        if (isBreak) {
-          ctx.fillStyle = '#00c3ff';
-        } else if (kickTransient > 0.15) {
-          ctx.fillStyle = '#ff2b2b';
-        } else {
-          ctx.fillStyle = '#00a2ff';
-        }
-        ctx.fillRect(col, yTop, 1, barH);
-      }
+      // No waveform data: honest empty state. Overview renderers must never
+      // synthesize energy contours (XML-exclusive workflow guarantee).
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('KEINE WAVEFORM-DATEN', width / 2, height / 2 - 2);
+      ctx.textAlign = 'left';
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview

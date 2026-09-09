@@ -216,7 +216,9 @@ runTest('ANLZ Parser', 'Prioritizes extracted Rekordbox analysis without losing 
   assertEqual(merged.title, track.title, 'XML title is retained');
   assertEqual(merged.artist, track.artist, 'XML artist is retained');
   assertEqual(merged.databaseRecord!.databaseSource, 'REKORDBOX_ANLZ', 'ANLZ source is recorded');
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ beatgrid has priority');
+  // The legacy fixture carries no PQTZ beat nodes, so strict-PQTZ keeps the
+  // XML grid (no uniform rebuild); ANLZ data that does exist still wins.
+  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid kept without PQTZ beats');
   assertEqual(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ waveform has priority');
   assert(merged.cues.every((cue) => cue.origin === DataOrigin.REKORDBOX_ANLZ), 'ANLZ cues have priority');
 });

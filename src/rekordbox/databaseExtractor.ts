@@ -11,6 +11,7 @@
 
 import {
   BeatGrid,
+  BeatNode,
   CuePoint,
   DataOrigin,
   ExtractedDatabaseRecord,
@@ -41,6 +42,7 @@ export interface AnlzExtractionResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  waveformVariants: WaveformAnalysisData[];
   beatGrid?: BeatGrid;
   bpm?: number;
   firstBeat?: number;
@@ -59,6 +61,7 @@ function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtra
     loops: parsed.loops,
     phrases: parsed.phrases,
     waveform: parsed.waveform,
+    waveformVariants: parsed.waveformVariants,
     beatGrid: parsed.beatGrid,
     bpm: parsed.bpm,
     firstBeat: parsed.firstBeat,
@@ -76,6 +79,60 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzExtractionResult {
 }
 
 /**
+ * Adopts the original Rekordbox beat positions decoded from PQTZ. The decoded
+ * beat nodes are kept verbatim (strict-PQTZ guarantee); only when they do not
+ * span the full track duration is a uniform continuation appended so the grid
+ * never ends mid-track — appended nodes are flagged with `tailExtended` and
+ * the original nodes stay untouched. Without decoded beat nodes there is
+ * nothing to adopt: the track grid is returned unchanged (no uniform rebuild
+ * as a substitute for missing PQTZ beats).
+ */
+function adoptAnlzBeatGrid(
+  extraction: AnlzExtractionResult,
+  track: TrackModel,
+  bpm: number
+): BeatGrid {
+  const anlzBeats = extraction.beatGrid?.beats;
+  if (!anlzBeats || anlzBeats.length === 0) {
+    return track.beatGrid;
+  }
+
+  const meter = track.beatGrid.meter || 4;
+  const beats: BeatNode[] = anlzBeats.map((node, index) => ({ ...node, index }));
+  const spb = bpm > 0 ? 60.0 / bpm : 0.5;
+
+  // Uniform tail extension (original nodes untouched, appended nodes flagged).
+  let guard = 0;
+  let lastTime = beats[beats.length - 1].time;
+  let barNumber = beats[beats.length - 1].barNumber;
+  let beatInBar = beats[beats.length - 1].beatInBar;
+  while (lastTime + spb <= track.duration + spb && guard++ < 500000) {
+    lastTime += spb;
+    beatInBar += 1;
+    if (beatInBar > meter) {
+      beatInBar = 1;
+      barNumber += 1;
+    }
+    beats.push({
+      index: beats.length,
+      time: lastTime,
+      isBarStart: beatInBar === 1,
+      barNumber,
+      beatInBar,
+      tailExtended: true,
+    });
+  }
+
+  return {
+    firstBeat: beats[0].time,
+    bpm,
+    meter,
+    beats,
+    origin: DataOrigin.REKORDBOX_ANLZ,
+  };
+}
+
+/**
  * Applies only data that was genuinely found in an ANLZ container. XML
  * metadata and the immutable original-media reference are retained; an empty
  * or partial ANLZ file can never erase them or introduce a synthetic fallback.
@@ -84,13 +141,27 @@ export function applyAnlzExtractionToTrack(
   track: TrackModel,
   extraction: AnlzExtractionResult
 ): TrackModel {
-  const bpm = extraction.bpm ?? track.bpm;
-  const firstBeat = extraction.firstBeat ?? track.beatGrid.firstBeat;
-  const hasAnlzBeatgrid = extraction.bpm !== undefined || extraction.firstBeat !== undefined;
+  // Strict-PQTZ rule: the ANLZ beat grid (and its bpm/first beat) is adopted
+  // only when real beat nodes were decoded. BPM/first-beat scalars without
+  // nodes (legacy or corrupt PQTZ) never trigger a uniform grid rebuild; the
+  // XML grid — genuine Rekordbox data — is kept and the gap is reported.
+  const hasAnlzBeatgrid = (extraction.beatGrid?.beats.length ?? 0) > 0;
+  const bpm = hasAnlzBeatgrid ? (extraction.bpm ?? track.bpm) : track.bpm;
+  const firstBeat = hasAnlzBeatgrid
+    ? (extraction.firstBeat ?? track.beatGrid.firstBeat)
+    : track.beatGrid.firstBeat;
+  const pqtzUnusable =
+    !hasAnlzBeatgrid &&
+    (extraction.tagsFound.includes('PQTZ') || extraction.tagsFound.includes('PQT2'));
+  const beatWarnings = pqtzUnusable
+    ? ['PQTZ ohne lesbare Beat-Einträge; XML-Beatgrid beibehalten.']
+    : [];
   const hasAnlzCues = extraction.cues.length > 0;
   const hasAnlzLoops = extraction.loops.length > 0;
   const hasAnlzPhrases = extraction.phrases.length > 0;
   const waveform = extraction.waveform ?? track.analysis;
+  const analysisVariants =
+    extraction.waveformVariants.length > 0 ? extraction.waveformVariants : track.analysisVariants;
 
   const phrases = hasAnlzPhrases
     ? extraction.phrases.map((phrase) => ({
@@ -129,19 +200,20 @@ export function applyAnlzExtractionToTrack(
     checksum: track.originalSha256,
     extractedAt: Date.now(),
     filePath: extraction.analysisPath ?? track.originalMedia?.resolvedPath,
-    anlzWarnings: extraction.warnings,
+    anlzWarnings: [...extraction.warnings, ...beatWarnings],
   };
 
   return {
     ...track,
     bpm,
     beatGrid: hasAnlzBeatgrid
-      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
+      ? adoptAnlzBeatGrid(extraction, track, bpm)
       : track.beatGrid,
     cues,
     loops: hasAnlzLoops ? extraction.loops : track.loops,
     phrases,
     analysis: waveform,
+    analysisVariants,
     databaseRecord,
   };
 }

@@ -79,6 +79,8 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  /** Every successfully decoded PWV variant, tagged with its source tag. */
+  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -315,6 +317,7 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
   return {
     firstBeat: beats[0].time,
     bpm: view.getUint16(entriesStart + 2, false) / 100,
+    // PQTZ carries no meter; 4/4 is the display default (beat times are unaffected).
     meter: 4,
     beats,
     origin: DataOrigin.REKORDBOX_ANLZ,
@@ -576,6 +579,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
+    waveformVariants: [],
     warnings: [],
   };
 
@@ -644,6 +648,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
+          result.warnings.push(`${tag}: keine Beat-Einträge lesbar; nur BPM/First Beat übernommen (Fallback-Layout, kein Beatgrid-Ersatz).`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -768,10 +773,17 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-        result.waveform = createWaveform(spec, view);
-        waveformPriority = WAVEFORM_PRIORITY[tag];
-      } else if (!spec) {
+      if (spec) {
+        // Every genuine variant is kept (zoom selection happens in the
+        // renderer); `waveform` remains the highest-priority variant.
+        const variant = createWaveform(spec, view);
+        variant.sourceTag = tag;
+        result.waveformVariants.push(variant);
+        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+          result.waveform = variant;
+          waveformPriority = WAVEFORM_PRIORITY[tag];
+        }
+      } else {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }

@@ -17,6 +17,26 @@ interface TrackHeaderProps {
   onPanView: (newOffset: number) => void;
 }
 
+/** Honest origin labels — every track origin is named, never implied. */
+const ORIGIN_LABELS: Record<string, string> = {
+  REKORDBOX_XML: 'REKORDBOX XML',
+  REKORDBOX_DB: 'REKORDBOX DB',
+  REKORDBOX_ANLZ: 'REKORDBOX ANLZ',
+  LOCAL_ANALYSIS: 'LOKALER IMPORT',
+  PROJECT: 'PROJEKT',
+  ANALYSIS_CACHE: 'ANALYSE-CACHE',
+  USER_EDIT: 'USER EDIT',
+  GENERATED_FALLBACK: 'GENERIERTE DEMO',
+};
+
+/** Read-only source status: missing originals are shown as MISSING, loudly. */
+const STATUS_STYLES: Record<string, string> = {
+  AVAILABLE: 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40',
+  MISSING: 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10',
+  UNSUPPORTED: 'text-[#f5b800] border-[#f5b800]/50 bg-[#f5b800]/10',
+  UNVERIFIED: 'text-neutral-400 border-neutral-700 bg-neutral-800/40',
+};
+
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
   track,
   currentTime,
@@ -59,12 +79,18 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
               <span>{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
               <span>•</span>
               <span className="text-[#00a2ff] font-mono text-[9.5px]">
-                {!track
-                  ? 'LEERES PROJEKT'
-                  : track.origin === 'REKORDBOX_XML'
-                  ? 'REKORDBOX XML'
-                  : 'EDIT WORKING COPY'}
+                {!track ? 'LEERES PROJEKT' : ORIGIN_LABELS[track.origin] ?? track.origin}
               </span>
+              {track?.originalMedia && (
+                <>
+                  <span>•</span>
+                  <span className={`font-mono text-[9.5px] px-1 rounded-xs border ${STATUS_STYLES[track.originalMedia.status] ?? STATUS_STYLES.UNVERIFIED}`}>
+                    {track.originalMedia.status === 'AVAILABLE'
+                      ? 'QUELLE OK'
+                      : `QUELLE: ${track.originalMedia.status}`}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
