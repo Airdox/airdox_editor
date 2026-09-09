@@ -1,0 +1,57 @@
+name: Windows-Build
+
+on:
+  push:
+    branches: ['main', 'release/**']
+    tags: ['v*']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:      # manuell auf Knopfdruck
+  schedule:
+    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
+
+jobs:
+  build:
+    name: Windows Installer + Portable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js aufsetzen
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: TypeScript-Prüfung
+        run: npm run lint
+
+      - name: Renderer bauen (Vite)
+        run: npm run build
+
+      - name: Electron Windows-Pakete (NSIS + Portable)
+        run: npx electron-builder --win nsis --win portable
+        env:
+          # Kein Signieren in der offenen CI – macht beim Build keinen Unterschied,
+          # vermeidet aber Warnungen.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Artefakte anhängen (immer)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airdox-smart-editor-windows
+          path: release/*.exe
+          retention-days: 30
+
+      - name: GitHub-Release bei Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Airdox SMART Editor ${{ github.ref_name }}
+          files: release/*.exe
+          generate_release_notes: true
