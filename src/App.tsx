@@ -532,6 +532,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           elapsedMs: result.elapsedMs,
           recursive: true,
           truncated,
+          ppthSample: result.ppthSample ?? [],
         });
       } catch (e) {
         console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);

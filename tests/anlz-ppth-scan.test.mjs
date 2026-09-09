@@ -35,6 +35,8 @@ const { scanAnlzForPaths } = require('../electron/dbReader.cjs');
 //   .../USBANLZ/0e8/<uuid>/readme.txt                 (nested junk, ignored)
 // Real Rekordbox trees nest every container below USBANLZ/ – the scan must
 // recurse (a top-level-only read finds 0 files on real machines).
+//   base/fakeG/PIONEER/USBANLZ/P016/00009999/ANLZ2000.DAT+EXT (export drive → G:\Export\DJ\Foxtrot.wav)
+// Tracks on export media are analyzed on the same drive (<drive>:\PIONEER\USBANLZ).
 // ---------------------------------------------------------------------------
 
 function buildPpthFile(targetPath, encoding) {
@@ -88,6 +90,15 @@ try {
   fs.writeFileSync(path.join(nestedDir2, 'ANLZ1001.DAT'), buildPpthFile(audioE, 'utf16le'));
   // Nested junk: ignored by the scan
   fs.writeFileSync(path.join(nestedDir2, 'readme.txt'), Buffer.from('ignore me'));
+
+  // Fake export drive: G:\PIONEER\USBANLZ\<bucket>\<id>\ANLZnnnn.DAT
+  // (mapped via driveRootResolver so the test runs on any platform).
+  const fakeG = path.join(base, 'fakeG');
+  const driveAnlz = path.join(fakeG, 'PIONEER', 'USBANLZ', 'P016', '00009999');
+  fs.mkdirSync(driveAnlz, { recursive: true });
+  const audioF = 'G:\\Export\\DJ\\Foxtrot.wav';
+  fs.writeFileSync(path.join(driveAnlz, 'ANLZ2000.DAT'), buildPpthFile(audioF, 'utf16be'));
+  fs.writeFileSync(path.join(driveAnlz, 'ANLZ2000.EXT'), buildPpthFile(audioF, 'utf16be'));
 
   // Second folder for tier-2 (basename) scenarios
   const anlzDir2 = path.join(base, 'rekordbox6', 'share', 'PIONEER', 'ANLZ');
@@ -156,6 +167,27 @@ try {
   assert.ok(matchE, 'deeply nested UTF-16LE container found');
   assert.strictEqual(matchE.matchTier, 1, 'deep nested match stays tier-1 (exact path)');
   assert.ok(!rNested.matches.some((m) => /gamma/i.test(m.path)), 'no phantom match in nested scan');
+
+  // ─── Audio-drive export folders (G:\PIONEER\USBANLZ) ───────────────────
+  // Tracks on export media are analyzed on the same drive. The drive letter
+  // is derived from the target path (file:// URL or plain path).
+  const rDrive = scanAnlzForPaths(
+    ['file://localhost/G:/Export/DJ/Foxtrot.wav'],
+    undefined,
+    (letter) => (letter === 'G' ? fakeG : null)
+  );
+  const matchF = rDrive.matches.find((m) => /foxtrot\.wav$/i.test(m.path));
+  assert.ok(matchF, 'export-drive ANLZ found via audio drive letter');
+  assert.strictEqual(matchF.matchTier, 1, 'drive match stays tier-1 (exact path)');
+  assert.ok(/ANLZ2000\.DAT$/i.test(matchF.datPath || ''), 'drive match resolves the DAT');
+  assert.ok(/ANLZ2000\.EXT$/i.test(matchF.extPath || ''), 'drive match resolves the EXT sibling');
+  assert.ok(
+    rDrive.folders.some((f) => /PIONEER.+USBANLZ/.test(f)),
+    'drive folder reported'
+  );
+  // Unknown drive letters resolve to null and are skipped silently.
+  const rDriveMiss = scanAnlzForPaths(['file://localhost/Z:/Nope/X.wav'], undefined, () => null);
+  assert.ok(!rDriveMiss.matches.some((m) => /x\.wav$/i.test(m.path)), 'no phantom match for unknown drive');
 
   // ─── Windows long-path prefix normalization ─────────────────────────────
   const r3 = scanAnlzForPaths(['\\\\?\\c:\\music\\dj\\alpha.wav'], [anlzDir]);

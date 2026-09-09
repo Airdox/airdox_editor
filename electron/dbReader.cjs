@@ -508,6 +508,47 @@ function normalizeAnlzPathKey(input) {
   return s.toLowerCase();
 }
 
+// Export-device analysis: when the audio lives on a Rekordbox export drive
+// (e.g. file://localhost/G:/Music/...), its analysis usually sits on the
+// SAME drive at <drive>:\PIONEER\USBANLZ (device-library layout) instead of
+// the local %APPDATA% tree. These candidates are derived from the scan
+// targets (read-only existence checks only, same recursion bounds apply).
+function extractAudioDriveLetters(targetPaths) {
+  const letters = [];
+  const seen = new Set();
+  for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
+    if (typeof tp !== 'string') continue;
+    // Strip a Windows long-path prefix (\\?\G:\...) before matching.
+    const s = tp.replace(/^\\\\\?\\/, '');
+    const m = s.match(/^(?:file:\/\/[^/]*\/)?([a-zA-Z]):[\\/]/);
+    if (!m) continue;
+    const letter = m[1].toUpperCase();
+    if (seen.has(letter)) continue;
+    seen.add(letter);
+    letters.push(letter);
+  }
+  return letters;
+}
+
+function findAudioDriveAnlzFolders(targetPaths, toDriveRoot) {
+  const folders = [];
+  for (const letter of extractAudioDriveLetters(targetPaths)) {
+    const driveRoot = toDriveRoot ? toDriveRoot(letter) : `${letter}:\\`;
+    if (!driveRoot) continue;
+    for (const sub of [path.join('PIONEER', 'USBANLZ'), path.join('PIONEER', 'ANLZ')]) {
+      const dir = path.join(driveRoot, sub);
+      try {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory() && !folders.includes(dir)) {
+          folders.push(dir);
+        }
+      } catch {
+        // Unreadable drive (ejected media, permissions) – skip silently.
+      }
+    }
+  }
+  return folders;
+}
+
 function buildAnlzPpthIndex(folders) {
   const index = new Map();
   let scanned = 0;
@@ -568,12 +609,19 @@ function buildAnlzPpthIndex(folders) {
  * The folders are searched RECURSIVELY because Rekordbox keeps ANLZ
  * containers in nested subdirectories below USBANLZ/ (flat top-level
  * layouts keep working as before).
+ * In addition to the local %APPDATA% tree, the audio drives referenced by
+ * the targets are checked for export-device analysis folders
+ * (<drive>:\PIONEER\USBANLZ) – tracks on export media are analyzed there.
  * @param {string[]} targetPaths audio paths (any form; normalized internally)
  * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
+ * @param {Function} [driveRootResolver] maps a drive letter to a directory (tests)
  */
-function scanAnlzForPaths(targetPaths, folderOverride) {
+function scanAnlzForPaths(targetPaths, folderOverride, driveRootResolver) {
   const started = Date.now();
-  const folders = folderOverride || findAnlzFolders();
+  const folders = folderOverride || [
+    ...findAnlzFolders(),
+    ...findAudioDriveAnlzFolders(targetPaths, driveRootResolver),
+  ];
   const { index, scanned, truncated } = buildAnlzPpthIndex(folders);
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
