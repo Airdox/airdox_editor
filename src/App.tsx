@@ -416,7 +416,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const anlzPpthScanStateRef = useRef<'IDLE' | 'RUNNING' | 'DONE'>('IDLE');
   const anlzPpthMissedKeysRef = useRef<Set<string>>(new Set());
   const anlzPpthScanPromiseRef = useRef<Promise<void> | null>(null);
-  const anlzPpthScanInfoRef = useRef<{ scanned: number; folders: number; elapsedMs: number } | null>(null);
+  const anlzPpthScanInfoRef = useRef<{ scanned: number; folders: number; elapsedMs: number; truncated: boolean } | null>(null);
+  const [anlzScanProgress, setAnlzScanProgress] = useState<{ scanned: number; total: number } | null>(null);
 
   // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
   // databases (master.db / exportLibrary.db) without manual user assignment.
@@ -439,6 +440,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         diag.found = 0;
         diag.reasons = ['Keine lokale master.db/exportLibrary.db gefunden.'];
         console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
+        logger.warn('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db)', {
+          hint: 'Rekordbox-Version und Bibliotheksort prüfen (Standard: %APPDATA%/Pioneer, verschoben: rekordboxAgent/options.json)',
+        });
         return dbAnalysisIndexRef.current;
       }
       diag.found = candidates.length;
@@ -448,6 +452,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           if (!result.available || !result.rows) {
             diag.reasons.push(`${cand.label || cand.path}: ${result.reason || 'nicht lesbar'}`);
             console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
+            logger.warn('DATABASE', `[DB Auto] ${cand.path}: nicht lesbar`, {
+              reason: result.reason || 'nicht lesbar',
+              label: cand.label ?? null,
+              appVer: cand.appVer ?? null,
+            });
             continue;
           }
           diag.readable += 1;
@@ -480,18 +489,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             }
           }
           console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
-          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
+          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType, appVer: cand.appVer ?? null });
           if (mapped.warnings?.length || result.warnings?.length) {
             console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
           }
         } catch (e) {
           diag.reasons.push(`${cand.path}: ${e instanceof Error ? e.message : String(e)}`);
           console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
+          logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, {
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       }
     } catch (e) {
       diag.reasons.push(`locateRekordboxDatabases: ${e instanceof Error ? e.message : String(e)}`);
       console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
+      logger.warn('DATABASE', '[DB Auto] Datenbank-Suche fehlgeschlagen', {
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
     diag.links = dbAnalysisIndexRef.current.size;
     return dbAnalysisIndexRef.current;
@@ -513,6 +528,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
     anlzPpthScanStateRef.current = 'RUNNING';
     const promise = (async () => {
+      const unsubscribeScanProgress = window.rekordboxDesktop!.onAnlzScanProgress
+        ? window.rekordboxDesktop!.onAnlzScanProgress((p) => setAnlzScanProgress({ scanned: p.scanned, total: p.total }))
+        : null;
       try {
         // Alle bekannten Audio-Lokalisationen in einem Scan abfragen, damit
         // ein Durchlauf die gesamte Sammlung beantwortet.
@@ -535,22 +553,35 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           });
           added += 1;
         }
-        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
+        const truncated = result.truncated === true;
+        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs, truncated };
         for (const t of targets) {
           const k = normalizeAudioKey(t);
           if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
         }
         console.info(
-          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
-            `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
+          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt (rekursiv, ` +
+            `${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).` +
+            (truncated ? ' [HINWEIS: Scan-Limit erreicht, Teilergebnis]' : '')
         );
-        logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer`, {
+        logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien (${result.extracted ?? '?'} mit PPTH), ${added} Treffer`, {
           folders: result.folders,
           elapsedMs: result.elapsedMs,
+          collectMs: result.collectMs ?? null,
+          extracted: result.extracted ?? null,
+          recursive: true,
+          truncated,
+          ppthSample: result.ppthSample ?? [],
         });
       } catch (e) {
         console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);
       } finally {
+        try {
+          unsubscribeScanProgress?.();
+        } catch {
+          // ignore
+        }
+        setAnlzScanProgress(null);
         anlzPpthScanStateRef.current = 'DONE';
         anlzPpthScanPromiseRef.current = null;
       }
@@ -1757,6 +1788,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         scanned: number;
         folders: number;
         elapsedMs: number;
+        truncated?: boolean;
         note?: string;
         db?: { found: number; readable: number; links: number; reasons: string[] };
       } | null = null;
@@ -1801,6 +1833,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               scanned: scanInfo?.scanned ?? 0,
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
+              truncated: scanInfo?.truncated ?? false,
               note: ppthEntry.note,
               db: dbDiag,
             };
@@ -1812,6 +1845,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
               db: dbDiag,
+              truncated: scanInfo?.truncated ?? false,
             };
             console.info(
               `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} ` +
@@ -2546,6 +2580,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           setXmlCollectionModalOpen(true);
         }}
       />
+
+      {/* ANLZ background scan progress (non-blocking toast) */}
+      {anlzScanProgress && (
+        <div
+          className="fixed bottom-4 right-4 z-50 font-mono text-[11px] px-3 py-2 rounded border border-sky-800/60 bg-sky-950/90 text-sky-300 shadow-lg"
+          title="ANLZ-Suche läuft im Hintergrund – die App bleibt bedienbar."
+        >
+          ANLZ-Scan{' '}
+          {anlzScanProgress.total > 0
+            ? Math.round((anlzScanProgress.scanned / anlzScanProgress.total) * 100)
+            : 0}
+          % ({anlzScanProgress.scanned.toLocaleString('de-DE')}/{anlzScanProgress.total.toLocaleString('de-DE')})
+        </div>
+      )}
 
       {/* Real-time Operation Feedback Modal (Insert, Replace, Delete, etc.) */}
       <OperationFeedbackModal

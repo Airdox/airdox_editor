@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
   scanAnlzPaths: (targetPaths) => ipcRenderer.invoke('rekordbox:scan-anlz-paths', targetPaths),
+  onAnlzScanProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('rekordbox:scan-anlz-progress', listener);
+    return () => ipcRenderer.removeListener('rekordbox:scan-anlz-progress', listener);
+  },
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
