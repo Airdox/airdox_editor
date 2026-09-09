@@ -1887,6 +1887,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onZoomOut={handleZoomOut}
           onResetZoom={handleResetZoom}
           onPanView={handlePanView}
+          onSetViewDuration={(dur) => setViewDuration(dur)}
           onAddToPalette={handleAddSelectionToPalette}
           onCopy={handleCopy}
           onCut={handleCut}

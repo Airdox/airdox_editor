@@ -10,7 +10,7 @@
  * - Context menu with real editing actions
  */
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import {
   TrackModel,
   WaveformMode,
@@ -23,6 +23,7 @@ import {
   RotateCcw,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   UploadCloud,
   FolderOpen,
   FileAudio,
@@ -43,6 +44,7 @@ interface DetailWaveformProps {
   onZoomOut: () => void;
   onResetZoom: () => void;
   onPanView: (newOffset: number) => void;
+  onSetViewDuration?: (seconds: number) => void;
   onAddToPalette: () => void;
   onCopy: () => void;
   onCut: () => void;
@@ -89,6 +91,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onZoomOut,
   onResetZoom,
   onPanView,
+  onSetViewDuration,
   onAddToPalette,
   onCopy,
   onCut,
@@ -758,6 +761,42 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     }
   };
 
+  // Zoom preset dropdown state + options
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const meter = track?.beatGrid?.meter ?? 4;
+  const spb = track ? 60.0 / track.bpm : 0.4615; // default ~130 BPM
+  const zoomPresets = [
+    { label: '2 Bars',  getDur: () => 2 * meter * spb },
+    { label: '4 Bars',  getDur: () => 4 * meter * spb },
+    { label: '8 Bars',  getDur: () => 8 * meter * spb },
+    { label: '16 Bars', getDur: () => 16 * meter * spb },
+    { label: '32 Bars', getDur: () => 32 * meter * spb },
+    { label: '64 Bars', getDur: () => 64 * meter * spb },
+    { label: 'Full Track', getDur: () => track?.duration || 60 },
+  ];
+
+  // Determine current preset label (closest match), else "Custom"
+  const currentZoomLabel = useMemo(() => {
+    if (!track) return '—';
+    const bars = viewDuration / (meter * spb);
+    if (viewDuration >= track.duration - 0.5) return 'Full Track';
+    const presets = [2, 4, 8, 16, 32, 64];
+    for (const pb of presets) {
+      if (Math.abs(bars - pb) < 0.2) return `${pb} Bars`;
+    }
+    return `${bars.toFixed(0)} Bars (Custom)`;
+  }, [track, viewDuration, meter, spb]);
+
+  const applyZoomPreset = (preset: (typeof zoomPresets)[number]) => {
+    setZoomMenuOpen(false);
+    const dur = Math.max(1, preset.getDur());
+    if (onSetViewDuration) {
+      onSetViewDuration(dur);
+    } else {
+      onResetZoom();
+    }
+  };
+
   return (
     <div
       ref={containerRef}
@@ -953,12 +992,58 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
         />
 
-        {/* Top-Left Authentic Rekordbox BPM Badge */}
+        {/* Top-Left: BPM Badge + Zoom Preset Dropdown */}
         {track && (
-          <div className="absolute top-1 left-2 z-10 select-none pointer-events-none flex items-center">
+          <div className="absolute top-1 left-2 z-10 select-none flex items-center space-x-2">
             <span className="text-[12px] font-mono font-bold text-white/95 bg-[#12141a]/85 border border-[#2d3142]/80 px-1.5 py-0.5 rounded-xs tracking-wider shadow-sm">
               {track.bpm.toFixed(2)}
             </span>
+
+            {/* Zoom Level Dropdown */}
+            <div className="relative">
+              <button
+                onClick={(e) => { e.stopPropagation(); setZoomMenuOpen((v) => !v); }}
+                onBlur={() => setTimeout(() => setZoomMenuOpen(false), 120)}
+                className="flex items-center space-x-1 px-2 py-0.5 bg-[#12141a]/90 border border-[#2d3142]/80 hover:border-[#0088ff] hover:bg-[#1a2333] rounded-xs text-[10px] font-mono font-bold text-neutral-200 shadow-sm transition-colors"
+                title="Zoom-Vorlage auswählen (Bars / Full Track)"
+              >
+                <span className="text-[#00a2ff]">ZOOM:</span>
+                <span>{currentZoomLabel}</span>
+                <ChevronDown size={10} className="text-neutral-400" />
+              </button>
+
+              {zoomMenuOpen && (
+                <div
+                  className="absolute left-0 top-6 w-40 bg-[#161820] border border-[#2d303c] rounded shadow-2xl py-1 z-50 text-[11px] text-neutral-200"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  {zoomPresets.map((p) => {
+                    const active = p.label === currentZoomLabel;
+                    return (
+                      <button
+                        key={p.label}
+                        onClick={() => applyZoomPreset(p)}
+                        className={`w-full text-left px-3 py-1 flex items-center justify-between transition-colors ${
+                          active
+                            ? 'bg-[#0088ff]/20 text-[#00a2ff] font-bold'
+                            : 'hover:bg-[#0088ff] hover:text-white'
+                        }`}
+                      >
+                        <span>{p.label}</span>
+                        {active && <span className="text-[#00c853] text-[9px]">●</span>}
+                      </button>
+                    );
+                  })}
+                  <div className="h-px bg-[#262832] my-1" />
+                  <button
+                    onClick={() => { setZoomMenuOpen(false); onResetZoom(); }}
+                    className="w-full text-left px-3 py-1 text-neutral-400 hover:bg-[#0088ff] hover:text-white text-[10px]"
+                  >
+                    Reset (RST)
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
