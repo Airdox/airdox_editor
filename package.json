@@ -1,8 +1,8 @@
 {
-  "name": "airdox_editor",
+  "name": "airdox_smart_editor",
   "private": true,
-  "version": "0.1.0",
-  "description": "Professional Rekordbox-style DJ audio editor with non-destructive Rekordbox XML/ANLZ/DB import and desktop export.",
+  "version": "0.4.1",
+  "description": "Airdox SMART Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
   "author": "Airdox",
   "type": "module",
   "main": "electron/main.cjs",
@@ -14,7 +14,7 @@
     "package:win:nsis": "npm run build && electron-builder --win nsis",
     "package:win:portable": "npm run build && electron-builder --win portable",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
     "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
@@ -50,8 +50,8 @@
     "better-sqlite3-multiple-ciphers": "^12.11.1"
   },
   "build": {
-    "appId": "info.airdox.rekordboxdesktopimport",
-    "productName": "Rekordbox Desktop Import",
+    "appId": "info.airdox.smarteditor",
+    "productName": "Airdox SMART Editor",
     "files": [
       "dist/**/*",
       "electron/**/*",
@@ -60,6 +60,13 @@
     "directories": {
       "output": "release"
     },
+    "protocols": [
+      {
+        "name": "Airdox SMART Editor",
+        "schemes": ["airdox"],
+        "role": "Editor"
+      }
+    ],
     "npmRebuild": false,
     "win": {
       "target": [
@@ -72,10 +79,12 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "shortcutName": "Airdox SMART Editor"
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
-    }
+    },
+    "artifactName": "${productName}-${version}-setup.${ext}"
   }
 }

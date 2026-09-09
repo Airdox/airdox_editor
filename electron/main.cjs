@@ -1,13 +1,34 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
-const { fileURLToPath } = require('node:url');
+const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
 const { isProtectedTarget } = require('./pathGuard.cjs');
+
+const APP_NAME = 'Airdox SMART Editor';
+const APP_PROTOCOL = 'airdox';
+
+// WICHTIG: Das eigene Protokoll muss VOR app.whenReady() als privilegiert
+// registriert werden, damit Chromium es als "standard" (http-ähnlich)
+// behandelt. Das behebt die CORS-/crossorigin-Probleme, die beim direkten
+// Laden aus file:// im Installer zum weissen Bildschirm führen.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: APP_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: false,
+      allowServiceWorkers: false,
+    },
+  },
+]);
 
 let mainWindow;
 
@@ -18,7 +39,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 720,
     backgroundColor: '#0a0b0d',
-    title: 'Rekordbox Desktop Import',
+    title: APP_NAME,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -27,11 +49,20 @@ function createWindow() {
     },
   });
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  // Das Standard-Electron-Menü ("File Edit View Window") entfernen – die App
+  // hat ihre eigene TitleBar/MenuBar-Komponente im React-Renderer.
+  Menu.setApplicationMenu(null);
+  mainWindow.setMenuBarVisibility(false);
 
-  // Renderer-Abstürze und fehlgeschlagene Ladungen protokollieren, damit ein
-  // weisser Bildschirm künftig nicht mehr stumm auftritt.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // Nur das eigene App-Protokoll und Dev-Tools erlauben.
+    if (!url.startsWith(`${APP_PROTOCOL}://`) && !url.startsWith('devtools://')) {
+      event.preventDefault();
+    }
+  });
+
+  // Renderer-Abstürze und fehlgeschlagene Ladungen protokollieren.
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Electron] Renderer-Prozess abgestürzt:', details);
   });
@@ -42,19 +73,18 @@ function createWindow() {
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
   if (developmentUrl) {
     mainWindow.loadURL(developmentUrl);
-    // DevTools nur in der Entwicklungsumgebung automatisch öffnen.
     if (process.env.SHOW_DEVTOOLS === 'true') {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   } else {
-    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
-    // WICHTIG: loadFile erzeugt eine file://-URL. Damit Vite-Assets mit
-    // base:"." korrekt aufgelöst werden, zusätzlich als explizite URL laden.
-    mainWindow.loadFile(indexPath).catch((err) => {
-      console.error('[Electron] Konnte dist/index.html nicht laden:', err);
+    // Statt loadFile(file://) das eigene privilegierte Protokoll verwenden:
+    // airdox://app/index.html → verweist auf dist/index.html im Installations-
+    // ordner. Dadurch funktionieren <script type="module" crossorigin> und
+    // alle relativen Asset-Pfade ohne CORS-/Origin-Probleme.
+    mainWindow.loadURL(`${APP_PROTOCOL}://app/index.html`).catch((err) => {
+      console.error('[Electron] Konnte App-Startseite nicht laden:', err);
     });
-    // In der veröffentlichten App F12 zum Öffnen der DevTools erlauben (für
-    // Diagnose bei Anwendern) – sie bleiben normalerweise geschlossen.
+    // F12 schaltet DevTools in der ausgelieferten App an/aus (Diagnose).
     mainWindow.webContents.on('before-input-event', (_event, input) => {
       if (input.key === 'F12' && input.type === 'keyDown') {
         mainWindow.webContents.isDevToolsOpened()
@@ -65,20 +95,60 @@ function createWindow() {
   }
 }
 
+/**
+ * Wandelt eine airdox://app/...-URL in einen Dateipfad innerhalb des
+ * dist/-Ordners um und verhindert Directory-Traversal.
+ */
+function resolveAppUrl(url) {
+  const distRoot = path.join(__dirname, '..', 'dist');
+  const parsed = new URL(url);
+  // Alles nach "airdox://app/" als Pfad innerhalb von dist/ behandeln.
+  let relPath = decodeURIComponent(parsed.pathname).replace(/^\/+/, '');
+  if (!relPath) relPath = 'index.html';
+  // Verhindern, dass "../" aus dist/ herausführt.
+  const absPath = path.normalize(path.join(distRoot, relPath));
+  if (!absPath.startsWith(path.normalize(distRoot) + path.sep) && absPath !== path.normalize(distRoot)) {
+    return null;
+  }
+  return absPath;
+}
+
+function registerAppProtocol() {
+  // Electron 25+ API: protocol.handle mit net.fetch aus Datei-URL.
+  protocol.handle(APP_PROTOCOL, async (request) => {
+    try {
+      const filePath = resolveAppUrl(request.url);
+      if (!filePath) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      // Existiert die Datei? Wenn nicht (z.B. Direct-Refresh auf Subroute),
+      // auf index.html zurückfallen, damit SPA-Routing funktioniert.
+      let target = filePath;
+      try {
+        const s = await stat(target);
+        if (!s.isFile()) target = path.join(__dirname, '..', 'dist', 'index.html');
+      } catch {
+        target = path.join(__dirname, '..', 'dist', 'index.html');
+      }
+      return net.fetch(pathToFileURL(target).toString());
+    } catch (err) {
+      console.error('[App-Protocol] Fehler bei', request.url, err);
+      return new Response('Internal Error', { status: 500 });
+    }
+  });
+}
+
 function toLocalPath(location) {
   if (typeof location !== 'string' || !location.trim()) return null;
 
   try {
-    // Windows drive paths must be handled before generic URL detection because
-    // "C:\\Music" otherwise looks like a URL with the scheme "c:".
     if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
       return path.resolve(location);
     }
 
-    // Rekordbox exports file:// URLs. Reject all non-file URL schemes.
     if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
       const url = new URL(location);
-      return url.protocol === 'file:' ? fileURLToPath(url) : null;
+      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
     }
 
     return path.resolve(location);
@@ -87,12 +157,13 @@ function toLocalPath(location) {
   }
 }
 
+// --- IPC-Handler bleiben unverändert ---
+
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);
   if (!localPath) {
     return { validLocation: false, exists: false, reason: 'Kein lokaler file://-Pfad.' };
   }
-
   try {
     await access(localPath, constants.R_OK);
     const details = await stat(localPath);
@@ -102,7 +173,6 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
       path: localPath,
       size: details.isFile() ? details.size : null,
       modifiedAt: details.mtimeMs,
-      // This bridge never exposes a write operation; source files remain read-only.
       accessMode: 'READ_ONLY',
     };
   } catch {
@@ -119,9 +189,6 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
       { name: 'All files', extensions: ['*'] },
     ],
   });
-
-  // File selection returns a path only; the selected file is opened read
-  // only through rekordbox:read-analysis-file.
   return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
@@ -138,7 +205,6 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
 });
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
-  // Read-only directory scan of the standard Pioneer app-data folders.
   return locateRekordboxDatabases();
 });
 
@@ -146,7 +212,6 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
-  // The database is opened exclusively with SQLite readonly mode.
   return readRekordboxDatabase(dbPath);
 });
 
@@ -154,23 +219,17 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     throw new Error('Kein gültiger Analysepfad übergeben.');
   }
-
   const allowedExtensions = new Set(['.dat', '.ext', '.2ex']);
   if (!allowedExtensions.has(path.extname(filePath).toLowerCase())) {
     throw new Error('Die ausgewählte Datei ist keine unterstützte Rekordbox-ANLZ-Datei.');
   }
-
   const localPath = path.resolve(filePath);
   await access(localPath, constants.R_OK);
   const details = await stat(localPath);
   if (!details.isFile()) throw new Error('Die ANLZ-Analysequelle verweist nicht auf eine Datei.');
-
-  // ANLZ files are a few hundred KB to a few MB; the boundary keeps the
-  // renderer process safe while still accepting every real-world file.
   if (details.size > 1024 * 1024 * 1024) {
     throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
-
   const data = await readFile(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
@@ -186,12 +245,11 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
   if (!data || typeof data.byteLength !== 'number' || data.byteLength === 0) {
     throw new Error('Keine Exportdaten übergeben.');
   }
-
   const kindFilters = {
     WAV: { name: 'WAV Audio', extensions: ['wav'] },
     XML: { name: 'Rekordbox XML', extensions: ['xml'] },
     JSON: { name: 'JSON', extensions: ['json'] },
-    PROJECT: { name: 'Airdox Projekt', extensions: ['airdox.json', 'json'] },
+    PROJECT: { name: 'Airdox SMART Editor Projekt', extensions: ['airdox.json', 'json'] },
   }[kind] || { name: 'Datei', extensions: ['*'] };
 
   const result = await dialog.showSaveDialog(mainWindow, {
@@ -202,18 +260,12 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
   if (result.canceled || !result.filePath) {
     return { saved: false };
   }
-
   const targetPath = path.resolve(result.filePath);
-
-  // The single hard rule of the write path: never overwrite an original
-  // Rekordbox source (audio / XML / ANLZ / database). Everything else is a
-  // fresh file the user explicitly chose in the save dialog.
   if (isProtectedTarget(targetPath, protectedPaths)) {
     throw new Error(
       'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
     );
   }
-
   const buffer = Buffer.from(data);
   await writeFile(targetPath, buffer);
   return { saved: true, path: targetPath, bytes: buffer.length, accessMode: 'WRITE_NEW_ONLY' };
@@ -224,52 +276,35 @@ ipcMain.handle('rekordbox:open-project-file', async () => {
     title: 'Projekt öffnen (nur lesend)',
     properties: ['openFile'],
     filters: [
-      { name: 'Airdox Projekt', extensions: ['airdox.json', 'json'] },
+      { name: 'Airdox SMART Editor Projekt', extensions: ['airdox.json', 'json'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
   if (result.canceled) return null;
-
   const localPath = path.resolve(result.filePaths[0]);
   await access(localPath, constants.R_OK);
   const details = await stat(localPath);
   if (!details.isFile()) throw new Error('Die Projektdatei ist keine Datei.');
-
-  // Project documents are metadata + small embedded slices; 64 MB is a very
-  // generous ceiling that still protects the renderer from accidental misuse.
   if (details.size > 64 * 1024 * 1024) {
     throw new Error('Die Projektdatei ist größer als 64 MB und wird nicht geladen.');
   }
-
   const data = await readFile(localPath, 'utf-8');
-  return {
-    data,
-    path: localPath,
-    size: details.size,
-    modifiedAt: details.mtimeMs,
-    accessMode: 'READ_ONLY',
-  };
+  return { data, path: localPath, size: details.size, modifiedAt: details.mtimeMs, accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   const localPath = toLocalPath(location);
   if (!localPath) throw new Error('Die XML-Location ist kein lokaler Dateipfad.');
-
   const allowedExtensions = new Set(['.wav', '.mp3', '.flac', '.aiff', '.aif', '.m4a', '.aac', '.ogg']);
   if (!allowedExtensions.has(path.extname(localPath).toLowerCase())) {
     throw new Error('Die referenzierte Originaldatei ist keine unterstützte Audiodatei.');
   }
-
   await access(localPath, constants.R_OK);
   const details = await stat(localPath);
   if (!details.isFile()) throw new Error('Die XML-Location verweist nicht auf eine Datei.');
-
-  // The source is opened only for reading. A bounded transfer avoids attempting
-  // to clone impractically large files into the renderer process.
   if (details.size > 1024 * 1024 * 1024) {
     throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
-
   const data = await readFile(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
@@ -281,6 +316,7 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
 });
 
 app.whenReady().then(() => {
+  registerAppProtocol();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
