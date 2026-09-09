@@ -10,6 +10,9 @@ on:
   schedule:
     - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
 
+permissions:
+  contents: write         # wird für das Erstellen von GitHub-Releases benötigt
+
 jobs:
   build:
     name: Windows Installer + Portable
