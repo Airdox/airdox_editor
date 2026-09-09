@@ -147,3 +147,22 @@ export function adoptSerializedGrid(
     origin
   );
 }
+
+/**
+ * Normalizes a binary bridge payload to an ArrayBuffer.
+ *
+ * Electron IPC structured-clones Node Buffers to Uint8Array (never back to
+ * ArrayBuffer), so desktop readers must not assume ArrayBuffer input:
+ * `new DataView(view)` and `decodeAudioData(view)` throw TypeError on views,
+ * which previously failed every desktop ANLZ/audio intake silently.
+ * ArrayBuffers pass through untouched; views are copied byte-exactly (never
+ * aliased, since pooled buffers may share a larger backing store).
+ */
+export function ensureArrayBuffer(data: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (data instanceof ArrayBuffer) return data;
+  if (ArrayBuffer.isView(data)) {
+    const view = data as Uint8Array;
+    return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer;
+  }
+  throw new Error('Unerwarteter Binärdatentyp vom Desktop-Bridge (weder ArrayBuffer noch Uint8Array).');
+}

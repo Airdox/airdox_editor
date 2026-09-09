@@ -105,6 +105,27 @@ export interface DbAnalysisRef {
 }
 
 /**
+ * Derives the deterministic sibling analysis file for a resolved ANLZ path.
+ * Rekordbox splits every analysis across two files in the same folder:
+ * ANLZnnnn.DAT (source path, beat grid, cues, preview waveforms) and
+ * ANLZnnnn.EXT (full-resolution color waveform PWV5, PSSI phrase structure,
+ * PCO2 extended cues). The sibling is a pure string rewrite — same folder,
+ * same basename, only the extension swapped — never a search.
+ *
+ * Returns null when the path already carries the target extension
+ * (case-insensitive) or has no extension to replace.
+ */
+export function deriveSiblingExtension(filePath: string, targetExt: string): string | null {
+  const trimmed = (filePath ?? '').trim();
+  const ext = targetExt.replace(/^\./, '');
+  if (!trimmed || !ext) return null;
+  const match = trimmed.match(/^(.*)\.([A-Za-z0-9]+)$/);
+  if (!match) return null;
+  if (match[2].toLowerCase() === ext.toLowerCase()) return null;
+  return `${match[1]}.${ext}`;
+}
+
+/**
  * Builds the deterministic XML→DB analysis index: normalized audio path →
  * ANLZ reference. Tracks without a location or without an AnalysisDataPath
  * are skipped (first entry wins on duplicates).

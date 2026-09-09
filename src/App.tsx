@@ -23,6 +23,7 @@ import {
   normalizeAudioKey,
   resolveAnalysisFilePath,
   DbAnalysisRef,
+  deriveSiblingExtension,
 } from './rekordbox/analysisResolver';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
@@ -34,8 +35,8 @@ import {
   DEFAULT_REKORDBOX_XML,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
-import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
-import { adoptSerializedGrid, describeGridEdit, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
+import { applyAnlzExtractionToTrack, generateRekordboxPhrases, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import {
   serializeProject,
@@ -143,7 +144,30 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
   }
   try {
     const source = await window.rekordboxDesktop.readAnalysisFile(resolved);
-    const extraction = parseAnlzBinary(source.data);
+    let extraction = parseAnlzBinary(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
+    // Rekordbox splits every analysis across sibling containers: the resolved
+    // file (usually ANLZnnnn.DAT) plus ANLZnnnn.EXT in the same folder. The
+    // EXT carries the full-resolution color waveform (PWV5), PSSI phrases and
+    // PCO2 colored cues — without it the deck can only show the low-res
+    // preview. Deterministic sibling, read-only; a missing sibling means
+    // fewer variants, never an error.
+    const sibling =
+      deriveSiblingExtension(resolved, 'EXT') ?? deriveSiblingExtension(resolved, 'DAT');
+    if (sibling) {
+      try {
+        const extSource = await window.rekordboxDesktop.readAnalysisFile(sibling);
+        const extExtraction = parseAnlzBinary(ensureArrayBuffer(extSource.data as ArrayBuffer | Uint8Array));
+        // Positional merge: primary is always the DAT side (PQTZ authority),
+        // secondary the EXT side (PCO2/PSSI priority) — independent of which
+        // file the AnalysisDataPath resolved to first.
+        extraction = /\.ext$/i.test(sibling)
+          ? mergeAnlzExtractions(extraction, extExtraction)
+          : mergeAnlzExtractions(extExtraction, extraction);
+        console.info(`[ANLZ Auto] +Schwesterdatei ${sibling} → ${extExtraction.tagsFound.join(', ')}`);
+      } catch {
+        console.info(`[ANLZ Auto] Keine Schwesterdatei (${sibling}); Farb-Waveform (PWV5)/Phrasen (PSSI) ggf. nicht verfügbar.`);
+      }
+    }
     const merged = applyAnlzExtractionToTrack(track, extraction);
     // Plausibility guard: the PPTH source path should reference the same audio file.
     const expected = track.originalMedia?.resolvedPath || track.originalMedia?.location || '';
@@ -1308,11 +1332,32 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // ANLZ belongs to the explicitly active XML track. It is read-only input and
   // takes priority over XML values only for analysis fields it actually holds.
-  const handleImportAnlzData = async (data: ArrayBuffer, fileName: string) => {
+  const handleImportAnlzData = async (data: ArrayBuffer | Uint8Array, fileName: string, sourcePath?: string) => {
     if (!activeTrack) return;
 
     try {
-      const extraction = parseAnlzBinary(data);
+      let extraction = parseAnlzBinary(ensureArrayBuffer(data));
+      // Same sibling rule as the auto path: a manually assigned ANLZnnnn.DAT
+      // is merged with its ANLZnnnn.EXT (color waveform/phrases) when the
+      // desktop bridge knows the file path.
+      if (sourcePath && window.rekordboxDesktop) {
+        const sibling =
+          deriveSiblingExtension(sourcePath, 'EXT') ?? deriveSiblingExtension(sourcePath, 'DAT');
+        if (sibling) {
+          try {
+            const extSource = await window.rekordboxDesktop.readAnalysisFile(sibling);
+            const extExtraction = parseAnlzBinary(ensureArrayBuffer(extSource.data as ArrayBuffer | Uint8Array));
+            // Positional merge (primary = DAT, secondary = EXT), regardless
+            // of which sibling the user picked.
+            extraction = /\.ext$/i.test(sibling)
+              ? mergeAnlzExtractions(extraction, extExtraction)
+              : mergeAnlzExtractions(extExtraction, extraction);
+            console.info(`[ANLZ Import] +Schwesterdatei ${sibling}`);
+          } catch {
+            console.info(`[ANLZ Import] Keine Schwesterdatei (${sibling}); importiere nur ${fileName}.`);
+          }
+        }
+      }
       const enrichedTrack = applyAnlzExtractionToTrack(activeTrack, extraction);
       // Same plausibility guard as the auto path: the PPTH source path inside
       // the container should reference this track's audio file.
@@ -1358,7 +1403,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!chosen) return;
       const source = await window.rekordboxDesktop.readAnalysisFile(chosen.path);
       const fileName = chosen.path.split(/[\\/]/).pop() || 'ANLZ-Datei';
-      await handleImportAnlzData(source.data, fileName);
+      await handleImportAnlzData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array), fileName, chosen.path);
     } catch (error) {
       console.error('[ANLZ Import] Windows-Lesepfad fehlgeschlagen:', error);
       alert(`ANLZ-Datei konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
@@ -1472,7 +1517,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
         try {
           const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-          originalAudio = await audioCtx.decodeAudioData(source.data);
+          originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
           originalMedia = {
             ...originalMedia,
             resolvedPath: source.path,
@@ -1744,7 +1789,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
           try {
             const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-            originalAudio = await audioCtx.decodeAudioData(source.data);
+            originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
             originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
           } catch (error) {
             console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);

@@ -123,7 +123,7 @@ function readUtf16Be(view: DataView, offset: number, byteLength: number): string
   return String.fromCharCode(...chars);
 }
 
-const WAVEFORM_PRIORITY: Record<string, number> = {
+export const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,

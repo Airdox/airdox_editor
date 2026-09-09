@@ -79,6 +79,12 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
 
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
+      // DAT-only preview variants carry one mono channel → authentic
+      // Rekordbox preview blue; band variants use the spectral palette.
+      const isMonoPreview =
+        analysis.sourceTag === 'PWAV' ||
+        analysis.sourceTag === 'PWV2' ||
+        analysis.sourceTag === 'PWV3';
       const bucketsPerCol = buckets / targetCols;
 
       for (let col = 0; col < targetCols; col++) {
@@ -107,14 +113,22 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const barH = Math.max(2, maxPeak * (height - 4));
         const yTop = (height - barH) / 2;
 
-        // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
+        if (isMonoPreview) {
+          // Classic Rekordbox preview blue for mono variants
+          ctx.fillStyle = '#00a2ff';
+          ctx.fillRect(col, yTop, 1, barH);
+          ctx.fillStyle = '#b3e5fc';
+          ctx.fillRect(col, yTop + barH * 0.3, 1, barH * 0.4);
+        } else {
+          // Rekordbox RGB spectral styling: bass orange-red, mids green,
+          // highs ice blue; full-spectrum columns render to white.
+          const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
+          const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
+          const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
 
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-        ctx.fillRect(col, yTop, 1, barH);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+          ctx.fillRect(col, yTop, 1, barH);
+        }
       }
     } else {
       // No waveform data: honest empty state. Overview renderers must never

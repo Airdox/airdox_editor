@@ -22,7 +22,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
-import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
+import { parseAnlzBinary as parseAnlzFile, WAVEFORM_PRIORITY } from './anlzParser';
 
 /**
  * Parses binary Rekordbox ANLZ file (.DAT, .EXT, .2EX).
@@ -76,6 +76,74 @@ function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtra
 
 export function parseAnlzBinary(buffer: ArrayBuffer): AnlzExtractionResult {
   return toExtractionResult(parseAnlzFile(buffer));
+}
+
+function waveformTagPriority(tag?: string): number {
+  return tag ? (WAVEFORM_PRIORITY[tag] ?? 0) : 0;
+}
+
+/**
+ * Merges two ANLZ extractions from sibling containers (ANLZnnnn.DAT and
+ * ANLZnnnn.EXT) into one. Rekordbox splits the analysis: the .DAT carries
+ * source path, PQTZ beat grid, PCOB cue lists and preview waveforms, while
+ * the .EXT carries the full-resolution color waveform (PWV5), PSSI phrase
+ * structure and PCO2 extended cues. The merge stays deterministic and never
+ * invents data:
+ *
+ *  - tagsFound / warnings are unioned (order-preserving);
+ *  - ALL genuine waveform variants of both files are kept; the highest
+ *    priority variant (PWV7 > PWV5 > PWV6 > ... > PWAV) becomes `waveform`;
+ *  - the primary beat grid wins when it holds decoded beat nodes (PQTZ is
+ *    authoritative in the .DAT), otherwise the secondary grid is adopted;
+ *  - non-empty cue/loop/phrase lists of the secondary file take priority
+ *    (PCO2/PSSI live in the .EXT); empty lists fall back to the primary's.
+ *
+ * Positional contract: `primary` is the DAT-side extraction, `secondary`
+ * the EXT-side extraction — callers enforce this regardless of which
+ * sibling file was read first.
+ */
+export function mergeAnlzExtractions(
+  primary: AnlzExtractionResult,
+  secondary: AnlzExtractionResult
+): AnlzExtractionResult {
+  // Ordered de-duplicated union (the raw parser keeps one entry per section,
+  // so a single file can already list e.g. PCOB twice — the merged view
+  // normalizes to distinct tags).
+  const tagsFound: string[] = [];
+  for (const tag of [...primary.tagsFound, ...secondary.tagsFound]) {
+    if (!tagsFound.includes(tag)) tagsFound.push(tag);
+  }
+
+  const waveformVariants = [...primary.waveformVariants, ...secondary.waveformVariants];
+  const waveform =
+    waveformTagPriority(secondary.waveform?.sourceTag) >
+    waveformTagPriority(primary.waveform?.sourceTag)
+      ? secondary.waveform
+      : (primary.waveform ?? secondary.waveform);
+
+  const primaryHasBeats = (primary.beatGrid?.beats?.length ?? 0) > 0;
+  const secondaryHasBeats = (secondary.beatGrid?.beats?.length ?? 0) > 0;
+  const gridWinner =
+    (primaryHasBeats || !secondaryHasBeats ? primary : secondary);
+  const gridLoser = gridWinner === primary ? secondary : primary;
+
+  return {
+    tagsFound,
+    cues: secondary.cues.length > 0 ? secondary.cues : primary.cues,
+    loops: secondary.loops.length > 0 ? secondary.loops : primary.loops,
+    phrases: secondary.phrases.length > 0 ? secondary.phrases : primary.phrases,
+    waveform,
+    waveformVariants,
+    beatGrid: gridWinner.beatGrid,
+    bpm: gridWinner.bpm ?? gridLoser.bpm,
+    firstBeat: gridWinner.firstBeat ?? gridLoser.firstBeat,
+    analysisPath: primary.analysisPath ?? secondary.analysisPath,
+    warnings: [...primary.warnings, ...secondary.warnings],
+    pssiMood: secondary.pssiMood ?? primary.pssiMood,
+    pssiEndBeat: secondary.pssiEndBeat ?? primary.pssiEndBeat,
+    pssiBank: secondary.pssiBank ?? primary.pssiBank,
+    pssiMasked: secondary.pssiMasked ?? primary.pssiMasked,
+  };
 }
 
 /**

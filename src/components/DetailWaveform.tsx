@@ -235,6 +235,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
+      // Bar-label decluttering: Rekordbox numbers bars only as densely as the
+      // zoom allows (e.g. every 4 bars: 129, 133). Below ~40 px per bar only
+      // every Nth bar gets a label; labels are also suppressed while they
+      // would slide under the top-left BPM badge (~58 px).
+      const pxPerBar = Math.max(1, ((secondsPerBeat * bg.meter) / Math.max(0.001, viewDuration)) * width);
+      const barLabelEvery = Math.max(1, Math.ceil(40 / pxPerBar));
+
       for (const vb of visibleBeats) {
         const x = timeToPixel(vb.time, width);
         if (x < -20 || x > width + 20) continue;
@@ -255,9 +262,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.stroke();
 
           // Rekordbox Bar number in top ruler (e.g. 109, 113)
-          ctx.fillStyle = tail ? 'rgba(255, 255, 255, 0.55)' : '#ffffff';
-          ctx.font = 'bold 11px sans-serif';
-          ctx.fillText(`${barNumber}`, x + 3, 14);
+          const showLabel = ((barNumber - 1) % barLabelEvery === 0) && x >= 58;
+          if (showLabel) {
+            ctx.fillStyle = tail ? 'rgba(255, 255, 255, 0.55)' : '#ffffff';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.fillText(`${barNumber}`, x + 3, 14);
+          }
         } else {
           // Intermediate beat lines (beats 2, 3, 4)
           ctx.strokeStyle = tail ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.22)';
@@ -320,6 +330,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
+        // DAT-only preview variants (PWAV/PWV2/PWV3) carry one mono channel;
+        // Rekordbox renders those in its classic preview blue — never as fake
+        // RGB color. Band variants (PWV5/PWV7/...) use the spectral palette.
+        const isMonoPreview =
+          analysis.sourceTag === 'PWAV' ||
+          analysis.sourceTag === 'PWV2' ||
+          analysis.sourceTag === 'PWV3';
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
         const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
         const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
@@ -338,19 +355,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
-          if (waveformMode === 'BLUE') {
-            // High-contrast electric blue waveform
+          if (waveformMode === 'BLUE' || (waveformMode === 'RGB' && isMonoPreview)) {
+            // High-contrast electric blue waveform (also the authentic look
+            // for mono preview variants, matching Rekordbox's preview blue)
             const barH = Math.max(2, peak * maxHalfH);
             ctx.fillStyle = '#00a2ff';
             ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
             ctx.fillStyle = '#b3e5fc';
             ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
           } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
+            // Pioneer Rekordbox RGB spectral mapping: bass orange-red, mids
+            // green, highs ice blue; full-spectrum columns render to white.
             const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 270 + mid * 35));
-            const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-            const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
+            const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
+            const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
+            const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
 
             ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
             ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);

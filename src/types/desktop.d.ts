@@ -13,7 +13,8 @@ declare global {
         accessMode: 'READ_ONLY';
       }>;
       readOriginalAudio(location: string): Promise<{
-        data: ArrayBuffer;
+        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
+        data: ArrayBuffer | Uint8Array;
         path: string;
         size: number;
         modifiedAt: number;
@@ -21,7 +22,8 @@ declare global {
       }>;
       chooseAnalysisFile(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       readAnalysisFile(filePath: string): Promise<{
-        data: ArrayBuffer;
+        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
+        data: ArrayBuffer | Uint8Array;
         path: string;
         size: number;
         modifiedAt: number;
