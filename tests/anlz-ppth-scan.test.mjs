@@ -30,6 +30,11 @@ const { scanAnlzForPaths } = require('../electron/dbReader.cjs');
 //   base/rekordbox7/share/PIONEER/USBANLZ/ANLZ0002.DAT  (PPTH → C:\Music\B.wav, UTF-16LE)
 //   base/rekordbox7/share/PIONEER/USBANLZ/ANLZ0003.DAT  (garbage header)
 //   base/rekordbox7/share/PIONEER/USBANLZ/notes.txt     (not an ANLZ file)
+//   .../USBANLZ/P016/0000875E/ANLZ1000.DAT+EXT          (nested pair → C:\Music\DJ\Delta.wav)
+//   .../USBANLZ/0e8/<uuid>/ANLZ1001.DAT                (nested → C:\Music\DJ\Epsilon.mp3, UTF-16LE)
+//   .../USBANLZ/0e8/<uuid>/readme.txt                 (nested junk, ignored)
+// Real Rekordbox trees nest every container below USBANLZ/ – the scan must
+// recurse (a top-level-only read finds 0 files on real machines).
 // ---------------------------------------------------------------------------
 
 function buildPpthFile(targetPath, encoding) {
@@ -71,6 +76,19 @@ try {
   // Non-ANLZ file: ignored by the scan
   fs.writeFileSync(path.join(anlzDir, 'notes.txt'), Buffer.from('not an anl'));
 
+  // Nested layout (real Rekordbox tree: USBANLZ/<bucket>/<id>/ANLZnnnn.*)
+  const nestedDir = path.join(anlzDir, 'P016', '0000875E');
+  fs.mkdirSync(nestedDir, { recursive: true });
+  const audioD = 'C:\\Music\\DJ\\Delta.wav';
+  fs.writeFileSync(path.join(nestedDir, 'ANLZ1000.DAT'), buildPpthFile(audioD, 'utf16be'));
+  fs.writeFileSync(path.join(nestedDir, 'ANLZ1000.EXT'), buildPpthFile(audioD, 'utf16be'));
+  const nestedDir2 = path.join(anlzDir, '0e8', 'f47ac10b58cc4372a5670e02b2c3d479');
+  fs.mkdirSync(nestedDir2, { recursive: true });
+  const audioE = 'C:\\Music\\DJ\\Epsilon.mp3';
+  fs.writeFileSync(path.join(nestedDir2, 'ANLZ1001.DAT'), buildPpthFile(audioE, 'utf16le'));
+  // Nested junk: ignored by the scan
+  fs.writeFileSync(path.join(nestedDir2, 'readme.txt'), Buffer.from('ignore me'));
+
   // Second folder for tier-2 (basename) scenarios
   const anlzDir2 = path.join(base, 'rekordbox6', 'share', 'PIONEER', 'ANLZ');
   fs.mkdirSync(anlzDir2, { recursive: true });
@@ -85,8 +103,8 @@ try {
     [anlzDir]
   );
 
-  // 4 ANLZ files scanned (notes.txt excluded)
-  assert.strictEqual(result.scanned, 4, 'scanned file count');
+  // 7 ANLZ files scanned (flat + nested; notes.txt/readme.txt excluded)
+  assert.strictEqual(result.scanned, 7, 'scanned file count');
 
   assert.strictEqual(result.matches.length, 2, 'two exact matches (A + B, no Gamma)');
 
@@ -120,6 +138,24 @@ try {
   assert.ok(moved.note, 'tier-2 carries a verification note');
   const twin = r2.matches.find((m) => /twin\.wav$/i.test(m.path));
   assert.ok(!twin, 'ambiguous basename (two candidates) must NOT match');
+
+  // ─── Nested layout: recursion finds real Rekordbox trees ──────────────
+  const rNested = scanAnlzForPaths(
+    ['C:/Music/DJ/Delta.wav', 'C:/Music/DJ/Epsilon.mp3'],
+    [anlzDir]
+  );
+  assert.strictEqual(rNested.scanned, 7, 'nested scan counts flat + nested containers');
+  assert.strictEqual(rNested.truncated, false, 'small tree is not truncated');
+  const matchD = rNested.matches.find((m) => /delta\.wav$/i.test(m.path));
+  assert.ok(matchD, 'nested DAT+EXT pair found recursively');
+  assert.strictEqual(matchD.matchTier, 1, 'nested match stays tier-1 (exact path)');
+  assert.ok(/ANLZ1000\.DAT$/i.test(matchD.datPath || ''), 'nested match resolves the DAT in its subfolder');
+  assert.ok(/ANLZ1000\.EXT$/i.test(matchD.extPath || ''), 'nested match resolves the EXT sibling in its subfolder');
+  assert.ok(matchD.datPath && matchD.datPath.includes('P016'), 'nested DAT path keeps its subdirectory');
+  const matchE = rNested.matches.find((m) => /epsilon\.mp3$/i.test(m.path));
+  assert.ok(matchE, 'deeply nested UTF-16LE container found');
+  assert.strictEqual(matchE.matchTier, 1, 'deep nested match stays tier-1 (exact path)');
+  assert.ok(!rNested.matches.some((m) => /gamma/i.test(m.path)), 'no phantom match in nested scan');
 
   // ─── Windows long-path prefix normalization ─────────────────────────────
   const r3 = scanAnlzForPaths(['\\\\?\\c:\\music\\dj\\alpha.wav'], [anlzDir]);

@@ -61,6 +61,8 @@ declare global {
         folders: string[];
         elapsedMs: number;
         ppthSample?: string[];
+        /** True when the recursive scan hit a safety bound (depth/file count). */
+        truncated?: boolean;
       }>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';

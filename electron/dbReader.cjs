@@ -365,6 +365,16 @@ function locateRekordboxDatabases() {
 
 const ANLZ_HEADER_BYTES = 1024;
 
+// Rekordbox stores ANLZ containers in NESTED subdirectories below USBANLZ/
+// (e.g. USBANLZ/P016/0000875E/ANLZ0000.DAT locally and on export media –
+// rekordcrate documents "nested subdirectories", and AnalysisDataPath values
+// such as /PIONEER/USBANLZ/0e8/<uuid>/ANLZ0000.DAT confirm it). A top-level
+// only read therefore finds 0 files on real machines. The index walk below
+// recurses with hard safety bounds and still reads headers only
+// (read-only, max 1 KiB per file, symlinks skipped to avoid cycles).
+const ANLZ_SCAN_MAX_DEPTH = 8;
+const ANLZ_SCAN_MAX_FILES = 100_000;
+
 function findAnlzFolders(baseOverride) {
   const folders = [];
   const push = (dir) => {
@@ -501,14 +511,38 @@ function normalizeAnlzPathKey(input) {
 function buildAnlzPpthIndex(folders) {
   const index = new Map();
   let scanned = 0;
-  for (const folder of folders) {
+  let truncated = false;
+  const walk = (dir, depth) => {
+    if (truncated) return;
+    if (depth > ANLZ_SCAN_MAX_DEPTH) {
+      truncated = true;
+      return;
+    }
     let entries = [];
-    try { entries = fs.readdirSync(folder); } catch { continue; }
-    for (const name of entries) {
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (truncated) return;
+      const name = ent.name;
+      if (!name || name.startsWith('.')) continue;
+      // Never follow symlinks: analysis trees must not escape into cycles.
+      if (ent.isSymbolicLink()) continue;
+      const full = path.join(dir, name);
+      if (ent.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+      if (!ent.isFile()) continue;
       const lower = name.toLowerCase();
       if (!lower.startsWith('anlz')) continue;
       if (!lower.endsWith('.dat') && !lower.endsWith('.ext')) continue;
-      const full = path.join(folder, name);
+      if (scanned >= ANLZ_SCAN_MAX_FILES) {
+        truncated = true;
+        return;
+      }
       scanned += 1;
       const ppth = readPpthFromFile(full);
       if (!ppth) continue;
@@ -520,20 +554,27 @@ function buildAnlzPpthIndex(folders) {
       else if (!entry.extPath) entry.extPath = full;
       index.set(key, entry);
     }
+  };
+  for (const folder of folders) {
+    if (truncated) break;
+    walk(folder, 0);
   }
-  return { index, scanned };
+  return { index, scanned, truncated };
 }
 
 /**
  * Matches the given audio paths against the PPTH headers of all ANLZ
  * containers in the standard Rekordbox analysis folders. Read-only.
+ * The folders are searched RECURSIVELY because Rekordbox keeps ANLZ
+ * containers in nested subdirectories below USBANLZ/ (flat top-level
+ * layouts keep working as before).
  * @param {string[]} targetPaths audio paths (any form; normalized internally)
  * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
  */
 function scanAnlzForPaths(targetPaths, folderOverride) {
   const started = Date.now();
   const folders = folderOverride || findAnlzFolders();
-  const { index, scanned } = buildAnlzPpthIndex(folders);
+  const { index, scanned, truncated } = buildAnlzPpthIndex(folders);
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
     const key = normalizeAnlzPathKey(tp);
@@ -590,7 +631,7 @@ function scanAnlzForPaths(targetPaths, folderOverride) {
     if (ppthSample.length >= 3) break;
   }
 
-  return { matches, scanned, folders, elapsedMs: Date.now() - started, ppthSample };
+  return { matches, scanned, folders, elapsedMs: Date.now() - started, ppthSample, truncated };
 }
 
 module.exports = {

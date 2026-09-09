@@ -410,7 +410,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const anlzPpthScanStateRef = useRef<'IDLE' | 'RUNNING' | 'DONE'>('IDLE');
   const anlzPpthMissedKeysRef = useRef<Set<string>>(new Set());
   const anlzPpthScanPromiseRef = useRef<Promise<void> | null>(null);
-  const anlzPpthScanInfoRef = useRef<{ scanned: number; folders: number; elapsedMs: number } | null>(null);
+  const anlzPpthScanInfoRef = useRef<{ scanned: number; folders: number; elapsedMs: number; truncated: boolean } | null>(null);
 
   // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
   // databases (master.db / exportLibrary.db) without manual user assignment.
@@ -516,18 +516,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           });
           added += 1;
         }
-        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
+        const truncated = result.truncated === true;
+        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs, truncated };
         for (const t of targets) {
           const k = normalizeAudioKey(t);
           if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
         }
         console.info(
-          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
-            `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
+          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt (rekursiv, ` +
+            `${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).` +
+            (truncated ? ' [HINWEIS: Scan-Limit erreicht, Teilergebnis]' : '')
         );
         logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer`, {
           folders: result.folders,
           elapsedMs: result.elapsedMs,
+          recursive: true,
+          truncated,
         });
       } catch (e) {
         console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);
@@ -1731,7 +1735,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Garantie-Erfüllung: ohne ANLZ direkt aus lokaler Rekordbox-DB holen – kein manueller DATA-Klick nötig.
       let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
       // UI-Diagnostik: was hat die automatische ANLZ-Zuordnung getan?
-      let anlzLookup: { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; elapsedMs: number; note?: string } | null = null;
+      let anlzLookup: { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; elapsedMs: number; truncated?: boolean; note?: string } | null = null;
       if (rbExclusive && !selectedDef.rawXmlAttributes?.analysisDataPath?.trim()) {
         if (dbAnalysisIndexRef.current.size === 0) {
           await ensureDbAnalysisIndex();
@@ -1766,6 +1770,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               scanned: scanInfo?.scanned ?? 0,
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
+              truncated: scanInfo?.truncated ?? false,
               note: ppthEntry.note,
             };
             console.info(`[Track-Link] XML-Track mit ANLZ verknüpft (PPTH-Scan Tier ${ppthEntry.matchTier}: ${ppthFile}).`);
@@ -1775,6 +1780,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               scanned: scanInfo?.scanned ?? 0,
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
+              truncated: scanInfo?.truncated ?? false,
             };
             console.info(
               `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} ` +
