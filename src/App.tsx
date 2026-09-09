@@ -637,6 +637,142 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   };
 
+  // -------------------------------------------------------------------
+  // Segment-Editing Hilfsfunktionen (runden Workflow)
+  // -------------------------------------------------------------------
+  // Segmente werden als sauber aufgeteilte, nicht überlappende Blöcke geführt.
+  // Ein einzelnes ORIGINAL-Segment (0..originalDuration) existiert initial.
+  // Jede Operation (Insert / Delete / Replace / Clear) spaltet die betroffenen
+  // Segmente an den Schnittstellen auf und fügt die neuen Segmente ein. Dadurch
+  // ist Undo/Redo trivial (komplette Segment-Liste + Cues als Snapshot) und der
+  // Audio-Renderer gibt das Material exakt so wieder, wie es der DJ erwartet.
+
+  type Segment = EditSegment;
+
+  const rerenderFromSegments = useCallback((track: TrackModel) => {
+    const rendered = audioEngine.renderWorkingAudio(track.audioBuffer!, track.workingSegments);
+    setWorkingAudioBuffer(rendered);
+    track.duration = rendered.duration;
+    track.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    setTracks((prev) => [...prev]);
+  }, []);
+
+  /** Teilt ein Segment exakt an Zeit `t` (projectTime) in zwei Hälften. */
+  const splitSegmentAt = (seg: Segment, t: number): [Segment, Segment] | null => {
+    const localT = t - seg.projectStart;
+    if (localT <= 0.0005 || localT >= seg.projectDuration - 0.0005) return null;
+    const left: Segment = { ...seg, projectDuration: localT, sourceEnd: seg.sourceStart + localT };
+    const right: Segment = {
+      ...seg,
+      projectStart: seg.projectStart + localT,
+      projectDuration: seg.projectDuration - localT,
+      sourceStart: seg.sourceStart + localT,
+    };
+    return [left, right];
+  };
+
+  /** Entfernt den Bereich [start,end] aus der Segment-Liste und schiebt
+   *  nachfolgende Segmente entsprechend nach vorne. Gibt neue Liste zurück.
+   *  (Cues werden hier NICHT angefasst – der Aufrufer ist verantwortlich.) */
+  const removeRange = (segs: Segment[], start: number, end: number): Segment[] => {
+    const out: Segment[] = [];
+    const shift = end - start;
+    for (const s of segs) {
+      const sStart = s.projectStart;
+      const sEnd = s.projectStart + s.projectDuration;
+      if (sEnd <= start + 0.0005) {
+        // liegt vor dem Löschbereich → unverändert
+        out.push(s);
+        continue;
+      }
+      if (sStart >= end - 0.0005) {
+        // liegt nach dem Löschbereich → nach vorne schieben
+        out.push({ ...s, projectStart: s.projectStart - shift });
+        continue;
+      }
+      // Segment schneidet den Löschbereich → zuschneiden
+      if (sStart < start - 0.0005) {
+        out.push({ ...s, projectDuration: start - sStart, sourceEnd: s.sourceStart + (start - sStart) });
+      }
+      if (sEnd > end + 0.0005) {
+        const rightLen = sEnd - end;
+        const offsetInSrc = end - s.projectStart;
+        out.push({
+          ...s,
+          projectStart: end - shift, // = start
+          projectDuration: rightLen,
+          sourceStart: s.sourceStart + offsetInSrc,
+        });
+      }
+      // Segmente, die komplett im Löschbereich liegen, werden einfach nicht übernommen
+    }
+    return out;
+  };
+
+  /** Fügt einen neuen Clip an Position `at` ein (öffnet Zeit, verschiebt
+   *  nachfolgende Segmente + Cues). */
+  const insertClipAt = useCallback((
+    at: number,
+    clipBuffer: AudioBuffer,
+    options: { clipId?: string; type?: 'INSERT' | 'REPLACE'; replaceRange?: { start: number; end: number }; gain?: number }
+  ) => {
+    if (!activeTrack || !activeTrack.audioBuffer) return;
+
+    const { clipId, type = 'INSERT', replaceRange, gain = 1.0 } = options;
+    let segs = activeTrack.workingSegments.slice();
+    let insertPos = at;
+
+    if (replaceRange) {
+      segs = removeRange(segs, replaceRange.start, replaceRange.end);
+      insertPos = replaceRange.start;
+    }
+
+    // Segmente >= insertPos um die Länge des Clips nach hinten schieben
+    const dur = clipBuffer.duration;
+    segs = segs.map((s) =>
+      s.projectStart >= insertPos - 0.0005
+        ? { ...s, projectStart: s.projectStart + dur }
+        : s
+    );
+
+    // Cues nach Einfügestelle verschieben, außer bei REPLACE (da bleibt Zeit gleich)
+    if (type === 'INSERT') {
+      activeTrack.cues = activeTrack.cues.map((c) =>
+        c.position >= insertPos - 0.0005 ? { ...c, position: c.position + dur } : c
+      );
+    } else if (replaceRange) {
+      // Bei Replace: Cues im ersetzten Bereich werden entfernt, Rest verschoben um Diff
+      const diff = dur - (replaceRange.end - replaceRange.start);
+      activeTrack.cues = activeTrack.cues
+        .filter((c) => c.position < replaceRange.start || c.position > replaceRange.end)
+        .map((c) => (c.position > replaceRange.end ? { ...c, position: c.position + diff } : c));
+    }
+
+    // Neues Segment einfügen
+    segs.push({
+      id: `${type.toLowerCase()}-${Date.now()}`,
+      type,
+      trackId: activeTrack.id,
+      sourceStart: 0,
+      sourceEnd: dur,
+      projectStart: insertPos,
+      projectDuration: dur,
+      clipId,
+      clipBuffer,
+      gain,
+    });
+
+    activeTrack.workingSegments = segs;
+    rerenderFromSegments(activeTrack);
+  }, [activeTrack, rerenderFromSegments]);
+
+  /** Kopiert nur das Material im Zeitbereich [start,end] in einen neuen
+   *  AudioBuffer (z.B. für Zwischenablage oder neue Palette-Clips). */
+  const sliceWorkingRange = useCallback((start: number, end: number): AudioBuffer | null => {
+    if (!workingAudioBuffer) return null;
+    return audioEngine.sliceAudioBuffer(workingAudioBuffer, start, end);
+  }, [workingAudioBuffer]);
+
   // Snapshot current state for Undo
   const pushHistorySnapshot = (desc: string) => {
     if (!activeTrack) return;
@@ -651,52 +787,288 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setRedoStack([]);
   };
 
-  // Undo / Redo
+  // Copy selection (nur Zwischenablage; keine Segmente ändern)
+  const handleCopy = () => {
+    if (!selection || !workingAudioBuffer) return;
+    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
+    setClipboardBuffer(sliced);
+  };
+
+  // Cut = Copy + Delete
+  const handleCut = () => {
+    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    handleCopy();
+    handleDelete();
+  };
+
+  // Paste: Source-Priorität 1) Zwischenablage, 2) ausgewählter Palette-Clip
+  const handlePaste = () => {
+    if (!activeTrack) return;
+    if (clipboardBuffer) {
+      pushHistorySnapshot('Paste @ Playhead');
+      insertClipAt(currentTime, clipboardBuffer, { type: 'INSERT' });
+      showOperationFeedback({
+        title: 'Eingefügt (Paste @ Playhead)',
+        operationType: 'INSERT',
+        description: `Zwischenablage (${clipboardBuffer.duration.toFixed(3)}s) an Playhead-Position ${currentTime.toFixed(3)}s eingefügt. Nachfolgendes Material wurde um +${clipboardBuffer.duration.toFixed(3)}s nach hinten geschoben.`,
+        timeRangeSec: { start: currentTime, end: currentTime + clipboardBuffer.duration, duration: clipboardBuffer.duration },
+        shiftedCuesCount: 0,
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (clip) handleInsertClipToDeckA(clip);
+  };
+
+  // Insert: wie Paste, aber explizites "Zeit öffnen"-Feedback (bei Palette-Fallback
+  // wird die vollständige Insert-Clip-Routine inkl. Tempo/Key-Sync genutzt).
+  const handleInsert = () => {
+    if (!activeTrack) return;
+    if (clipboardBuffer) {
+      pushHistorySnapshot('Insert @ Playhead');
+      insertClipAt(currentTime, clipboardBuffer, { type: 'INSERT' });
+      showOperationFeedback({
+        title: 'Eingefügt mit Verschiebung (Insert)',
+        operationType: 'INSERT',
+        description: `Audio (${clipboardBuffer.duration.toFixed(3)}s) an Playhead ${currentTime.toFixed(3)}s eingefügt. Alle nachfolgenden Segmente und Cues wurden um +${clipboardBuffer.duration.toFixed(3)}s verschoben.`,
+        timeRangeSec: { start: currentTime, end: currentTime + clipboardBuffer.duration, duration: clipboardBuffer.duration },
+        shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= currentTime - 0.0005).length,
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+    const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (clip) handleInsertClipToDeckA(clip);
+  };
+
+  // Insert Clip into Deck A (Palette / Clip-Deck)
+  const handleInsertClipToDeckA = (clip: PaletteClip) => {
+    if (!activeTrack || !activeTrack.audioBuffer) {
+      alert('Bitte lade zuerst einen Track in Deck A.');
+      return;
+    }
+    if (!clip.audioBuffer) {
+      alert('Der Clip enthält keine Audiodaten.');
+      return;
+    }
+    pushHistorySnapshot(`Insert Clip: ${clip.name}`);
+
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const insertPos = currentTime;
+    insertClipAt(insertPos, adapted.adaptedBuffer, { clipId: clip.id, type: 'INSERT' });
+
+    showOperationFeedback({
+      title: 'Clip an Playhead eingefügt',
+      operationType: 'INSERT',
+      description: `Clip "${clip.name}" (${adapted.newDuration.toFixed(3)}s) an Position ${insertPos.toFixed(3)}s eingefügt. Tempo: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ` +
+        (adapted.semitonesShifted !== 0
+          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
+          : matchPitchOnInsert
+          ? 'Tonhöhe: Harmonisch synchronisiert.'
+          : 'Tonhöhe: Original beibehalten (Key Sync aus).'),
+      timeRangeSec: { start: insertPos, end: insertPos + adapted.newDuration, duration: adapted.newDuration },
+      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos - 0.0005).length,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Replace selection in Deck A with Clip
+  const handleReplaceDeckAWithClip = (clip: PaletteClip) => {
+    if (!selection || !activeTrack || !activeTrack.audioBuffer) return;
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
+      return;
+    }
+    pushHistorySnapshot(`Replace with Clip: ${clip.name}`);
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    insertClipAt(selection.start, adapted.adaptedBuffer, {
+      clipId: clip.id,
+      type: 'REPLACE',
+      replaceRange: { start: selection.start, end: selection.end },
+    });
+    const newEnd = selection.start + adapted.newDuration;
+    showOperationFeedback({
+      title: 'Auswahl ersetzt (Replace)',
+      operationType: 'REPLACE',
+      description: `Auswahl (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${clip.name}" (${adapted.newDuration.toFixed(3)}s) ersetzt.`,
+      timeRangeSec: { start: selection.start, end: newEnd, duration: adapted.newDuration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+    setSelection(null);
+  };
+
+  // Overdub selection in Deck A with Clip
+  const handleOverdubDeckAWithClip = (clip: PaletteClip) => {
+    if (!selection || !activeTrack || !activeTrack.audioBuffer) return;
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
+      return;
+    }
+    pushHistorySnapshot(`Overdub with Clip: ${clip.name}`);
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const dur = Math.min(adapted.newDuration, selection.duration);
+    activeTrack.workingSegments.push({
+      id: `overdub-${Date.now()}`,
+      type: 'OVERDUB',
+      trackId: activeTrack.id,
+      sourceStart: 0,
+      sourceEnd: dur,
+      projectStart: selection.start,
+      projectDuration: dur,
+      clipId: clip.id,
+      clipBuffer: adapted.adaptedBuffer,
+      gain: 1.0,
+    });
+    rerenderFromSegments(activeTrack);
+    showOperationFeedback({
+      title: 'Auswahl überlagert (Overdub)',
+      operationType: 'OVERDUB',
+      description: `Clip "${clip.name}" über Auswahl (${selection.duration.toFixed(3)}s) gemischt. Originalmaterial bleibt erhalten.`,
+      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Replace/Overdub mit dem aktuell ausgewählten Palette-Clip
+  const handleReplace = () => {
+    if (!selection || !activeTrack) return;
+    const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (!clip || !clip.audioBuffer) {
+      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+      return;
+    }
+    handleReplaceDeckAWithClip(clip);
+  };
+  const handleOverdub = () => {
+    if (!selection || !activeTrack) return;
+    const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+    if (!clip || !clip.audioBuffer) {
+      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
+      return;
+    }
+    handleOverdubDeckAWithClip(clip);
+  };
+
+  // Delete = entferne Auswahl aus Segment-Liste und verschiebe nachfolgendes Material nach vorne
+  const handleDelete = () => {
+    if (!selection || !activeTrack || !activeTrack.audioBuffer) return;
+    pushHistorySnapshot('Delete');
+    const delStart = selection.start;
+    const delEnd = selection.end;
+    const delDuration = delEnd - delStart;
+
+    activeTrack.workingSegments = removeRange(activeTrack.workingSegments, delStart, delEnd);
+    activeTrack.cues = activeTrack.cues
+      .filter((c) => c.position < delStart - 0.0005 || c.position > delEnd + 0.0005)
+      .map((c) =>
+        c.position > delEnd ? { ...c, position: Math.max(0, c.position - delDuration) } : c
+      );
+    rerenderFromSegments(activeTrack);
+
+    showOperationFeedback({
+      title: 'Auswahl gelöscht (Delete)',
+      operationType: 'DELETE',
+      description: `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio und Cues um -${delDuration.toFixed(3)}s nach vorne gerückt.`,
+      timeRangeSec: { start: delStart, end: delEnd, duration: delDuration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+    setSelection(null);
+  };
+
+  // Clear = Auswahl stummschalten (als CUT-Segment markieren, ohne Länge zu verändern)
+  const handleClear = () => {
+    if (!selection || !activeTrack || !activeTrack.audioBuffer) return;
+    pushHistorySnapshot('Clear/Mute');
+    const out: Segment[] = [];
+    for (const s of activeTrack.workingSegments) {
+      const sStart = s.projectStart;
+      const sEnd = s.projectStart + s.projectDuration;
+      if (s.type === 'CUT') continue;
+      if (sEnd <= selection.start || sStart >= selection.end) { out.push(s); continue; }
+      if (sStart < selection.start) {
+        out.push({ ...s, projectDuration: selection.start - sStart, sourceEnd: s.sourceStart + (selection.start - sStart) });
+      }
+      if (sEnd > selection.end) {
+        out.push({
+          ...s,
+          projectStart: selection.end,
+          projectDuration: sEnd - selection.end,
+          sourceStart: s.sourceStart + (selection.end - s.projectStart),
+        });
+      }
+    }
+    out.push({
+      id: `cut-${Date.now()}`,
+      type: 'CUT',
+      trackId: activeTrack.id,
+      sourceStart: 0,
+      sourceEnd: selection.duration,
+      projectStart: selection.start,
+      projectDuration: selection.duration,
+      gain: 0,
+    });
+    activeTrack.workingSegments = out;
+    rerenderFromSegments(activeTrack);
+
+    showOperationFeedback({
+      title: 'Bereich stummgeschaltet (Clear)',
+      operationType: 'CLEAR',
+      description: `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet. Länge und Beatgrid bleiben unverändert.`,
+      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+    setSelection(null);
+  };
+
+  // Undo = Snapshot wiederherstellen (Segmente + Cues + Selection)
   const handleUndo = () => {
     if (undoStack.length === 0 || !activeTrack || !activeTrack.audioBuffer) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
-
-    // Push current to redo
-    const currentSnapshot: EditHistoryEntry = {
+    setRedoStack((prev) => [...prev, {
       description: 'Before Undo',
       timestamp: Date.now(),
       segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
       selection: selection ? { ...selection } : null,
       cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-    };
-    setRedoStack((prev) => [...prev, currentSnapshot]);
-
-    // Restore
+    }]);
     activeTrack.workingSegments = previous.segments;
     activeTrack.cues = previous.cues;
     setSelection(previous.selection);
-
-    const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
-    setWorkingAudioBuffer(reRendered);
+    rerenderFromSegments(activeTrack);
   };
 
   const handleRedo = () => {
     if (redoStack.length === 0 || !activeTrack || !activeTrack.audioBuffer) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
-
-    // Push current to undo
-    const currentSnapshot: EditHistoryEntry = {
+    setUndoStack((prev) => [...prev, {
       description: 'Before Redo',
       timestamp: Date.now(),
       segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
       selection: selection ? { ...selection } : null,
       cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-    };
-    setUndoStack((prev) => [...prev, currentSnapshot]);
-
+    }]);
     activeTrack.workingSegments = next.segments;
     activeTrack.cues = next.cues;
     setSelection(next.selection);
-
-    const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
-    setWorkingAudioBuffer(reRendered);
+    rerenderFromSegments(activeTrack);
   };
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
@@ -792,370 +1164,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setPaletteClips((prev) => [...prev, newClip]);
     setSelectedClipId(newClipId);
     if (!paletteOpen) setPaletteOpen(true);
-  };
-
-  // Copy selection
-  const handleCopy = () => {
-    if (!selection || !workingAudioBuffer) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
-    setClipboardBuffer(sliced);
-  };
-
-  // Cut selection
-  const handleCut = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    handleCopy();
-    handleDelete();
-  };
-
-  // Paste at playhead
-  const handlePaste = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Paste');
-
-    const pasteDuration = clipboardBuffer.duration;
-    const newSeg: EditSegment = {
-      id: `paste-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: pasteDuration,
-      projectStart: currentTime,
-      projectDuration: pasteDuration,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-  };
-
-  // Insert (shifts timeline and subsequent markers)
-  const handleInsert = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Insert');
-
-    const shiftAmount = clipboardBuffer.duration;
-    const insertPos = currentTime;
-
-    // Mathematically shift cues occurring after insert position
-    activeTrack.cues = activeTrack.cues.map((c) => {
-      if (c.position >= insertPos) {
-        return { ...c, position: c.position + shiftAmount };
-      }
-      return c;
-    });
-
-    const newSeg: EditSegment = {
-      id: `insert-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: shiftAmount,
-      projectStart: insertPos,
-      projectDuration: shiftAmount,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Audio Segment eingefügt (Insert)',
-      operationType: 'INSERT',
-      description: `Audio-Material (${shiftAmount.toFixed(3)}s) an Playhead-Position ${insertPos.toFixed(3)}s eingefügt. Nachfolgende Cues und Wellenform wurden um +${shiftAmount.toFixed(3)}s verschoben.`,
-      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
-      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip) => {
-    if (!activeTrack || !workingAudioBuffer) {
-      alert('Bitte lade zuerst einen Track in Deck A.');
-      return;
-    }
-    if (!clip.audioBuffer) {
-      alert('Der Clip enthält keine Audiodaten.');
-      return;
-    }
-
-    pushHistorySnapshot('Insert Clip');
-
-    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const shiftAmount = adapted.newDuration;
-    const insertPos = currentTime;
-
-    // Shift cues occurring after insert position
-    activeTrack.cues = activeTrack.cues.map((c) => {
-      if (c.position >= insertPos) {
-        return { ...c, position: c.position + shiftAmount };
-      }
-      return c;
-    });
-
-    const newSeg: EditSegment = {
-      id: `insert-clip-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: shiftAmount,
-      projectStart: insertPos,
-      projectDuration: shiftAmount,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Clip in Deck A eingefügt (Insert)',
-      operationType: 'INSERT',
-      description: `Clip "${clip.name}" an Position ${insertPos.toFixed(3)}s eingefügt. Tempo: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
-          : matchPitchOnInsert
-          ? 'Tonhöhe: Harmonisch synchronisiert.'
-          : 'Tonhöhe: Original beibehalten (Key Sync aus).'
-      }`,
-      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
-      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
-  const handleReplaceDeckAWithClip = (clip: PaletteClip) => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    if (!clip.audioBuffer) {
-      alert('Der ausgewählte Clip enthält keine Audiodaten.');
-      return;
-    }
-
-    pushHistorySnapshot('Replace with Clip');
-
-    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const replaceSeg: EditSegment = {
-      id: `replace-${Date.now()}`,
-      type: 'REPLACE',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: Math.min(adapted.newDuration, selection.duration),
-      projectStart: selection.start,
-      projectDuration: selection.duration,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, replaceSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
-      operationType: 'REPLACE',
-      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${clip.name}" ersetzt. Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe angepasst: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne (${adapted.harmonicRelation}).`
-          : matchPitchOnInsert
-          ? 'Tonhöhe: Harmonisch kompatibel.'
-          : 'Tonhöhe: Original beibehalten.'
-      }`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Overdub selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
-  const handleOverdubDeckAWithClip = (clip: PaletteClip) => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    if (!clip.audioBuffer) {
-      alert('Der ausgewählte Clip enthält keine Audiodaten.');
-      return;
-    }
-
-    pushHistorySnapshot('Overdub with Clip');
-
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const overdubSeg: EditSegment = {
-      id: `overdub-${Date.now()}`,
-      type: 'OVERDUB',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: Math.min(adapted.newDuration, selection.duration),
-      projectStart: selection.start,
-      projectDuration: selection.duration,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, overdubSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Deck A überlagert (Overdub mit Clip)',
-      operationType: 'OVERDUB',
-      description: `Clip "${clip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte). Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
-          : 'Tonhöhe: Harmonisch kompatibel.'
-      }`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  // Replace selection with active Palette clip
-  const handleReplace = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
-      return;
-    }
-    handleReplaceDeckAWithClip(activeClip);
-  };
-
-  // Overdub active Palette clip onto selection
-  const handleOverdub = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const activeClip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
-    if (!activeClip || !activeClip.audioBuffer) {
-      alert('Bitte wähle zuerst einen Clip in der Palette aus.');
-      return;
-    }
-    handleOverdubDeckAWithClip(activeClip);
-  };
-
-  // Delete selection (removes range and shifts subsequent material)
-  const handleDelete = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Delete');
-
-    const delDuration = selection.duration;
-    const delStart = selection.start;
-
-    // Shift cues occurring after delete
-    activeTrack.cues = activeTrack.cues
-      .filter((c) => c.position < delStart || c.position > selection.end)
-      .map((c) => {
-        if (c.position > selection.end) {
-          return { ...c, position: Math.max(0, c.position - delDuration) };
-        }
-        return c;
-      });
-
-    // Create a new buffer with that duration removed
-    const audioCtx = audioEngine.getContext();
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(delStart * rate);
-    const endIdx = Math.floor(selection.end * rate);
-    const delSamples = endIdx - startIdx;
-    const newLength = Math.max(1, workingAudioBuffer.length - delSamples);
-
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      newLength,
-      rate
-    );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src.subarray(0, startIdx), 0);
-      dest.set(src.subarray(endIdx), startIdx);
-    }
-
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.duration = newBuffer.duration;
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
-
-    showOperationFeedback({
-      title: 'Auswahl gelöscht (Delete)',
-      operationType: 'DELETE',
-      description: `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${delDuration.toFixed(3)}s nach vorne gerückt.`,
-      timeRangeSec: { start: delStart, end: selection.end, duration: delDuration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-
-    setSelection(null);
-  };
-
-  // Clear selection (silences range without changing duration)
-  const handleClear = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Clear');
-
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(selection.start * rate);
-    const endIdx = Math.floor(selection.end * rate);
-
-    const audioCtx = audioEngine.getContext();
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      workingAudioBuffer.length,
-      rate
-    );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src);
-      // Zero out range
-      for (let i = startIdx; i < endIdx && i < dest.length; i++) {
-        dest[i] = 0;
-      }
-    }
-
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
-
-    showOperationFeedback({
-      title: 'Bereich stummgeschaltet (Clear / Mute)',
-      operationType: 'CLEAR',
-      description: `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet. Timeline-Dauer und Beatgrid-Synchronisation unverändert erhalten.`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
   };
 
   // Add Cue marker at position
@@ -1915,11 +1923,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onSelectClip={(clip) => setSelectedClipId(clip.id)}
             selectedClipId={selectedClipId}
             hasSelection={selection !== null && selection.duration > 0}
+            hasSelectionInDeckA={selection !== null && selection.duration > 0}
             onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
             targetBpm={activeTrack?.bpm}
             targetKey={activeTrack?.key}
+            onInsertClipToDeckA={handleInsertClipToDeckA}
+            onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
+            onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
           />
         )}
       </div>
@@ -1969,6 +1981,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
         hasClipboard={clipboardBuffer !== null}
+        activeClipName={(paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0])?.name || null}
         matchPitch={matchPitchOnInsert}
         onToggleMatchPitch={setMatchPitchOnInsert}
         targetKey={activeTrack?.key}

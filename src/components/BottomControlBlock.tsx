@@ -43,6 +43,8 @@ interface BottomControlBlockProps {
   canUndo: boolean;
   canRedo: boolean;
   hasClipboard: boolean;
+  /** Fallback source: active palette clip name (when clipboard empty) */
+  activeClipName?: string | null;
   matchPitch?: boolean;
   onToggleMatchPitch?: (match: boolean) => void;
   targetKey?: string;
@@ -67,11 +69,17 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   canUndo,
   canRedo,
   hasClipboard,
+  activeClipName,
   matchPitch = true,
   onToggleMatchPitch,
   targetKey,
 }) => {
   const hasSelection = selection !== null && selection.duration > 0;
+  // PASTE/INSERT/REPLACE/OVERDUB source priority:
+  //   1. Clipboard (COPY/CUT) – for PASTE/INSERT
+  //   2. Selected palette clip – fallback source when no clipboard
+  const hasInsertSource = hasClipboard || !!activeClipName;
+  const sourceLabel = hasClipboard ? 'Zwischenablage' : activeClipName ? `Palette: ${activeClipName}` : 'Kein Quellmaterial';
 
   return (
     <div className="h-44 bg-[#0d0e12] border-t border-[#1c1e26] flex select-none z-20">
@@ -241,26 +249,32 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
 
           <button
             onClick={onPaste}
-            disabled={!hasClipboard}
-            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen (Ctrl+V)"
+            disabled={!hasInsertSource}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs relative"
+            title={hasInsertSource ? `Einfügen aus ${sourceLabel} (Ctrl+V)` : 'Erst kopieren oder Palette-Clip auswählen'}
           >
             <ClipboardPaste size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
               PASTE
             </span>
+            {!hasClipboard && activeClipName && (
+              <span className="absolute -top-1 -right-1 text-[7px] font-bold bg-[#0088ff] text-white rounded px-1 py-0 shadow">P</span>
+            )}
           </button>
 
           <button
             onClick={onInsert}
-            disabled={!hasClipboard}
-            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen mit Zeittransformation (Insert)"
+            disabled={!hasInsertSource}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs relative"
+            title={hasInsertSource ? `Insert aus ${sourceLabel} (Zeit öffnen)` : 'Erst kopieren oder Palette-Clip auswählen'}
           >
             <ArrowRightLeft size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
               INSERT
             </span>
+            {!hasClipboard && activeClipName && (
+              <span className="absolute -top-1 -right-1 text-[7px] font-bold bg-[#0088ff] text-white rounded px-1 py-0 shadow">P</span>
+            )}
           </button>
 
           {/* Row 2: DELETE, CLEAR, UNDO, REDO */}

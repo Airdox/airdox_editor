@@ -1,12 +1,12 @@
-# Windows-Build – Airdox SMART Editor
+# Windows-Build – airdox_SMART_Editor
 
 Die App wird mit **Electron + electron-builder** zu einer nativen Windows-App gebaut.
 Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `Airdox SMART Editor-0.4.1-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`Airdox SMART Editor-0.4.1-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.1-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.1-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)

@@ -1,8 +1,8 @@
 {
-  "name": "airdox_smart_editor",
+  "name": "airdox_SMART_Editor",
   "private": true,
-  "version": "0.4.1",
-  "description": "Airdox SMART Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
+  "version": "0.4.3",
+  "description": "airdox_SMART_Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
   "author": "Airdox",
   "type": "module",
   "main": "electron/main.cjs",
@@ -27,20 +27,23 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "puppeteer-core": "^25.10.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@playwright/test": "^1.63.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
-    "@electron/rebuild": "^4.0.1",
     "autoprefixer": "^10.4.21",
     "electron": "^44.2.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
@@ -51,7 +54,8 @@
   },
   "build": {
     "appId": "info.airdox.smarteditor",
-    "productName": "Airdox SMART Editor",
+    "productName": "airdox_SMART_Editor",
+    "executableName": "airdox_SMART_Editor",
     "files": [
       "dist/**/*",
       "electron/**/*",
@@ -80,7 +84,7 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Airdox SMART Editor"
+      "shortcutName": "airdox_SMART_Editor"
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"

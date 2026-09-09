@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Edit Workflow Self-Test</title></head>
+<body>
+<p>Diese Datei dokumentiert die erwarteten Screenshot-Szenarien für die 8 Edit-Aktionen plus Palette-Insert.
+Siehe <code>tests/edit-workflow.test.mjs</code> für den automatisierten Playwright-Test.</p>
+<ol>
+  <li>01_initial.png – App-Start mit Default-Track, Sidebar-Palette offen, Playhead im Drop-Bereich (Bar 113)</li>
+  <li>02_selection_8beat.png – Klick auf "8 BEAT" erzeugt 8-Beat-Selection</li>
+  <li>03_copy.png – COPY klicken → Clipboard-Icon wird aktiv, PASTE/INSERT-Buttons enabled</li>
+  <li>04_clone.png – CLONE klicken → Neuer Clip erscheint in Palette</li>
+  <li>05_palette_insert.png – In der Sidebar beim roten "Intro Kick 4B"-Clip auf INSERT @ ▶ klicken – Clip wird an Playhead-Position eingefügt, Zeit öffnet sich, Wellenform zeigt neues Material</li>
+  <li>06_clear.png – CLEAR auf markiertem Bereich → Stumm-Block (flache Linie) wird sichtbar, Länge bleibt gleich</li>
+  <li>07_delete.png – DELETE → Bereich wird entfernt, nachfolgendes Material rückt nach vorne</li>
+  <li>08_paste.png – PASTE an Playhead-Position (mit Clipboard) – Zeit öffnet sich</li>
+  <li>09_insert.png – INSERT – identisch, schiebt Cues</li>
+  <li>10_replace.png – REPLACE mit ausgewähltem Palette-Clip</li>
+  <li>11_overdub.png – OVERDUB – Original + Clip überlagert</li>
+  <li>12_undo.png – UNDO macht den letzten Schritt rückgängig</li>
+  <li>13_redo.png – REDO stellt ihn wieder her</li>
+</ol>
+</body></html>

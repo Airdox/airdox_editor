@@ -169,7 +169,24 @@ class AudioEngine {
 
   /**
    * Builds an AudioBuffer from an original AudioBuffer and a list of EditSegments
-   * (non-destructive non-linear rendering)
+   * (non-destructive non-linear rendering).
+   *
+   * Regeln (damit die Schnitt-Logik rund funktioniert):
+   *  - Jedem Segment-Typ wird exakt eine Rendering-Bedeutung zugewiesen:
+   *      ORIGINAL : kopiert Originalquelle in den Output (Basismaterial)
+   *      CUT      : wie ORIGINAL, markiert aber einen entfernten Bereich (hier: Stille)
+   *      INSERT   : kopiert Clip in den Output (wird an anderer Stelle platziert)
+   *      REPLACE  : wie INSERT, ersetzt aber einen Originalbereich (wird zum
+   *                 Rendern identisch behandelt – die Unterscheidung dient der
+   *                 History / Telemetrie)
+   *      OVERDUB  : mischt Clip auf den bereits vorhandenen Output drauf
+   *  - Der Output wird spurengetreu aufgebaut: zuerst werden ORIGINAL + INSERT +
+   *    REPLACE Segmente nach projectStart sortiert gemischt (Lücken = Stille),
+   *    danach werden OVERDUB-Segmente dazugemischt. Überschneidungen zwischen
+   *    INSERT/REPLACE untereinander werden abwechselnd gemischt (Überlagerung).
+   *  - Auf diese Weise funktionieren Einfügungen ("Zeit öffnen") und
+   *    Ersetzungen korrekt, ohne dass das Original direkt verändert werden
+   *    muss – Undo/Redo arbeiten also nur noch über die Segment-Liste.
    */
   public renderWorkingAudio(
     originalBuffer: AudioBuffer,
@@ -180,8 +197,9 @@ class AudioEngine {
       return originalBuffer;
     }
 
-    // Calculate total duration from segments
-    let totalDuration = 0;
+    // 1. Gesamtdauer = spätestes Segment-Ende (kann länger als Original sein,
+    //    wenn Insert-Material hinter dem Original liegt).
+    let totalDuration = originalBuffer.duration;
     for (const seg of segments) {
       const end = seg.projectStart + seg.projectDuration;
       if (end > totalDuration) totalDuration = end;
@@ -193,38 +211,87 @@ class AudioEngine {
     const channels = originalBuffer.numberOfChannels;
     const outputBuffer = ctx.createBuffer(channels, totalSamples, sampleRate);
 
+    // 2. Output vorsorglich mit Stille füllen.
     for (let ch = 0; ch < channels; ch++) {
-      const outCh = outputBuffer.getChannelData(ch);
-      const origCh = originalBuffer.getChannelData(ch);
+      const data = outputBuffer.getChannelData(ch);
+      data.fill(0);
+    }
 
-      for (const seg of segments) {
-        const destStart = Math.floor(seg.projectStart * sampleRate);
-        const destLen = Math.floor(seg.projectDuration * sampleRate);
-        const gain = seg.gain ?? 1.0;
+    // 3. Zuerst ORIGINAL/CUT/INSERT/REPLACE rendern ("replace"-Semantik: falls
+    //    sich zwei Segmente überlappen, mischen wir sie mit 1/N-Gain, damit
+    //    nicht sofort Clipping auftritt). Für den normalen Workflow (keine
+    //    überlappenden Segmente) entspricht das einem sauberen Schnitt.
+    const nonOverdub = segments.filter((s) => s.type !== 'OVERDUB');
+    const overlaps = new Array(totalSamples).fill(0);
+    for (const seg of nonOverdub) {
+      const destStart = Math.floor(seg.projectStart * sampleRate);
+      const destLen = Math.floor(seg.projectDuration * sampleRate);
+      const gain = seg.gain ?? 1.0;
+      if (destLen <= 0 || destStart >= totalSamples) continue;
 
-        if (seg.type === 'ORIGINAL' || seg.type === 'CUT') {
+      if (seg.type === 'ORIGINAL') {
+        const srcStart = Math.floor(seg.sourceStart * sampleRate);
+        for (let ch = 0; ch < channels; ch++) {
+          const src = originalBuffer.getChannelData(ch);
+          const dest = outputBuffer.getChannelData(ch);
+          for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < src.length; i++) {
+            dest[destStart + i] += src[srcStart + i] * gain;
+          }
+        }
+        for (let i = 0; i < destLen && destStart + i < totalSamples; i++) {
+          overlaps[destStart + i] += 1;
+        }
+      } else if (seg.type === 'CUT') {
+        // CUT: Bereich ist still (wird bereits mit 0 vorbelegt, aber die
+        // Overlap-Zählung verhindert, dass ein späteres OVERDUB darüber
+        // liegt – nein, wir lassen OVERDUB auch auf CUT zu; CUT ist also
+        // einfach "kein Original an dieser Stelle". Keine Kopie nötig.
+      } else if (seg.type === 'INSERT' || seg.type === 'REPLACE') {
+        const clipBuf = seg.clipBuffer;
+        if (clipBuf) {
+          const clipChCount = clipBuf.numberOfChannels;
           const srcStart = Math.floor(seg.sourceStart * sampleRate);
-          for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < origCh.length; i++) {
-            outCh[destStart + i] = origCh[srcStart + i] * gain;
-          }
-        } else if (seg.type === 'INSERT' || seg.type === 'REPLACE') {
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            const srcStart = Math.floor(seg.sourceStart * sampleRate);
-            for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < clipCh.length; i++) {
-              outCh[destStart + i] = clipCh[srcStart + i] * gain;
+          for (let ch = 0; ch < channels; ch++) {
+            const src = clipBuf.getChannelData(Math.min(ch, clipChCount - 1));
+            const dest = outputBuffer.getChannelData(ch);
+            for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < src.length; i++) {
+              dest[destStart + i] += src[srcStart + i] * gain;
             }
           }
-        } else if (seg.type === 'OVERDUB') {
-          // Overdub layers onto existing sound
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            for (let i = 0; i < destLen && destStart + i < totalSamples && i < clipCh.length; i++) {
-              outCh[destStart + i] = Math.tanh(outCh[destStart + i] + clipCh[i] * gain * 0.85);
-            }
+          for (let i = 0; i < destLen && destStart + i < totalSamples; i++) {
+            overlaps[destStart + i] += 1;
           }
+        }
+      }
+    }
+
+    // 4. Überlappungen normalisieren (Verhindert Clipping bei Überlagerungen).
+    for (let ch = 0; ch < channels; ch++) {
+      const dest = outputBuffer.getChannelData(ch);
+      for (let i = 0; i < totalSamples; i++) {
+        if (overlaps[i] > 1) {
+          dest[i] *= 1 / Math.sqrt(overlaps[i]);
+        }
+      }
+    }
+
+    // 5. OVERDUB: Clip auf den bereits fertigen Output mischen (mit Soft-Clipping).
+    for (const seg of segments) {
+      if (seg.type !== 'OVERDUB') continue;
+      const clipBuf = seg.clipBuffer;
+      if (!clipBuf) continue;
+      const destStart = Math.floor(seg.projectStart * sampleRate);
+      const destLen = Math.floor(seg.projectDuration * sampleRate);
+      const gain = (seg.gain ?? 1.0) * 0.85;
+      if (destLen <= 0 || destStart >= totalSamples) continue;
+      const clipChCount = clipBuf.numberOfChannels;
+      for (let ch = 0; ch < channels; ch++) {
+        const src = clipBuf.getChannelData(Math.min(ch, clipChCount - 1));
+        const dest = outputBuffer.getChannelData(ch);
+        for (let i = 0; i < destLen && destStart + i < totalSamples && i < src.length; i++) {
+          const v = dest[destStart + i] + src[i] * gain;
+          // Soft-Clip per tanh zur Vermeidung von harten Clipping-Artefakten.
+          dest[destStart + i] = Math.tanh(v);
         }
       }
     }

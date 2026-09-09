@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Airdox SMART Editor</title>
-    <meta name="description" content="Airdox SMART Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import, Beatgrid-Synchronisation, Echtzeit-Audio-Engine und Palette-Clips." />
+    <title>airdox_SMART_Editor</title>
+    <meta name="description" content="airdox_SMART_Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import, Beatgrid-Synchronisation, Echtzeit-Audio-Engine und Palette-Clips." />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' airdox://app 'unsafe-inline'; img-src 'self' airdox://app data: blob:; media-src 'self' airdox://app data: blob:; font-src 'self' airdox://app https://fonts.gstatic.com data:; style-src 'self' airdox://app 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' airdox://app 'unsafe-inline' 'unsafe-eval'; connect-src 'self' airdox://app;" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
         overflow: hidden;
       }
       #root:empty::before {
-        content: "Airdox SMART Editor wird geladen…";
+        content: "airdox_SMART_Editor wird geladen…";
         display: flex;
         width: 100%;
         height: 100%;
@@ -54,7 +54,7 @@
         root.classList.add('fatal');
         var msg = (ev.error && ev.error.stack) || ev.message || String(ev.error) || 'Unbekannter Fehler';
         root.textContent =
-          'Airdox SMART Editor – Startfehler\n\n' +
+          'airdox_SMART_Editor – Startfehler\n\n' +
           msg +
           '\n\nDrücke F12 für Entwicklerwerkzeuge.';
       });
@@ -64,7 +64,7 @@
         root.classList.add('fatal');
         var reason = ev.reason && (ev.reason.stack || ev.reason.message || String(ev.reason));
         root.textContent =
-          'Airdox SMART Editor – Unbehandelter Promise-Fehler\n\n' +
+          'airdox_SMART_Editor – Unbehandelter Promise-Fehler\n\n' +
           (reason || String(ev.reason)) +
           '\n\nDrücke F12 für Entwicklerwerkzeuge.';
       });

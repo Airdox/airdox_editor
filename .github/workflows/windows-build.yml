@@ -2,13 +2,25 @@ name: Windows-Build
 
 on:
   push:
+<<<<<<< HEAD
     branches: ['main', 'release/**']
+=======
+    branches: ['main', 'release/**', 'arena/**']
+>>>>>>> 1fed2f1 (v0.4.3: Palette-Insert-Bugfix, segmentbasierter Edit-Workflow, Sidebar-Aktionsbuttons, geplante CI-Builds)
     tags: ['v*']
   pull_request:
     branches: ['main']
   workflow_dispatch:      # manuell auf Knopfdruck
   schedule:
+<<<<<<< HEAD
     - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
+=======
+    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE – baut den aktuellen main-Branch
+    - cron: '37 * * * *' # stündlich (Plausibilitäts-Check, dass neueste Commits bauen)
+
+permissions:
+  contents: write         # wird für das Erstellen von GitHub-Releases benötigt
+>>>>>>> 1fed2f1 (v0.4.3: Palette-Insert-Bugfix, segmentbasierter Edit-Workflow, Sidebar-Aktionsbuttons, geplante CI-Builds)
 
 jobs:
   build:
@@ -34,11 +46,19 @@ jobs:
         run: npm run build
 
       - name: Electron Windows-Pakete (NSIS + Portable)
+<<<<<<< HEAD
         run: npx electron-builder --win nsis --win portable
         env:
           # Kein Signieren in der offenen CI – macht beim Build keinen Unterschied,
           # vermeidet aber Warnungen.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+=======
+        run: npx electron-builder --win nsis --win portable --publish never
+        env:
+          # Kein Signieren in der offenen CI
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+>>>>>>> 1fed2f1 (v0.4.3: Palette-Insert-Bugfix, segmentbasierter Edit-Workflow, Sidebar-Aktionsbuttons, geplante CI-Builds)
 
       - name: Artefakte anhängen (immer)
         if: always()
@@ -52,6 +72,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+<<<<<<< HEAD
           name: Airdox SMART Editor ${{ github.ref_name }}
+=======
+          name: airdox_SMART_Editor ${{ github.ref_name }}
+>>>>>>> 1fed2f1 (v0.4.3: Palette-Insert-Bugfix, segmentbasierter Edit-Workflow, Sidebar-Aktionsbuttons, geplante CI-Builds)
           files: release/*.exe
           generate_release_notes: true
