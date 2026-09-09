@@ -161,6 +161,49 @@ runTest('No synthesis', 'ANLZ waveform + cues take priority without touching met
   assertEqual(merged.originalMedia, track.originalMedia, 'Original-media reference retained');
 });
 
+// ─── Cue-parser guard (robust parser must not over-detect) ─────────────────
+const FOREIGN_EXPORT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.0.2" Company="AlphaTheta" />
+  <COLLECTION Entries="1">
+    <TRACK TrackID="901" Name="Foreign Export" Artist="X" Album="Y" TotalTime="120.0"
+           AverageBpm="120.00" Tonality="1A" BitRate="320" Year="2024" Rating="100" PlayCount="1">
+      <TEMPO Inizio="0.000" Bpm="120.00" Metro="4/4" Battito="1" />
+      <POSITION_MARK Name="Real Memory Cue" Type="0" Start="10.000" Num="-1" Red="255" Green="34" Blue="34" />
+      <POSITION_MARK Name="Junk Without Position" Type="0" Num="-1" Red="255" Green="34" Blue="34" />
+      <POSITION_MARK Name="Junk Loop Without Start" Type="4" Num="-1" />
+    </TRACK>
+  </COLLECTION>
+</DJ_PLAYLISTS>`;
+
+runTest('Cue guard', 'POSITION_MARK without a position attribute is ignored', () => {
+  const { track } = extractTrackFromRekordboxXml(FOREIGN_EXPORT_XML, 0);
+  assertEqual(track.cues.length, 1, 'only the mark with Start becomes a cue');
+  assertEqual(track.loops.length, 0, 'loop mark without Start ignored');
+  assertEqual(track.cues[0]?.name, 'Real Memory Cue', 'surviving cue is the genuine one');
+  assertEqual(track.cues[0]?.position, 10.0, 'position taken verbatim');
+});
+
+const FOREIGN_EXPORT_ALT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.0.2" Company="AlphaTheta" />
+  <COLLECTION Entries="1">
+    <TRACK TrackID="902" Name="Alt Tag Export" Artist="X" Album="Y" TotalTime="120.0"
+           AverageBpm="120.00" Tonality="1A" BitRate="320" Year="2024" Rating="100" PlayCount="1">
+      <TEMPO Inizio="0.000" Bpm="120.00" Metro="4/4" Battito="1" />
+      <CUE Name="Alt Position Cue" Position="20.500" Number="0" />
+      <CUE Name="Alt Junk" Comment="no position at all" />
+    </TRACK>
+  </COLLECTION>
+</DJ_PLAYLISTS>`;
+
+runTest('Cue guard', 'Alt-tag exporters: Position attribute counts, junk is skipped', () => {
+  const { track } = extractTrackFromRekordboxXml(FOREIGN_EXPORT_ALT_XML, 0);
+  assertEqual(track.cues.length, 1, 'only the alt-tag mark with Position becomes a cue');
+  assertEqual(track.cues[0]?.name, 'Alt Position Cue', 'surviving cue is the genuine one');
+  assertEqual(track.cues[0]?.position, 20.5, 'Position attribute adopted');
+});
+
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
 console.log('Test Results:\n');
 let passedCount = 0;

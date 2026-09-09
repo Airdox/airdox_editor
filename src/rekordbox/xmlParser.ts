@@ -292,10 +292,22 @@ function parseSingleTrackNode(
     }
     if (collected.length > 0) markElements = collected as any;
   }
+  // A mark without a position attribute is not a genuine cue/anchor (guards
+  // against false positives on foreign exports). DOM-less environments keep
+  // the previous behavior.
+  const POSITION_ATTRS = ['Start', 'start', 'Position', 'position', 'Time', 'time', 'Inizio'];
+  const hasPositionAttribute = (mEl: any): boolean => {
+    // getAttribute returns null for missing attributes in both the browser
+    // DOM and the Node fallback parser.
+    if (typeof mEl?.getAttribute !== 'function') return false;
+    return POSITION_ATTRS.some((a) => mEl.getAttribute(a) !== null);
+  };
+
   let firstBeatCueAnchor: number | null = null;
   markElements.forEach((mEl: any) => {
+    if (!hasPositionAttribute(mEl)) return;
     const name = (mEl.getAttribute('Name') || '').toLowerCase();
-    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
+    const start = parseFloat(mEl.getAttribute('Start') || mEl.getAttribute('Position') || mEl.getAttribute('Time') || '0.0');
     if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
       firstBeatCueAnchor = start;
     }
@@ -321,6 +333,7 @@ function parseSingleTrackNode(
         origin: DataOrigin.REKORDBOX_XML,
       };
   markElements.forEach((mEl: any, mIdx: number) => {
+    if (!hasPositionAttribute(mEl)) return;
     // Flexible attribute resolution: supports Rekordbox (Type/Start/Name/Num) and generic (type/position/time etc.)
     const typeRaw = mEl.getAttribute('Type') ?? mEl.getAttribute('type') ?? mEl.getAttribute('Kind') ?? '0';
     const type = String(typeRaw);

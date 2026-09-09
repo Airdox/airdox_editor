@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
+  scanAnlzForPaths,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 
@@ -188,6 +189,10 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
+});
+
+ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
+  return scanAnlzForPaths(targetPaths);
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
