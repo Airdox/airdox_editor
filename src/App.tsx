@@ -398,7 +398,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Deterministic XML→DB analysis index: normalized audio path → ANLZ
   // reference (exact match only, rebuilt on every database import).
   const dbAnalysisIndexRef = useRef<Map<string, DbAnalysisRef>>(new Map());
-  const dbAutoLoadAttemptedRef = useRef(false);
+  const dbIndexDiagRef = useRef<{
+    attempts: number;
+    found: number;
+    readable: number;
+    links: number;
+    reasons: string[];
+  }>({ attempts: 0, found: 0, readable: 0, links: 0, reasons: [] });
 
   // PPTH-based ANLZ index (SQLCipher-independent fallback): every ANLZ
   // container records the exact audio path in its PPTH header. The desktop
@@ -419,22 +425,32 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // renderer builds the exact-match audio-path → AnalysisDataPath map.
   const ensureDbAnalysisIndex = useCallback(async () => {
     if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
-    if (dbAutoLoadAttemptedRef.current) return dbAnalysisIndexRef.current;
+    const diag = dbIndexDiagRef.current;
+    // A failed first attempt (module not ready at boot, DB mounted late, …)
+    // gets exactly one retry; a successful read is never repeated.
+    if (diag.attempts >= (diag.readable > 0 ? 1 : 2)) {
+      return dbAnalysisIndexRef.current;
+    }
     if (!window.rekordboxDesktop) return dbAnalysisIndexRef.current;
-    dbAutoLoadAttemptedRef.current = true;
+    diag.attempts += 1;
     try {
       const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
       if (!candidates || candidates.length === 0) {
+        diag.found = 0;
+        diag.reasons = ['Keine lokale master.db/exportLibrary.db gefunden.'];
         console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
         return dbAnalysisIndexRef.current;
       }
+      diag.found = candidates.length;
       for (const cand of candidates) {
         try {
           const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
           if (!result.available || !result.rows) {
+            diag.reasons.push(`${cand.label || cand.path}: ${result.reason || 'nicht lesbar'}`);
             console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
             continue;
           }
+          diag.readable += 1;
           const mapped = mapRekordboxDatabaseRows(
             {
               content: result.rows.content,
@@ -469,12 +485,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
           }
         } catch (e) {
+          diag.reasons.push(`${cand.path}: ${e instanceof Error ? e.message : String(e)}`);
           console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
         }
       }
     } catch (e) {
+      diag.reasons.push(`locateRekordboxDatabases: ${e instanceof Error ? e.message : String(e)}`);
       console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
     }
+    diag.links = dbAnalysisIndexRef.current.size;
     return dbAnalysisIndexRef.current;
   }, []);
 
@@ -1733,11 +1752,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Garantie-Erfüllung: ohne ANLZ direkt aus lokaler Rekordbox-DB holen – kein manueller DATA-Klick nötig.
       let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
       // UI-Diagnostik: was hat die automatische ANLZ-Zuordnung getan?
-      let anlzLookup: { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; elapsedMs: number; note?: string } | null = null;
+      let anlzLookup: {
+        via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
+        scanned: number;
+        folders: number;
+        elapsedMs: number;
+        note?: string;
+        db?: { found: number; readable: number; links: number; reasons: string[] };
+      } | null = null;
       if (rbExclusive && !selectedDef.rawXmlAttributes?.analysisDataPath?.trim()) {
         if (dbAnalysisIndexRef.current.size === 0) {
           await ensureDbAnalysisIndex();
         }
+        // DB-Diagnose sichtbar machen: Warum hat der DB-Pfad (nicht) geliefert?
+        const dbDiag = {
+          found: dbIndexDiagRef.current.found,
+          readable: dbIndexDiagRef.current.readable,
+          links: dbIndexDiagRef.current.links,
+          reasons: dbIndexDiagRef.current.reasons.slice(0, 3),
+        };
         const linkKey = normalizeAudioKey(
           selectedDef.originalMedia?.location || selectedDef.originalMedia?.resolvedPath || ''
         );
@@ -1748,7 +1781,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             analysisDataPath: linkRef.analysisDataPath,
             sourceDbDir: linkRef.sourceDbDir,
           };
-          anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0 };
+          anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0, db: dbDiag };
           console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
         } else if (linkKey) {
           // PPTH-Fallback (SQLCipher-unabhängig): exakter Treffer über die
@@ -1769,6 +1802,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
               note: ppthEntry.note,
+              db: dbDiag,
             };
             console.info(`[Track-Link] XML-Track mit ANLZ verknüpft (PPTH-Scan Tier ${ppthEntry.matchTier}: ${ppthFile}).`);
           } else {
@@ -1777,11 +1811,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               scanned: scanInfo?.scanned ?? 0,
               folders: scanInfo?.folders ?? 0,
               elapsedMs: scanInfo?.elapsedMs ?? 0,
+              db: dbDiag,
             };
             console.info(
               `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} ` +
                 `(${anlzLookup.scanned} ANLZ-Dateien in ${anlzLookup.folders} Ordner(n) gescannt) – ` +
-                `Track bleibt auf VORSCHAU (manuelle ANLZ-Zuordnung über DATA möglich).`
+                `Track bleibt ohne Waveform (wie Original; manuelle ANLZ-Zuordnung über DATA möglich).`
             );
           }
         }

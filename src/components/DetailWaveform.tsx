@@ -101,7 +101,18 @@ function anlzLookupParts(track: TrackModel | null): { label: string; title: stri
   const raw = track?.rawXmlAttributes?.anlzLookup;
   if (!raw) return { label: '— KEINE WAVEFORM (ANLZ fehlt)', title: 'Keine ANLZ zugeordnet – wie im Original wird keine Wellenform gezeichnet; über DATA zuordnen.' };
   try {
-    const lk = JSON.parse(raw) as { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; note?: string };
+    const lk = JSON.parse(raw) as {
+      via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
+      scanned: number;
+      folders: number;
+      note?: string;
+      db?: { found: number; readable: number; links: number; reasons: string[] };
+    };
+    // DB-Pfad-Diagnose: sichtbar machen, ob die lokale Rekordbox-DB gefunden
+    // und lesbar war und wie viele ANLZ-Links der Index liefert.
+    const dbShort = lk.db
+      ? `DB ${lk.db.readable}/${lk.db.found} LESBAR • ${lk.db.links} LINKS`
+      : '';
     if (lk.via === 'PPTH_NAME') {
       return { label: '— ANLZ via DATEINAME (PRÜFEN!)', title: lk.note || 'ANLZ per eindeutigem Dateinamen zugeordnet – Datei vermutlich nach der Analyse verschoben.' };
     }
@@ -109,8 +120,15 @@ function anlzLookupParts(track: TrackModel | null): { label: string; title: stri
       return { label: '— ANLZ zugeordnet (Lese-Fehler)', title: 'ANLZ-Datei gefunden, aber das Lesen lieferte keine Waveform – Pfad prüfen.' };
     }
     return {
-      label: `— KEIN ANLZ (SCAN ${lk.scanned} DAT.)`,
-      title: `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung. Manuell über DATA zuordnen.`,
+      label: `— KEIN ANLZ${dbShort ? ` • ${dbShort}` : ''} • SCAN ${lk.scanned} DAT.`,
+      title:
+        `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung.` +
+        (lk.db
+          ? lk.db.readable === 0
+            ? ` DB-Pfad: ${lk.db.reasons.join(' | ') || 'keine lesbare master.db/exportLibrary.db.'}`
+            : ` DB lesbar (${lk.db.links} Links), aber kein exakter Audio-Pfad-Treffer für diesen Track.`
+          : '') +
+        ' Manuell über DATA zuordnen.',
     };
   } catch {
     return { label: '— KEINE WAVEFORM', title: 'ANLZ-Status nicht lesbar.' };
