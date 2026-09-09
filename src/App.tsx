@@ -398,6 +398,140 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Deterministic XML→DB analysis index: normalized audio path → ANLZ
   // reference (exact match only, rebuilt on every database import).
   const dbAnalysisIndexRef = useRef<Map<string, DbAnalysisRef>>(new Map());
+  const dbAutoLoadAttemptedRef = useRef(false);
+
+  // PPTH-based ANLZ index (SQLCipher-independent fallback): every ANLZ
+  // container records the exact audio path in its PPTH header. The desktop
+  // bridge scans the standard analysis folders (read-only, headers only) and
+  // returns exact audio-path matches, so REKORDBOX_XML tracks get their
+  // genuine Rekordbox waveform even when no master.db/exportLibrary.db is
+  // readable. One lazy scan per session; misses are remembered.
+  const anlzPpthIndexRef = useRef<Map<string, { datPath: string | null; extPath: string | null }>>(new Map());
+  const anlzPpthScanStateRef = useRef<'IDLE' | 'RUNNING' | 'DONE'>('IDLE');
+  const anlzPpthMissedKeysRef = useRef<Set<string>>(new Set());
+  const anlzPpthScanPromiseRef = useRef<Promise<void> | null>(null);
+
+  // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
+  // databases (master.db / exportLibrary.db) without manual user assignment.
+  // This fulfills REKORDBOX_XML → Waveform ausschließlich aus ANLZ/DB:
+  // the Desktop bridge scans %APPDATA%/Pioneer/rekordbox* read-only and the
+  // renderer builds the exact-match audio-path → AnalysisDataPath map.
+  const ensureDbAnalysisIndex = useCallback(async () => {
+    if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
+    if (dbAutoLoadAttemptedRef.current) return dbAnalysisIndexRef.current;
+    if (!window.rekordboxDesktop) return dbAnalysisIndexRef.current;
+    dbAutoLoadAttemptedRef.current = true;
+    try {
+      const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
+      if (!candidates || candidates.length === 0) {
+        console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
+        return dbAnalysisIndexRef.current;
+      }
+      for (const cand of candidates) {
+        try {
+          const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
+          if (!result.available || !result.rows) {
+            console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
+            continue;
+          }
+          const mapped = mapRekordboxDatabaseRows(
+            {
+              content: result.rows.content,
+              cues: result.rows.cues,
+              artists: result.rows.artists,
+              albums: result.rows.albums,
+              genres: result.rows.genres,
+              keys: result.rows.keys,
+              labels: result.rows.labels,
+              playlists: result.rows.playlists,
+              songPlaylists: result.rows.songPlaylists,
+            },
+            result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
+          );
+          const sourceDbDir = dirOfPath(cand.path);
+          const fullTrackModels = mapped.tracks.map((track, idx) => {
+            track.rawXmlAttributes = { ...(track.rawXmlAttributes ?? {}), sourceDbDir };
+            return buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
+          });
+          const built = buildDbAnalysisIndex(fullTrackModels, sourceDbDir);
+          // Merge – keep first entry on duplicate keys (earliest DB wins)
+          let added = 0;
+          for (const [k, v] of built) {
+            if (!dbAnalysisIndexRef.current.has(k)) {
+              dbAnalysisIndexRef.current.set(k, v);
+              added++;
+            }
+          }
+          console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
+          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
+          if (mapped.warnings?.length || result.warnings?.length) {
+            console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
+          }
+        } catch (e) {
+          console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
+    }
+    return dbAnalysisIndexRef.current;
+  }, []);
+
+  // SQLCipher-unabhängige ANLZ-Auflösung: Jeder ANLZ-Container speichert den
+  // exakten Audio-Pfad im PPTH-Header. Die Desktop-Bridge scannt die
+  // Standard-Verzeichnisstrukturen (nur Header lesen, read-only) und liefert
+  // exakte Treffer – so bekommt ein REKORDBOX_XML-Track seine echte
+  // Rekordbox-Waveform, selbst wenn keine master.db/exportLibrary.db lesbar
+  // ist. Einmalig lazy pro Session; bekannte Verfehlungen werden gemerkt.
+  const ensureAnlzPpthIndex = useCallback(async (track: TrackModel, linkKey: string): Promise<void> => {
+    if (!window.rekordboxDesktop?.scanAnlzPaths) return;
+    if (anlzPpthIndexRef.current.has(linkKey)) return;
+    if (anlzPpthScanStateRef.current === 'DONE' && anlzPpthMissedKeysRef.current.has(linkKey)) return;
+    if (anlzPpthScanPromiseRef.current) {
+      await anlzPpthScanPromiseRef.current;
+      return;
+    }
+    anlzPpthScanStateRef.current = 'RUNNING';
+    const promise = (async () => {
+      try {
+        // Alle bekannten Audio-Lokalisationen in einem Scan abfragen, damit
+        // ein Durchlauf die gesamte Sammlung beantwortet.
+        const targets = new Set<string>();
+        const pushTarget = (loc?: string | null) => {
+          if (loc && loc.trim()) targets.add(loc.trim());
+        };
+        for (const t of xmlImportedTracks) pushTarget(t.originalMedia?.location);
+        for (const t of tracks) pushTarget(t.originalMedia?.location);
+        pushTarget(track.originalMedia?.location);
+        const result = await window.rekordboxDesktop!.scanAnlzPaths(Array.from(targets));
+        let added = 0;
+        for (const m of result.matches) {
+          if (!m.datPath && !m.extPath) continue;
+          anlzPpthIndexRef.current.set(normalizeAudioKey(m.path), { datPath: m.datPath, extPath: m.extPath });
+          added += 1;
+        }
+        for (const t of targets) {
+          const k = normalizeAudioKey(t);
+          if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
+        }
+        console.info(
+          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
+            `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
+        );
+        logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer`, {
+          folders: result.folders,
+          elapsedMs: result.elapsedMs,
+        });
+      } catch (e) {
+        console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);
+      } finally {
+        anlzPpthScanStateRef.current = 'DONE';
+        anlzPpthScanPromiseRef.current = null;
+      }
+    })();
+    anlzPpthScanPromiseRef.current = promise;
+    await promise;
+  }, [xmlImportedTracks, tracks]);
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
@@ -405,6 +539,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Stringent empty project: no demo bootstrap. The deck starts empty and
   // only genuine Rekordbox/local data loads it (XML-exclusive guarantee:
   // no synthetic reference track, no generated previews, no template data).
+
+  // Eager auto-load: hole Waveform/Cues direkt aus lokaler Rekordbox DB ohne manuellen DATA-Klick.
+  useEffect(() => {
+    if (!window.rekordboxDesktop) return;
+    ensureDbAnalysisIndex();
+  }, [ensureDbAnalysisIndex]);
 
   // Durable file logging: mirrors every decisive pipeline parameter into the
   // desktop log file (idempotent, browser-safe).
@@ -1389,11 +1529,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
       console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
     } catch (error) {
-      logger.error('DATABASE', '[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden.', {
-        fileName,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
       console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
+      logger.error('DATABASE', `[ANLZ Import] ${fileName}: ${message}`);
+      // Import failures must be visible: a silently closed picker with no
+      // waveform is indistinguishable from a bug.
+      showOperationFeedback({
+        title: 'ANLZ-Import fehlgeschlagen',
+        operationType: 'CUE',
+        description: `${fileName} konnte nicht gelesen werden (${message}). Die Datei bleibt unverändert; es wurden keine Daten übernommen.`,
+        originalSha256: activeTrack?.originalSha256 ?? 'UNKNOWN',
+        timestamp: Date.now(),
+      });
     }
   };
 
@@ -1574,8 +1721,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Deterministic XML→DB analysis link: when the collection entry carries
       // no AnalysisDataPath of its own, attach the DB reference whose audio
       // path matches exactly (no fuzzy/metadata similarity matching).
+      // Garantie-Erfüllung: ohne ANLZ direkt aus lokaler Rekordbox-DB holen – kein manueller DATA-Klick nötig.
       let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
       if (rbExclusive && !selectedDef.rawXmlAttributes?.analysisDataPath?.trim()) {
+        if (dbAnalysisIndexRef.current.size === 0) {
+          await ensureDbAnalysisIndex();
+        }
         const linkKey = normalizeAudioKey(
           selectedDef.originalMedia?.location || selectedDef.originalMedia?.resolvedPath || ''
         );
@@ -1587,6 +1738,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             sourceDbDir: linkRef.sourceDbDir,
           };
           console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
+        } else if (linkKey) {
+          // PPTH-Fallback (SQLCipher-unabhängig): exakter Treffer über die
+          // PPTH-Header der ANLZ-Container in den Standard-Verzeichnissen.
+          await ensureAnlzPpthIndex(selectedDef, linkKey);
+          const ppthEntry = anlzPpthIndexRef.current.get(linkKey);
+          const ppthFile = ppthEntry ? ppthEntry.datPath || ppthEntry.extPath : null;
+          if (ppthFile) {
+            linkedRawXmlAttributes = {
+              ...(selectedDef.rawXmlAttributes ?? {}),
+              analysisDataPath: ppthFile,
+              sourceDbDir: dirOfPath(ppthFile),
+            };
+            console.info(`[Track-Link] XML-Track exakt mit ANLZ verknüpft (PPTH-Scan: ${ppthFile}).`);
+          } else {
+            console.info(
+              `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} – ` +
+                `Track bleibt auf VORSCHAU (manuelle ANLZ-Zuordnung über DATA möglich).`
+            );
+          }
         }
       }
 
