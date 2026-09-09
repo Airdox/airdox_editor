@@ -85,6 +85,9 @@ export function normalizeAudioKey(input: string | undefined | null): string {
   if (fileMatch) {
     s = s.slice(fileMatch[0].length);
   }
+  // Windows long-path prefix (\\?\C:\...) → plain drive path (stay in sync
+  // with electron/dbReader.cjs normalizeAnlzPathKey).
+  s = s.replace(/^\\\\\?\\([a-zA-Z]:)/, '$1');
   if (s.includes('%')) {
     try {
       s = decodeURIComponent(s);

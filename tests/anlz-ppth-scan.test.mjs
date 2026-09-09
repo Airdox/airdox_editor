@@ -71,6 +71,15 @@ try {
   // Non-ANLZ file: ignored by the scan
   fs.writeFileSync(path.join(anlzDir, 'notes.txt'), Buffer.from('not an anl'));
 
+  // Second folder for tier-2 (basename) scenarios
+  const anlzDir2 = path.join(base, 'rekordbox6', 'share', 'PIONEER', 'ANLZ');
+  fs.mkdirSync(anlzDir2, { recursive: true });
+  // "Moved.wav": unique basename, PPTH points to the OLD location
+  fs.writeFileSync(path.join(anlzDir2, 'ANLZ0100.DAT'), buildPpthFile('C:\\Old\\Location\\Moved.wav', 'utf16be'));
+  // "Twin.wav": two different ANLZ containers share the basename → ambiguous
+  fs.writeFileSync(path.join(anlzDir2, 'ANLZ0101.DAT'), buildPpthFile('C:\\A\\Twin.wav', 'utf16be'));
+  fs.writeFileSync(path.join(anlzDir2, 'ANLZ0102.DAT'), buildPpthFile('C:\\B\\Twin.wav', 'utf16be'));
+
   const result = scanAnlzForPaths(
     [audioA, 'c:/music/dj/BETA.mp3', 'C:\\Music\\DJ\\Gamma.wav'],
     [anlzDir]
@@ -95,6 +104,28 @@ try {
   assert.ok(!result.matches.some((m) => /gamma/i.test(m.path)), 'no phantom match for Gamma');
   assert.ok(Array.isArray(result.folders) && result.folders.includes(anlzDir), 'folders reported');
   assert.ok(result.elapsedMs >= 0, 'elapsedMs reported');
+  assert.ok(Array.isArray(result.ppthSample) && result.ppthSample.length > 0, 'ppthSample reported');
+  assert.strictEqual(result.matches.every((m) => m.matchTier === 1), true, 'all tier-1 (exact path) matches');
+
+  // ─── Tier 2: file moved after analysis (basename only) ─────────────────
+  // The target path differs from the PPTH, but the basename "Moved.wav" is
+  // unique in the whole index → tier-2 match with verification note.
+  const r2 = scanAnlzForPaths(
+    ['D:\\New\\Folder\\Moved.wav', 'E:\\Ambiguous\\Twin.wav'],
+    [anlzDir2]
+  );
+  const moved = r2.matches.find((m) => /moved\.wav$/i.test(m.path));
+  assert.ok(moved, 'tier-2 match for moved file (unique basename)');
+  assert.strictEqual(moved.matchTier, 2, 'tier-2 flagged');
+  assert.ok(moved.note, 'tier-2 carries a verification note');
+  const twin = r2.matches.find((m) => /twin\.wav$/i.test(m.path));
+  assert.ok(!twin, 'ambiguous basename (two candidates) must NOT match');
+
+  // ─── Windows long-path prefix normalization ─────────────────────────────
+  const r3 = scanAnlzForPaths(['\\\\?\\c:\\music\\dj\\alpha.wav'], [anlzDir]);
+  const prefixed = r3.matches.find((m) => /alpha\.wav$/i.test(m.path));
+  assert.ok(prefixed, '\\\\?\\ long-path prefix normalizes to a match');
+  assert.strictEqual(prefixed.matchTier, 1, 'long-path prefix stays tier-1');
 } finally {
   fs.rmSync(base, { recursive: true, force: true });
 }

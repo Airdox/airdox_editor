@@ -406,10 +406,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // returns exact audio-path matches, so REKORDBOX_XML tracks get their
   // genuine Rekordbox waveform even when no master.db/exportLibrary.db is
   // readable. One lazy scan per session; misses are remembered.
-  const anlzPpthIndexRef = useRef<Map<string, { datPath: string | null; extPath: string | null }>>(new Map());
+  const anlzPpthIndexRef = useRef<Map<string, { datPath: string | null; extPath: string | null; matchTier: 1 | 2; note?: string }>>(new Map());
   const anlzPpthScanStateRef = useRef<'IDLE' | 'RUNNING' | 'DONE'>('IDLE');
   const anlzPpthMissedKeysRef = useRef<Set<string>>(new Set());
   const anlzPpthScanPromiseRef = useRef<Promise<void> | null>(null);
+  const anlzPpthScanInfoRef = useRef<{ scanned: number; folders: number; elapsedMs: number } | null>(null);
 
   // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
   // databases (master.db / exportLibrary.db) without manual user assignment.
@@ -507,9 +508,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         let added = 0;
         for (const m of result.matches) {
           if (!m.datPath && !m.extPath) continue;
-          anlzPpthIndexRef.current.set(normalizeAudioKey(m.path), { datPath: m.datPath, extPath: m.extPath });
+          anlzPpthIndexRef.current.set(normalizeAudioKey(m.path), {
+            datPath: m.datPath,
+            extPath: m.extPath,
+            matchTier: m.matchTier,
+            note: m.note,
+          });
           added += 1;
         }
+        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
         for (const t of targets) {
           const k = normalizeAudioKey(t);
           if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
@@ -1723,6 +1730,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // path matches exactly (no fuzzy/metadata similarity matching).
       // Garantie-Erfüllung: ohne ANLZ direkt aus lokaler Rekordbox-DB holen – kein manueller DATA-Klick nötig.
       let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
+      // UI-Diagnostik: was hat die automatische ANLZ-Zuordnung getan?
+      let anlzLookup: { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; elapsedMs: number; note?: string } | null = null;
       if (rbExclusive && !selectedDef.rawXmlAttributes?.analysisDataPath?.trim()) {
         if (dbAnalysisIndexRef.current.size === 0) {
           await ensureDbAnalysisIndex();
@@ -1737,6 +1746,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             analysisDataPath: linkRef.analysisDataPath,
             sourceDbDir: linkRef.sourceDbDir,
           };
+          anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0 };
           console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
         } else if (linkKey) {
           // PPTH-Fallback (SQLCipher-unabhängig): exakter Treffer über die
@@ -1744,20 +1754,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           await ensureAnlzPpthIndex(selectedDef, linkKey);
           const ppthEntry = anlzPpthIndexRef.current.get(linkKey);
           const ppthFile = ppthEntry ? ppthEntry.datPath || ppthEntry.extPath : null;
+          const scanInfo = anlzPpthScanInfoRef.current;
           if (ppthFile) {
             linkedRawXmlAttributes = {
               ...(selectedDef.rawXmlAttributes ?? {}),
               analysisDataPath: ppthFile,
               sourceDbDir: dirOfPath(ppthFile),
             };
-            console.info(`[Track-Link] XML-Track exakt mit ANLZ verknüpft (PPTH-Scan: ${ppthFile}).`);
+            anlzLookup = {
+              via: ppthEntry.matchTier === 2 ? 'PPTH_NAME' : 'PPTH',
+              scanned: scanInfo?.scanned ?? 0,
+              folders: scanInfo?.folders ?? 0,
+              elapsedMs: scanInfo?.elapsedMs ?? 0,
+              note: ppthEntry.note,
+            };
+            console.info(`[Track-Link] XML-Track mit ANLZ verknüpft (PPTH-Scan Tier ${ppthEntry.matchTier}: ${ppthFile}).`);
           } else {
+            anlzLookup = {
+              via: null,
+              scanned: scanInfo?.scanned ?? 0,
+              folders: scanInfo?.folders ?? 0,
+              elapsedMs: scanInfo?.elapsedMs ?? 0,
+            };
             console.info(
-              `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} – ` +
+              `[Track-Link] Kein DB-Eintrag und kein PPTH-Treffer für ${linkKey} ` +
+                `(${anlzLookup.scanned} ANLZ-Dateien in ${anlzLookup.folders} Ordner(n) gescannt) – ` +
                 `Track bleibt auf VORSCHAU (manuelle ANLZ-Zuordnung über DATA möglich).`
             );
           }
         }
+      }
+      if (anlzLookup) {
+        linkedRawXmlAttributes = {
+          ...(linkedRawXmlAttributes ?? {}),
+          anlzLookup: JSON.stringify(anlzLookup),
+        };
       }
 
       let loadedTrack: TrackModel = {

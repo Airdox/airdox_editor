@@ -393,6 +393,33 @@ function findAnlzFolders(baseOverride) {
     push(path.join(root, 'USBANLZ'));
     push(path.join(root, 'ANLZ'));
   }
+
+  // Robust fallback: discover any *ANLZ* folder under the Pioneer root
+  // (rekordbox6/7/custom layouts differ), limited depth, read-only.
+  const pioneerRoot = baseOverride
+    ? baseOverride
+    : (process.platform === 'win32'
+        ? path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'Pioneer')
+        : path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer'));
+  if (!baseOverride && fs.existsSync(pioneerRoot)) {
+    const found = [];
+    const walk = (dir, depth) => {
+      if (depth > 4 || found.length >= 8) return;
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const lower = ent.name.toLowerCase();
+        if (lower === 'usbanlz' || lower === 'anlz') {
+          found.push(path.join(dir, ent.name));
+        } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share') {
+          walk(path.join(dir, ent.name), depth + 1);
+        }
+      }
+    };
+    walk(pioneerRoot, 0);
+    for (const f of found) push(f);
+  }
   return folders;
 }
 
@@ -460,6 +487,8 @@ function normalizeAnlzPathKey(input) {
   let s = String(input).trim();
   const fileMatch = s.match(/^file:\/\/(localhost)?\/?/i);
   if (fileMatch) s = s.slice(fileMatch[0].length);
+  // Windows long-path prefix (\\?\C:\...) -> plain drive path
+  s = s.replace(/^\\\\\?\\([a-zA-Z]:)/, '$1').replace(/^\\\?\\([a-zA-Z]:)/, '$1');
   if (s.includes('%')) {
     try { s = decodeURIComponent(s); } catch { /* roh behalten */ }
   }
@@ -511,12 +540,57 @@ function scanAnlzForPaths(targetPaths, folderOverride) {
     if (key && !wanted.has(key)) wanted.set(key, String(tp));
   }
   const matches = [];
+  const matchedKeys = new Set();
+
+  // Tier 1: exakter normalisierter Pfadtrenffer (PPTH == Audio-Pfad).
   for (const [key, entry] of index) {
     if (!wanted.has(key)) continue;
     if (!entry.datPath && !entry.extPath) continue;
-    matches.push({ path: wanted.get(key), datPath: entry.datPath, extPath: entry.extPath });
+    matches.push({
+      path: wanted.get(key),
+      datPath: entry.datPath,
+      extPath: entry.extPath,
+      matchTier: 1,
+    });
+    matchedKeys.add(key);
   }
-  return { matches, scanned, folders, elapsedMs: Date.now() - started };
+
+  // Tier 2: Audio-Datei wurde nach der Analyse verschoben/umbenannt?
+  // Dann stimmt nur der Dateiname ueberein. Ein Treffer gilt nur, wenn der
+  // Basename in der gesamten ANLZ-Index eindeutig ist (ansonsten ambig).
+  if (matchedKeys.size < wanted.size) {
+    const byBasename = new Map();
+    for (const [key, entry] of index) {
+      if (!entry.datPath && !entry.extPath) continue;
+      const bn = key.split('/').pop();
+      if (!byBasename.has(bn)) byBasename.set(bn, []);
+      byBasename.get(bn).push(key);
+    }
+    for (const [key, original] of wanted) {
+      if (matchedKeys.has(key)) continue;
+      const bn = key.split('/').pop();
+      const candidates = byBasename.get(bn);
+      if (!candidates || candidates.length !== 1) continue;
+      const entry = index.get(candidates[0]);
+      matches.push({
+        path: original,
+        datPath: entry.datPath,
+        extPath: entry.extPath,
+        matchTier: 2,
+        note: 'ANLZ per Dateiname zugeordnet (PPTH-Pfad weicht ab – vermutlich verschobene Datei). Zuordnung pruefen.',
+      });
+      matchedKeys.add(key);
+    }
+  }
+
+  // Diagnostik: erste PPTH-Pfade (Console/Log), ohne Vollindex zu senden.
+  const ppthSample = [];
+  for (const entry of index.values()) {
+    ppthSample.push(entry.ppth);
+    if (ppthSample.length >= 3) break;
+  }
+
+  return { matches, scanned, folders, elapsedMs: Date.now() - started, ppthSample };
 }
 
 module.exports = {

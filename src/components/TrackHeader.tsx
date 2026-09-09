@@ -7,6 +7,7 @@
 import React from 'react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
+import { APP_VERSION } from '../utils/appVersion';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -15,6 +16,66 @@ interface TrackHeaderProps {
   viewDuration: number; // duration of detail window in seconds
   onSeek: (time: number) => void;
   onPanView: (newOffset: number) => void;
+}
+
+/**
+ * ANLZ auto-lookup diagnostics (read from track.rawXmlAttributes.anlzLookup,
+ * written by the deck loader): shows WHY a track has (or has not) its
+ * genuine Rekordbox waveform — DB link, exact PPTH scan hit, unique
+ * basename hit (needs verification), or scan with no match.
+ */
+interface AnlzLookupInfo {
+  via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
+  scanned: number;
+  folders: number;
+  elapsedMs: number;
+  note?: string;
+}
+
+function readAnlzLookup(track: TrackModel | null): AnlzLookupInfo | null {
+  if (!track?.rawXmlAttributes?.anlzLookup) return null;
+  try {
+    return JSON.parse(track.rawXmlAttributes.anlzLookup) as AnlzLookupInfo;
+  } catch {
+    return null;
+  }
+}
+
+function AnlzStatusChip({ track }: { track: TrackModel }) {
+  const hasAnlz = !!(track.analysis && track.analysis.length > 0);
+  const lookup = readAnlzLookup(track);
+
+  let label = '';
+  let cls = '';
+  let title = '';
+  if (hasAnlz) {
+    label = `ANLZ OK${track.analysis?.sourceTag ? ` • ${track.analysis.sourceTag}` : ''}`;
+    cls = 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40';
+    title = 'Genuine Rekordbox-ANLZ zugeordnet (Waveform/Cues/Phrasen aus der Quelle).';
+  } else if (lookup?.via === 'PPTH_NAME') {
+    label = 'ANLZ via DATEINAME – PRÜFEN!';
+    cls = 'text-[#f5b800] border-[#f5b800]/50 bg-[#f5b800]/10';
+    title = lookup.note || 'ANLZ per eindeutigem Dateinamen zugeordnet (Datei wurde vermutlich nach der Analyse verschoben).';
+  } else if (lookup?.via === 'PPTH' || lookup?.via === 'DB') {
+    // Lookup fand die Datei, aber das Lesen lieferte keine Waveform.
+    label = `ANLZ ${lookup.via === 'DB' ? 'via DB' : 'via PPTH'} – NICHT LESBAR`;
+    cls = 'text-[#f5b800] border-[#f5b800]/50 bg-[#f5b800]/10';
+    title = 'ANLZ-Datei wurde deterministisch zugeordnet, konnte aber nicht gelesen werden (Pfad prüfen).';
+  } else if (lookup) {
+    label = `KEIN ANLZ • SCAN ${lookup.scanned} DAT.`;
+    cls = 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10';
+    title = `Automatische Suche: ${lookup.scanned} ANLZ-Dateien in ${lookup.folders} Ordner(n) gescannt, keine Übereinstimmung mit dem Audio-Pfad dieses Tracks. ANLZ manuell über DATA zuordnen.`;
+  } else {
+    label = 'KEIN ANLZ';
+    cls = 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10';
+    title = 'Keine ANLZ zugeordnet – Beatgrid-Vorschau aktiv. ANLZ über DATA oder automatische Zuordnung erhalten.';
+  }
+
+  return (
+    <span className={`font-mono text-[9.5px] px-1 rounded-xs border ${cls}`} title={title}>
+      {label}
+    </span>
+  );
 }
 
 /** Honest origin labels — every track origin is named, never implied. */
@@ -91,6 +152,18 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   </span>
                 </>
               )}
+              {track && (
+                <>
+                  <span>•</span>
+                  <AnlzStatusChip track={track} />
+                </>
+              )}
+              <span
+                className="font-mono text-[9.5px] px-1 rounded-xs border border-neutral-700 bg-neutral-800/40 text-neutral-400"
+                title={`airdox_SMART_Editor Version ${APP_VERSION}`}
+              >
+                v{APP_VERSION}
+              </span>
             </div>
           </div>
         </div>

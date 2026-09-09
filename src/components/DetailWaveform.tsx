@@ -79,6 +79,35 @@ interface ContextMenuState {
   timeAtClick: number;
 }
 
+/**
+ * ANLZ auto-lookup diagnostics (written by the deck loader into
+ * track.rawXmlAttributes.anlzLookup): what the deterministic search found
+ * (DB link / exact PPTH hit / unique-basename hit) or why nothing matched
+ * (scan size, folders). Kept visible in the footer instead of DevTools.
+ */
+function anlzLookupParts(track: TrackModel | null): { label: string; title: string } {
+  if (track?.analysis && track.analysis.length > 0) {
+    return { label: `${track.analysis.length} BUCKETS`, title: 'Genuine Rekordbox-ANLZ zugeordnet.' };
+  }
+  const raw = track?.rawXmlAttributes?.anlzLookup;
+  if (!raw) return { label: '— VORSCHAU-PEAKS', title: 'Keine ANLZ zugeordnet – Beatgrid-Vorschau aktiv.' };
+  try {
+    const lk = JSON.parse(raw) as { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; note?: string };
+    if (lk.via === 'PPTH_NAME') {
+      return { label: '— ANLZ via DATEINAME (PRÜFEN!)', title: lk.note || 'ANLZ per eindeutigem Dateinamen zugeordnet – Datei vermutlich nach der Analyse verschoben.' };
+    }
+    if (lk.via === 'PPTH' || lk.via === 'DB') {
+      return { label: '— ANLZ zugeordnet (Lese-Fehler)', title: 'ANLZ-Datei gefunden, aber das Lesen lieferte keine Waveform – Pfad prüfen.' };
+    }
+    return {
+      label: `— KEIN ANLZ (SCAN ${lk.scanned} DAT.)`,
+      title: `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung. Manuell über DATA zuordnen.`,
+    };
+  } catch {
+    return { label: '— VORSCHAU-PEAKS', title: 'ANLZ-Status nicht lesbar.' };
+  }
+}
+
 export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   track,
   currentTime,
@@ -1101,13 +1130,18 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               {track.cues.length} CUES
             </span>
             <span className="text-neutral-600">•</span>
-            <span className="text-neutral-400">
-              {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'VORSCHAU (Beatgrid) • '}
-              {track.analysis?.length || (track.beatGrid ? '—' : '0')} {track.analysis?.length ? 'BUCKETS' : 'VORSCHAU-PEAKS'}
-              {track.analysisVariants && track.analysisVariants.length > 1
-                ? ` • ${track.analysisVariants.length} VARIANTEN`
-                : ''}
-            </span>
+            {(() => {
+              const anl = anlzLookupParts(track);
+              return (
+                <span className="text-neutral-400" title={anl.title}>
+                  {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'VORSCHAU (Beatgrid) • '}
+                  {anl.label}
+                  {track.analysisVariants && track.analysisVariants.length > 1
+                    ? ` • ${track.analysisVariants.length} VARIANTEN`
+                    : ''}
+                </span>
+              );
+            })()}
             {track.phrases && track.phrases.length > 0 && (
               <>
                 <span className="text-neutral-600">•</span>

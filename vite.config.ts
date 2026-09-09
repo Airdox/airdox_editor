@@ -1,7 +1,13 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 import {defineConfig} from 'vite';
+
+// App version injected at build time (single source: package.json).
+const pkgVersion = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')
+).version as string;
 
 export default defineConfig(() => {
   return {
@@ -10,6 +16,9 @@ export default defineConfig(() => {
     // ("/assets/...") führen in der ausgelieferten Desktop-App zu 404-Fehlern
     // und damit zum berüchtigten weissen Bildschirm.
     base: './',
+    define: {
+      __APP_VERSION__: JSON.stringify(pkgVersion),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
