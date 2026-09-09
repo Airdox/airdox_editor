@@ -60,13 +60,6 @@
     "directories": {
       "output": "release"
     },
-    "protocols": [
-      {
-        "name": "Airdox SMART Editor",
-        "schemes": ["airdox"],
-        "role": "Editor"
-      }
-    ],
     "npmRebuild": false,
     "win": {
       "target": [

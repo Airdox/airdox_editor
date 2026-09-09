@@ -34,11 +34,11 @@ jobs:
         run: npm run build
 
       - name: Electron Windows-Pakete (NSIS + Portable)
-        run: npx electron-builder --win nsis --win portable
+        run: npx electron-builder --win nsis --win portable --publish never
         env:
-          # Kein Signieren in der offenen CI – macht beim Build keinen Unterschied,
-          # vermeidet aber Warnungen.
+          # Kein Signieren in der offenen CI
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Artefakte anhängen (immer)
         if: always()
