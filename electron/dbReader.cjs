@@ -278,16 +278,60 @@ function readJsonIfExists(filePath) {
   }
 }
 
-function candidateFromOptions(appDir) {
-  const optionsPath = path.join(appDir, 'rekordboxAgent', 'storage', 'options.json');
-  const options = readJsonIfExists(optionsPath);
-  if (!options || !Array.isArray(options.options)) return null;
-  for (const entry of options.options) {
-    if (Array.isArray(entry) && entry[0] === 'db-path' && typeof entry[1] === 'string' && entry[1].trim()) {
+function getOptionValue(optionsDoc, name) {
+  if (!optionsDoc || !Array.isArray(optionsDoc.options)) return null;
+  for (const entry of optionsDoc.options) {
+    if (Array.isArray(entry) && entry[0] === name && typeof entry[1] === 'string' && entry[1].trim()) {
       return entry[1];
     }
   }
   return null;
+}
+
+// options.json lives at the Pioneer ROOT level:
+//   %APPDATA%\Pioneer\rekordboxAgent\storage\options.json
+// (a SIBLING of the rekordbox{7,6,} version folders – NOT nested inside
+// them). Copies nested inside a version folder are honored as a legacy
+// fallback. Returns absolute paths of files that actually exist.
+function findOptionsJsonFiles(pioneerRoot, appDirs) {
+  const files = [];
+  const consider = (p) => {
+    if (!p) return;
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile() && !files.includes(p)) files.push(p);
+    } catch {
+      // Unreadable – ignore.
+    }
+  };
+  if (pioneerRoot) consider(path.join(pioneerRoot, 'rekordboxAgent', 'storage', 'options.json'));
+  for (const appDir of Array.isArray(appDirs) ? appDirs : []) {
+    if (!appDir) continue;
+    consider(path.join(appDir, 'rekordboxAgent', 'storage', 'options.json'));
+  }
+  return files;
+}
+
+function candidateFromOptions(appDir) {
+  // The agent folder is a sibling of the version folders
+  // (Pioneer\rekordboxAgent); the nested path is legacy fallback only.
+  const pioneerRoot = appDir ? path.dirname(appDir) : null;
+  for (const optionsPath of findOptionsJsonFiles(pioneerRoot, appDir ? [appDir] : [])) {
+    const value = getOptionValue(readJsonIfExists(optionsPath), 'db-path');
+    if (value) return value;
+  }
+  return null;
+}
+
+// Custom analysis location of a moved library
+// (Rekordbox: Erweitert → Datenbank → Datenbankverwaltung):
+// options.json "analysis-data-root-path", e.g. D:\PIONEER\Master\share.
+function analysisRootsFromOptions(pioneerRoot, appDirs) {
+  const roots = [];
+  for (const optionsPath of findOptionsJsonFiles(pioneerRoot, appDirs)) {
+    const value = getOptionValue(readJsonIfExists(optionsPath), 'analysis-data-root-path');
+    if (value && !roots.includes(value)) roots.push(value);
+  }
+  return roots;
 }
 
 function findDatabaseFiles(appDir) {
@@ -429,6 +473,17 @@ function findAnlzFolders(baseOverride) {
     };
     walk(pioneerRoot, 0);
     for (const f of found) push(f);
+  }
+  // Moved libraries (Rekordbox: Erweitert → Datenbank → Datenbankverwaltung):
+  // options.json records the custom analysis root ("analysis-data-root-path",
+  // e.g. D:\PIONEER\Master\share). Its PIONEER\USBANLZ subtree holds the real
+  // containers – without it a moved library stays invisible to the scan.
+  const optionAppDirs = pioneerRoot
+    ? ['rekordbox7', 'rekordbox6', 'rekordbox'].map((d) => path.join(pioneerRoot, d))
+    : [];
+  for (const root of analysisRootsFromOptions(pioneerRoot, optionAppDirs)) {
+    push(path.join(root, 'PIONEER', 'USBANLZ'));
+    push(path.join(root, 'PIONEER', 'ANLZ'));
   }
   return folders;
 }
@@ -690,4 +745,9 @@ module.exports = {
   locateRekordboxDatabases,
   scanAnlzForPaths,
   isCipherAvailable: () => getCipherModule() !== null,
+  // Read-only discovery helpers (exported as test seams):
+  getOptionValue,
+  findOptionsJsonFiles,
+  candidateFromOptions,
+  findAnlzFolders,
 };
