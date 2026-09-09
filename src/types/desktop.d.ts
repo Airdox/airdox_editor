@@ -13,7 +13,8 @@ declare global {
         accessMode: 'READ_ONLY';
       }>;
       readOriginalAudio(location: string): Promise<{
-        data: ArrayBuffer;
+        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
+        data: ArrayBuffer | Uint8Array;
         path: string;
         size: number;
         modifiedAt: number;
@@ -21,17 +22,46 @@ declare global {
       }>;
       chooseAnalysisFile(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       readAnalysisFile(filePath: string): Promise<{
-        data: ArrayBuffer;
+        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
+        data: ArrayBuffer | Uint8Array;
         path: string;
         size: number;
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
+      /** Durable diagnostic log: appends one structured entry to the desktop log file (append-only, never throws). */
+      appendLog(entry: {
+        ts?: number;
+        level?: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
+        category?: string;
+        message: string;
+        data?: unknown;
+      }): Promise<boolean>;
+      /** Absolute path of the durable desktop log file (null when unavailable). */
+      getLogFilePath(): Promise<string | null>;
+      /** Reveals the durable desktop log file in the OS file manager. */
+      revealLogFile(): Promise<boolean>;
       chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      /**
+       * Deterministic ANLZ lookup without SQLCipher: reads the PPTH header of
+       * every ANLZ container in the standard Rekordbox analysis folders and
+       * returns exact audio-path matches (DAT + EXT pair). Read-only.
+       */
+      scanAnlzPaths(targetPaths: string[]): Promise<{
+        /**
+         * matchTier 1 = exact PPTH path match; matchTier 2 = unique basename
+         * match (file moved after analysis – must be verified by the user).
+         */
+        matches: Array<{ path: string; datPath: string | null; extPath: string | null; matchTier: 1 | 2; note?: string }>;
+        scanned: number;
+        folders: string[];
+        elapsedMs: number;
+        ppthSample?: string[];
+      }>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;

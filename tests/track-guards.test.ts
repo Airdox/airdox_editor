@@ -17,11 +17,14 @@
 import {
   adoptSerializedGrid,
   describeGridEdit,
+  ensureArrayBuffer,
   isRekordboxOrigin,
   ppthMismatchNote,
   selectDeckWaveformSource,
   shiftBeatNodes,
 } from '../src/rekordbox/trackGuards';
+import { generateRealAnlzDatFixture } from './fixtures/testDatasets';
+import { parseAnlzBinary } from '../src/rekordbox/databaseExtractor';
 import { deserializeProject, serializeProject } from '../src/rekordbox/projectFile';
 import { BeatGrid, BeatNode, DataOrigin, TrackModel } from '../src/types/rekordbox';
 
@@ -216,6 +219,46 @@ runTest('T8 notice', 'Grid edits produce a traceable USER_EDIT notice', () => {
   const shift = describeGridEdit('SHIFT', 1.0, 0.999, 5000);
   assert(shift.includes('Grid-Shift'), 'Shift source named');
   assert(shift.includes('-1.0 ms'), 'Negative delta signed');
+});
+
+// ─── Bridge payload guard (desktop IPC regression) ──────────────────────────
+runTest('Bridge payload', 'ArrayBuffer passes through by reference', () => {
+  const buffer = new ArrayBuffer(16);
+  assert(ensureArrayBuffer(buffer) === buffer, 'Same reference, no copy');
+});
+
+runTest('Bridge payload', 'Offset Uint8Array views copy byte-exactly', () => {
+  // Simulates a pooled Node Buffer: the payload is a window into a larger store.
+  const pool = new Uint8Array(128);
+  for (let i = 0; i < pool.length; i++) pool[i] = i % 256;
+  const view = new Uint8Array(pool.buffer, 37, 40);
+  const normalized = ensureArrayBuffer(view);
+  assertEqual(normalized.byteLength, 40, 'Exact length');
+  const bytes = new Uint8Array(normalized);
+  for (let i = 0; i < 40; i++) {
+    assertEqual(bytes[i], (37 + i) % 256, `Byte ${i} preserved`);
+  }
+});
+
+runTest('Bridge payload', 'IPC-shaped ANLZ payload decodes after normalization', () => {
+  const fixture = generateRealAnlzDatFixture(128.0);
+  const pool = new Uint8Array(fixture.byteLength + 64);
+  pool.set(new Uint8Array(fixture), 37);
+  const ipcView = new Uint8Array(pool.buffer, 37, fixture.byteLength);
+
+  // Documents the desktop bug: a raw IPC view throws inside the parser.
+  let threw = false;
+  try {
+    parseAnlzBinary(ipcView as unknown as ArrayBuffer);
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'Raw IPC view throws (the reported desktop failure)');
+
+  const extraction = parseAnlzBinary(ensureArrayBuffer(ipcView));
+  assert(extraction.tagsFound.includes('PQTZ'), 'PQTZ decoded');
+  assert(extraction.waveform !== undefined, 'Waveform decoded');
+  assertEqual(extraction.waveform!.length, 600, 'DAT buckets intact');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

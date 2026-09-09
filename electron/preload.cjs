@@ -10,8 +10,14 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  scanAnlzPaths: (targetPaths) => ipcRenderer.invoke('rekordbox:scan-anlz-paths', targetPaths),
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
+  // Diagnostic log file (durable): mirrors every decisive pipeline parameter
+  // into <userData>/airdox-smart-editor.log. Append-only, never throws.
+  appendLog: (entry) => ipcRenderer.invoke('airdox:append-log', entry),
+  getLogFilePath: () => ipcRenderer.invoke('airdox:get-log-path'),
+  revealLogFile: () => ipcRenderer.invoke('airdox:reveal-log'),
 });

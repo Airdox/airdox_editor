@@ -20,6 +20,8 @@ import {
   AlertOctagon,
   Info,
   Layers,
+  FolderOpen,
+  FileText,
 } from 'lucide-react';
 import { logger, LogEntry, LogLevel, LogCategory } from '../../utils/logger';
 
@@ -88,6 +90,26 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
     logger.clear();
     setLogs([]);
   };
+
+  // Desktop log file location (durable mirror of every entry), shown so the
+  // file can be found when diagnosing a missing waveform after the fact.
+  const [logFilePath, setLogFilePath] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (isOpen && window.rekordboxDesktop?.getLogFilePath) {
+      window.rekordboxDesktop
+        .getLogFilePath()
+        .then((p) => {
+          if (!cancelled) setLogFilePath(p);
+        })
+        .catch(() => {
+          if (!cancelled) setLogFilePath(null);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -190,6 +212,26 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Durable log file location (desktop) */}
+        {logFilePath && (
+          <div className="px-3 py-1.5 bg-[#0f1118] border-b border-[#232635] flex items-center justify-between flex-shrink-0 text-[10.5px]">
+            <div className="flex items-center space-x-1.5 text-neutral-400 truncate mr-3" title={logFilePath}>
+              <FileText size={11} className="text-[#00a2ff] flex-shrink-0" />
+              <span className="truncate">
+                Log-Datei (jeder Eintrag wird dauerhaft gespiegelt, Rotation 5 MB): <span className="text-neutral-300">{logFilePath}</span>
+              </span>
+            </div>
+            <button
+              onClick={() => window.rekordboxDesktop?.revealLogFile?.()}
+              className="px-2 py-0.5 bg-[#1a1c26] hover:bg-[#252838] border border-[#2c3042] text-neutral-300 hover:text-white rounded flex items-center space-x-1 transition-colors flex-shrink-0"
+              title="Log-Datei im Dateimanager anzeigen"
+            >
+              <FolderOpen size={11} />
+              <span>Im Ordner zeigen</span>
+            </button>
+          </div>
+        )}
 
         {/* Log Viewer Body */}
         <div className="flex-1 p-3 overflow-y-auto font-mono text-[11px] space-y-1 bg-[#08090d] select-text">

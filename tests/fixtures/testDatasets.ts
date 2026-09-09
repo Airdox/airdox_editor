@@ -6,9 +6,8 @@
  * and binary ANLZ chunks for comprehensive import simulation and automated testing.
  */
 
-import { CuePoint, LoopPoint, PhraseSection, TrackModel, DataOrigin } from '../types/rekordbox';
-import { parseRekordboxXml } from './xmlParser';
-import { extractTrackFromRekordboxXml } from './databaseExtractor';
+import { CuePoint, LoopPoint, PhraseSection, TrackModel, DataOrigin } from '../../src/types/rekordbox';
+import { parseRekordboxXml } from '../../src/rekordbox/xmlParser';
 
 export interface TestScenario {
   id: string;

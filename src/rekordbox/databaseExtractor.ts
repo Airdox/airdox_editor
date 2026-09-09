@@ -22,7 +22,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
-import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
+import { parseAnlzBinary as parseAnlzFile, WAVEFORM_PRIORITY } from './anlzParser';
 
 /**
  * Parses binary Rekordbox ANLZ file (.DAT, .EXT, .2EX).
@@ -76,6 +76,74 @@ function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtra
 
 export function parseAnlzBinary(buffer: ArrayBuffer): AnlzExtractionResult {
   return toExtractionResult(parseAnlzFile(buffer));
+}
+
+function waveformTagPriority(tag?: string): number {
+  return tag ? (WAVEFORM_PRIORITY[tag] ?? 0) : 0;
+}
+
+/**
+ * Merges two ANLZ extractions from sibling containers (ANLZnnnn.DAT and
+ * ANLZnnnn.EXT) into one. Rekordbox splits the analysis: the .DAT carries
+ * source path, PQTZ beat grid, PCOB cue lists and preview waveforms, while
+ * the .EXT carries the full-resolution color waveform (PWV5), PSSI phrase
+ * structure and PCO2 extended cues. The merge stays deterministic and never
+ * invents data:
+ *
+ *  - tagsFound / warnings are unioned (order-preserving);
+ *  - ALL genuine waveform variants of both files are kept; the highest
+ *    priority variant (PWV7 > PWV5 > PWV6 > ... > PWAV) becomes `waveform`;
+ *  - the primary beat grid wins when it holds decoded beat nodes (PQTZ is
+ *    authoritative in the .DAT), otherwise the secondary grid is adopted;
+ *  - non-empty cue/loop/phrase lists of the secondary file take priority
+ *    (PCO2/PSSI live in the .EXT); empty lists fall back to the primary's.
+ *
+ * Positional contract: `primary` is the DAT-side extraction, `secondary`
+ * the EXT-side extraction — callers enforce this regardless of which
+ * sibling file was read first.
+ */
+export function mergeAnlzExtractions(
+  primary: AnlzExtractionResult,
+  secondary: AnlzExtractionResult
+): AnlzExtractionResult {
+  // Ordered de-duplicated union (the raw parser keeps one entry per section,
+  // so a single file can already list e.g. PCOB twice — the merged view
+  // normalizes to distinct tags).
+  const tagsFound: string[] = [];
+  for (const tag of [...primary.tagsFound, ...secondary.tagsFound]) {
+    if (!tagsFound.includes(tag)) tagsFound.push(tag);
+  }
+
+  const waveformVariants = [...primary.waveformVariants, ...secondary.waveformVariants];
+  const waveform =
+    waveformTagPriority(secondary.waveform?.sourceTag) >
+    waveformTagPriority(primary.waveform?.sourceTag)
+      ? secondary.waveform
+      : (primary.waveform ?? secondary.waveform);
+
+  const primaryHasBeats = (primary.beatGrid?.beats?.length ?? 0) > 0;
+  const secondaryHasBeats = (secondary.beatGrid?.beats?.length ?? 0) > 0;
+  const gridWinner =
+    (primaryHasBeats || !secondaryHasBeats ? primary : secondary);
+  const gridLoser = gridWinner === primary ? secondary : primary;
+
+  return {
+    tagsFound,
+    cues: secondary.cues.length > 0 ? secondary.cues : primary.cues,
+    loops: secondary.loops.length > 0 ? secondary.loops : primary.loops,
+    phrases: secondary.phrases.length > 0 ? secondary.phrases : primary.phrases,
+    waveform,
+    waveformVariants,
+    beatGrid: gridWinner.beatGrid,
+    bpm: gridWinner.bpm ?? gridLoser.bpm,
+    firstBeat: gridWinner.firstBeat ?? gridLoser.firstBeat,
+    analysisPath: primary.analysisPath ?? secondary.analysisPath,
+    warnings: [...primary.warnings, ...secondary.warnings],
+    pssiMood: secondary.pssiMood ?? primary.pssiMood,
+    pssiEndBeat: secondary.pssiEndBeat ?? primary.pssiEndBeat,
+    pssiBank: secondary.pssiBank ?? primary.pssiBank,
+    pssiMasked: secondary.pssiMasked ?? primary.pssiMasked,
+  };
 }
 
 /**
@@ -218,58 +286,6 @@ export function applyAnlzExtractionToTrack(
   };
 }
 
-/**
- * Computes Rekordbox song structure phrases (PSSI) from BPM and duration
- */
-export function generateRekordboxPhrases(
-  bpm: number,
-  durationSec: number,
-  firstBeatSec: number = 0.0
-): PhraseSection[] {
-  const secondsPerBeat = 60.0 / bpm;
-  const secondsPerBar = secondsPerBeat * 4.0;
-  const totalBars = Math.floor(durationSec / secondsPerBar);
-
-  const phrases: PhraseSection[] = [];
-  let currentBar = 1;
-
-  // Typical electronic DJ arrangement template matching Pioneer Rekordbox Phrase Analysis:
-  // INTRO (16 bars) -> UP / BUILD (16 bars) -> CHORUS / MAIN (32 bars) -> BREAKDOWN (16 bars) -> DROP (32 bars) -> OUTRO (16 bars)
-  const template: { name: PhraseSection['name']; bars: number; color: string }[] = [
-    { name: 'INTRO', bars: 16, color: '#3b82f6' }, // Blue
-    { name: 'UP', bars: 16, color: '#10b981' }, // Green
-    { name: 'CHORUS', bars: 32, color: '#f59e0b' }, // Amber
-    { name: 'BREAKDOWN', bars: 16, color: '#8b5cf6' }, // Purple
-    { name: 'DROP', bars: 32, color: '#ef4444' }, // Red
-    { name: 'CHORUS', bars: 32, color: '#f59e0b' }, // Amber
-    { name: 'OUTRO', bars: 16, color: '#3b82f6' }, // Blue
-  ];
-
-  for (let i = 0; i < template.length && currentBar <= totalBars; i++) {
-    const t = template[i];
-    const barsInPhrase = Math.min(t.bars, totalBars - currentBar + 1);
-    const startBar = currentBar;
-    const endBar = currentBar + barsInPhrase;
-    const startTime = firstBeatSec + (startBar - 1) * secondsPerBar;
-    const endTime = firstBeatSec + (endBar - 1) * secondsPerBar;
-
-    phrases.push({
-      id: `phrase-${i + 1}`,
-      name: t.name,
-      startBar,
-      endBar,
-      startTime: Math.max(0, startTime),
-      endTime: Math.min(durationSec, endTime),
-      color: t.color,
-      // Own template calculation, clearly labeled as a fallback.
-      origin: DataOrigin.GENERATED_FALLBACK,
-    });
-
-    currentBar += barsInPhrase;
-  }
-
-  return phrases;
-}
 
 /**
  * Extracts all visual assets (Memory Cues, Waveform Analysis, Beatgrid, Phrases)
@@ -308,26 +324,26 @@ export function extractTrackFromRekordboxXml(
     };
   });
 
-  // Extract Waveform. ANLZ/database data always takes priority; analysis
-  // computed from a decoded audio buffer is LOCAL_ANALYSIS. Only when neither
-  // exists is a clearly labeled GENERATED_FALLBACK produced.
-  let analysis: WaveformAnalysisData | null = null;
-  if (audioBuffer) {
-    analysis = analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS);
-  } else {
-    analysis = generateAnalysisFromMetadata(duration, bpm, memoryCues, bg.firstBeat);
-  }
+  // Waveform: ANLZ/database data always takes priority; analysis computed
+  // from a decoded audio buffer is LOCAL_ANALYSIS. Without genuine data the
+  // track carries NO waveform — own peak/metadata synthesis was removed
+  // (XML-exclusive guarantee); renderers show the honest empty state.
+  const analysis: WaveformAnalysisData | null = audioBuffer
+    ? analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS)
+    : null;
 
-  const phrases = generateRekordboxPhrases(bpm, duration, bg.firstBeat);
+  // No template phrases: PSSI song structure comes only from ANLZ.
+  const phrases: PhraseSection[] = [];
 
   const dbRecord: ExtractedDatabaseRecord = {
     trackId: rawTrack.id || '1',
     databaseSource: 'REKORDBOX_XML',
-    anlzTagsFound: ['PQTZ', 'PWV3', 'PWV5', 'PCOB', 'PSSI'],
+    // No ANLZ container was parsed here — never report invented tags.
+    anlzTagsFound: [],
     memoryCuesCount: memoryCues.filter((c) => c.type === 'MEMORY').length,
     hotCuesCount: memoryCues.filter((c) => c.type === 'HOT_CUE').length,
     loopsCount: (rawTrack.loops || []).length,
-    waveformBuckets: analysis.length,
+    waveformBuckets: analysis?.length ?? 0,
     waveformModeSupported: ['BLUE', 'RGB', '3BAND'],
     sampleRate: audioBuffer ? audioBuffer.sampleRate : 44100,
     checksum: 'REKORDBOX-XML-VALIDATED',
@@ -369,69 +385,4 @@ export function extractTrackFromRekordboxXml(
   };
 
   return { track, record: dbRecord };
-}
-
-/**
- * Creates synthetic high-precision multi-band waveform data aligned to duration & cues
- * when raw audio is loading or for immediate instant-preview from database metadata.
- */
-export function generateAnalysisFromMetadata(
-  durationSec: number,
-  bpm: number,
-  cues: CuePoint[],
-  firstBeatSec: number = 0.0
-): WaveformAnalysisData {
-  const bucketsPerSec = 180;
-  const totalBuckets = Math.max(100, Math.floor(durationSec * bucketsPerSec));
-  const peaks = new Float32Array(totalBuckets);
-  const lowEnergy = new Float32Array(totalBuckets);
-  const midEnergy = new Float32Array(totalBuckets);
-  const highEnergy = new Float32Array(totalBuckets);
-
-  const secondsPerBeat = 60.0 / bpm;
-  const cueTimes = cues.map((c) => c.position);
-
-  for (let b = 0; b < totalBuckets; b++) {
-    const time = (b / totalBuckets) * durationSec;
-    // Align with firstBeatSec
-    const beatOffset = time - firstBeatSec;
-    const beatFraction = ((beatOffset % secondsPerBeat) + secondsPerBeat) % secondsPerBeat / secondsPerBeat;
-
-    // Kick transient on downbeats (20-100Hz -> Low / Red)
-    const isBeatTransient = beatFraction < 0.12;
-    const kickAmp = isBeatTransient ? Math.exp(-beatFraction * 20.0) : 0.05;
-
-    // Hi-hats on off-beats (8kHz -> High / Blue)
-    const offbeatOffset = beatOffset + secondsPerBeat * 0.5;
-    const offbeatFraction = ((offbeatOffset % secondsPerBeat) + secondsPerBeat) % secondsPerBeat / secondsPerBeat;
-    const hatAmp = offbeatFraction < 0.15 ? Math.exp(-offbeatFraction * 25.0) * 0.6 : 0.05;
-
-    // Synth / vocal melody in mids (500Hz-3kHz -> Green/Cyan)
-    const synthAmp = 0.2 + 0.3 * Math.sin(time * 2.5) * Math.cos(time * 0.8);
-
-    // Boost around drop cue markers
-    const nearCue = cueTimes.some((ct) => Math.abs(ct - time) < 4.0);
-    const cueBoost = nearCue ? 1.3 : 1.0;
-
-    const low = Math.min(1.0, Math.max(0, (kickAmp * 0.95 + 0.1) * cueBoost));
-    const mid = Math.min(1.0, Math.max(0, (synthAmp * 0.8 + 0.15) * cueBoost));
-    const high = Math.min(1.0, Math.max(0, (hatAmp * 0.9 + 0.1) * cueBoost));
-
-    lowEnergy[b] = low;
-    midEnergy[b] = mid;
-    highEnergy[b] = high;
-    peaks[b] = Math.min(1.0, Math.max(low, mid, high));
-  }
-
-  return {
-    length: totalBuckets,
-    peaks,
-    peaksL: peaks,
-    peaksR: peaks,
-    lowEnergy,
-    midEnergy,
-    highEnergy,
-    // Clearly labeled: this is an own calculation, never Rekordbox data.
-    origin: DataOrigin.GENERATED_FALLBACK,
-  };
 }

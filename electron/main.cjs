@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -6,8 +6,23 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
+  scanAnlzForPaths,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
+const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
+
+// Durable diagnostic log: <userData>/airdox-smart-editor.log (+ .prev.log
+// rotation). Created lazily because app.getPath('userData') is only valid
+// once the app is ready; writes never throw back into the app.
+let logWriter = null;
+function getLogWriter() {
+  if (!logWriter) {
+    logWriter = createLogWriter(
+      path.join(app.getPath('userData'), 'airdox-smart-editor.log')
+    );
+  }
+  return logWriter;
+}
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -190,6 +205,10 @@ ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
 });
 
+ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
+  return scanAnlzForPaths(targetPaths);
+});
+
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
@@ -297,7 +316,51 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
+// --- Log-File bridge: durable diagnostics for all decisive pipeline params ---
+
+ipcMain.handle('airdox:append-log', async (_event, entry) => {
+  try {
+    if (!entry || typeof entry.message !== 'string') return false;
+    return getLogWriter().append(formatLogLine(entry));
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('airdox:get-log-path', async () => {
+  try {
+    return getLogWriter().filePath;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('airdox:reveal-log', async () => {
+  try {
+    shell.showItemInFolder(getLogWriter().filePath);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 app.whenReady().then(() => {
+  const writer = getLogWriter();
+  writer.append(formatLogLine({
+    ts: Date.now(),
+    level: 'INFO',
+    category: 'SYSTEM',
+    message: `Session gestartet — Log-Datei: ${writer.filePath}`,
+    data: {
+      app: APP_NAME,
+      appVersion: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+    },
+  }));
   registerAppProtocol();
   createWindow();
   app.on('activate', () => {

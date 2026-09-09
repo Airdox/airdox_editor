@@ -79,6 +79,12 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
 
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
+      // DAT-only preview variants carry one mono channel → authentic
+      // Rekordbox preview blue; band variants use the spectral palette.
+      const isMonoPreview =
+        analysis.sourceTag === 'PWAV' ||
+        analysis.sourceTag === 'PWV2' ||
+        analysis.sourceTag === 'PWV3';
       const bucketsPerCol = buckets / targetCols;
 
       for (let col = 0; col < targetCols; col++) {
@@ -107,23 +113,52 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const barH = Math.max(2, maxPeak * (height - 4));
         const yTop = (height - barH) / 2;
 
-        // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
+        if (isMonoPreview) {
+          // Classic Rekordbox preview blue for mono variants
+          ctx.fillStyle = '#00a2ff';
+          ctx.fillRect(col, yTop, 1, barH);
+          ctx.fillStyle = '#b3e5fc';
+          ctx.fillRect(col, yTop + barH * 0.3, 1, barH * 0.4);
+        } else {
+          // Rekordbox RGB spectral styling: bass orange-red, mids green,
+          // highs ice blue; full-spectrum columns render to white.
+          const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
+          const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
+          const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
 
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-        ctx.fillRect(col, yTop, 1, barH);
+          ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+          ctx.fillRect(col, yTop, 1, barH);
+        }
       }
     } else {
-      // No waveform data: honest empty state. Overview renderers must never
-      // synthesize energy contours (XML-exclusive workflow guarantee).
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('KEINE WAVEFORM-DATEN', width / 2, height / 2 - 2);
-      ctx.textAlign = 'left';
+      // Vorschau-Kontur wenn keine ANLZ-Daten vorhanden: Beatgrid-basierte Hüllkurve
+      const bg = track.beatGrid;
+      const bpm = bg.bpm || 130.05;
+      const secondsPerBeat = 60 / bpm;
+      const centerY = height / 2;
+      ctx.globalAlpha = 0.5;
+      for (let col = 0; col < targetCols; col++) {
+        const t = (col / targetCols) * duration;
+        const beatPos = (t - bg.firstBeat) / secondsPerBeat;
+        const beatFract = ((beatPos % 1) + 1) % 1;
+        const barIndex = Math.floor(beatPos / 4);
+        const isBreak = barIndex >= 96 && barIndex < 112;
+        const kickEnv = isBreak ? 0.06 : Math.exp(-beatFract * 14) * 0.9;
+        const sub = isBreak ? 0.08 : 0.18 + 0.12 * Math.sin(t * 16);
+        const peak = Math.min(1, kickEnv + sub + 0.06);
+        const barH = Math.max(2, peak * (height - 6));
+        const yTop = (height - barH) / 2;
+        const r = Math.min(255, Math.floor(kickEnv * 260 + sub * 60));
+        const g = Math.min(255, Math.floor(sub * 220 + 30));
+        const bCol = Math.min(255, Math.floor(kickEnv * 60 + 90));
+        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+        ctx.fillRect(col, yTop, 1, barH);
+        if (col % 2 === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillRect(col, centerY - 1, 1, 2);
+        }
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
