@@ -31,6 +31,7 @@ const {
   findOptionsJsonFiles,
   candidateFromOptions,
   getOptionValue,
+  appVerFromOptions,
 } = require('../electron/dbReader.cjs');
 
 function buildPpthFile(targetPath) {
@@ -126,6 +127,14 @@ try {
     null,
     'no options.json anywhere → null (no throw)'
   );
+
+  // ─── app_ver travels with the candidate (diagnostic context) ──────────
+  assert.strictEqual(
+    appVerFromOptions(path.join(pioneer, 'rekordbox6')),
+    '7.2.16',
+    'app_ver resolved via root-level options.json'
+  );
+  assert.strictEqual(appVerFromOptions(path.join(base, 'no-such-appdir')), null, 'no options.json → null app_ver');
 
   // ─── Analysis root of the moved library is scanned ────────────────────
   const audioG = 'G:\\Export\\DJ\\Moved.wav';

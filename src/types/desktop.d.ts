@@ -43,7 +43,7 @@ declare global {
       revealLogFile(): Promise<boolean>;
       chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       locateRekordboxDatabases(): Promise<
-        Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
+        Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string; appVer?: string | null }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
       /**

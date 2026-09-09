@@ -113,6 +113,26 @@ function detectDbType(filePath) {
   return null;
 }
 
+// Validates that a keyed database exposes the expected content table.
+// Pure probe (takes any db-like { prepare }) so it stays unit-testable
+// without the native SQLCipher module.
+function probeDbTables(db, dbType) {
+  const need = dbType === 'MASTER_DB' ? 'djmdContent' : 'content';
+  let names;
+  try {
+    names = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((row) => row && row.name);
+  } catch (error) {
+    return { ok: false, reason: `Tabellenliste nicht lesbar (${error.message || error})` };
+  }
+  if (!names.includes(need)) {
+    return { ok: false, reason: `erwartete Tabelle fehlt: ${need}` };
+  }
+  return { ok: true };
+}
+
 function openRekordboxDb(filePath) {
   const Database = getCipherModule();
   if (!Database) {
@@ -136,6 +156,24 @@ function openRekordboxDb(filePath) {
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+      // Key-/schema-tripwire against silent corruption: with a wrong key or
+      // a changed schema the expected tables are missing – then the DB
+      // counts as unreadable (loud per-track PPTH fallback) instead of
+      // delivering garbage rows after a Rekordbox update.
+      const probe = probeDbTables(db, dbType);
+      if (!probe.ok) {
+        try {
+          db.close();
+        } catch {
+          // ignore
+        }
+        return {
+          available: false,
+          reason:
+            `Integritätsprüfung fehlgeschlagen (${probe.reason}) – ggf. Key-/Schema-Drift nach Rekordbox-Update. ` +
+            'Tracks fallen automatisch auf den PPTH-Fallback zurück.',
+        };
+      }
       return { db, dbType };
     } catch (openError) {
       try {
@@ -322,6 +360,18 @@ function candidateFromOptions(appDir) {
   return null;
 }
 
+// options.json "app_ver" (e.g. 7.2.16): captured as diagnostic context with
+// every database read, so a future key/schema drift can be attributed to the
+// Rekordbox version that wrote the library.
+function appVerFromOptions(appDir) {
+  const pioneerRoot = appDir ? path.dirname(appDir) : null;
+  for (const optionsPath of findOptionsJsonFiles(pioneerRoot, appDir ? [appDir] : [])) {
+    const value = getOptionValue(readJsonIfExists(optionsPath), 'app_ver');
+    if (value) return value;
+  }
+  return null;
+}
+
 // Custom analysis location of a moved library
 // (Rekordbox: Erweitert → Datenbank → Datenbankverwaltung):
 // options.json "analysis-data-root-path", e.g. D:\PIONEER\Master\share.
@@ -350,7 +400,7 @@ function findDatabaseFiles(appDir) {
     if (fs.existsSync(p) && fs.statSync(p).isFile()) {
       const base = path.basename(p).toLowerCase();
       const kind = base === 'exportlibrary.db' ? 'ONE_LIBRARY' : base === 'master.db' ? 'MASTER_DB' : null;
-      if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)` });
+      if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)`, appVer: appVerFromOptions(appDir) });
     }
   }
 
@@ -750,4 +800,6 @@ module.exports = {
   findOptionsJsonFiles,
   candidateFromOptions,
   findAnlzFolders,
+  probeDbTables,
+  appVerFromOptions,
 };
