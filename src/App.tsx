@@ -35,7 +35,7 @@ import {
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
-import { adoptSerializedGrid, describeGridEdit, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
+import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import {
   serializeProject,
@@ -143,7 +143,7 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
   }
   try {
     const source = await window.rekordboxDesktop.readAnalysisFile(resolved);
-    const extraction = parseAnlzBinary(source.data);
+    const extraction = parseAnlzBinary(ensureArrayBuffer(source.data));
     const merged = applyAnlzExtractionToTrack(track, extraction);
     // Plausibility guard: the PPTH source path should reference the same audio file.
     const expected = track.originalMedia?.resolvedPath || track.originalMedia?.location || '';
@@ -1308,11 +1308,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // ANLZ belongs to the explicitly active XML track. It is read-only input and
   // takes priority over XML values only for analysis fields it actually holds.
-  const handleImportAnlzData = async (data: ArrayBuffer, fileName: string) => {
+  const handleImportAnlzData = async (data: ArrayBuffer | Uint8Array, fileName: string) => {
     if (!activeTrack) return;
 
     try {
-      const extraction = parseAnlzBinary(data);
+      const extraction = parseAnlzBinary(ensureArrayBuffer(data));
       const enrichedTrack = applyAnlzExtractionToTrack(activeTrack, extraction);
       // Same plausibility guard as the auto path: the PPTH source path inside
       // the container should reference this track's audio file.
@@ -1341,7 +1341,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
       console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
+      logger.error('DATABASE', `[ANLZ Import] ${fileName}: ${message}`);
+      // Import failures must be visible: a silently closed picker with no
+      // waveform is indistinguishable from a bug.
+      showOperationFeedback({
+        title: 'ANLZ-Import fehlgeschlagen',
+        operationType: 'CUE',
+        description: `${fileName} konnte nicht gelesen werden (${message}). Die Datei bleibt unverändert; es wurden keine Daten übernommen.`,
+        originalSha256: activeTrack?.originalSha256 ?? 'UNKNOWN',
+        timestamp: Date.now(),
+      });
     }
   };
 
@@ -1472,7 +1483,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
         try {
           const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-          originalAudio = await audioCtx.decodeAudioData(source.data);
+          originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data));
           originalMedia = {
             ...originalMedia,
             resolvedPath: source.path,
@@ -1744,7 +1755,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
           try {
             const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-            originalAudio = await audioCtx.decodeAudioData(source.data);
+            originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data));
             originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
           } catch (error) {
             console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);
