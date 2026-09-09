@@ -110,10 +110,6 @@ export interface Rgb {
   b: number;
 }
 
-/** Classic Rekordbox preview blue for the labeled no-ANLZ preview only. */
-export const MONO_PREVIEW_BLUE = '#00a2ff';
-export const MONO_PREVIEW_CORE = '#b3e5fc';
-
 export function rgbCss(c: Rgb): string {
   return `rgb(${c.r}, ${c.g}, ${c.b})`;
 }
@@ -215,19 +211,9 @@ export function isBarShaded(barNumber: number): boolean {
 export const BAR_SHADE_FILL = '#101117';
 
 // ---------------------------------------------------------------------------
-// Honest preview (no ANLZ assigned): visualize ONLY the imported beatgrid
-// structure — bar/beat columns with fixed heights. No envelopes, no invented
-// audio, no analyzeAudioBuffer. Pinned by tests/render-look.test.ts (R6).
+// Without ANLZ there is no waveform data at all: the renderers draw an empty
+// pane (like the original) plus an honest hint — no invented amplitudes.
 // ---------------------------------------------------------------------------
-
-export const PREVIEW_ALPHA = 0.55;
-export const PREVIEW_BAR_FRACTION = 0.6;
-export const PREVIEW_BEAT_FRACTION = 0.35;
-
-/** Preview contour height purely from the imported bar/beat structure. */
-export function previewBeatHalfHeight(isBar: boolean, maxHalfH: number): number {
-  return (isBar ? PREVIEW_BAR_FRACTION : PREVIEW_BEAT_FRACTION) * maxHalfH;
-}
 
 /**
  * Peak-hold downsampling for the overview: takes the stored values verbatim

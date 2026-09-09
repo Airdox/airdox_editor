@@ -9,11 +9,8 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
 import {
   collectVisibleBeats,
-  MONO_PREVIEW_BLUE,
   monoBlueColor,
   peakHoldColumn,
-  PREVIEW_ALPHA,
-  previewBeatHalfHeight,
   pwv4BackColor,
   pwv4FrontColor,
   rgbColumnColor,
@@ -161,39 +158,23 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
           ctx.fillRect(col, centerY - barH, 1, barH * 2);
         }
       }
-
-      // Authentic per-bar separators (reference 01: dark ticks on the strip)
-      if (track.beatGrid.beats && track.beatGrid.beats.length > 0) {
-        const barTicks = collectVisibleBeats(track.beatGrid.beats, 0, duration, 4000).filter(
-          (v) => v.isBar
-        );
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        for (const vbar of barTicks) {
-          const bx = Math.round((vbar.time / duration) * width);
-          ctx.fillRect(bx, 0, 1, height);
-        }
-      }
-    } else {
-      // Honest preview when no ANLZ data is assigned: pure bar/beat
-      // structure with fixed heights — no envelopes, no invented audio.
-      const bg = track.beatGrid;
-      const centerY = height / 2;
-      ctx.globalAlpha = PREVIEW_ALPHA;
-      if (bg.beats && bg.beats.length > 0) {
-        const vis = collectVisibleBeats(bg.beats, 0, duration, 4000);
-        for (let i = 0; i < vis.length; i++) {
-          const vb = vis[i];
-          const nextT = i + 1 < vis.length ? vis[i + 1].time : duration;
-          const x1 = Math.round((vb.time / duration) * width);
-          const x2 = Math.round((nextT / duration) * width);
-          if (x2 <= x1) continue;
-          const barH = Math.max(1, previewBeatHalfHeight(vb.isBar, (height - 4) / 2));
-          ctx.fillStyle = MONO_PREVIEW_BLUE;
-          ctx.fillRect(x1, centerY - barH, x2 - x1 - 1, barH * 2);
-        }
-      }
-      ctx.globalAlpha = 1;
     }
+
+    // Authentic per-bar separators (reference 01: dark ticks on the strip) —
+    // pure grid data, drawn with or without analysis.
+    if (track.beatGrid.beats && track.beatGrid.beats.length > 0) {
+      const barTicks = collectVisibleBeats(track.beatGrid.beats, 0, duration, 4000).filter(
+        (v) => v.isBar
+      );
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      for (const vbar of barTicks) {
+        const bx = Math.round((vbar.time / duration) * width);
+        ctx.fillRect(bx, 0, 1, height);
+      }
+    }
+
+    // Without ANLZ there is no waveform data — like the original, the strip
+    // stays empty (no invented contour); only the grid ticks above remain.
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
     if (track.phrases && track.phrases.length > 0) {

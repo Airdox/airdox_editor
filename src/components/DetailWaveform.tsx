@@ -23,11 +23,7 @@ import {
   collectVisibleBeats,
   columnDrawWidth,
   isBarShaded,
-  MONO_PREVIEW_BLUE,
-  MONO_PREVIEW_CORE,
   monoBlueColor,
-  PREVIEW_ALPHA,
-  previewBeatHalfHeight,
   pwv4BackColor,
   pwv4FrontColor,
   rgbColumnColor,
@@ -103,7 +99,7 @@ function anlzLookupParts(track: TrackModel | null): { label: string; title: stri
     return { label: `${track.analysis.length} BUCKETS`, title: 'Genuine Rekordbox-ANLZ zugeordnet.' };
   }
   const raw = track?.rawXmlAttributes?.anlzLookup;
-  if (!raw) return { label: '— VORSCHAU-PEAKS', title: 'Keine ANLZ zugeordnet – Beatgrid-Vorschau aktiv.' };
+  if (!raw) return { label: '— KEINE WAVEFORM (ANLZ fehlt)', title: 'Keine ANLZ zugeordnet – wie im Original wird keine Wellenform gezeichnet; über DATA zuordnen.' };
   try {
     const lk = JSON.parse(raw) as { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; note?: string };
     if (lk.via === 'PPTH_NAME') {
@@ -117,7 +113,7 @@ function anlzLookupParts(track: TrackModel | null): { label: string; title: stri
       title: `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung. Manuell über DATA zuordnen.`,
     };
   } catch {
-    return { label: '— VORSCHAU-PEAKS', title: 'ANLZ-Status nicht lesbar.' };
+    return { label: '— KEINE WAVEFORM', title: 'ANLZ-Status nicht lesbar.' };
   }
 }
 
@@ -486,34 +482,17 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.textAlign = 'left';
         }
       } else {
-        // Honest fallback preview when no ANLZ waveform is assigned:
-        // visualize ONLY the imported bar/beat structure with fixed heights —
-        // no envelopes, no invented peaks, no analyzeAudioBuffer.
-        const maxHalfH = height * 0.42;
-        ctx.globalAlpha = PREVIEW_ALPHA;
-        for (let i = 0; i < visibleBeats.length; i++) {
-          const vb = visibleBeats[i];
-          const nextTime =
-            i + 1 < visibleBeats.length ? visibleBeats[i + 1].time : viewOffset + viewDuration + 1;
-          const x1 = timeToPixel(vb.time, width);
-          const x2 = timeToPixel(nextTime, width);
-          if (x2 < 0 || x1 > width) continue;
-          const colW = columnDrawWidth(Math.max(1, x2 - x1));
-          const barH = Math.max(2, previewBeatHalfHeight(vb.isBar, maxHalfH));
-          ctx.fillStyle = MONO_PREVIEW_BLUE;
-          ctx.fillRect(x1, centerY - barH, colW, barH * 2);
-          ctx.fillStyle = MONO_PREVIEW_CORE;
-          ctx.fillRect(x1, centerY - barH * 0.35, colW, barH * 0.7);
-        }
-        ctx.globalAlpha = 1;
-        // Dezenter Hinweis dass dies eine Vorschau ist – echte ANLZ-Daten fehlen
+        // Without ANLZ there is no waveform data — the original Rekordbox
+        // shows an empty waveform pane here. We draw nothing invented (no
+        // fake contour, no amplitudes); the beatgrid lines and ruler above
+        // already visualize the imported grid data. Only the honest hint:
         ctx.textAlign = 'center';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
         ctx.font = '11px sans-serif';
-        ctx.fillText('VORSCHAU-Wellenform (Beatgrid) – für echte Peaks ANLZ über DATA zuordnen', width / 2, height - 10);
+        ctx.fillText('KEINE WAVEFORM-DATEN (ANLZ fehlt) – das Original zeigt hier ebenfalls keine Wellenform', width / 2, height - 10);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
         ctx.font = '9px sans-serif';
-        ctx.fillText('Beatgrid & Cues stammen aus Rekordbox-Import – Daten sind vorhanden', width / 2, height - 22);
+        ctx.fillText('Beatgrid & Cues stammen aus dem Rekordbox-Import – für echte Peaks ANLZ über DATA zuordnen', width / 2, height - 22);
         ctx.textAlign = 'left';
       }
 
@@ -1163,7 +1142,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               const anl = anlzLookupParts(track);
               return (
                 <span className="text-neutral-400" title={anl.title}>
-                  {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'VORSCHAU (Beatgrid) • '}
+                  {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'KEINE WAVEFORM • '}
                   {anl.label}
                   {track.analysisVariants && track.analysisVariants.length > 1
                     ? ` • ${track.analysisVariants.length} VARIANTEN`

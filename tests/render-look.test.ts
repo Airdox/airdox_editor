@@ -12,8 +12,9 @@
  *       drawn low → mid → high on the same axis.
  *  R5 – Comb geometry + alternate bar shading (reference 01/02).
  *  R6 – End-to-end PWV5 pass-through via parseAnlzBinary.
- *  R7 – Honest no-ANLZ preview: heights from bar/beat structure only.
- *  R8 – Overview downsampling: peak-hold, never averaging.
+ *  R7 – Overview downsampling: peak-hold, never averaging.
+ *  (No-ANLZ case: the renderers draw an empty pane like the original —
+ *   nothing to compute, nothing to test in the pure model.)
  *
  * Run with: npx tsx tests/render-look.test.ts
  */
@@ -26,10 +27,6 @@ import {
   columnDrawWidth,
   isBarShaded,
   peakHoldColumn,
-  PREVIEW_ALPHA,
-  PREVIEW_BAR_FRACTION,
-  PREVIEW_BEAT_FRACTION,
-  previewBeatHalfHeight,
   pwv4BackColor,
   pwv4FrontColor,
   PWV4_FRONT_BOOST,
@@ -79,7 +76,7 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
 }
 
 console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R8)       ');
+console.log('  RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R7)       ');
 console.log('═══════════════════════════════════════════════════════════════════\n');
 
 // ─── R1: PWV5 stored RGB is the column color ────────────────────────────────
@@ -194,18 +191,8 @@ runTest('R6 pass-through', 'Decoded PWV5 columns stay pure red/green/blue', () =
   assertEqual(v.whiteness, undefined, 'no whiteness invented for PWV5');
 });
 
-// ─── R7: honest preview ──────────────────────────────────────────────────────
-runTest('R7 preview', 'Heights only from bar/beat structure', () => {
-  const barH = previewBeatHalfHeight(true, 100);
-  const beatH = previewBeatHalfHeight(false, 100);
-  assertEqual(barH, PREVIEW_BAR_FRACTION * 100, 'bar fixed fraction');
-  assertEqual(beatH, PREVIEW_BEAT_FRACTION * 100, 'beat fixed fraction');
-  assert(barH > beatH, 'bar emphasized');
-  assertEqual(PREVIEW_ALPHA, 0.55, 'alpha pinned');
-});
-
-// ─── R8: peak-hold overview ──────────────────────────────────────────────────
-runTest('R8 peak-hold', 'Stored maxima, never averages; PWV4 channels held', () => {
+// ─── R7: peak-hold overview ──────────────────────────────────────────────────
+runTest('R7 peak-hold', 'Stored maxima, never averages; PWV4 channels held', () => {
   const peaks = Float32Array.from([0.25, 0.75, 0.5]);
   const low = Float32Array.from([0.125, 0.5, 0.25]);
   const mid = Float32Array.from([0.25, 0.125, 0.5]);
