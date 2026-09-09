@@ -226,7 +226,7 @@ class LoggerService {
    */
   public generateDiagnosticReport(appContextState?: any): string {
     const report = {
-      title: 'Airdox SMART Editor – Diagnosebericht',
+      title: 'airdox_SMART_Editor – Diagnosebericht',
       generatedAt: new Date().toISOString(),
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A',
       screenResolution: typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A',

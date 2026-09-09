@@ -9,7 +9,7 @@ const {
 } = require('./dbReader.cjs');
 const { isProtectedTarget } = require('./pathGuard.cjs');
 
-const APP_NAME = 'Airdox SMART Editor';
+const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
 
 // WICHTIG: Das eigene Protokoll muss VOR app.whenReady() als privilegiert
@@ -249,7 +249,7 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
     WAV: { name: 'WAV Audio', extensions: ['wav'] },
     XML: { name: 'Rekordbox XML', extensions: ['xml'] },
     JSON: { name: 'JSON', extensions: ['json'] },
-    PROJECT: { name: 'Airdox SMART Editor Projekt', extensions: ['airdox.json', 'json'] },
+    PROJECT: { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
   }[kind] || { name: 'Datei', extensions: ['*'] };
 
   const result = await dialog.showSaveDialog(mainWindow, {
@@ -276,7 +276,7 @@ ipcMain.handle('rekordbox:open-project-file', async () => {
     title: 'Projekt öffnen (nur lesend)',
     properties: ['openFile'],
     filters: [
-      { name: 'Airdox SMART Editor Projekt', extensions: ['airdox.json', 'json'] },
+      { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
