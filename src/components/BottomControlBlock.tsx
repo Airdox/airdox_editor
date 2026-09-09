@@ -174,6 +174,38 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
 
       {/* 3. EDIT Panel */}
       <div className="flex-1 flex flex-col">
+        {/* Workflow guidance strip */}
+        <div className="h-5 bg-[#0f141c] border-b border-[#1c2230] flex items-center px-2 text-[10px] font-mono">
+          {!hasSelection ? (
+            <span className="text-neutral-400">
+              <span className="text-[#0088ff] font-bold">SCHRITT 1:</span> Bereich in der Wellenform auswählen (1–128 BEAT) oder Cursor positionieren → dann
+              {hasInsertSource ? (
+                <span className="text-emerald-400 font-bold ml-1">
+                  ▶ INSERT / PASTE
+                  {activeClipName ? ` (Quelle: ${hasClipboard ? 'Zwischenablage' : activeClipName})` : ''}
+                </span>
+              ) : (
+                <span className="text-neutral-500 ml-1">erst COPY / CLONE oder Palette-Clip auswählen</span>
+              )}
+            </span>
+          ) : (
+            <span className="text-neutral-300">
+              <span className="text-[#0088ff] font-bold">BEREICH AUSGEWÄHLT:</span>
+              <span className="text-white font-bold mx-1">
+                {Math.round(selection!.beatsCount)} Beats / {selection!.barsCount.toFixed(1)} Bars ({selection!.duration.toFixed(2)}s)
+              </span>
+              →
+              <span className="text-[#00a2ff] font-bold mx-1">COPY</span>·
+              <span className="text-[#00c853] font-bold mx-1">CLONE</span>·
+              <span className="text-[#ffb020] font-bold mx-1">REPLACE</span>·
+              <span className="text-[#7ea7ff] font-bold mx-1">OVERDUB</span>·
+              <span className="text-neutral-300 mx-1">CLEAR</span>·
+              <span className="text-[#ff453a] font-bold mx-1">DELETE</span>
+            </span>
+          )}
+          {canUndo && <span className="ml-auto text-neutral-500">↶ UNDO verfügbar</span>}
+        </div>
+
         {/* Angled Tab Header */}
         <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
           <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">

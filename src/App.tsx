@@ -1892,6 +1892,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onCut={handleCut}
           onPaste={handlePaste}
           onInsert={handleInsert}
+          onInsertPaletteClip={() => {
+            const clip = paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0];
+            if (clip) handleInsertClipToDeckA(clip);
+          }}
+          activePaletteClipName={(paletteClips.find((c) => c.id === selectedClipId) || paletteClips[0])?.name || null}
           onReplace={handleReplace}
           onOverdub={handleOverdub}
           onDelete={handleDelete}

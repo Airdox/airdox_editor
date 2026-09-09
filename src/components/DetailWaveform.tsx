@@ -43,11 +43,13 @@ interface DetailWaveformProps {
   onZoomOut: () => void;
   onResetZoom: () => void;
   onPanView: (newOffset: number) => void;
-  onAddToPalette: (start: number, end: number) => void;
+  onAddToPalette: () => void;
   onCopy: () => void;
   onCut: () => void;
   onPaste: () => void;
   onInsert: () => void;
+  onInsertPaletteClip?: () => void;
+  activePaletteClipName?: string | null;
   onReplace: () => void;
   onOverdub: () => void;
   onDelete: () => void;
@@ -92,6 +94,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onCut,
   onPaste,
   onInsert,
+  onInsertPaletteClip,
+  activePaletteClipName,
   onReplace,
   onOverdub,
   onDelete,
@@ -1089,7 +1093,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               <>
                 <button
                   onClick={() => {
-                    onAddToPalette(selection.start, selection.end);
+                    onAddToPalette();
                     setContextMenu(null);
                   }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white font-medium text-[#00a2ff]"
@@ -1136,12 +1140,34 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             )}
 
             {!selection && (
-              <button
-                onClick={() => { onPaste(); setContextMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
-              >
-                Paste at Playhead
-              </button>
+              <>
+                <button
+                  onClick={() => { onPaste(); setContextMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                >
+                  <span>Paste at Cursor</span>
+                  <span className="text-[10px] font-mono text-neutral-500">Ctrl+V</span>
+                </button>
+                <button
+                  onClick={() => {
+                    onSeek(contextMenu.timeAtClick);
+                    onInsertPaletteClip?.();
+                    setContextMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#059669] hover:text-white text-[#00c853] flex justify-between"
+                  title="Ausgewählten Palette-Clip an dieser Position einfügen (öffnet Zeit)"
+                >
+                  <span>Insert Palette Clip @ Cursor</span>
+                  <span className="text-[10px] font-mono text-emerald-400">{activePaletteClipName || 'Palette'}</span>
+                </button>
+                <button
+                  onClick={() => { onInsert(); setContextMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                >
+                  <span>Insert at Cursor (Clipboard)</span>
+                  <span className="text-[10px] font-mono text-neutral-500">Insert</span>
+                </button>
+              </>
             )}
           </div>
         )}
