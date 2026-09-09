@@ -27,6 +27,24 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
+      /**
+       * Deterministic PathResolver + read for the AnalysisDataPath column.
+       * No search, no guessing – resolves against `<share>/` (sibling of master.db).
+       */
+      resolveAndReadAnlz(
+        analysisDataPath: string,
+        dbPath: string
+      ): Promise<{
+        available: boolean;
+        reason?: string;
+        resolvedPath?: string;
+        path?: string;
+        size?: number;
+        modifiedAt?: number;
+        data?: ArrayBuffer;
+        accessMode?: 'READ_ONLY';
+        analysisDataPath?: string;
+      }>;
       chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>

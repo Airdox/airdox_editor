@@ -117,10 +117,22 @@ export function audioBufferToWavBase64(buffer: AudioBufferLike): string {
 // Serialized (persisted) shapes
 // ---------------------------------------------------------------------------
 
+export interface SerializedBeatNode {
+  index: number;
+  time: number;
+  isBarStart: boolean;
+  barNumber: number;
+  beatInBar: number;
+}
+
 export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
+  /** Individual beat times – populated when the source was PQTZ so the
+   *  dense grid survives a save/load cycle without being flattened to a
+   *  uniform BPM grid. */
+  beats?: SerializedBeatNode[];
 }
 
 export interface SerializedSegment {
@@ -253,6 +265,16 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
+      // Persist individual beat entries verbatim when present (ANLZ PQTZ).
+      beats: track.beatGrid?.beats && track.beatGrid.beats.length > 0
+        ? track.beatGrid.beats.map((b) => ({
+            index: b.index,
+            time: b.time,
+            isBarStart: b.isBarStart,
+            barNumber: b.barNumber,
+            beatInBar: b.beatInBar,
+          }))
+        : undefined,
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],

@@ -215,6 +215,103 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   return readRekordboxDatabase(dbPath);
 });
 
+/**
+ * Deterministic PathResolver for Rekordbox AnalysisDataPath.
+ *
+ * The `AnalysisDataPath` column in djmdContent (master.db) stores a path
+ * relative to the `share/` directory that sits next to master.db, e.g.:
+ *   `/PIONEER/USBANLZ/Q001/ANLZ0000.DAT`
+ * It may also appear as:
+ *   `PIONEER/USBANLZ/Q001/ANLZ0000.DAT`   (no leading slash)
+ *   `C:/Users/.../Pioneer/rekordbox/share/PIONEER/USBANLZ/.../ANLZ0000.DAT` (absolute)
+ *
+ * We NEVER search by track name, NEVER walk the tree recursively, and NEVER
+ * guess filename variants – we only normalize and join.
+ */
+function resolveAnalysisDataPath(analysisDataPath, dbPath) {
+  if (typeof analysisDataPath !== 'string' || !analysisDataPath.trim()) {
+    return { missing: true, reason: 'Kein AnalysisDataPath in der Track-Zeile vorhanden.' };
+  }
+  if (typeof dbPath !== 'string' || !dbPath.trim()) {
+    return { missing: true, reason: 'Kein master.db-Pfad bekannt; Share-Verzeichnis kann nicht bestimmt werden.' };
+  }
+
+  // dbPath is .../share/master.db → shareDir is .../share
+  const dbDir = path.dirname(path.resolve(dbPath));
+  let shareDir = dbDir;
+  // If master.db was opened directly from its containing folder (master.db
+  // lives inside share/ in every Rekordbox 6/7 layout), we are already there.
+  // Defensive: ensure `shareDir` ends with `share` and contains `PIONEER`.
+  if (!/[\\/]share$/i.test(shareDir)) {
+    // Sometimes the opener passes the parent (Pioneer/rekordbox) – try share/.
+    const candidate = path.join(shareDir, 'share');
+    const masterCandidate = path.join(candidate, 'master.db');
+    try { require('node:fs').accessSync(masterCandidate, constants.R_OK); shareDir = candidate; }
+    catch { /* keep dbDir */ }
+  }
+
+  const raw = analysisDataPath.trim();
+
+  // Absolute Windows path (starts with drive letter or UNC): use as-is.
+  if (/^[a-z]:[\\/]/i.test(raw) || raw.startsWith('\\\\')) {
+    const abs = path.resolve(raw);
+    return { resolvedPath: abs };
+  }
+
+  // file:// URL in AnalysisDataPath
+  if (/^file:/i.test(raw)) {
+    try { return { resolvedPath: require('node:url').fileURLToPath(raw) }; }
+    catch { /* fall through */ }
+  }
+
+  // Relative path (with or without leading slash/backslash) → strip and join
+  // against share/.
+  let rel = raw.replace(/^[\\/]+/, '').replace(/\//g, path.sep);
+  const resolved = path.join(shareDir, rel);
+
+  // Security: sandbox to shareDir (no ../ escape).
+  const normShare = path.normalize(shareDir) + path.sep;
+  const normResolved = path.normalize(resolved);
+  if (!normResolved.startsWith(normShare) && normResolved !== path.normalize(shareDir)) {
+    return { missing: true, reason: `AnalysisDataPath verweist ausserhalb des share/-Verzeichnisses: ${raw}` };
+  }
+  return { resolvedPath: normResolved };
+}
+
+ipcMain.handle('rekordbox:resolve-read-anlz', async (_event, analysisDataPath, dbPath) => {
+  const resolution = resolveAnalysisDataPath(analysisDataPath, dbPath);
+  if (resolution.missing) {
+    return { available: false, reason: resolution.reason, analysisDataPath, dbPath };
+  }
+  const target = resolution.resolvedPath;
+  try {
+    await access(target, constants.R_OK);
+    const details = await stat(target);
+    if (!details.isFile()) {
+      return { available: false, reason: `AnalysisDataPath verweist nicht auf eine Datei: ${target}`, resolvedPath: target };
+    }
+    if (details.size > 256 * 1024 * 1024) {
+      return { available: false, reason: `ANLZ-Datei ist grösser als 256 MB und wird nicht geladen: ${target}`, resolvedPath: target };
+    }
+    const data = await readFile(target);
+    return {
+      available: true,
+      path: target,
+      size: details.size,
+      modifiedAt: details.mtimeMs,
+      data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      accessMode: 'READ_ONLY',
+    };
+  } catch (err) {
+    return {
+      available: false,
+      reason: `ANLZ-Datei nicht gefunden oder nicht lesbar: ${target} (${err && err.message ? err.message : err})`,
+      resolvedPath: target,
+      analysisDataPath,
+    };
+  }
+});
+
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     throw new Error('Kein gültiger Analysepfad übergeben.');

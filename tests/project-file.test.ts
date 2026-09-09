@@ -93,6 +93,8 @@ function ok(cond: unknown, msg: string) {
     loops: [{ id: 'l1', name: 'Loop', start: 10, end: 20, length: 10, color: '#ff9500', origin: DataOrigin.REKORDBOX_XML }],
     analysis: null,
     origin: DataOrigin.LOCAL_ANALYSIS,
+    analysisOrigin: 'LOCAL_ANALYSIS',
+    analysisStatus: 'READY',
     workingSegments: [
       { id: 's0', type: 'ORIGINAL', trackId: 't1', sourceStart: 0, sourceEnd: 120, projectStart: 0, projectDuration: 120, gain: 1 },
       { id: 's1', type: 'INSERT', trackId: 't1', sourceStart: 0, sourceEnd: 0.5, projectStart: 60, projectDuration: 0.5, clipBuffer, gain: 0.9 },
@@ -148,6 +150,7 @@ function ok(cond: unknown, msg: string) {
       originalSha256: st.originalSha256, isOriginalUntouched: st.isOriginalUntouched,
       audioBuffer: null, beatGrid: { ...st.beatGrid, beats: [], origin: st.origin },
       cues: st.cues, loops: st.loops, analysis: null, origin: st.origin,
+      analysisOrigin: 'LOCAL_ANALYSIS', analysisStatus: 'READY',
       workingSegments: st.workingSegments.map((s) => ({ ...s, clipBuffer: null as unknown as AudioBuffer })),
     }],
     paletteClips: [],
@@ -175,6 +178,8 @@ function ok(cond: unknown, msg: string) {
     loops: [],
     analysis: null,
     origin: DataOrigin.REKORDBOX_XML,
+    analysisOrigin: 'REKORDBOX_XML',
+    analysisStatus: 'MISSING_REKORDBOX_ANALYSIS',
     originalMedia: {
       location: 'C:\\Music\\Track.wav',
       accessMode: 'READ_ONLY',

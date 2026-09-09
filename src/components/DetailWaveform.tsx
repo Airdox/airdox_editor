@@ -140,16 +140,57 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     [viewOffset, viewDuration]
   );
 
-  // Helper to snap time to nearest beat
+  // Helper to snap time to nearest beat.
+  // Step 3: prefer the dense beats[] array (from ANLZ PQTZ) which respects
+  // tempo changes; fall back to the uniform formula only for grids without
+  // per-beat entries (XML/TEMPO-only imports, synthetic demo tracks).
   const snapTime = useCallback(
     (t: number) => {
       if (!quantize || !track) return t;
       const bg = track.beatGrid;
+      if (bg.beats && bg.beats.length > 0) {
+        let bestIdx = 0;
+        let bestDist = Math.abs(bg.beats[0].time - t);
+        for (let i = 1; i < bg.beats.length; i++) {
+          const d = Math.abs(bg.beats[i].time - t);
+          if (d < bestDist) { bestDist = d; bestIdx = i; }
+          if (bg.beats[i].time > t && bg.beats[i].time - t > bestDist) break;
+        }
+        return Math.max(0, bg.beats[bestIdx].time);
+      }
       const spb = 60.0 / bg.bpm;
       const beatIndex = Math.round((t - bg.firstBeat) / spb);
       return Math.max(0, bg.firstBeat + beatIndex * spb);
     },
     [quantize, track]
+  );
+
+  // Convert seconds to bar/beat using beats[] when present.
+  const locateBarBeatAt = useCallback(
+    (pos: number) => {
+      if (!track) return { barNum: 1, beatInBar: 1 };
+      const bg = track.beatGrid;
+      if (bg.beats && bg.beats.length > 0) {
+        let bestIdx = 0;
+        let bestDist = Math.abs(bg.beats[0].time - pos);
+        for (let i = 1; i < bg.beats.length; i++) {
+          const d = Math.abs(bg.beats[i].time - pos);
+          if (d < bestDist) { bestDist = d; bestIdx = i; }
+          if (bg.beats[i].time > pos && bg.beats[i].time - pos > bestDist) break;
+        }
+        const n = bg.beats[bestIdx];
+        return { barNum: n.barNumber, beatInBar: n.beatInBar, isBar: n.isBarStart };
+      }
+      const spb = 60.0 / bg.bpm;
+      const beatIndex = Math.round((pos - bg.firstBeat) / spb);
+      const isBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter === 0;
+      return {
+        barNum: Math.floor(beatIndex / bg.meter) + 1,
+        beatInBar: ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1,
+        isBar,
+      };
+    },
+    [track]
   );
 
   // Render detail waveform loop
@@ -208,18 +249,36 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
+      // Step 3: iterate the beats[] array verbatim when it exists (PQTZ
+      // preserves tempo changes). Fallback to the uniform formula only
+      // when beats[] is empty (XML/TEMPO-only, demo).
       const bg = track.beatGrid;
+      const beatsDense = bg.beats && bg.beats.length > 0 ? bg.beats : null;
       const secondsPerBeat = 60.0 / bg.bpm;
-      const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
-      const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
 
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
+      const iterateBeats = (cb: (beatTime: number, isBar: boolean, barNumber: number) => void) => {
+        if (beatsDense) {
+          for (let i = 0; i < beatsDense.length; i++) {
+            const bt = beatsDense[i].time;
+            if (bt < viewOffset - 0.5) continue;
+            if (bt > viewOffset + viewDuration + 0.5) break;
+            cb(bt, beatsDense[i].isBarStart, beatsDense[i].barNumber);
+          }
+        } else {
+          const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
+          const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+          for (let b = startBeat; b <= endBeat; b++) {
+            const beatTime = bg.firstBeat + b * secondsPerBeat;
+            const isBar = b % bg.meter === 0;
+            const barNumber = Math.floor(b / bg.meter) + 1;
+            cb(beatTime, isBar, barNumber);
+          }
+        }
+      };
+
+      iterateBeats((beatTime, isBar, barNumber) => {
         const x = timeToPixel(beatTime, width);
-        if (x < -20 || x > width + 20) continue;
-
-        const isBar = b % bg.meter === 0;
-        const barNumber = Math.floor(b / bg.meter) + 1;
+        if (x < -20 || x > width + 20) return;
 
         if (isBar) {
           // Rekordbox authentic solid white Bar vertical downbeat line
@@ -251,7 +310,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.lineTo(x, 18);
           ctx.stroke();
         }
-      }
+      });
 
       // 2b. Rekordbox Phrase Blocks (PSSI Song Structure)
       if (track.phrases && track.phrases.length > 0) {
@@ -338,73 +397,52 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           }
         }
       } else {
-        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
-        const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
-          const isBreak = (barIndex >= 96 && barIndex < 112);
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
-
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            // 3BAND
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
-        }
+        // Step 4: NO synthetic kick-waveform is drawn when analysis is missing.
+        // Instead we show a transparent "Keine Rekordbox-Analysedaten" overlay
+        // so the user sees that real PWV data is absent – rather than seeing
+        // a fake waveform and being misled.
+        const msg = track.analysisStatus === 'MISSING_REKORDBOX_ANALYSIS'
+          ? (track.analysisStatusMessage || 'Keine Rekordbox-Analysedaten vorhanden.')
+          : (track.analysisStatusMessage || 'Keine Waveform-Daten verfügbar.');
+        ctx.fillStyle = 'rgba(255, 180, 0, 0.08)';
+        ctx.fillRect(0, 27, width, height - 27);
+        ctx.fillStyle = '#ffb400';
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚠  KEINE REKORDBOX-WAVEFORM (PWV) VORHANDEN', width / 2, centerY - 8);
+        ctx.fillStyle = 'rgba(255, 220, 120, 0.85)';
+        ctx.font = '10px sans-serif';
+        const shortMsg = msg.length > 110 ? msg.slice(0, 107) + '…' : msg;
+        ctx.fillText(shortMsg, width / 2, centerY + 10);
+        ctx.fillStyle = 'rgba(255, 220, 120, 0.55)';
+        ctx.font = '9px monospace';
+        ctx.fillText('Waveform wird nicht erfunden – importiere eine ANLZ-Datei via DATA-Panel.', width / 2, centerY + 26);
+        ctx.textAlign = 'left';
       }
 
-      // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
+      // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines).
+      // Uses the same beats[] iteration as the top ruler (Step 3), so tempo
+      // changes in PQTZ are reflected exactly.
+      iterateBeats((beatTime, isBar, _barNumber) => {
         const x = timeToPixel(beatTime, width);
-        if (x < -10 || x > width + 10) continue;
-        const isBar = b % bg.meter === 0;
+        if (x < -10 || x > width + 10) return;
 
         if (isBar) {
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = analysis && analysis.length > 0 ? '#ffffff' : 'rgba(255,255,255,0.45)';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 18);
           ctx.lineTo(x, height);
           ctx.stroke();
         } else {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+          ctx.strokeStyle = analysis && analysis.length > 0 ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255,255,255,0.12)';
           ctx.lineWidth = 0.7;
           ctx.beginPath();
           ctx.moveTo(x, 18);
           ctx.lineTo(x, height);
           ctx.stroke();
         }
-      }
+      });
 
       // 4. Draw Cues and Markers
       track.cues.forEach((c) => {
@@ -534,16 +572,15 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
       if (track && hoveredTime !== null) {
         const bg = track.beatGrid;
-        const spb = 60.0 / bg.bpm;
         const snappedTime = snapTime(hoveredTime);
         const snappedX = timeToPixel(snappedTime, width);
         const rawX = timeToPixel(hoveredTime, width);
 
         if (snappedX >= 0 && snappedX <= width) {
-          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
-          const isBar = beatIndex % bg.meter === 0;
-          const barNum = Math.floor(beatIndex / bg.meter) + 1;
-          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
+          const bb = locateBarBeatAt(snappedTime);
+          const isBar = Boolean(bb.isBar);
+          const barNum = bb.barNum;
+          const beatInBar = bb.beatInBar;
 
           // Subtle glowing translucent beam along the snapped grid line
           const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
@@ -634,6 +671,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     hoveredTime,
     snapTime,
     timeToPixel,
+    locateBarBeatAt,
+    pixelToTime,
   ]);
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
@@ -716,11 +755,35 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const updateSelectionRange = (start: number, end: number) => {
     if (!track) return;
     const bg = track.beatGrid;
-    const spb = 60.0 / bg.bpm;
-    const startBeat = Math.max(0, (start - bg.firstBeat) / spb);
-    const endBeat = Math.max(0, (end - bg.firstBeat) / spb);
-    const beatsCount = Math.max(0, endBeat - startBeat);
-    const barsCount = beatsCount / bg.meter;
+    // Step 3: count beats/bars using beats[] when present so tempo changes
+    // are accounted for; fall back to the uniform formula otherwise.
+    let startBeat = 0, endBeat = 0, beatsCount = 0, barsCount = 0;
+    if (bg.beats && bg.beats.length > 0) {
+      let biStart = 0, biEnd = 0;
+      for (let i = 0; i < bg.beats.length; i++) {
+        if (bg.beats[i].time <= start) biStart = i;
+        if (bg.beats[i].time <= end) biEnd = i;
+      }
+      startBeat = biStart;
+      endBeat = biEnd;
+      beatsCount = Math.max(0, endBeat - startBeat);
+      // count bars between start and end using the actual bar numbers on beats
+      let barCount = 0;
+      let lastBar = -1;
+      for (let i = biStart; i <= biEnd; i++) {
+        if (bg.beats[i].isBarStart && bg.beats[i].barNumber !== lastBar) {
+          barCount++;
+          lastBar = bg.beats[i].barNumber;
+        }
+      }
+      barsCount = barCount || beatsCount / bg.meter;
+    } else {
+      const spb = 60.0 / bg.bpm;
+      startBeat = Math.max(0, (start - bg.firstBeat) / spb);
+      endBeat = Math.max(0, (end - bg.firstBeat) / spb);
+      beatsCount = Math.max(0, endBeat - startBeat);
+      barsCount = beatsCount / bg.meter;
+    }
 
     onSelect({
       start,
@@ -1103,6 +1166,14 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             <span className="text-neutral-400">
               {track.analysis?.length || 0} WAVEFORM BUCKETS
             </span>
+            {track.databaseRecord?.anlzTagsFound?.filter((t) => t.startsWith('PWV') || t === 'PWAV').length ? (
+              <>
+                <span className="text-neutral-600">•</span>
+                <span className="text-[#00c853] font-semibold" title="PWV-Waveform-Tag aus ANLZ">
+                  PWV: {track.databaseRecord.anlzTagsFound.filter((t) => t.startsWith('PWV') || t === 'PWAV').join('/')}
+                </span>
+              </>
+            ) : null}
             {track.phrases && track.phrases.length > 0 && (
               <>
                 <span className="text-neutral-600">•</span>

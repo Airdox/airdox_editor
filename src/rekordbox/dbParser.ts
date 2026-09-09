@@ -315,6 +315,9 @@ export function buildDeckTrackFromDatabase(
     analysis: null,
     phrases: [],
     origin: DataOrigin.REKORDBOX_DB,
+    analysisOrigin: 'REKORDBOX_XML',
+    analysisStatus: 'PARTIAL',
+    analysisStatusMessage: 'Rekordbox-Datenbankeintrag geladen; ANLZ wird beim Laden anhand AnalysisDataPath aufgelöst.',
     rawXmlAttributes: partial.rawXmlAttributes,
     originalMedia: partial.originalMedia,
     workingSegments: [

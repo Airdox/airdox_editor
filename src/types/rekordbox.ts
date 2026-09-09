@@ -11,10 +11,36 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
+  /** Synthetic data created only for demo / unit-test fixtures. Must NEVER
+   *  be presented to the user as real Rekordbox analysis. */
+  GENERATED_TEST = 'GENERATED_TEST',
   /** Own calculation used as a clearly labeled fallback when no Rekordbox
    * source (ANLZ/DB/audio) provides the data. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
+  UNKNOWN = 'UNKNOWN',
 }
+
+/**
+ * High-level source discriminator for the entire analysis bundle of a track
+ * (waveform + beatgrid + cues + phrases). The UI uses this to decide whether
+ * to render real Rekordbox data or to display a transparent "Keine Analyse
+ * vorhanden" message instead of inventing waveforms.
+ */
+export type AnalysisOrigin =
+  | 'REKORDBOX_XML'
+  | 'REKORDBOX_ANLZ'
+  | 'USER_EDIT'
+  | 'GENERATED_TEST'
+  | 'LOCAL_ANALYSIS'
+  | 'MISSING_REKORDBOX_ANALYSIS'
+  | 'UNKNOWN';
+
+export type AnalysisStatus =
+  | 'READY'             // ANLZ analysis present and rendered
+  | 'PARTIAL'           // ANLZ loaded but some sections missing
+  | 'MISSING_REKORDBOX_ANALYSIS' // no ANLZ found – UI must NOT invent data
+  | 'LOADING'
+  | 'ERROR';
 
 export type WaveformMode = 'BLUE' | 'RGB' | '3BAND';
 
@@ -184,6 +210,21 @@ export interface TrackModel {
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
   origin: DataOrigin;
+  /** Discriminates where the *analysis bundle* (waveform + beatgrid + cues)
+   *  came from. Never silently upgrades fallback data to REKORDBOX_ANLZ. */
+  analysisOrigin: AnalysisOrigin;
+  /** Transparent status for the UI – lets the renderer show "Keine
+   *  Rekordbox-Analysedaten vorhanden" instead of drawing synthetic data. */
+  analysisStatus: AnalysisStatus;
+  /** Human-readable reason / warnings, surfaced to the user when analysis is
+   *  missing or partial.  */
+  analysisStatusMessage?: string;
+  /** When a USER_EDIT has been applied, the originally imported ANLZ beatgrid
+   *  is preserved here so edits can be reverted. */
+  originalAnlzBeatGrid?: BeatGrid;
+  /** Absolute, resolved path to the ANLZ container (ANLZ0000.DAT) that was
+   *  used to load analysis, if any. */
+  anlzFilePath?: string;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];
   rawXmlAttributes?: Record<string, string>;

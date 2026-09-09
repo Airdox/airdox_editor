@@ -103,6 +103,29 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         onSeek={onSeek}
         onPanView={onPanView}
       />
+
+      {/* v0.4.5 ANLZ-status banner (Step 4/8): transparent message when real
+          Rekordbox analysis is missing or the beatgrid was user-edited. */}
+      {track && (track.analysisStatus === 'MISSING_REKORDBOX_ANALYSIS' || track.analysisStatusMessage) && (
+        <div className={`mt-1 px-2 py-0.5 text-[10px] font-mono rounded-[2px] border ${
+          track.analysisStatus === 'MISSING_REKORDBOX_ANALYSIS'
+            ? 'bg-[#3d2b00]/50 border-[#7c5a00]/60 text-[#ffc857]'
+            : track.analysisOrigin === 'USER_EDIT'
+            ? 'bg-[#2b1d3f]/60 border-[#8b6bc5]/50 text-[#c4a6ff]'
+            : 'bg-[#0b2a1b]/60 border-[#2a7a4f]/50 text-[#8ee0b0]'
+        }`}>
+          {track.analysisStatus === 'MISSING_REKORDBOX_ANALYSIS' ? '⚠  ' : 'ℹ  '}
+          {track.analysisStatusMessage ||
+            (track.analysisOrigin === 'REKORDBOX_ANLZ'
+              ? 'Rekordbox-ANLZ-Analyse geladen (PQTZ+PWV).'
+              : track.analysisOrigin === 'USER_EDIT'
+              ? 'Beatgrid wurde manuell verändert (USER_EDIT).'
+              : 'Analyse-Daten bereit.')}
+          <span className="ml-2 opacity-70">
+            [Origin: {track.analysisOrigin} · Status: {track.analysisStatus}]
+          </span>
+        </div>
+      )}
     </div>
   );
 };

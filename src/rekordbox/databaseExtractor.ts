@@ -11,6 +11,7 @@
 
 import {
   BeatGrid,
+  BeatNode,
   CuePoint,
   DataOrigin,
   ExtractedDatabaseRecord,
@@ -19,7 +20,6 @@ import {
   TrackModel,
   WaveformAnalysisData,
 } from '../types/rekordbox';
-import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
 import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
 
@@ -76,27 +76,94 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzExtractionResult {
 }
 
 /**
+ * Finds the bar/beat of a position in seconds by consulting the dense beats[]
+ * array when present. Falls back to the uniform-grid formula only when no
+ * per-beat entries exist – this is the documented fallback for files where
+ * ANLZ only supplies a single BPM+firstBeat pair (never happens with real
+ * PQTZ/PQT2 data).
+ */
+function locateBarBeat(
+  position: number,
+  beatGrid: BeatGrid
+): { barNumber: number; beatNumber: number; beatIndex: number } {
+  if (beatGrid.beats.length > 0) {
+    // Binary/linear search for the nearest beat.
+    const beats = beatGrid.beats;
+    let best = 0;
+    let bestDist = Math.abs(beats[0].time - position);
+    for (let i = 1; i < beats.length; i++) {
+      const d = Math.abs(beats[i].time - position);
+      if (d < bestDist) { bestDist = d; best = i; }
+      if (beats[i].time > position && beats[i].time - position > bestDist) break;
+    }
+    const node = beats[best];
+    return {
+      barNumber: node.barNumber,
+      beatNumber: node.beatInBar,
+      beatIndex: node.index,
+    };
+  }
+  const spb = 60 / beatGrid.bpm;
+  const beatIndex = Math.max(0, Math.round((position - beatGrid.firstBeat) / spb));
+  return {
+    barNumber: Math.floor(beatIndex / (beatGrid.meter || 4)) + 1,
+    beatNumber: (beatIndex % (beatGrid.meter || 4)) + 1,
+    beatIndex,
+  };
+}
+
+/**
  * Applies only data that was genuinely found in an ANLZ container. XML
  * metadata and the immutable original-media reference are retained; an empty
  * or partial ANLZ file can never erase them or introduce a synthetic fallback.
+ *
+ * CRITICAL (Step 2): individual PQTZ beat entries (`beats[]`) are preserved
+ * 1:1. We do NOT call `buildBeatGridFromTempo` when the ANLZ parser returned
+ * a dense beat grid – that would discard tempo changes and beat positions
+ * Rekordbox actually wrote. The uniform-bpm builder is kept strictly as the
+ * documented fallback for XML/TEMPO-only imports.
  */
 export function applyAnlzExtractionToTrack(
   track: TrackModel,
   extraction: AnlzExtractionResult
 ): TrackModel {
-  const bpm = extraction.bpm ?? track.bpm;
-  const firstBeat = extraction.firstBeat ?? track.beatGrid.firstBeat;
-  const hasAnlzBeatgrid = extraction.bpm !== undefined || extraction.firstBeat !== undefined;
+  const anlzBeatGrid = extraction.beatGrid;
+  const hasAnlzBeatgrid = Boolean(anlzBeatGrid && anlzBeatGrid.beats.length > 0);
+  // BPM display value: take the ANLZ PQTZ first-entry tempo when available,
+  // otherwise keep whatever the XML/DB gave us.
+  const bpm = anlzBeatGrid?.bpm ?? extraction.bpm ?? track.bpm;
+  const firstBeat = anlzBeatGrid?.firstBeat ?? extraction.firstBeat ?? track.beatGrid.firstBeat;
+
   const hasAnlzCues = extraction.cues.length > 0;
   const hasAnlzLoops = extraction.loops.length > 0;
   const hasAnlzPhrases = extraction.phrases.length > 0;
-  const waveform = extraction.waveform ?? track.analysis;
+  const hasAnlzWaveform = Boolean(extraction.waveform);
+  const waveform: WaveformAnalysisData | null = hasAnlzWaveform && extraction.waveform
+    ? {
+        ...extraction.waveform,
+        // When the ANLZ parser didn't stamp a precise secPerBucket we
+        // derive it from bucket count vs. track duration. This is needed
+        // by the detail renderer to map pixel columns to ANLZ buckets.
+        secPerBucket:
+          extraction.waveform.secPerBucket ??
+          (extraction.waveform.length > 0 ? track.duration / extraction.waveform.length : undefined),
+      }
+    : track.analysis;
+
+  // Choose the effective beat grid: ANLZ PQTZ beats[] take priority and are
+  // preserved verbatim. Only fall back to uniform grid when PQTZ is absent.
+  const effectiveBeatGrid: BeatGrid = hasAnlzBeatgrid && anlzBeatGrid
+    ? {
+        ...anlzBeatGrid,
+        bpm,
+        firstBeat,
+        origin: DataOrigin.REKORDBOX_ANLZ,
+      }
+    : track.beatGrid;
 
   const phrases = hasAnlzPhrases
     ? extraction.phrases.map((phrase) => ({
         ...phrase,
-        // PSSI is decoded against the ANLZ beat grid; never let a phrase
-        // extend past the actual working duration of the track.
         endTime: Math.min(track.duration, phrase.endTime),
         startTime: Math.max(0, Math.min(track.duration, phrase.startTime)),
       }))
@@ -104,17 +171,19 @@ export function applyAnlzExtractionToTrack(
 
   const cues = hasAnlzCues
     ? extraction.cues.map((cue, index) => {
-        const beatIndex = Math.max(0, Math.round((cue.position - firstBeat) / (60 / bpm)));
+        const bb = locateBarBeat(cue.position, effectiveBeatGrid);
         return {
           ...cue,
           inMsec: cue.inMsec ?? Math.round(cue.position * 1000),
           cueIndex: cue.cueIndex ?? index + 1,
-          barNumber: cue.barNumber ?? Math.floor(beatIndex / 4) + 1,
-          beatNumber: cue.beatNumber ?? (beatIndex % 4) + 1,
+          barNumber: cue.barNumber ?? bb.barNumber,
+          beatNumber: cue.beatNumber ?? bb.beatNumber,
           origin: DataOrigin.REKORDBOX_ANLZ,
-        };
+        } as CuePoint;
       })
     : track.cues;
+
+  const loops = hasAnlzLoops ? extraction.loops : track.loops;
 
   const databaseRecord: ExtractedDatabaseRecord = {
     trackId: track.id,
@@ -122,9 +191,17 @@ export function applyAnlzExtractionToTrack(
     anlzTagsFound: extraction.tagsFound,
     memoryCuesCount: cues.filter((cue) => cue.type === 'MEMORY').length,
     hotCuesCount: cues.filter((cue) => cue.type === 'HOT_CUE').length,
-    loopsCount: (hasAnlzLoops ? extraction.loops : track.loops).length,
+    loopsCount: loops.length,
     waveformBuckets: waveform?.length ?? 0,
-    waveformModeSupported: waveform ? ['BLUE', 'RGB', '3BAND'] : [],
+    // PWV2/PWV3 = BLUE (mono), PWV4/PWV5 = RGB, PWV6/PWV7 = 3BAND
+    waveformModeSupported: (() => {
+      const tags = extraction.tagsFound;
+      const modes: Array<'BLUE' | 'RGB' | '3BAND'> = [];
+      if (tags.some((t) => t === 'PWAV' || t === 'PWV2' || t === 'PWV3')) modes.push('BLUE');
+      if (tags.some((t) => t === 'PWV4' || t === 'PWV5')) modes.push('RGB');
+      if (tags.some((t) => t === 'PWV6' || t === 'PWV7')) modes.push('3BAND');
+      return modes.length ? modes : ['BLUE', 'RGB', '3BAND'];
+    })(),
     sampleRate: track.sampleRate,
     checksum: track.originalSha256,
     extractedAt: Date.now(),
@@ -132,17 +209,28 @@ export function applyAnlzExtractionToTrack(
     anlzWarnings: extraction.warnings,
   };
 
+  const missingParts: string[] = [];
+  if (!hasAnlzBeatgrid) missingParts.push('Beatgrid (PQTZ)');
+  if (!hasAnlzWaveform) missingParts.push('Waveform (PWV)');
+  if (!hasAnlzCues && !hasAnlzLoops) missingParts.push('Cues (PCOB/PCO2)');
+  const hasAnyAnlz = hasAnlzBeatgrid || hasAnlzWaveform || hasAnlzCues || hasAnlzLoops || hasAnlzPhrases;
+
   return {
     ...track,
     bpm,
-    beatGrid: hasAnlzBeatgrid
-      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
-      : track.beatGrid,
+    beatGrid: effectiveBeatGrid,
     cues,
-    loops: hasAnlzLoops ? extraction.loops : track.loops,
+    loops,
     phrases,
     analysis: waveform,
     databaseRecord,
+    analysisOrigin: 'REKORDBOX_ANLZ',
+    analysisStatus: missingParts.length === 0
+      ? 'READY'
+      : hasAnyAnlz ? 'PARTIAL' : 'MISSING_REKORDBOX_ANALYSIS',
+    analysisStatusMessage: missingParts.length === 0
+      ? undefined
+      : `Rekordbox-ANLZ geladen, fehlende Abschnitte: ${missingParts.join(', ')}.`,
   };
 }
 
@@ -236,27 +324,27 @@ export function extractTrackFromRekordboxXml(
     };
   });
 
-  // Extract Waveform. ANLZ/database data always takes priority; analysis
-  // computed from a decoded audio buffer is LOCAL_ANALYSIS. Only when neither
-  // exists is a clearly labeled GENERATED_FALLBACK produced.
-  let analysis: WaveformAnalysisData | null = null;
-  if (audioBuffer) {
-    analysis = analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS);
-  } else {
-    analysis = generateAnalysisFromMetadata(duration, bpm, memoryCues, bg.firstBeat);
-  }
+  // Step 4 / audio-engine separation: the extractor NEVER analyses audio
+  // itself and NEVER generates a synthetic waveform. Waveform and Beatgrid
+  // come exclusively from ANLZ (PWV/PQTZ). Without ANLZ the track is created
+  // with `analysis = null` and `analysisStatus = MISSING_REKORDBOX_ANALYSIS`;
+  // the UI surfaces a transparent message rather than inventing data.
+  //
+  // audioBuffer (when provided) is retained only for playback/DSP and is
+  // NOT fed through any local analyser on the import path.
+  const analysis: WaveformAnalysisData | null = null;
 
   const phrases = generateRekordboxPhrases(bpm, duration, bg.firstBeat);
 
   const dbRecord: ExtractedDatabaseRecord = {
     trackId: rawTrack.id || '1',
     databaseSource: 'REKORDBOX_XML',
-    anlzTagsFound: ['PQTZ', 'PWV3', 'PWV5', 'PCOB', 'PSSI'],
+    anlzTagsFound: [],
     memoryCuesCount: memoryCues.filter((c) => c.type === 'MEMORY').length,
     hotCuesCount: memoryCues.filter((c) => c.type === 'HOT_CUE').length,
     loopsCount: (rawTrack.loops || []).length,
-    waveformBuckets: analysis.length,
-    waveformModeSupported: ['BLUE', 'RGB', '3BAND'],
+    waveformBuckets: 0,
+    waveformModeSupported: [],
     sampleRate: audioBuffer ? audioBuffer.sampleRate : 44100,
     checksum: 'REKORDBOX-XML-VALIDATED',
     extractedAt: Date.now(),
@@ -281,7 +369,12 @@ export function extractTrackFromRekordboxXml(
     analysis,
     phrases,
     origin: DataOrigin.REKORDBOX_XML,
+    analysisOrigin: 'REKORDBOX_XML',
+    analysisStatus: 'MISSING_REKORDBOX_ANALYSIS',
+    analysisStatusMessage: 'Nur XML-Metadaten geladen; ANLZ muss separat über AnalysisDataPath aufgelöst werden.',
     databaseRecord: dbRecord,
+    rawXmlAttributes: rawTrack.rawXmlAttributes,
+    originalMedia: rawTrack.originalMedia,
     workingSegments: [
       {
         id: `seg-init-${Date.now()}`,
