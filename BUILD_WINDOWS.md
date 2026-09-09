@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.6-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.6-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.11-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.11-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -35,7 +35,7 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
 `main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
 beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.6 && git push --tags`) wird automatisch ein GitHub
+Tag (z. B. `git tag v0.4.11 && git push --tags`) wird automatisch ein GitHub
 Release mit den `.exe`-Dateien erzeugt.
 
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)

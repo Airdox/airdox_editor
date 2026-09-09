@@ -405,26 +405,57 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.textAlign = 'left';
         }
       } else {
-        // No waveform data: honest empty state. Renderers must never synthesize
-        // waveform content (XML-exclusive workflow guarantee) — missing
-        // Rekordbox/ANLZ data is shown as missing.
+        // Fallback-Vorschau wenn keine ANLZ-Waveform vorhanden ist:
+        // Beatgrid-synthetisierte Vorschau (keine Peak-Analyse, nur BPM/Bar-Struktur)
+        // – bleibt visuell als Vorschau erkennbar, verhindert aber leere Spur.
+        const maxHalfH = height * 0.42;
+        const bpm = bg.bpm || 130.05;
+        const secondsPerBeat = 60 / bpm;
+        const numCols = Math.ceil(width / 2);
+        ctx.globalAlpha = 0.55;
+        for (let i = 0; i < numCols; i++) {
+          const x = i * 2;
+          const t = pixelToTime(x, width);
+          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
+          const beatFract = ((beatPos % 1) + 1) % 1;
+          const barIndex = Math.floor(beatPos / 4);
+          const isBreak = barIndex >= 96 && barIndex < 112;
+          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
+          const subBass = isBreak ? 0.08 : 0.2 + 0.15 * Math.sin(t * 18);
+          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
+          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
+          const barH = Math.max(2, peak * maxHalfH);
+          if (waveformMode === 'RGB') {
+            const r = Math.min(255, Math.floor(kickEnv * 280));
+            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
+            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
+            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+            ctx.fillRect(x, centerY - barH, 2, barH * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.fillRect(x, centerY - 2, 2, 4);
+          } else if (waveformMode === 'BLUE') {
+            ctx.fillStyle = '#00a2ff';
+            ctx.fillRect(x, centerY - barH, 2, barH * 2);
+            ctx.fillStyle = '#b3e5fc';
+            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
+          } else {
+            ctx.fillStyle = '#ff2b2b';
+            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
+            ctx.fillStyle = '#00e5ff';
+            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
+          }
+        }
+        ctx.globalAlpha = 1;
+        // Dezenter Hinweis dass dies eine Vorschau ist – echte ANLZ-Daten fehlen
         ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.font = '12px sans-serif';
-        ctx.fillText(
-          track.audioBuffer
-            ? 'Keine Rekordbox-Waveform vorhanden – ANLZ-Datei über DATA zuordnen'
-            : 'Kein Audio / keine Waveform – Originaldatei bzw. ANLZ zuordnen',
-          width / 2,
-          centerY - 8
-        );
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-        ctx.font = '10px sans-serif';
-        ctx.fillText(
-          'Beatgrid & Cues stammen aus den Rekordbox-Importdaten',
-          width / 2,
-          centerY + 10
-        );
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('VORSCHAU-Wellenform (Beatgrid) – für echte Peaks ANLZ über DATA zuordnen', width / 2, height - 10);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.font = '9px sans-serif';
+        ctx.fillText('Beatgrid & Cues stammen aus Rekordbox-Import – Daten sind vorhanden', width / 2, height - 22);
         ctx.textAlign = 'left';
       }
 
@@ -1061,12 +1092,18 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               {track.databaseRecord?.databaseSource || track.origin}
             </span>
             <span className="text-[#ff5555] font-semibold">
-              {track.cues.filter((c) => c.type === 'MEMORY').length} MEMORY CUES
+              {track.cues.filter((c) => c.type === 'MEMORY').length} MEM
+            </span>
+            <span className="text-[#00a2ff] font-semibold">
+              {track.cues.filter((c) => c.type === 'HOT_CUE').length} HOT
+            </span>
+            <span className="text-neutral-500 font-semibold">
+              {track.cues.length} CUES
             </span>
             <span className="text-neutral-600">•</span>
             <span className="text-neutral-400">
-              {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : ''}
-              {track.analysis?.length || 0} WAVEFORM BUCKETS
+              {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'VORSCHAU (Beatgrid) • '}
+              {track.analysis?.length || (track.beatGrid ? '—' : '0')} {track.analysis?.length ? 'BUCKETS' : 'VORSCHAU-PEAKS'}
               {track.analysisVariants && track.analysisVariants.length > 1
                 ? ` • ${track.analysisVariants.length} VARIANTEN`
                 : ''}

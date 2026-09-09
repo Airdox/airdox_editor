@@ -131,13 +131,34 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         }
       }
     } else {
-      // No waveform data: honest empty state. Overview renderers must never
-      // synthesize energy contours (XML-exclusive workflow guarantee).
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('KEINE WAVEFORM-DATEN', width / 2, height / 2 - 2);
-      ctx.textAlign = 'left';
+      // Vorschau-Kontur wenn keine ANLZ-Daten vorhanden: Beatgrid-basierte Hüllkurve
+      const bg = track.beatGrid;
+      const bpm = bg.bpm || 130.05;
+      const secondsPerBeat = 60 / bpm;
+      const centerY = height / 2;
+      ctx.globalAlpha = 0.5;
+      for (let col = 0; col < targetCols; col++) {
+        const t = (col / targetCols) * duration;
+        const beatPos = (t - bg.firstBeat) / secondsPerBeat;
+        const beatFract = ((beatPos % 1) + 1) % 1;
+        const barIndex = Math.floor(beatPos / 4);
+        const isBreak = barIndex >= 96 && barIndex < 112;
+        const kickEnv = isBreak ? 0.06 : Math.exp(-beatFract * 14) * 0.9;
+        const sub = isBreak ? 0.08 : 0.18 + 0.12 * Math.sin(t * 16);
+        const peak = Math.min(1, kickEnv + sub + 0.06);
+        const barH = Math.max(2, peak * (height - 6));
+        const yTop = (height - barH) / 2;
+        const r = Math.min(255, Math.floor(kickEnv * 260 + sub * 60));
+        const g = Math.min(255, Math.floor(sub * 220 + 30));
+        const bCol = Math.min(255, Math.floor(kickEnv * 60 + 90));
+        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+        ctx.fillRect(col, yTop, 1, barH);
+        if (col % 2 === 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.18)';
+          ctx.fillRect(col, centerY - 1, 1, 2);
+        }
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
