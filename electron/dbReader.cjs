@@ -89,8 +89,11 @@ function getOneLibraryKey() {
 
 let cipherModule = undefined;
 let cipherLoadError = null;
+// Test seam (see setCipherModuleForTests): undefined = no override.
+let cipherModuleOverride = undefined;
 
 function getCipherModule() {
+  if (cipherModuleOverride !== undefined) return cipherModuleOverride;
   if (cipherModule !== undefined) return cipherModule;
   try {
     // eslint-disable-next-line import/no-extraneous-dependencies, global-require
@@ -174,7 +177,7 @@ function openRekordboxDb(filePath) {
             'Tracks fallen automatisch auf den PPTH-Fallback zurück.',
         };
       }
-      return { db, dbType };
+      return { available: true, db, dbType };
     } catch (openError) {
       try {
         db.close();
@@ -261,7 +264,14 @@ function readOneLibraryDb(db) {
  */
 function readRekordboxDatabase(filePath) {
   const opened = openRekordboxDb(filePath);
-  if (!opened.available) return opened;
+  if (!opened.available) {
+    // Defensive: a failure without a reason must never surface silently –
+    // callers (and diagnose reports) rely on `reason` to explain the cause.
+    return {
+      available: false,
+      reason: opened.reason || 'Datenbank konnte nicht geöffnet werden (kein Grund übermittelt).',
+    };
+  }
 
   const { db, dbType } = opened;
   try {
@@ -941,4 +951,9 @@ module.exports = {
   findAnlzFolders,
   probeDbTables,
   appVerFromOptions,
+  // Test seam: inject a fake cipher module (or null) so the read pipeline
+  // is unit-testable without the native SQLCipher binding.
+  setCipherModuleForTests(mod) {
+    cipherModuleOverride = mod;
+  },
 };
