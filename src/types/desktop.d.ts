@@ -40,10 +40,15 @@ declare global {
        * returns exact audio-path matches (DAT + EXT pair). Read-only.
        */
       scanAnlzPaths(targetPaths: string[]): Promise<{
-        matches: Array<{ path: string; datPath: string | null; extPath: string | null }>;
+        /**
+         * matchTier 1 = exact PPTH path match; matchTier 2 = unique basename
+         * match (file moved after analysis – must be verified by the user).
+         */
+        matches: Array<{ path: string; datPath: string | null; extPath: string | null; matchTier: 1 | 2; note?: string }>;
         scanned: number;
         folders: string[];
         elapsedMs: number;
+        ppthSample?: string[];
       }>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
