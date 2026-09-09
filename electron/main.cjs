@@ -6,7 +6,7 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
-  scanAnlzForPaths,
+  scanAnlzForPathsAsync,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
@@ -205,8 +205,14 @@ ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
 });
 
-ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
-  return scanAnlzForPaths(targetPaths);
+ipcMain.handle('rekordbox:scan-anlz-paths', async (event, targetPaths) => {
+  return scanAnlzForPathsAsync(targetPaths, undefined, undefined, (progress) => {
+    try {
+      event.sender.send('rekordbox:scan-anlz-progress', progress);
+    } catch {
+      // Renderer gone – the scan result is still returned.
+    }
+  });
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {

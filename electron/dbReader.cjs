@@ -457,7 +457,7 @@ function locateRekordboxDatabases() {
 // Track zuordnen, indem lediglich die Datei-HEADER gelesen werden –
 // ohne SQLCipher und ohne master.db. Read-only: es wird nie geschrieben.
 
-const ANLZ_HEADER_BYTES = 1024;
+const ANLZ_HEADER_BYTES = 4096;
 
 // Rekordbox stores ANLZ containers in NESTED subdirectories below USBANLZ/
 // (e.g. USBANLZ/P016/0000875E/ANLZ0000.DAT locally and on export media –
@@ -538,38 +538,59 @@ function findAnlzFolders(baseOverride) {
   return folders;
 }
 
-function decodePpthPath(buffer, offset, byteLength) {
-  if (byteLength < 2) {
-    // Ungleiche Kurzfassung: rohes ASCII (exotische Exporte)
-    let out = '';
-    for (let i = 0; i < byteLength && offset + i < buffer.length; i++) {
-      out += String.fromCharCode(buffer[offset + i]);
+// A decoded string only counts as an ANLZ path when it looks like one:
+// Windows drive (either slash direction), file:// URL, or /Drive/... path.
+function looksLikeAudioPath(s) {
+  if (!s || s.length < 4 || s.length > 4096) return false;
+  if (/[a-zA-Z]:[\\/]/.test(s)) return true;
+  if (s.startsWith('file://')) return true;
+  if (s.startsWith('/')) return true;
+  return false;
+}
+
+// Scans a buffer window for a plausible path string in one encoding.
+// encoding: 'be' (UTF-16BE), 'le' (UTF-16LE), 'ascii' (Latin-1).
+// Stops at the first NUL; leading header bytes (length prefixes, padding)
+// before the path marker are trimmed.
+function scanWindowForPath(buffer, start, end, encoding) {
+  const chars = [];
+  if (encoding === 'ascii') {
+    for (let pPos = start; pPos < end && pPos < buffer.length; pPos++) {
+      const byte = buffer[pPos];
+      if (byte === 0) break;
+      if (byte < 0x20 || (byte > 0x7e && byte < 0xa0)) return null;
+      chars.push(byte);
     }
-    return out.replace(/\0+$/, '') || null;
-  }
-  // Rekordbox schreibt PPTH-Pfade als UTF-16BE; ältere/exportierte
-  // Container nutzen UTF-16LE. Beide werden versucht – ein Treffer muss
-  // wie ein echter Dateipfad aussehen (Sonderzeichen ausschließen).
-  const decoders = [
-    (pPos) => (buffer[pPos] << 8) | buffer[pPos + 1],
-    (pPos) => (buffer[pPos + 1] << 8) | buffer[pPos],
-  ];
-  for (const codeOf of decoders) {
-    const chars = [];
-    let valid = true;
-    for (let pPos = offset; pPos + 1 < offset + byteLength && pPos + 1 <= buffer.length - 1; pPos += 2) {
-      const code = codeOf(pPos);
+  } else {
+    const highFirst = encoding === 'be';
+    for (let pPos = start; pPos + 1 < end && pPos + 1 < buffer.length; pPos += 2) {
+      const code = highFirst ? (buffer[pPos] << 8) | buffer[pPos + 1] : (buffer[pPos + 1] << 8) | buffer[pPos];
       if (code === 0) break;
-      if (code > 0x024f) {
-        valid = false;
-        break;
-      }
+      if (code === 0xfeff && chars.length === 0) continue; // BOM
+      if (code < 0x20 || code > 0x024f) return null;
       chars.push(code);
     }
-    if (!valid || chars.length === 0) continue;
-    const s = String.fromCharCode(...chars);
-    // Ein echter Pfad enthält ein Laufwerk oder file:// – sonst verwirft.
-    if (/[a-zA-Z]:\\/.test(s) || s.startsWith('file://') || s.startsWith('/')) return s;
+  }
+  if (chars.length === 0) return null;
+  const s = String.fromCharCode(...chars);
+  const marker = s.search(/[a-zA-Z]:[\\/]|file:\/\/|\/(?=[A-Za-z])/);
+  if (marker < 0) return null;
+  const trimmed = s.slice(marker).replace(/[\s ]+$/, '');
+  return looksLikeAudioPath(trimmed) ? trimmed : null;
+}
+
+// Decodes the PPTH path from a tag-content window. The content layout
+// varies (optional length prefix, BOM, padding), so several start offsets
+// and all three encodings are attempted – the first plausible path wins.
+function decodePpthContent(buffer, contentStart, contentEnd) {
+  const starts = [contentStart, contentStart + 1, contentStart + 2, contentStart + 4];
+  const encodings = ['be', 'le', 'ascii'];
+  for (const start of starts) {
+    if (start < 0 || start >= contentEnd || start >= buffer.length) continue;
+    for (const encoding of encodings) {
+      const hit = scanWindowForPath(buffer, start, contentEnd, encoding);
+      if (hit) return hit;
+    }
   }
   return null;
 }
@@ -583,11 +604,27 @@ function readPpthFromFile(filePath) {
     const buf = Buffer.alloc(len);
     const read = fs.readSync(handle, buf, 0, len, 0);
     if (read < 0x10) return null;
-    if (buf.toString('ascii', 0, 4) !== 'PPTH') return null;
-    // Envelope: PPTH, u32 lenHeader (BE), u32 lenTag (BE), u32 lenPath (BE @ +0x0c)
-    const lenPath = buf.readUInt32BE(0x0c);
-    if (lenPath <= 0 || 0x10 + lenPath > read) return null;
-    return decodePpthPath(buf, 0x10, lenPath);
+    // Legacy layout: PPTH envelope directly at offset 0.
+    if (buf.toString('ascii', 0, 4) === 'PPTH') {
+      const lenPath = buf.readUInt32BE(0x0c);
+      if (lenPath > 0 && 0x10 + lenPath <= read) {
+        const legacy = decodePpthContent(buf, 0x10, 0x10 + lenPath);
+        if (legacy) return legacy;
+      }
+    }
+    // Genuine layout: PMAI container with tagged sections – find PPTH.
+    const tagPos = buf.indexOf('PPTH', 0, 'ascii');
+    if (tagPos < 0 || tagPos + 12 > read) return null;
+    const lenHeader = buf.readUInt32BE(tagPos + 4);
+    const lenTag = buf.readUInt32BE(tagPos + 8);
+    let contentStart = tagPos + 12;
+    let contentEnd = Math.min(read, tagPos + 12 + 2048);
+    if (lenHeader >= 12 && lenHeader <= 64 && lenTag > lenHeader && lenTag - lenHeader <= 4096) {
+      contentStart = tagPos + lenHeader;
+      contentEnd = Math.min(read, tagPos + lenTag);
+    }
+    if (contentEnd <= contentStart) return null;
+    return decodePpthContent(buf, contentStart, contentEnd);
   } catch {
     return null;
   } finally {
@@ -654,9 +691,11 @@ function findAudioDriveAnlzFolders(targetPaths, toDriveRoot) {
   return folders;
 }
 
-function buildAnlzPpthIndex(folders) {
-  const index = new Map();
-  let scanned = 0;
+// Two-phase PPTH index: collect (readdir-only, fast) then index (header
+// reads, chunkable). Both phases share bounds and filters, so sync and
+// async scans always agree.
+function collectAnlzFiles(folders) {
+  const files = [];
   let truncated = false;
   const walk = (dir, depth) => {
     if (truncated) return;
@@ -685,49 +724,62 @@ function buildAnlzPpthIndex(folders) {
       const lower = name.toLowerCase();
       if (!lower.startsWith('anlz')) continue;
       if (!lower.endsWith('.dat') && !lower.endsWith('.ext')) continue;
-      if (scanned >= ANLZ_SCAN_MAX_FILES) {
+      if (files.length >= ANLZ_SCAN_MAX_FILES) {
         truncated = true;
         return;
       }
-      scanned += 1;
-      const ppth = readPpthFromFile(full);
-      if (!ppth) continue;
-      const key = normalizeAnlzPathKey(ppth);
-      if (!key) continue;
-      const isDat = lower.endsWith('.dat');
-      const entry = index.get(key) || { ppth, datPath: null, extPath: null };
-      if (isDat) entry.datPath = full;
-      else if (!entry.extPath) entry.extPath = full;
-      index.set(key, entry);
+      files.push({ full, isDat: lower.endsWith('.dat') });
     }
   };
   for (const folder of folders) {
     if (truncated) break;
     walk(folder, 0);
   }
-  return { index, scanned, truncated };
+  return { files, truncated };
 }
 
-/**
- * Matches the given audio paths against the PPTH headers of all ANLZ
- * containers in the standard Rekordbox analysis folders. Read-only.
- * The folders are searched RECURSIVELY because Rekordbox keeps ANLZ
- * containers in nested subdirectories below USBANLZ/ (flat top-level
- * layouts keep working as before).
- * In addition to the local %APPDATA% tree, the audio drives referenced by
- * the targets are checked for export-device analysis folders
- * (<drive>:\PIONEER\USBANLZ) – tracks on export media are analyzed there.
- * @param {string[]} targetPaths audio paths (any form; normalized internally)
- * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
- * @param {Function} [driveRootResolver] maps a drive letter to a directory (tests)
- */
-function scanAnlzForPaths(targetPaths, folderOverride, driveRootResolver) {
-  const started = Date.now();
-  const folders = folderOverride || [
-    ...findAnlzFolders(),
-    ...findAudioDriveAnlzFolders(targetPaths, driveRootResolver),
-  ];
-  const { index, scanned, truncated } = buildAnlzPpthIndex(folders);
+// Indexes one collected file. DAT and EXT siblings share the same analysis,
+// so an EXT with a collected DAT sibling attaches without re-reading
+// (halves header reads on real libraries); an EXT without a readable DAT
+// sibling is read normally. state: { index, datPathToKey, extracted }.
+function indexCollectedFile(state, file, datSiblings) {
+  const { full, isDat } = file;
+  if (!isDat) {
+    const siblingKey = full.toLowerCase().replace(/\.ext$/, '.dat');
+    if (datSiblings.has(siblingKey)) {
+      const key = state.datPathToKey.get(siblingKey);
+      if (key) {
+        const entry = state.index.get(key);
+        if (entry && !entry.extPath) entry.extPath = full;
+        return;
+      }
+      // DAT sibling collected but unreadable (no PPTH) – fall through and
+      // try the EXT itself so EXT-only analyses still resolve.
+    }
+  }
+  const ppth = readPpthFromFile(full);
+  if (!ppth) return;
+  const key = normalizeAnlzPathKey(ppth);
+  if (!key) return;
+  state.extracted += 1;
+  const entry = state.index.get(key) || { ppth, datPath: null, extPath: null };
+  if (isDat) {
+    entry.datPath = full;
+    state.datPathToKey.set(full.toLowerCase(), key);
+  } else if (!entry.extPath) {
+    entry.extPath = full;
+  }
+  state.index.set(key, entry);
+}
+
+function createAnlzIndexState() {
+  return { index: new Map(), datPathToKey: new Map(), extracted: 0 };
+}
+
+// Tier 1: exact normalized path hit (PPTH == audio path).
+// Tier 2: basename-only hit, valid only when the basename is unique across
+// the whole index (moved/renamed file – user must verify).
+function matchAnlzTargets(index, targetPaths) {
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
     const key = normalizeAnlzPathKey(tp);
@@ -735,23 +787,12 @@ function scanAnlzForPaths(targetPaths, folderOverride, driveRootResolver) {
   }
   const matches = [];
   const matchedKeys = new Set();
-
-  // Tier 1: exakter normalisierter Pfadtrenffer (PPTH == Audio-Pfad).
   for (const [key, entry] of index) {
     if (!wanted.has(key)) continue;
     if (!entry.datPath && !entry.extPath) continue;
-    matches.push({
-      path: wanted.get(key),
-      datPath: entry.datPath,
-      extPath: entry.extPath,
-      matchTier: 1,
-    });
+    matches.push({ path: wanted.get(key), datPath: entry.datPath, extPath: entry.extPath, matchTier: 1 });
     matchedKeys.add(key);
   }
-
-  // Tier 2: Audio-Datei wurde nach der Analyse verschoben/umbenannt?
-  // Dann stimmt nur der Dateiname ueberein. Ein Treffer gilt nur, wenn der
-  // Basename in der gesamten ANLZ-Index eindeutig ist (ansonsten ambig).
   if (matchedKeys.size < wanted.size) {
     const byBasename = new Map();
     for (const [key, entry] of index) {
@@ -776,15 +817,111 @@ function scanAnlzForPaths(targetPaths, folderOverride, driveRootResolver) {
       matchedKeys.add(key);
     }
   }
+  return { matches, wantedCount: wanted.size, matchedCount: matchedKeys.size };
+}
 
-  // Diagnostik: erste PPTH-Pfade (Console/Log), ohne Vollindex zu senden.
-  const ppthSample = [];
+// Diagnostics: first PPTH paths (console/log), without sending the full index.
+function ppthSampleFromIndex(index, limit = 3) {
+  const sample = [];
   for (const entry of index.values()) {
-    ppthSample.push(entry.ppth);
-    if (ppthSample.length >= 3) break;
+    sample.push(entry.ppth);
+    if (sample.length >= limit) break;
   }
+  return sample;
+}
 
-  return { matches, scanned, folders, elapsedMs: Date.now() - started, ppthSample, truncated };
+function resolveScanFolders(targetPaths, folderOverride, driveRootResolver) {
+  if (folderOverride) return folderOverride;
+  return [
+    ...findAnlzFolders(),
+    ...findAudioDriveAnlzFolders(targetPaths, driveRootResolver),
+  ];
+}
+
+/**
+ * Matches the given audio paths against the PPTH headers of all ANLZ
+ * containers in the standard Rekordbox analysis folders. Read-only.
+ * The folders are searched RECURSIVELY because Rekordbox keeps ANLZ
+ * containers in nested subdirectories below USBANLZ/ (flat top-level
+ * layouts keep working as before).
+ * In addition to the local %APPDATA% tree, the audio drives referenced by
+ * the targets are checked for export-device analysis folders
+ * (<drive>:\PIONEER\USBANLZ) – tracks on export media are analyzed there.
+ * @param {string[]} targetPaths audio paths (any form; normalized internally)
+ * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
+ * @param {Function} [driveRootResolver] maps a drive letter to a directory (tests)
+ */
+function scanAnlzForPaths(targetPaths, folderOverride, driveRootResolver) {
+  const started = Date.now();
+  const folders = resolveScanFolders(targetPaths, folderOverride, driveRootResolver);
+  const collectStarted = Date.now();
+  const { files, truncated } = collectAnlzFiles(folders);
+  const collectMs = Date.now() - collectStarted;
+  const state = createAnlzIndexState();
+  const datSiblings = new Set(files.filter((f) => f.isDat).map((f) => f.full.toLowerCase()));
+  // DATs first so EXT siblings attach without re-reading.
+  const ordered = [...files.filter((f) => f.isDat), ...files.filter((f) => !f.isDat)];
+  for (const file of ordered) indexCollectedFile(state, file, datSiblings);
+  const { matches } = matchAnlzTargets(state.index, targetPaths);
+  return {
+    matches,
+    scanned: files.length,
+    extracted: state.extracted,
+    folders,
+    elapsedMs: Date.now() - started,
+    collectMs,
+    ppthSample: ppthSampleFromIndex(state.index),
+    truncated,
+  };
+}
+
+/**
+ * Async variant: same result, but yields to the event loop while indexing
+ * so a 20k-file library no longer freezes the app. onProgress receives
+ * { scanned, total } throttled (~150 ms) plus a final event.
+ */
+async function scanAnlzForPathsAsync(targetPaths, folderOverride, driveRootResolver, onProgress) {
+  const started = Date.now();
+  const folders = resolveScanFolders(targetPaths, folderOverride, driveRootResolver);
+  const collectStarted = Date.now();
+  const { files, truncated } = collectAnlzFiles(folders);
+  const collectMs = Date.now() - collectStarted;
+  const state = createAnlzIndexState();
+  const datSiblings = new Set(files.filter((f) => f.isDat).map((f) => f.full.toLowerCase()));
+  const ordered = [...files.filter((f) => f.isDat), ...files.filter((f) => !f.isDat)];
+  const total = ordered.length;
+  let lastEmit = 0;
+  const emit = (scanned, force = false) => {
+    if (typeof onProgress !== 'function') return;
+    const now = Date.now();
+    if (!force && now - lastEmit < 150 && scanned < total) return;
+    lastEmit = now;
+    try {
+      onProgress({ scanned, total });
+    } catch {
+      // Progress listener failed – the scan continues regardless.
+    }
+  };
+  emit(0, total === 0);
+  for (let i = 0; i < ordered.length; i++) {
+    indexCollectedFile(state, ordered[i], datSiblings);
+    if ((i + 1) % 50 === 0 || i + 1 === total) {
+      emit(i + 1);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  emit(total, true);
+  const { matches } = matchAnlzTargets(state.index, targetPaths);
+  return {
+    matches,
+    scanned: files.length,
+    extracted: state.extracted,
+    folders,
+    elapsedMs: Date.now() - started,
+    collectMs,
+    ppthSample: ppthSampleFromIndex(state.index),
+    truncated,
+  };
 }
 
 module.exports = {
@@ -794,6 +931,8 @@ module.exports = {
   readRekordboxDatabase,
   locateRekordboxDatabases,
   scanAnlzForPaths,
+  scanAnlzForPathsAsync,
+  collectAnlzFiles,
   isCipherAvailable: () => getCipherModule() !== null,
   // Read-only discovery helpers (exported as test seams):
   getOptionValue,
