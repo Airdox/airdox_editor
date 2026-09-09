@@ -7,7 +7,7 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
-const { isProtectedTarget } = require('./pathGuard.cjs');
+const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -138,26 +138,8 @@ function registerAppProtocol() {
   });
 }
 
-function toLocalPath(location) {
-  if (typeof location !== 'string' || !location.trim()) return null;
-
-  try {
-    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
-      return path.resolve(location);
-    }
-
-    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
-      const url = new URL(location);
-      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
-    }
-
-    return path.resolve(location);
-  } catch {
-    return null;
-  }
-}
-
 // --- IPC-Handler bleiben unverändert ---
+// (toLocalPath lives in pathGuard.cjs so it stays unit-testable.)
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);

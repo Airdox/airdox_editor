@@ -28,4 +28,30 @@ function isProtectedTarget(targetPath, protectedPaths) {
   );
 }
 
-module.exports = { normalizeForCompare, isProtectedTarget };
+/**
+ * Resolves an XML LOCATION value to a local filesystem path (or null when it
+ * is not a local file reference). Absolute paths are resolved, file:// URLs
+ * are decoded via fileURLToPath, anything else (http(s), custom schemes,
+ * relative library paths) maps to null or a resolved path without searching.
+ * Pure apart from path resolution; used by the Electron bridge and unit-tested.
+ */
+function toLocalPath(location) {
+  if (typeof location !== 'string' || !location.trim()) return null;
+
+  try {
+    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
+      return path.resolve(location);
+    }
+
+    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
+      const url = new URL(location);
+      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
+    }
+
+    return path.resolve(location);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { normalizeForCompare, isProtectedTarget, toLocalPath };

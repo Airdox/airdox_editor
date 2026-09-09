@@ -32,6 +32,12 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
+  /**
+   * True only for uniform continuation nodes appended after the last verbatim
+   * PQTZ beat so the grid spans the full track duration. Verbatim Rekordbox
+   * beats never carry this flag (strict-PQTZ provenance).
+   */
+  tailExtended?: boolean;
 }
 
 export interface BeatGrid {
@@ -142,6 +148,11 @@ export interface WaveformAnalysisData {
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
+  /**
+   * ANLZ source tag this variant was decoded from (e.g. 'PWV5', 'PWV7').
+   * Set only for genuine ANLZ variants; never for computed analysis.
+   */
+  sourceTag?: string;
 }
 
 /**
@@ -183,6 +194,12 @@ export interface TrackModel {
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
+  /**
+   * All genuine ANLZ waveform variants decoded from the container (different
+   * PWV tags / resolutions). `analysis` remains the best variant; renderers
+   * pick the variant that matches the current zoom. Never synthesized.
+   */
+  analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];
@@ -216,6 +233,8 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
+  /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
+  beatGrid?: BeatGrid;
 }
 
 export interface MultiTrackLayer {
