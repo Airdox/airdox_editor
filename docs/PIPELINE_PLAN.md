@@ -72,8 +72,10 @@ identisch) **und** `ERGEBNIS: PASS`. Der Schlüssel wird niemals ausgegeben, nur
 Read-Only-Beweis, „keine Kopie entstanden“ sowie die Negativfälle (beschädigte Datei →
 Exit 1).
 
-**Status:** lokal grün (Fixture). **Auf dem Windows-Rechner mit der echten `D:`-Bibliothek
-noch auszuführen** – das ist der nächste Handschlag.
+**Status:** ✅ echt verifiziert (10.09.2026, Windows): `D:\PIONEER\Master\master.db`
+(74,9 MB, via `rekordboxAgent/options.json` gefunden), 47 Tabellen, 10.726 Tracks,
+10.194 mit AnalysisDataPath (95 %), 11.091 Cues; Fingerabdruck vorher/nachher identisch;
+Schlüssel nur maskiert, keine Kopie erzeugt.
 
 ---
 
@@ -185,8 +187,12 @@ führt die CLI als Prozess aus und prüft Gate, Inventarwerte (PWV5 = 2 Bytes/60
 PWV3 = 1 Byte/900/`MONO_5BIT`, PWV7 = 3 Bytes/900/`TRIPLE_BYTE`), PPTH-Exakttreffer,
 Read-Only-Beweis und den Negativfall (PPTH-only → Exit 1).
 
-**Status:** lokal grün (Fixture). **Auf dem Windows-Rechner mit einem echten Track aus der
-`D:`-Bibliothek noch auszuführen** – erst dann ist die Stufe gegen echte Daten bestätigt.
+**Status:** ✅ echt verifiziert (10.09.2026, Track 100011458): 3/3 Container
+(DAT/EXT/2EX) unter `D:\PIONEER\Master\share\PIONEER\USBANLZ\…`, Quelle
+`analysisResolver`; Gate `[5]` PASS; `[6]` PASS via `PLACEHOLDER_BASENAME`
+(PPTH trägt rekordbox-Platzhalter `?/`); `[7]` byte-identisch. Ehrlich berichtet,
+bewusst nicht dekodiert (außerhalb der Gates): `PQT2` (anderes Layout, Grid kommt aus
+`PQTZ`), `PVBR` (DAT), `PWVC` (2EX).
 
 ---
 
