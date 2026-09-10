@@ -559,8 +559,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
   // databases (master.db / exportLibrary.db) without manual user assignment.
   // This fulfills REKORDBOX_XML → Waveform ausschließlich aus ANLZ/DB:
-  // the Desktop bridge scans %APPDATA%/Pioneer/rekordbox* read-only and the
-  // renderer builds the exact-match audio-path → AnalysisDataPath map.
+  // the Desktop bridge scans the D: partition read-only (ständige
+  // Nutzer-Vorgabe: die Rekordbox-Datenbank liegt auf D: — kein AppData-
+  // Scan) and the renderer builds the exact-match audio-path →
+  // AnalysisDataPath map.
   const ensureDbAnalysisIndex = useCallback(async () => {
     if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
     if (dbAutoLoadAttemptedRef.current) return dbAnalysisIndexRef.current;

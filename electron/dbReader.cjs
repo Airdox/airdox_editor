@@ -356,40 +356,48 @@ function findDatabaseFilesOnWindowsVolume(volumeRoot) {
 }
 
 /**
- * Scans the standard Pioneer/Rekordbox application data directories for
+ * Suche nach der Rekordbox-Datenbank (master.db / exportLibrary.db).
+ *
+ * Ständige Nutzer-Vorgabe: Die Rekordbox-Datenbank liegt auf Partition D:.
+ * Auf Windows wird daher NUR D: durchsucht — AppData (C:) und alle anderen
+ * Laufwerke werden bewusst NICHT angefasst, damit die Quellenauswahl
+ * deterministisch bleibt. Ein abweichender Root ist nur als explizite,
+ * dokumentierte Ausnahme über AIRDOX_REKORDBOX_ROOT möglich (Default: aus).
+ */
+function getDatabaseSearchRoots(platform = process.platform, env = process.env) {
+  if (platform === 'win32') {
+    const roots = [
+      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
+      'D:\\rekordbox7', 'D:\\rekordbox6',
+    ];
+    const override = (env.AIRDOX_REKORDBOX_ROOT || '').trim();
+    if (override) roots.unshift(override);
+    return roots;
+  }
+  if (platform === 'darwin') {
+    const base = path.join(env.HOME || '', 'Library', 'Application Support', 'Pioneer');
+    return ['rekordbox7', 'rekordbox6', 'rekordbox'].map((dirName) => path.join(base, dirName));
+  }
+  return [];
+}
+
+/**
+ * Scans the standard Rekordbox application data directories for
  * master.db / exportLibrary.db (read-only).
+ *
+ * Windows: ausschließlich die D:-Roots aus getDatabaseSearchRoots —
+ * KEIN AppData-Scan, KEIN options.json-Pointer, KEINE anderen Laufwerke.
  */
 function locateRekordboxDatabases() {
   const candidates = [];
+  const roots = getDatabaseSearchRoots();
   if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    const pioneerRoot = path.join(appData, 'Pioneer');
-    // Rekordbox keeps the library location in the global
-    // Pioneer/rekordboxAgent/options.json even when master.db itself lives on
-    // another partition (for example D:). Read that pointer before scanning
-    // the conventional per-version folders.
-    candidates.push(...findDatabaseFiles(pioneerRoot));
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
-    }
-  } else if (process.platform === 'darwin') {
-    const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(base, dirName)));
-    }
+    for (const root of roots) candidates.push(...findDatabaseFilesOnWindowsVolume(root));
+  } else {
+    for (const dir of roots) candidates.push(...findDatabaseFiles(dir));
   }
 
-  if (process.platform === 'win32') {
-    const configuredRoot = process.env.AIRDOX_REKORDBOX_ROOT;
-    const volumeRoots = [
-      configuredRoot,
-      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
-      'D:\\rekordbox7', 'D:\\rekordbox6',
-    ].filter(Boolean);
-    for (const root of volumeRoots) candidates.push(...findDatabaseFilesOnWindowsVolume(root));
-  }
-
-  // Deduplicate by resolved path; options.json entries rank first.
+  // Deduplicate by resolved path.
   const seen = new Set();
   const unique = [];
   for (const candidate of candidates) {
@@ -452,29 +460,32 @@ function findAnlzFolders(baseOverride) {
 
   // Robust fallback: discover any *ANLZ* folder under the Pioneer root
   // (rekordbox6/7/custom layouts differ), limited depth, read-only.
-  const pioneerRoot = baseOverride
-    ? baseOverride
-    : (process.platform === 'win32'
-        ? path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'Pioneer')
-        : path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer'));
-  if (!baseOverride && fs.existsSync(pioneerRoot)) {
-    const found = [];
-    const walk = (dir, depth) => {
-      if (depth > 4 || found.length >= 8) return;
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const ent of entries) {
-        if (!ent.isDirectory()) continue;
-        const lower = ent.name.toLowerCase();
-        if (lower === 'usbanlz' || lower === 'anlz') {
-          found.push(path.join(dir, ent.name));
-        } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share') {
-          walk(path.join(dir, ent.name), depth + 1);
+  // Windows: NUR D: durchsuchen — AppData (C:) wird nicht angefasst
+  // (ständige Nutzer-Vorgabe, siehe getDatabaseSearchRoots).
+  if (!baseOverride) {
+    const fallbackRoots = process.platform === 'win32'
+      ? ['D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox']
+      : [path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer')];
+    for (const pioneerRoot of fallbackRoots) {
+      if (!fs.existsSync(pioneerRoot)) continue;
+      const found = [];
+      const walk = (dir, depth) => {
+        if (depth > 4 || found.length >= 8) return;
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const ent of entries) {
+          if (!ent.isDirectory()) continue;
+          const lower = ent.name.toLowerCase();
+          if (lower === 'usbanlz' || lower === 'anlz') {
+            found.push(path.join(dir, ent.name));
+          } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share') {
+            walk(path.join(dir, ent.name), depth + 1);
+          }
         }
-      }
-    };
-    walk(pioneerRoot, 0);
-    for (const f of found) push(f);
+      };
+      walk(pioneerRoot, 0);
+      for (const f of found) push(f);
+    }
   }
   return folders;
 }
@@ -711,6 +722,7 @@ module.exports = {
   getOneLibraryKey,
   detectDbType,
   readRekordboxDatabase,
+  getDatabaseSearchRoots,
   locateRekordboxDatabases,
   scanAnlzForPaths,
   isCipherAvailable: () => getCipherModule() !== null,

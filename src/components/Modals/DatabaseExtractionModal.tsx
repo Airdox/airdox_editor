@@ -668,13 +668,18 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                       </button>
                     )}
                     {onLocateRekordboxDatabases && (
-                      <button
-                        onClick={handleDiscoverDatabases}
-                        className="w-full py-2 bg-[#115c48] hover:bg-[#157055] border border-[#10b981]/40 text-[#7ce8c3] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
-                      >
-                        <Database size={13} />
-                        <span>{searchingDatabase ? 'Suche...' : 'Standardordner durchsuchen'}</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={handleDiscoverDatabases}
+                          className="w-full py-2 bg-[#115c48] hover:bg-[#157055] border border-[#10b981]/40 text-[#7ce8c3] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
+                        >
+                          <Database size={13} />
+                          <span>{searchingDatabase ? 'Suche...' : 'Standardordner durchsuchen'}</span>
+                        </button>
+                        <p className="text-[9px] text-neutral-500">
+                          Suche: nur Partition D: wird durchsucht — die Rekordbox-Datenbank liegt auf D: (kein AppData-Scan).
+                        </p>
+                      </>
                     )}
                     {databaseCandidates.length > 0 && (
                       <div className="space-y-1.5 max-h-28 overflow-y-auto">

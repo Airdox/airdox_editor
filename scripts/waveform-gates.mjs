@@ -261,6 +261,13 @@ runCommandGate(
   'Restore the unified versioning contract (docs/VERSIONIERUNG.md): strict semver in package.json, Vite __APP_VERSION__ injection, no hardcoded version in src/utils/appVersion.ts, no stale version numbers in README.md/BUILD_WINDOWS.md, ${version} in artifact names. Then rerun npm run verify:waveform.'
 );
 runCommandGate(
+  'Database',
+  'Rekordbox database search restricted to D: (main process) agent',
+  tsxCommand,
+  [resolve(root, 'tests', 'db-search-d-drive.test.mjs')],
+  'Restore the user-mandated D: partition search: on Windows the Rekordbox database lookup (electron/dbReader.cjs, getDatabaseSearchRoots / findAnlzFolders) must only scan D: — no AppData/C:, no other drives. Then rerun npm run verify:waveform.'
+);
+runCommandGate(
   'Release',
   'TypeScript gatekeeper',
   npmCommand,
