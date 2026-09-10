@@ -83,8 +83,13 @@ check('D3', 'Ausnahme: AIRDOX_REKORDBOX_ROOT steht vor den D:-Standardroots', ()
 check('D4', 'macOS: Roots unter Application Support/Pioneer (kein Laufwerk)', () => {
   const roots = getDatabaseSearchRoots('darwin', { HOME: '/Users/test' });
   assert.strictEqual(roots.length, 3, 'rekordbox7/6/');
+  // Plattformunabhängig prüfen: beide Seiten (Funktion und Erwartung)
+  // nutzen denselben path.join des Host-Systems.
+  for (const name of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
+    const expected = path.join('/Users/test', 'Library', 'Application Support', 'Pioneer', name);
+    assert.ok(roots.includes(expected), `fehlt: ${expected}`);
+  }
   for (const r of roots) {
-    assert.ok(r.startsWith('/Users/test/Library/Application Support/Pioneer/'), r);
     assert.ok(!/^[A-Za-z]:[\\/]/.test(r), 'Kein Laufwerksbuchstabe auf macOS');
   }
 });
