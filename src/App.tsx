@@ -1168,7 +1168,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, dropTime: number = currentTime) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -1184,7 +1184,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
 
     const shiftAmount = adapted.newDuration;
-    const insertPos = currentTime;
+    const insertPos = Math.max(0, Math.min(activeTrack.duration, dropTime));
 
     // Shift cues occurring after insert position
     activeTrack.cues = activeTrack.cues.map((c) => {
@@ -2466,6 +2466,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
+          onDropClip={(clipId, dropTime) => {
+            const clip = paletteClips.find((candidate) => candidate.id === clipId);
+            if (clip) handleInsertClipToDeckA(clip, dropTime);
+          }}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}

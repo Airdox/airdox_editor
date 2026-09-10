@@ -170,6 +170,13 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
             return (
               <div
                 key={clip.id}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'copy';
+                  e.dataTransfer.setData('application/x-airdox-palette-clip', clip.id);
+                  e.dataTransfer.setData('text/plain', clip.id);
+                }}
+                onDragEnd={(e) => e.dataTransfer.clearData()}
                 onClick={() => onSelectClip(clip)}
                 className={`p-1.5 rounded-xs border transition-all cursor-pointer ${
                   isSelected
