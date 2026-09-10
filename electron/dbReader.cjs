@@ -333,7 +333,9 @@ function findDatabaseFiles(appDir) {
 function findDatabaseFilesOnWindowsVolume(volumeRoot) {
   const results = [];
   const seen = new Set();
-  const allowedDirectory = (name) => /^(pioneer|rekordbox|rekordbox[0-9]+|database|databases|library|share|storage|export)$/i.test(name);
+  // Rekordbox 7 benennt den Datenordner frei (hier: „Master“) — deshalb
+  // auch master/database/library/share/storage/export, nie mehr.
+  const allowedDirectory = (name) => /^(pioneer|rekordbox|rekordbox[0-9]+|master|database|databases|library|share|storage|export)$/i.test(name);
   const visit = (dir, depth) => {
     if (depth > 6) return;
     let entries = [];
@@ -382,20 +384,55 @@ function getDatabaseSearchRoots(platform = process.platform, env = process.env) 
 }
 
 /**
+ * Ein Rekordbox-DB-Pointer (options.json db-path / XML LOCATION) ist nur
+ * gültig, wenn das ZIEL auf D: liegt — die Nutzer-Datenbank liegt auf D:.
+ * Pointer auf C:, G: & Co. werden verworfen (kein Suchen auf anderen
+ * Laufwerken, keine AppData-DB).
+ */
+function isOnDriveD(p) {
+  return typeof p === 'string' && /^[dD]:[\\/]/.test(p.trim());
+}
+
+/**
+ * Windows-DB-Suche, ausschließlich auf D: —
+ *  (1) Rekordboxs eigener Pointer (rekordboxAgent/options.json, eine einzige
+ *      Config-Datei — KEIN Verzeichnis-Scan) wird gelesen, aber NUR
+ *      akzeptiert, wenn das Ziel auf D: liegt;
+ *  (2) die D:-Roots aus getDatabaseSearchRoots werden durchwandert
+ *      (inkl. Rekordbox-7-Datenordner „Master“).
+ * KEIN AppData-Verzeichnis-Scan, KEINE anderen Laufwerke.
+ */
+function locateRekordboxDatabasesOnD() {
+  const candidates = [];
+  // (1) Rekordbox erklärt in options.json, wo die DB liegt — nur D:-Ziele.
+  const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+  const pointer = candidateFromOptions(path.join(appData, 'Pioneer'));
+  if (pointer) {
+    const p = pointer.replace(/^file:\/\/(localhost)?\/?/i, '').replace(/^\/([A-Za-z]:)/, '$1').trim();
+    if (isOnDriveD(p) && fs.existsSync(p) && fs.statSync(p).isFile()) {
+      const base = path.basename(p).toLowerCase();
+      const kind = base === 'exportlibrary.db' ? 'ONE_LIBRARY' : base === 'master.db' ? 'MASTER_DB' : null;
+      if (kind) candidates.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json, Ziel D:)` });
+    }
+  }
+  // (2) D:-Roots durchwandern (nur Rekordbox-typische Ordner, begrenzt).
+  for (const root of getDatabaseSearchRoots()) {
+    candidates.push(...findDatabaseFilesOnWindowsVolume(root));
+  }
+  return candidates;
+}
+
+/**
  * Scans the standard Rekordbox application data directories for
  * master.db / exportLibrary.db (read-only).
  *
- * Windows: ausschließlich die D:-Roots aus getDatabaseSearchRoots —
- * KEIN AppData-Scan, KEIN options.json-Pointer, KEINE anderen Laufwerke.
+ * Windows: ausschließlich locateRekordboxDatabasesOnD() (siehe dort).
  */
 function locateRekordboxDatabases() {
-  const candidates = [];
-  const roots = getDatabaseSearchRoots();
-  if (process.platform === 'win32') {
-    for (const root of roots) candidates.push(...findDatabaseFilesOnWindowsVolume(root));
-  } else {
-    for (const dir of roots) candidates.push(...findDatabaseFiles(dir));
-  }
+  const candidates =
+    process.platform === 'win32'
+      ? locateRekordboxDatabasesOnD()
+      : getDatabaseSearchRoots().flatMap((dir) => findDatabaseFiles(dir));
 
   // Deduplicate by resolved path.
   const seen = new Set();
@@ -429,8 +466,11 @@ function findAnlzFolders(baseOverride) {
     }
   };
   const roots = [];
+  // Rekordbox 7 benennt den Datenordner frei — „master“ ist der bei diesem
+  // Nutzer übliche Name (D:\PIONEER\Master\share\PIONEER\USBANLZ).
+  const dirNames = ['rekordbox7', 'rekordbox6', 'rekordbox', 'master'];
   if (baseOverride) {
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
+    for (const dirName of dirNames) {
       roots.push(path.join(baseOverride, dirName, 'share', 'PIONEER'));
       roots.push(path.join(baseOverride, dirName));
     }
@@ -443,7 +483,7 @@ function findAnlzFolders(baseOverride) {
       'D:\\rekordbox7', 'D:\\rekordbox6',
     ];
     for (const base of dRoots) {
-      for (const dirName of ['', 'rekordbox7', 'rekordbox6', 'rekordbox']) {
+      for (const dirName of ['', ...dirNames]) {
         roots.push(dirName ? path.join(base, dirName, 'share', 'PIONEER') : path.join(base, 'share', 'PIONEER'));
       }
     }
@@ -478,7 +518,7 @@ function findAnlzFolders(baseOverride) {
           const lower = ent.name.toLowerCase();
           if (lower === 'usbanlz' || lower === 'anlz') {
             found.push(path.join(dir, ent.name));
-          } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share') {
+          } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share' || lower === 'master') {
             walk(path.join(dir, ent.name), depth + 1);
           }
         }
@@ -723,6 +763,9 @@ module.exports = {
   detectDbType,
   readRekordboxDatabase,
   getDatabaseSearchRoots,
+  isOnDriveD,
+  findDatabaseFilesOnWindowsVolume,
+  findAnlzFolders,
   locateRekordboxDatabases,
   scanAnlzForPaths,
   isCipherAvailable: () => getCipherModule() !== null,
