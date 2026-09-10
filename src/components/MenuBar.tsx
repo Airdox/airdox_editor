@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc } from 'lucide-react';
+import { Disc, Disc2 } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -30,6 +30,7 @@ interface MenuBarProps {
   onOpenDatabaseInspector?: () => void;
   onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
+  onOpenMixLab?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -54,6 +55,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenDatabaseInspector,
   onOpenXmlCollection,
   onOpenSystemLogs,
+  onOpenMixLab,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -256,6 +258,18 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span>Browser & Multi-Track</span>
                 <span>{browserOpen ? '✓' : ''}</span>
               </button>
+              {onOpenMixLab && (
+                <>
+                  <div className="h-px bg-[#262830] my-1" />
+                  <button
+                    onClick={() => { onOpenMixLab(); setActiveMenu(null); }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00e5ff] font-medium"
+                    title="Mix-Vorschau: zwei Slots, Drop-Ziel, Beat-Sync, Crossfade — ohne Projektänderung"
+                  >
+                    Mix Lab (Vorschau)…
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -316,6 +330,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           >
             <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] inline-block animate-pulse" />
             <span className="font-semibold tracking-wide">DB-Extraktor</span>
+          </button>
+        )}
+        {onOpenMixLab && (
+          <button
+            onClick={onOpenMixLab}
+            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#10b981]/10 hover:bg-[#10b981]/30 text-[#34d399] hover:text-white border border-[#10b981]/30 text-[10px] transition-colors"
+            title="Mix Lab öffnen — Mix-Vorschau (zwei Slots, Drop-Ziel, Beat-Sync, Crossfade) ohne Projektänderung"
+          >
+            <Disc2 size={11} className="text-[#00e5ff]" />
+            <span className="font-semibold tracking-wide">Mix Lab</span>
           </button>
         )}
       </div>

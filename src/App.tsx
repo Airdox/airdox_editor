@@ -51,6 +51,7 @@ import { TrackHeader } from './components/TrackHeader';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
+import { MixLabView } from './components/MixLabView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
@@ -497,6 +498,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
+  // Mix Lab (Stage 2 vertical slice): read-only mix preview. It references
+  // tracks/clips by id only and never writes to the project or originals.
+  const [mixLabOpen, setMixLabOpen] = useState<boolean>(false);
 
   const showOperationFeedback = useCallback((telemetry: OperationTelemetry) => {
     setFeedbackTelemetry(telemetry);
@@ -2426,6 +2430,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
+        onOpenMixLab={() => setMixLabOpen(true)}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -2665,6 +2670,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isOpen={systemLogModalOpen}
         onClose={() => setSystemLogModalOpen(false)}
       />
+
+      {/* Mix Lab (Stage 2): kreative Mix-Vorschau — rein read-only,
+          kein Schreibzugriff auf Projekt oder Originaldaten. */}
+      {mixLabOpen && (
+        <MixLabView
+          tracks={tracks}
+          paletteClips={paletteClips}
+          activeTrackId={activeTrackId}
+          onClose={() => setMixLabOpen(false)}
+        />
+      )}
     </div>
   );
 }

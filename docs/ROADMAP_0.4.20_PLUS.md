@@ -90,6 +90,19 @@ Das unterscheidet Airdox von allgemeinen Performance-DJs: Die Originaldatei und 
 
 **Ziel:** Die stärksten kreativen Funktionen mit überschaubarem Aufwand.
 
+**Mix-Lab-Vertikalschnitt (umgesetzt, Stage 2):** Der Mix Lab ist als reine
+Read-Only-Vorschau umgesetzt (Menu → „Mix Lab“ / Quick-Access-Button):
+zwei Clip-/Track-Slots (Track oder Palette-Clip), Drop-Zielvorschau mit
+Ghost-Region, beat-synchroner Anker auf verbatim ANLZ/PQTZ-Beats
+(Off/Beat/Bar), vier Crossfade-Kurven (Linear, Equal Power,
+Slow-In-Fast-Out, Fast-In-Slow-Out), Original-Waveform (exklusiv echte
+ANLZ-Varianten) plus transparente Mix-Layer (Gain-Envelopes, Crossfade-
+Fenster), Audio-Vorschau ausschließlich über geladene In-Memory-Buffer.
+Kein Apply-Pfad, keine Projektänderung, keine Synthese — bei fehlender
+ANLZ-Waveform oder fehlendem Beatgrid zeigt der Mix Lab den ehrlichen
+Leerzustand bzw. den deklarierten Fallback. Tests: `tests/mix-preview.test.ts`
+(M1–M6, inkl. Immutabilitätsnachweis).
+
 - Zwei synchronisierte Player mit A/B-Waveform und Mixpoint-Vorschau.
 - Drag & Drop mit Drop-Vorschau, Zielposition und Operationstyp.
 - Palette-Clip-Aktionen: Insert, Replace, Overdub, Duplicate, Trim, Rename, Color.
