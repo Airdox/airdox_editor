@@ -13,13 +13,20 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const tsxCommand = resolve(root, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+const tsxCommand = process.execPath;
+const tsxPrefix = [resolve(root, 'node_modules', 'tsx', 'dist', 'cli.mjs')];
 const failures = [];
 
 function runAgent(name, command, args) {
   process.stdout.write(`\n[WAVEFORM AGENT] ${name}\n$ ${command} ${args.join(' ')}\n`);
   try {
-    execFileSync(command, args, { cwd: root, stdio: 'inherit', env: process.env });
+    execFileSync(command, args, {
+      cwd: root,
+      stdio: 'inherit',
+      env: process.env,
+      // Windows .cmd shims (npm/tsx) require a shell when spawned directly.
+      shell: process.platform === 'win32',
+    });
     console.log(`[GATE PASS] ${name}`);
   } catch (error) {
     const code = error.status ?? 1;
@@ -55,11 +62,11 @@ function sourceContractAgent() {
 // evidence meaningless, and a renderer failure makes the integration gate
 // unsafe to publish.
 sourceContractAgent();
-runAgent('Resolver + nested ANLZ scan agent', tsxCommand, ['tests/analysis-resolver.test.ts']);
-runAgent('Binary ANLZ/PQTZ/EXT provenance agent', tsxCommand, ['tests/anlz-real-format.test.ts']);
-runAgent('Waveform variants + renderer agent', tsxCommand, ['tests/waveform-variants.test.ts']);
-runAgent('Renderer no-synthesis + palette contract agent', tsxCommand, ['tests/renderer-original-data.test.ts']);
-runAgent('XML/DB integration agent', tsxCommand, ['tests/xml-exclusive-import.test.ts']);
+runAgent('Resolver + nested ANLZ scan agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'analysis-resolver.test.ts')]);
+runAgent('Binary ANLZ/PQTZ/EXT provenance agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'anlz-real-format.test.ts')]);
+runAgent('Waveform variants + renderer agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'waveform-variants.test.ts')]);
+runAgent('Renderer no-synthesis + palette contract agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'renderer-original-data.test.ts')]);
+runAgent('XML/DB integration agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'xml-exclusive-import.test.ts')]);
 runAgent('TypeScript gatekeeper', npmCommand, ['run', 'lint']);
 runAgent('Production build gatekeeper', npmCommand, ['run', 'build']);
 
