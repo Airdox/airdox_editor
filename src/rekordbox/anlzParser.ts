@@ -54,6 +54,27 @@ export interface AnlzCueEntry {
   loopDenominator?: number;
 }
 
+/** Roh-Inventar eines Waveform-Tags: exakt die Werte, die readWaveformSpec
+ *  aus dem Blockkopf liest (len_entry_bytes / len_entries / Stil). Wird nur
+ *  für die Diagnose-CLI (scripts/anlz-probe.mjs, Stufe 4 des
+ *  Pipeline-Stufenplans) mitgeführt; der Decode-Pfad bleibt unverändert. */
+export interface AnlzWaveformInventory {
+  entryBytes: number;
+  entryCount: number;
+  style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
+}
+
+/** Ein gelesener ANLZ-Block (Tag + Envelope-Längen). Teil des Tag-Inventars:
+ *  jede Sektion einer Quelle wird berichtet, auch wenn der Parser sie nicht
+ *  dekodiert ("keine Daten liegen lassen", Pipeline-Stufenplan Regel 4). */
+export interface AnlzTagInventoryEntry {
+  tag: string;
+  offset: number;
+  headerLength: number;
+  blockLength: number;
+  waveform: AnlzWaveformInventory | null;
+}
+
 export interface AnlzPhraseEntry {
   index: number;
   beat: number;
@@ -82,6 +103,9 @@ export interface AnlzParsedResult {
   /** Every successfully decoded PWV variant, tagged with its source tag. */
   waveformVariants: WaveformAnalysisData[];
   warnings: string[];
+  /** Read-only inventory of every ANLZ block (Stufe 4 des Stufenplans):
+   *  Tag, Envelope-Längen und Waveform-Spezifikation. Dekodiert nichts. */
+  tagInventory: AnlzTagInventoryEntry[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
   rawMemoryCues?: AnlzCueEntry[];
@@ -581,6 +605,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     phrases: [],
     waveformVariants: [],
     warnings: [],
+    tagInventory: [],
   };
 
   let offset = 0;
@@ -628,6 +653,30 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     }
     const tagEnd = offset + chunkSize;
     result.tagsFound.push(tag);
+
+    // Read-only-Inventar (Stufe 4): jeden gelesenen Block berichten, inklusive
+    // der Waveform-Spezifikation exakt so, wie readWaveformSpec sie liest.
+    // Hier wird nichts dekodiert und nichts verändert.
+    if (tag in WAVEFORM_PRIORITY) {
+      const spec = readWaveformSpec(view, offset, tagEnd, tag);
+      result.tagInventory.push({
+        tag,
+        offset,
+        headerLength: lenHeader,
+        blockLength: chunkSize,
+        waveform: spec
+          ? { entryBytes: spec.entryBytes, entryCount: spec.entryCount, style: spec.style }
+          : null,
+      });
+    } else {
+      result.tagInventory.push({
+        tag,
+        offset,
+        headerLength: lenHeader,
+        blockLength: chunkSize,
+        waveform: null,
+      });
+    }
 
     if (tag === 'PPTH') {
       if (offset + 0x10 <= tagEnd) {

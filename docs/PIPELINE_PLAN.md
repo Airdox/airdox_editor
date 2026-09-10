@@ -138,18 +138,34 @@ liest nur die 1 KB Header der ANLZ-Container.
 
 ---
 
-### Stufe 4 – ANLZ-Tag-Inventar (nächste Trockenübung, **noch zu bauen**)
+### Stufe 4 – ANLZ-Tag-Inventar ✅ gebaut, lokal verifiziert
 
-**Geplanter Befehl:** `npm run probe:anlz -- --db "<master.db>" --track 12345`
+**Befehl:**
 
-**Soll ausgeben (read-only):** Dateigröße DAT/EXT, `PPTH`-Pfad + Plausibilitätsvergleich
+```bat
+npm run probe:anlz -- --db "<master.db>" --track 12345
+npm run probe:anlz -- --anlz "D:\…\ANLZ0000.DAT"
+```
+
+**Ausgabe (read-only):** Dateigröße DAT/EXT/.2EX, `PPTH`-Pfad + Plausibilitätsvergleich
 mit `FolderPath+FileNameL`, alle gefundenen Tags, pro Waveform-Tag
-`len_entry_bytes`/`len_entries`/Stil, Anzahl PQTZ-Beats, Cue-/Loop-Zahl, PSSI
-(maskiert/unmaskiert, Mood, Bank, End-Beat).
+`len_entry_bytes`/`len_entries`/Stil, Anzahl PQTZ-Beats (inkl. Zeitfenster), Cue-/Loop-Zahl,
+PSSI (maskiert/unmaskiert, Mood, Bank, End-Beat) sowie vorhandene, aber nicht dekodierte
+Tags („keine Daten liegen lassen“). Die CLI läuft über `tsx` mit **demselben** Parser wie
+der App-Pfad (`src/rekordbox/anlzParser.ts`); das Inventar (`tagInventory`) wird dort
+read-only mitgeführt und nicht separat nachimplementiert.
 
-**Gate:** für einen echten Track aus der `D:`-Bibliothek muss das Inventar mindestens
-`PPTH + PQTZ + PWV*` liefern, sonst gilt die Stufe als nicht erfüllt (kein „grün“ ohne
-Evidenz).
+**Gate:** mindestens `PPTH + PQTZ/PQT2 + ein dekodierbarer PWV*-Tag`, sonst FAIL
+(kein „grün“ ohne Evidenz). Zusätzlich `[7] Fingerabdruck NACHHER = PASS`.
+
+**Test:** `npx tsx tests/anlz-probe.test.ts` – baut `master.db` + `share/PIONEER/USBANLZ`
+mit den echt-formatigen Fixtures (.DAT: PMAI/PPTH/PQTZ/PCOB/PWV5; .EXT: PCO2/PWV3/PWV7/PSSI),
+führt die CLI als Prozess aus und prüft Gate, Inventarwerte (PWV5 = 2 Bytes/600/`RGB_5BIT`,
+PWV3 = 1 Byte/900/`MONO_5BIT`, PWV7 = 3 Bytes/900/`TRIPLE_BYTE`), PPTH-Exakttreffer,
+Read-Only-Beweis und den Negativfall (PPTH-only → Exit 1).
+
+**Status:** lokal grün (Fixture). **Auf dem Windows-Rechner mit einem echten Track aus der
+`D:`-Bibliothek noch auszuführen** – erst dann ist die Stufe gegen echte Daten bestätigt.
 
 ---
 
