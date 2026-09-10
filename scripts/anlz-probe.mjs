@@ -284,6 +284,24 @@ function run(options) {
         fileReport.ppthMatch = ok;
         ppthMatched = ppthMatched || ok;
         sub(`PPTH-Plausibilität vs. djmdContent-Pfad: ${ok ? 'PASS (exakter Treffer)' : 'WARN (weicht ab – Zuordnung prüfen)'}`);
+        if (!ok) {
+          // Diagnose (read-only): Rohdaten der PPTH-Sektion + alternativer
+          // UTF-16LE-Decode, um Encoding-Fehler von Platzhalter-Pfaden zu
+          // unterscheiden.
+          const inv = parsed.tagInventory.find((t) => t.tag === 'PPTH');
+          if (inv) {
+            const lenPath = buffer.readUInt32BE(inv.offset + 0x0c);
+            const start = inv.offset + 0x10;
+            const raw = buffer.subarray(start, Math.min(start + lenPath, buffer.length));
+            const codes = [];
+            for (let i = 0; i + 1 < raw.length; i += 2) codes.push(raw.readUInt16LE(i));
+            const leStr = String.fromCharCode(...codes).replace(/\0+$/, '');
+            sub(`PPTH-Rohdaten (hex, max 96 B): ${raw.subarray(0, 96).toString('hex')}`);
+            sub(`PPTH alternativ als UTF-16LE: ${leStr}`);
+            fileReport.ppthRawHex = raw.subarray(0, 128).toString('hex');
+            fileReport.ppthUtf16Le = leStr;
+          }
+        }
       }
     } else {
       sub('PPTH: (nicht vorhanden)');
