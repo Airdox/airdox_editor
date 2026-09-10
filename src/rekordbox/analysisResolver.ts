@@ -161,3 +161,66 @@ export function buildDbAnalysisIndex(
   }
   return index;
 }
+
+export interface SeededAnlzEntry {
+  datPath: string | null;
+  extPath: string | null;
+  matchTier: 1;
+  note: string;
+}
+
+/**
+ * DB-first ANLZ resolution: seeds the audio-path → ANLZ index exclusively
+ * with the EXACT targets from the Rekordbox database (AnalysisDataPath).
+ *
+ * This is the primary resolution path: master.db stores, for every analyzed
+ * track, the precise analysis file. No filesystem search happens here — only
+ * deterministic path derivation (resolveAnalysisFilePath) and the pure
+ * DAT/EXT sibling rewrite (deriveSiblingExtension).
+ *
+ * Targets without a DB entry — or whose AnalysisDataPath cannot be resolved
+ * deterministically — are returned as `unresolved`; ONLY those may fall back
+ * to the PPTH file scan. An empty `unresolved` list means: zero file scans.
+ */
+export function seedAnlzIndexFromDb(
+  targets: readonly string[],
+  dbIndex: ReadonlyMap<string, DbAnalysisRef>
+): { entries: Map<string, SeededAnlzEntry>; unresolved: string[] } {
+  const entries = new Map<string, SeededAnlzEntry>();
+  const unresolved: string[] = [];
+  for (const target of targets) {
+    const key = normalizeAudioKey(target);
+    if (!key) continue;
+    const ref = dbIndex.get(key);
+    if (!ref) {
+      unresolved.push(target);
+      continue;
+    }
+    const resolved = resolveAnalysisFilePath(ref.sourceDbDir, ref.analysisDataPath);
+    if (!resolved) {
+      // Not deterministic → never guess; the PPTH scan may still find it.
+      unresolved.push(target);
+      continue;
+    }
+    const lower = resolved.toLowerCase();
+    let datPath: string | null;
+    let extPath: string | null;
+    if (lower.endsWith('.dat')) {
+      datPath = resolved;
+      extPath = deriveSiblingExtension(resolved, 'EXT');
+    } else if (lower.endsWith('.ext')) {
+      extPath = resolved;
+      datPath = deriveSiblingExtension(resolved, 'DAT');
+    } else {
+      datPath = resolved;
+      extPath = null;
+    }
+    entries.set(key, {
+      datPath,
+      extPath,
+      matchTier: 1,
+      note: 'DB-Exaktziel (AnalysisDataPath aus master.db)',
+    });
+  }
+  return { entries, unresolved };
+}

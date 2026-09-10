@@ -16,6 +16,7 @@ import {
   dirOfPath,
   normalizeAudioKey,
   resolveAnalysisFilePath,
+  seedAnlzIndexFromDb,
 } from '../src/rekordbox/analysisResolver';
 
 interface TestResult {
@@ -168,6 +169,103 @@ runTest('db index', 'Index links exact matches and skips incomplete rows', () =>
   assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
   assertEqual(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
   assertEqual(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
+});
+
+// ─── SUITE 6: DB-first seeding (exact targets from master.db, no scanning) ──
+// master.db stores the EXACT AnalysisDataPath per track. The resolver must
+// seed the ANLZ index from those exact targets (deterministic, zero
+// filesystem access) and leave ONLY genuinely unknown targets as fallback.
+const D_DRIVE_DB_DIR = 'D:\\PIONEER\\Master';
+
+runTest('db-first', 'Relative AnalysisDataPath resolves to exact <dbDir>/share/PIONEER/USBANLZ path', () => {
+  const dbIndex = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\Music\\Ref Mix.wav' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+      },
+    ],
+    D_DRIVE_DB_DIR
+  );
+  const { entries, unresolved } = seedAnlzIndexFromDb(['D:\\Music\\Ref Mix.wav'], dbIndex);
+  assertEqual(unresolved.length, 0, 'No fallback needed — exact DB target');
+  const hit = entries.get(normalizeAudioKey('D:\\Music\\Ref Mix.wav'));
+  assert(hit !== undefined, 'Entry seeded');
+  assertEqual(
+    hit!.datPath,
+    'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u1\\ANLZ0000.DAT',
+    'DAT resolved against the database directory (exact target)'
+  );
+  assertEqual(
+    hit!.extPath,
+    'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u1\\ANLZ0000.EXT',
+    'EXT sibling derived deterministically'
+  );
+  assertEqual(hit!.matchTier, 1, 'Exact match tier');
+});
+
+runTest('db-first', 'Absolute AnalysisDataPath is used verbatim (DAT and EXT both honored)', () => {
+  const dbIndex = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\Music\\A.wav' },
+        rawXmlAttributes: { analysisDataPath: 'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\aa\\ANLZ0001.EXT' },
+      },
+    ],
+    D_DRIVE_DB_DIR
+  );
+  const { entries, unresolved } = seedAnlzIndexFromDb(['D:\\Music\\A.wav'], dbIndex);
+  assertEqual(unresolved.length, 0, 'No fallback needed');
+  const hit = entries.get(normalizeAudioKey('D:\\Music\\A.wav'));
+  assert(hit !== undefined, 'Entry seeded');
+  assertEqual(hit!.extPath, 'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\aa\\ANLZ0001.EXT', 'EXT verbatim');
+  assertEqual(hit!.datPath, 'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\aa\\ANLZ0001.DAT', 'DAT sibling derived');
+});
+
+runTest('db-first', 'Targets absent from the DB are the ONLY fallback (unresolved)', () => {
+  const dbIndex = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\Music\\InDb.wav' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+      },
+    ],
+    D_DRIVE_DB_DIR
+  );
+  const { entries, unresolved } = seedAnlzIndexFromDb(
+    ['D:\\Music\\InDb.wav', 'D:\\Music\\NotInDb.wav', 'E:\\Other\\Volume.wav'],
+    dbIndex
+  );
+  assertEqual(entries.size, 1, 'Only the DB-known target seeded');
+  assertEqual(unresolved.length, 2, 'Exactly the two unknown targets left for fallback');
+  assert(unresolved.includes('D:\\Music\\NotInDb.wav'), 'Unknown drive-D target');
+  assert(unresolved.includes('E:\\Other\\Volume.wav'), 'Other-volume target');
+});
+
+runTest('db-first', 'Unresolvable relative form is NOT guessed — stays in fallback', () => {
+  const dbIndex = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\Music\\Weird.wav' },
+        rawXmlAttributes: { analysisDataPath: 'some/random/relative.DAT' },
+      },
+    ],
+    D_DRIVE_DB_DIR
+  );
+  const { entries, unresolved } = seedAnlzIndexFromDb(['D:\\Music\\Weird.wav'], dbIndex);
+  assertEqual(entries.size, 0, 'No guess — nothing seeded');
+  assertEqual(unresolved.length, 1, 'Left to the PPTH fallback, never a fabricated path');
+});
+
+runTest('db-first', 'Empty targets → nothing seeded, nothing unresolved (zero file scans)', () => {
+  const dbIndex = buildDbAnalysisIndex([], D_DRIVE_DB_DIR);
+  const { entries, unresolved } = seedAnlzIndexFromDb([], dbIndex);
+  assertEqual(entries.size, 0, 'No entries');
+  assertEqual(unresolved.length, 0, 'No fallback → no scan');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

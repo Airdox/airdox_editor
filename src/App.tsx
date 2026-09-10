@@ -20,6 +20,7 @@ import {
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import {
   buildDbAnalysisIndex,
+  seedAnlzIndexFromDb,
   dirOfPath,
   normalizeAudioKey,
   resolveAnalysisFilePath,
@@ -675,8 +676,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     anlzPpthScanStateRef.current = 'RUNNING';
     const promise = (async () => {
       try {
-        // Alle bekannten Audio-Lokalisationen in einem Scan abfragen, damit
-        // ein Durchlauf die gesamte Sammlung beantwortet.
+        // DB-FIRST: master.db enthält pro Track das EXAKTE ANLZ-Ziel
+        // (AnalysisDataPath). Diese Ziele werden deterministisch aufgelöst —
+        // OHNE Dateisystem-Suche. Ein PPTH-Dateiscan läuft NUR noch für
+        // Tracks, die in der Datenbank nicht vorkommen (echter Fallback).
+        if (dbAnalysisIndexRef.current.size === 0) {
+          await ensureDbAnalysisIndex();
+        }
+        // Alle bekannten Audio-Lokalisationen in einem Durchlauf beantworten.
         const targets = new Set<string>();
         const pushTarget = (loc?: string | null) => {
           if (loc && loc.trim()) targets.add(loc.trim());
@@ -684,6 +691,35 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         for (const t of xmlImportedTracks) pushTarget(t.originalMedia?.location);
         for (const t of tracks) pushTarget(t.originalMedia?.location);
         pushTarget(track.originalMedia?.location);
+        const { entries: seeded, unresolved: dbUnresolved } = seedAnlzIndexFromDb(
+          Array.from(targets),
+          dbAnalysisIndexRef.current,
+        );
+        for (const [k, v] of seeded) {
+          if (!anlzPpthIndexRef.current.has(k)) anlzPpthIndexRef.current.set(k, v);
+        }
+        if (dbUnresolved.length === 0) {
+          console.info(
+            `[ANLZ] Alle ${targets.size} Ziel(e) exakt über die master.db aufgelöst (AnalysisDataPath) — kein Dateiscan.`,
+          );
+          logger.info(
+            'DATABASE',
+            `[ANLZ] ${targets.size} Ziel(e) exakt via master.db (AnalysisDataPath) — 0 Dateiscans`,
+            { dbLinks: dbAnalysisIndexRef.current.size },
+          );
+          return;
+        }
+        console.info(
+          `[ANLZ] ${targets.size - dbUnresolved.length} Ziel(e) exakt via master.db, ` +
+            `${dbUnresolved.length} ohne DB-Eintrag → PPTH-Fallback-Scan (asynchron): ` +
+            dbUnresolved.slice(0, 3).join(', ') +
+            (dbUnresolved.length > 3 ? ` … (+${dbUnresolved.length - 3} weitere)` : ''),
+        );
+        logger.info(
+          'DATABASE',
+          `[ANLZ PPTH-Fallback] ${dbUnresolved.length} Ziel(e) ohne exaktes DB-Ziel → Dateiscan`,
+          { first: dbUnresolved.slice(0, 3), dbLinks: dbAnalysisIndexRef.current.size },
+        );
         // Fortschritt sichtbar halten: Der Scan läuft asynchron im
         // Main-Prozess (UI bleibt bedienbar); bei 20k+ ANLZ-Dateien dauert
         // das erste Mal — der Log zeigt, dass es läuft.
@@ -702,7 +738,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             })
           : null;
         try {
-          const result = await window.rekordboxDesktop!.scanAnlzPaths(Array.from(targets));
+          const result = await window.rekordboxDesktop!.scanAnlzPaths(dbUnresolved);
           let added = 0;
           for (const m of result.matches) {
             if (!m.datPath && !m.extPath) continue;
@@ -715,7 +751,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             added += 1;
           }
           anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
-          for (const t of targets) {
+          for (const t of dbUnresolved) {
             const k = normalizeAudioKey(t);
             if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
           }
@@ -746,7 +782,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     })();
     anlzPpthScanPromiseRef.current = promise;
     await promise;
-  }, [xmlImportedTracks, tracks]);
+  }, [xmlImportedTracks, tracks, ensureDbAnalysisIndex]);
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
