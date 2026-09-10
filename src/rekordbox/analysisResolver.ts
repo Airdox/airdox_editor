@@ -227,7 +227,16 @@ export function queryDbForExactPaths(
     const hit = dbIndex.get(key);
     if (!hit) {
       result.missingCount += 1;
-      if (result.missing.length < 10) result.missing.push(raw.trim());
+      if (result.missing.length < 10) {
+        // Lesbar im Log melden (%20 → Leerzeichen), nicht als roher Export-Wert.
+        let readable = raw.trim();
+        try {
+          readable = decodeURIComponent(readable);
+        } catch {
+          // keep raw
+        }
+        result.missing.push(readable);
+      }
       continue;
     }
     if (hasAbsolutePathForm(raw)) result.absoluteHits += 1;
