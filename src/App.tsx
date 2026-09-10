@@ -247,7 +247,85 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
   }
 }
 
+function shiftGridForInsert(track: TrackModel, at: number, amount: number) {
+  track.beatGrid = { ...track.beatGrid, firstBeat: track.beatGrid.firstBeat >= at ? track.beatGrid.firstBeat + amount : track.beatGrid.firstBeat,
+    beats: track.beatGrid.beats.map((beat) => beat.time >= at ? { ...beat, time: beat.time + amount } : beat) };
+}
+function shiftGridForDelete(track: TrackModel, start: number, end: number) {
+  const amount = end - start;
+  track.beatGrid = { ...track.beatGrid, firstBeat: track.beatGrid.firstBeat >= end ? track.beatGrid.firstBeat - amount : track.beatGrid.firstBeat,
+    beats: track.beatGrid.beats.filter((beat) => beat.time < start || beat.time >= end)
+      .map((beat) => beat.time >= end ? { ...beat, time: beat.time - amount } : beat) };
+}
+
 /** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
+/** Keep edit history lossless: AudioBuffers are runtime objects and must not be
+ * passed through JSON.stringify (that silently destroys getChannelData()). */
+function cloneEditSegments(segments: EditSegment[]): EditSegment[] {
+  return segments.map((segment) => ({ ...segment, clipBuffer: segment.clipBuffer }));
+}
+
+/** A materialised working buffer is represented as one persisted REPLACE layer.
+ * This keeps subsequent edits, undo/redo and project reload on the same timeline
+ * instead of accidentally rebuilding from the untouched source. */
+function materializeWorkingBuffer(track: TrackModel, buffer: AudioBuffer): EditSegment[] {
+  return [{
+    id: `working-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'REPLACE',
+    trackId: track.id,
+    sourceStart: 0,
+    sourceEnd: buffer.duration,
+    projectStart: 0,
+    projectDuration: buffer.duration,
+    clipBuffer: buffer,
+    gain: 1,
+  }];
+}
+
+function spliceAudioBuffer(ctx: AudioContext, source: AudioBuffer, at: number, remove: number, insert?: AudioBuffer): AudioBuffer {
+  const rate = source.sampleRate;
+  const start = Math.max(0, Math.min(source.length, Math.floor(at * rate)));
+  const removeSamples = Math.max(0, Math.min(source.length - start, Math.floor(remove * rate)));
+  const insertSamples = insert ? Math.floor(insert.duration * rate) : 0;
+  const out = ctx.createBuffer(source.numberOfChannels, Math.max(1, source.length - removeSamples + insertSamples), rate);
+  for (let ch = 0; ch < source.numberOfChannels; ch++) {
+    const dst = out.getChannelData(ch);
+    const src = source.getChannelData(ch);
+    const clip = insert?.getChannelData(Math.min(ch, insert.numberOfChannels - 1));
+    dst.set(src.subarray(0, start), 0);
+    if (clip) dst.set(clip.subarray(0, insertSamples), start);
+    dst.set(src.subarray(start + removeSamples), start + insertSamples);
+  }
+  return out;
+}
+
+function replaceAudioBuffer(ctx: AudioContext, source: AudioBuffer, startSec: number, durationSec: number, replacement: AudioBuffer): AudioBuffer {
+  const out = spliceAudioBuffer(ctx, source, startSec, 0);
+  const rate = source.sampleRate;
+  const start = Math.max(0, Math.min(out.length, Math.floor(startSec * rate)));
+  const len = Math.min(Math.floor(durationSec * rate), out.length - start);
+  for (let ch = 0; ch < out.numberOfChannels; ch++) {
+    const dst = out.getChannelData(ch);
+    const clip = replacement.getChannelData(Math.min(ch, replacement.numberOfChannels - 1));
+    dst.fill(0, start, start + len);
+    dst.set(clip.subarray(0, Math.min(len, clip.length)), start);
+  }
+  return out;
+}
+
+function overdubAudioBuffer(ctx: AudioContext, source: AudioBuffer, startSec: number, durationSec: number, overlay: AudioBuffer): AudioBuffer {
+  const out = spliceAudioBuffer(ctx, source, 0, 0);
+  const rate = source.sampleRate;
+  const start = Math.max(0, Math.min(out.length, Math.floor(startSec * rate)));
+  const len = Math.min(Math.floor(durationSec * rate), out.length - start, overlay.length);
+  for (let ch = 0; ch < out.numberOfChannels; ch++) {
+    const dst = out.getChannelData(ch);
+    const src = overlay.getChannelData(Math.min(ch, overlay.numberOfChannels - 1));
+    for (let i = 0; i < len; i++) dst[start + i] = Math.tanh(dst[start + i] + src[i] * 0.85);
+  }
+  return out;
+}
+
 async function decodeWavBase64(audioCtx: AudioContext, base64?: string): Promise<AudioBuffer | undefined> {
   if (!base64) return undefined;
   const bytes = base64ToBytes(base64);
@@ -824,9 +902,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const snapshot: EditHistoryEntry = {
       description: desc,
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: cloneEditSegments(activeTrack.workingSegments),
       selection: selection ? { ...selection } : null,
       cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      duration: activeTrack.duration,
       beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
     };
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
@@ -843,9 +922,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const currentSnapshot: EditHistoryEntry = {
       description: 'Before Undo',
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: cloneEditSegments(activeTrack.workingSegments),
       selection: selection ? { ...selection } : null,
       cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      duration: activeTrack.duration,
       beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
     };
     setRedoStack((prev) => [...prev, currentSnapshot]);
@@ -854,12 +934,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     activeTrack.workingSegments = previous.segments;
     activeTrack.cues = previous.cues;
     if (previous.beatGrid) activeTrack.beatGrid = previous.beatGrid;
+    if (previous.duration !== undefined) activeTrack.duration = previous.duration;
     setSelection(previous.selection);
 
     // Audio re-render only when audio exists; metadata-only tracks (e.g.
     // grid edits without readable originals) still undo their model state.
     if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
+      activeTrack.duration = reRendered.duration;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+      activeTrack.analysisVariants = undefined;
       setWorkingAudioBuffer(reRendered);
     } else {
       setTracks((prev) => [...prev]);
@@ -875,9 +959,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const currentSnapshot: EditHistoryEntry = {
       description: 'Before Redo',
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: cloneEditSegments(activeTrack.workingSegments),
       selection: selection ? { ...selection } : null,
       cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      duration: activeTrack.duration,
       beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
     };
     setUndoStack((prev) => [...prev, currentSnapshot]);
@@ -885,10 +970,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     activeTrack.workingSegments = next.segments;
     activeTrack.cues = next.cues;
     if (next.beatGrid) activeTrack.beatGrid = next.beatGrid;
+    if (next.duration !== undefined) activeTrack.duration = next.duration;
     setSelection(next.selection);
 
     if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
+      activeTrack.duration = reRendered.duration;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+      activeTrack.analysisVariants = undefined;
       setWorkingAudioBuffer(reRendered);
     } else {
       setTracks((prev) => [...prev]);
@@ -1022,10 +1111,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       gain: 1.0,
     };
 
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    shiftGridForInsert(activeTrack, currentTime, clipboardBuffer.duration);
+    const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, currentTime, 0, clipboardBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
+    activeTrack.duration = rendered.duration;
+    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
   };
 
@@ -1057,10 +1148,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       gain: 1.0,
     };
 
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    shiftGridForInsert(activeTrack, insertPos, clipboardBuffer.duration);
+    const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, insertPos, 0, clipboardBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
+    activeTrack.duration = rendered.duration;
+    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1114,10 +1207,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       gain: 1.0,
     };
 
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    shiftGridForInsert(activeTrack, insertPos, adapted.adaptedBuffer.duration);
+    const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, insertPos, 0, adapted.adaptedBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
+    activeTrack.duration = rendered.duration;
+    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1163,10 +1258,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       gain: 1.0,
     };
 
-    const updatedSegments = [...activeTrack.workingSegments, replaceSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    const rendered = replaceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, selection.start, selection.duration, adapted.adaptedBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
+    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1212,10 +1307,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       gain: 1.0,
     };
 
-    const updatedSegments = [...activeTrack.workingSegments, overdubSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
+    const rendered = overdubAudioBuffer(audioEngine.getContext(), workingAudioBuffer, selection.start, selection.duration, adapted.adaptedBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
+    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
+    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1266,13 +1361,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     // Shift cues occurring after delete
     activeTrack.cues = activeTrack.cues
-      .filter((c) => c.position < delStart || c.position > selection.end)
+      .filter((c) => c.position < delStart || c.position >= selection.end)
       .map((c) => {
-        if (c.position > selection.end) {
+        if (c.position >= selection.end) {
           return { ...c, position: Math.max(0, c.position - delDuration) };
         }
         return c;
       });
+
+    // Keep beatgrid positions and the rendered timeline in lockstep.
+    shiftGridForDelete(activeTrack, delStart, selection.end);
 
     // Create a new buffer with that duration removed
     const audioCtx = audioEngine.getContext();
@@ -1297,6 +1395,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     setWorkingAudioBuffer(newBuffer);
     activeTrack.duration = newBuffer.duration;
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, newBuffer);
     activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
 
     showOperationFeedback({
@@ -1340,6 +1439,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
 
     setWorkingAudioBuffer(newBuffer);
+    activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, newBuffer);
     activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
 
     showOperationFeedback({

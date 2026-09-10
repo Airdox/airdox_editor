@@ -233,6 +233,8 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
+  /** Timeline length is part of edit history (insert/delete change it). */
+  duration?: number;
   /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
   beatGrid?: BeatGrid;
 }
