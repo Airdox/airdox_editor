@@ -543,7 +543,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Deterministic XML→DB analysis index: normalized audio path → ANLZ
   // reference (exact match only, rebuilt on every database import).
   const dbAnalysisIndexRef = useRef<Map<string, DbAnalysisRef>>(new Map());
-  const dbAutoLoadAttemptedRef = useRef(false);
+  // Single-Flight: alle Aufrufe (Mount, Deck-Load, PPTH-Seed) müssen auf den
+  // GLEICHEN laufenden Ladevorgang warten. Das alte boolesche "attempted"-Flag
+  // erlaubte es einem zweiten Caller, mitten im DB-Read einen LEEREN Index zu
+  // sehen ("dbLinks: 0") und darauf einen unnötigen Vollscan zu starten.
+  const dbAutoLoadPromiseRef = useRef<Promise<Map<string, DbAnalysisRef>> | null>(null);
 
   // PPTH-based ANLZ index (SQLCipher-independent fallback): every ANLZ
   // container records the exact audio path in its PPTH header. The desktop
@@ -566,63 +570,76 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // AnalysisDataPath map.
   const ensureDbAnalysisIndex = useCallback(async () => {
     if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
-    if (dbAutoLoadAttemptedRef.current) return dbAnalysisIndexRef.current;
     if (!window.rekordboxDesktop) return dbAnalysisIndexRef.current;
-    dbAutoLoadAttemptedRef.current = true;
-    try {
-      const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
-      if (!candidates || candidates.length === 0) {
-        console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
-        return dbAnalysisIndexRef.current;
-      }
-      for (const cand of candidates) {
-        try {
-          const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
-          if (!result.available || !result.rows) {
-            console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
-            continue;
-          }
-          const mapped = mapRekordboxDatabaseRows(
-            {
-              content: result.rows.content,
-              cues: result.rows.cues,
-              artists: result.rows.artists,
-              albums: result.rows.albums,
-              genres: result.rows.genres,
-              keys: result.rows.keys,
-              labels: result.rows.labels,
-              playlists: result.rows.playlists,
-              songPlaylists: result.rows.songPlaylists,
-            },
-            result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
-          );
-          const sourceDbDir = dirOfPath(cand.path);
-          const fullTrackModels = mapped.tracks.map((track, idx) => {
-            track.rawXmlAttributes = { ...(track.rawXmlAttributes ?? {}), sourceDbDir };
-            return buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
-          });
-          const built = buildDbAnalysisIndex(fullTrackModels, sourceDbDir);
-          // Merge – keep first entry on duplicate keys (earliest DB wins)
-          let added = 0;
-          for (const [k, v] of built) {
-            if (!dbAnalysisIndexRef.current.has(k)) {
-              dbAnalysisIndexRef.current.set(k, v);
-              added++;
-            }
-          }
-          console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
-          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
-          if (mapped.warnings?.length || result.warnings?.length) {
-            console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
-          }
-        } catch (e) {
-          console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
+    // Single-flight: wait for the in-flight load instead of observing a
+    // half-filled (empty) index.
+    if (dbAutoLoadPromiseRef.current) return dbAutoLoadPromiseRef.current;
+    const loadPromise = (async () => {
+      try {
+        const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
+        if (!candidates || candidates.length === 0) {
+          console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
+          return dbAnalysisIndexRef.current;
         }
+        for (const cand of candidates) {
+          try {
+            const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
+            if (!result.available || !result.rows) {
+              console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
+              continue;
+            }
+            const mapped = mapRekordboxDatabaseRows(
+              {
+                content: result.rows.content,
+                cues: result.rows.cues,
+                artists: result.rows.artists,
+                albums: result.rows.albums,
+                genres: result.rows.genres,
+                keys: result.rows.keys,
+                labels: result.rows.labels,
+                playlists: result.rows.playlists,
+                songPlaylists: result.rows.songPlaylists,
+              },
+              result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
+            );
+            const sourceDbDir = dirOfPath(cand.path);
+            const fullTrackModels = mapped.tracks.map((track, idx) => {
+              track.rawXmlAttributes = { ...(track.rawXmlAttributes ?? {}), sourceDbDir };
+              return buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
+            });
+            const built = buildDbAnalysisIndex(fullTrackModels, sourceDbDir);
+            // Merge – keep first entry on duplicate keys (earliest DB wins)
+            let added = 0;
+            for (const [k, v] of built) {
+              if (!dbAnalysisIndexRef.current.has(k)) {
+                dbAnalysisIndexRef.current.set(k, v);
+                added++;
+              }
+            }
+            console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
+            logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
+            if (mapped.warnings?.length || result.warnings?.length) {
+              console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
+            }
+          } catch (e) {
+            console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
+          }
+        }
+      } catch (e) {
+        console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
       }
-    } catch (e) {
-      console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
+      return dbAnalysisIndexRef.current;
+    })();
+    dbAutoLoadPromiseRef.current = loadPromise;
+    try {
+      return await loadPromise;
+    } finally {
+      // Clear only when nothing was found, so a later retry can re-run the
+      // search (e.g. DB unlocked in the meantime).
+      if (dbAnalysisIndexRef.current.size === 0) {
+        dbAutoLoadPromiseRef.current = null;
+      }
     }
-    return dbAnalysisIndexRef.current;
   }, []);
 
   // Original Protection Agent: wire the intervention popup + durable logging

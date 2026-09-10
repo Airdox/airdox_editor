@@ -504,7 +504,13 @@ const ANLZ_HEADER_BYTES = 1024;
 function findAnlzFolders(baseOverride) {
   const folders = [];
   const push = (dir) => {
-    if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory() && !folders.includes(dir)) {
+    // Windows-Pfade sind case-insensitiv: „D:\Pioneer\master\...“ (konstruiert)
+    // und „D:\Pioneer\Master\...“ (gefunden) sind derselbe Ordner — doppelte
+    // Einträge ließen den Scan denselben Baum zweimal durchlaufen.
+    const isDup = process.platform === 'win32'
+      ? folders.some((f) => f.toLowerCase() === dir.toLowerCase())
+      : folders.includes(dir);
+    if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory() && !isDup) {
       folders.push(dir);
     }
   };

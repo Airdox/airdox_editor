@@ -153,11 +153,24 @@ export function buildDbAnalysisIndex(
   sourceDbDir: string
 ): Map<string, DbAnalysisRef> {
   const index = new Map<string, DbAnalysisRef>();
+  const dbDirKey = normalizeAudioKey(sourceDbDir);
   for (const track of tracks) {
     const key = normalizeAudioKey(track.originalMedia?.location);
     const analysisDataPath = track.rawXmlAttributes?.analysisDataPath?.trim() ?? '';
     if (!key || !analysisDataPath || index.has(key)) continue;
-    index.set(key, { trackId: track.id, analysisDataPath, sourceDbDir });
+    const ref: DbAnalysisRef = { trackId: track.id, analysisDataPath, sourceDbDir };
+    index.set(key, ref);
+    // Rekordbox 7 keeps library media UNDER the database directory
+    // (contents_<hash>/artist/album/file) and exports XML locations
+    // LIBRARY-RELATIVE (file://localhost//contents_<hash>/...). The sub-path
+    // below the DB directory is therefore a second EXACT key — with and
+    // without the leading slash the export artifacts produce. Still a pure
+    // string derivation: no searching, no guessing.
+    if (dbDirKey && key.startsWith(dbDirKey + '/')) {
+      const rel = key.slice(dbDirKey.length + 1);
+      if (rel && !index.has(rel)) index.set(rel, ref);
+      if (rel && !index.has('/' + rel)) index.set('/' + rel, ref);
+    }
   }
   return index;
 }

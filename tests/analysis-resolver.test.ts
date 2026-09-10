@@ -268,6 +268,72 @@ runTest('db-first', 'Empty targets → nothing seeded, nothing unresolved (zero 
   assertEqual(unresolved.length, 0, 'No fallback → no scan');
 });
 
+// ─── SUITE 7: Rekordbox 7 library-relative locations (contents_<hash>) ─────
+// The user's rekordbox_export.xml references library media RELATIVE to the
+// database directory: file://localhost//contents_4136090260/artist/album/
+// file.mp3 — while master.db stores the ABSOLUTE path
+// D:\PIONEER\Master\contents_4136090260\artist\album\file.mp3. The DB index
+// must offer both exact spellings so the exact target is found WITHOUT any
+// filesystem search.
+
+runTest('rb7 relative', 'XML export form normalizes to leading-slash relative key', () => {
+  const xmlLocation = 'file://localhost//contents_4136090260/unknownartist/unknownalbum/song.mp3';
+  assertEqual(
+    normalizeAudioKey(xmlLocation),
+    '/contents_4136090260/unknownartist/unknownalbum/song.mp3',
+    'Leading-slash form (export artifact)'
+  );
+});
+
+runTest('rb7 relative', 'DB index carries full AND relative keys for library media', () => {
+  const index = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\PIONEER\\Master\\contents_4136090260\\unknownartist\\unknownalbum\\song.mp3' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+      },
+      {
+        id: 'db-2',
+        originalMedia: { location: 'G:\\mp3 traktor\\neu 2015\\linked.mp3' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u2/ANLZ0000.DAT' },
+      },
+    ],
+    'D:\\PIONEER\\Master'
+  );
+  const rel = 'contents_4136090260/unknownartist/unknownalbum/song.mp3';
+  assert(index.has('d:/pioneer/master/' + rel), 'Absolute DB key');
+  assert(index.has(rel), 'Relative key (no leading slash)');
+  assert(index.has('/' + rel), 'Relative key (XML export leading-slash form)');
+  assert(index.get('/' + rel)!.trackId === 'db-1', 'Relative key links to the same DB track');
+  // G:-media is NOT under the DB dir → no relative key may be fabricated.
+  assert(!index.has('mp3 traktor/neu 2015/linked.mp3'), 'No relative key for foreign-volume media');
+  assert(index.has('g:/mp3 traktor/neu 2015/linked.mp3'), 'G: track still indexed by its full path');
+});
+
+runTest('rb7 relative', 'User scenario: XML contents_-location resolves to the exact DB target', () => {
+  const index = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\PIONEER\\Master\\contents_4136090260\\unknownartist\\unknownalbum\\andreas henneberg  skirmish original mix.mp3' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u9/ANLZ0000.DAT' },
+      },
+    ],
+    'D:\\PIONEER\\Master'
+  );
+  const xmlTarget = 'file://localhost//contents_4136090260/unknownartist/unknownalbum/andreas%20henneberg%20%20skirmish%20original%20mix.mp3';
+  const { entries, unresolved } = seedAnlzIndexFromDb([xmlTarget], index);
+  assertEqual(unresolved.length, 0, 'Exact DB target found — no PPTH fallback, no scanning');
+  const hit = entries.get(normalizeAudioKey(xmlTarget));
+  assert(hit !== undefined, 'Seeded');
+  assertEqual(
+    hit!.datPath,
+    'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u9\\ANLZ0000.DAT',
+    'Exact analysis file derived from the DB target'
+  );
+});
+
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
 console.log('Test Results:\n');
 let passedCount = 0;
