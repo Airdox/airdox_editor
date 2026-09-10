@@ -16,6 +16,7 @@ import {
   dirOfPath,
   normalizeAudioKey,
   joinAudioPath,
+  classifyPpthPlausibility,
   resolveAnalysisFilePath,
 } from '../src/rekordbox/analysisResolver';
 
@@ -192,6 +193,35 @@ runTest('joinAudioPath', 'Leere Anteile und Sonderfälle', () => {
   assertEqual(joinAudioPath('', 'a.wav'), 'a.wav', 'nur Name');
   assertEqual(joinAudioPath('D:/x/', ''), 'D:/x/', 'nur Ordner');
   assertEqual(joinAudioPath(null, null), '', 'beides leer');
+});
+
+// ─── classifyPpthPlausibility (PPTH-Platzhalter '?' echter RB-Analysen) ────
+runTest('classifyPpthPlausibility', 'Vollpfad identisch → EXACT', () => {
+  assertEqual(
+    classifyPpthPlausibility('C:\\Music\\Reference.wav', 'C:/Music/Reference.wav'),
+    'EXACT',
+    'normalisierte Vollpfade'
+  );
+});
+
+runTest('classifyPpthPlausibility', 'Platzhalter ?/ + gleicher Basisname → PLACEHOLDER_BASENAME', () => {
+  assertEqual(
+    classifyPpthPlausibility('?/Zareh_Kan_-_Tekken.mp3', 'G:/mucke1/Dark Techno platten traktor/Dark/Zareh_Kan_-_Tekken.mp3'),
+    'PLACEHOLDER_BASENAME',
+    'echtes Fallmuster vom 10.09.2026'
+  );
+  assertEqual(
+    classifyPpthPlausibility('?/reference.wav', 'C:\\Music\\REFERENCE.WAV'),
+    'PLACEHOLDER_BASENAME',
+    'case-insensitiv'
+  );
+});
+
+runTest('classifyPpthPlausibility', 'Abweichungen → MISMATCH (kein Fuzzy)', () => {
+  assertEqual(classifyPpthPlausibility('?/other.mp3', 'G:/x/ref.mp3'), 'MISMATCH', 'anderer Basisname');
+  assertEqual(classifyPpthPlausibility('G:/x/ref.mp3', 'G:/y/ref2.mp3'), 'MISMATCH', 'Vollpfade verschieden');
+  assertEqual(classifyPpthPlausibility('', 'G:/y/ref.mp3'), 'MISMATCH', 'leeres PPTH');
+  assertEqual(classifyPpthPlausibility(null, null), 'MISMATCH', 'null');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

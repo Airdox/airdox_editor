@@ -37,8 +37,8 @@ import { parseAnlzBinary } from '../src/rekordbox/anlzParser.ts';
 import {
   resolveAnalysisFilePath,
   deriveSiblingExtension,
-  normalizeAudioKey,
   joinAudioPath,
+  classifyPpthPlausibility,
 } from '../src/rekordbox/analysisResolver.ts';
 
 const require = createRequire(import.meta.url);
@@ -280,11 +280,17 @@ function run(options) {
       fileReport.ppth = parsed.analysisPath;
       sub(`PPTH: ${parsed.analysisPath}`);
       if (audioPathFromDb !== null) {
-        const ok = normalizeAudioKey(parsed.analysisPath) === normalizeAudioKey(audioPathFromDb);
+        const ppthClass = classifyPpthPlausibility(parsed.analysisPath, audioPathFromDb);
+        const ok = ppthClass !== 'MISMATCH';
         fileReport.ppthMatch = ok;
+        fileReport.ppthClass = ppthClass;
         ppthMatched = ppthMatched || ok;
-        sub(`PPTH-Plausibilität vs. djmdContent-Pfad: ${ok ? 'PASS (exakter Treffer)' : 'WARN (weicht ab – Zuordnung prüfen)'}`);
-        if (!ok) {
+        if (ppthClass === 'EXACT') {
+          sub('PPTH-Plausibilität vs. djmdContent-Pfad: PASS (exakter Treffer)');
+        } else if (ppthClass === 'PLACEHOLDER_BASENAME') {
+          sub('PPTH-Plausibilität vs. djmdContent-Pfad: PASS (Basisname exakt; PPTH-Laufwerk ist Rekordbox-Platzhalter "?")');
+        } else {
+          sub('PPTH-Plausibilität vs. djmdContent-Pfad: WARN (weicht ab – Zuordnung prüfen)');
           // Diagnose (read-only): Rohdaten der PPTH-Sektion + alternativer
           // UTF-16LE-Decode, um Encoding-Fehler von Platzhalter-Pfaden zu
           // unterscheiden.

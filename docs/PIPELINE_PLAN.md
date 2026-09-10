@@ -163,6 +163,14 @@ Tags („keine Daten liegen lassen“). Die CLI läuft über `tsx` mit **demselb
 der App-Pfad (`src/rekordbox/anlzParser.ts`); das Inventar (`tagInventory`) wird dort
 read-only mitgeführt und nicht separat nachimplementiert.
 
+**PPTH-Plausibilität ([6]):** `classifyPpthPlausibility()` in
+`src/rekordbox/analysisResolver.ts` unterscheidet drei deterministische Fälle: `EXACT`
+(normalisierte Vollpfade identisch), `PLACEHOLDER_BASENAME` (rekordbox schreibt für
+manche Analysen `?/` + Basisname statt Laufwerk+Verzeichnis – Rohdaten-Evidenz
+`003f002f…` vom 10.09.2026; dann wird der **exakte** Basisname geprüft, kein Fuzzy) und
+`MISMATCH` (WARN + Rohdaten-Diagnose). Die Zuordnung der Container stammt immer aus
+`analysisResolver` bzw. dem PPTH-Tier-1-Scan, nie aus der Plausibilitätsprüfung.
+
 **Gate:** mindestens `PPTH + PQTZ/PQT2 + ein dekodierbarer PWV*-Tag`, sonst FAIL
 (kein „grün“ ohne Evidenz). Zusätzlich `[7] Fingerabdruck NACHHER = PASS`.
 
@@ -225,6 +233,7 @@ tatsächlichen Implementierung ab und wurden übernommen:
 | `PWAV`/`PWV2` „Amplituden 0–255“ | `PWAV` = 5-Bit-Wert im Byte (`& 0x1F` / 31), `PWV2` = 4-Bit-Wert (`& 0x0F` / 15), `PWV5` = 5-Bit-Peak + 3×3-Bit-Bandenergie in einem Big-Endian-UInt16. |
 | „Amplituden auf Pixeldichte skalieren“ | Zulässig ist ausschließlich **Aggregation vorhandener Stützstellen** (max-Wert pro Pixel). Neue Stützstellen werden nicht erzeugt. |
 | `PFIX` | In der implementierten Spezifikation nicht vorhanden; erweiterte Cues kommen aus `PCO2` (Einträge `PCP2`), klassische aus `PCOB` (Einträge `PCPT`). |
+| PPTH immer voller Pfad | Echte Analysen dieser Bibliothek tragen `?/<Basisname>` im PPTH (UTF-16BE, Rohdaten `003f002f…` – kein Encoding-Fehler). `classifyPpthPlausibility()` prüft dann den exakten Basisname (`PLACEHOLDER_BASENAME`); Vollpfad-Vergleich bleibt für echte Pfade (`EXACT`), alles andere `MISMATCH`. |
 | `FolderPath` + `FileNameL` naiv verkettet | Echte Rekordbox-7-DBs speichern in `FolderPath` teils den vollen Pfad; `FileNameL` wiederholt den Basisnamen (`…/x.mp3x.mp3`). Neue Regel `joinAudioPath()` (analysisResolver.ts, auch von `dbParser.ts` genutzt): endet `FolderPath` auf `FileNameL`, wird es unverändert übernommen. |
 
 ## 5. Befund vom 2026-09-10

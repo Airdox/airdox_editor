@@ -112,6 +112,37 @@ export function joinAudioPath(
   return `${stripped}${sep}${file}`;
 }
 
+/** Ergebnis des PPTH-Plausibilitätsvergleichs (Stufe 4 des Stufenplans). */
+export type PpthPlausibility = 'EXACT' | 'PLACEHOLDER_BASENAME' | 'MISMATCH';
+
+/**
+ * Vergleicht den in der ANLZ gespeicherten PPTH-Pfad deterministisch mit dem
+ * Audiopfad der Datenbankzeile.
+ *
+ *  - `EXACT`: normalisierte Vollpfade identisch (Tier-1-Regel).
+ *  - `PLACEHOLDER_BASENAME`: rekordbox schreibt für manche Analysen statt
+ *    Laufwerk+Verzeichnis den Platzhalter `?/` + Basisname (beobachtet am
+ *    10.09.2026 an `D:\PIONEER\Master`, PPTH-Rohdaten `003f002f…`). Dann ist
+ *    ein Vollpfad-Vergleich quellenbedingt unmöglich; geprüft wird der
+ *    **exakte** Basisname – kein Fuzzy-Matching, keine Suche.
+ *  - `MISMATCH`: alles andere → Zuordnung prüfen.
+ */
+export function classifyPpthPlausibility(
+  ppth: string | undefined | null,
+  audioPath: string | undefined | null
+): PpthPlausibility {
+  const a = normalizeAudioKey(ppth);
+  const b = normalizeAudioKey(audioPath);
+  if (!a || !b) return 'MISMATCH';
+  if (a === b) return 'EXACT';
+  if (a.startsWith('?/') || a.startsWith('?\\')) {
+    const baseA = a.split('/').pop() || '';
+    const baseB = b.split('/').pop() || '';
+    if (baseA && baseA === baseB) return 'PLACEHOLDER_BASENAME';
+  }
+  return 'MISMATCH';
+}
+
 export function normalizeAudioKey(input: string | undefined | null): string {
   if (!input) return '';
   let s = input.trim();

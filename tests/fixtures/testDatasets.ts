@@ -671,10 +671,13 @@ function standardBeatGrid(bpm: number, firstBeatMs: number, beatCount: number) {
  * .DAT fixture with the real PMAI/PPTH/PQTZ/PCOB/PWV5 layouts: two memory
  * points + one loop, one hot cue and a 4-beat beat grid.
  */
-export function generateRealAnlzDatFixture(bpm: number = 128.0): ArrayBuffer {
+export function generateRealAnlzDatFixture(
+  bpm: number = 128.0,
+  ppthPath: string = 'C:\\Music\\Reference.wav'
+): ArrayBuffer {
   const spbMs = Math.round(60000 / bpm);
   const tags: AnlzTag[] = [
-    encodePpth('C:\\Music\\Reference.wav'),
+    encodePpth(ppthPath),
     encodePqtz(bpm, 0, standardBeatGrid(bpm, 0, 32)),
     encodePcob(0, [
       encodePcptEntry(0, { hotCue: 0, orderFirst: 0xffff, orderLast: 1 }),

@@ -188,6 +188,39 @@ assert.match(fb.stdout || '', /PPTH-Scan \(Stufe-3-Fallback, Tier 1/, 'Fallback-
 assert.match(fb.stdout || '', /ERGEBNIS: PASS/);
 
 // ---------------------------------------------------------------------------
+// 4c) PPTH-Platzhalter '?/' (echte rekordbox-Analysen): Basisname exakt →
+//     [6] PASS, kein WARN, Gate bleibt grün.
+// ---------------------------------------------------------------------------
+
+const workDir3 = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-anlz-ph-'));
+const dbDir3 = path.join(workDir3, 'db');
+const anlzDir3 = path.join(dbDir3, 'share', 'PIONEER', 'USBANLZ', 'x');
+fs.mkdirSync(anlzDir3, { recursive: true });
+fs.writeFileSync(
+  path.join(anlzDir3, 'ANLZ0003.DAT'),
+  Buffer.from(generateRealAnlzDatFixture(128, '?/Reference.wav'))
+);
+
+const dbPath3 = path.join(dbDir3, 'master.db');
+{
+  const Database = require('better-sqlite3-multiple-ciphers');
+  const db = new Database(dbPath3);
+  db.pragma('cipher = sqlcipher');
+  db.pragma('legacy = 4');
+  db.pragma(`key = '${dbReader.getMasterDbKey()}'`);
+  db.exec(`
+    CREATE TABLE djmdContent (ID INTEGER PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, AnalysisDataPath TEXT);
+    INSERT INTO djmdContent VALUES (1, 'C:\\Music\\', 'Reference.wav', 'Placeholder', '/PIONEER/USBANLZ/x/ANLZ0003.DAT');
+  `);
+  db.close();
+}
+
+const ph = runProbe(['--db', dbPath3, '--track', '1']);
+assert.strictEqual(ph.status, 0, `Platzhalter-Lauf muss Exit 0 liefern\n${ph.stdout}${ph.stderr}`);
+assert.match(ph.stdout || '', /Basisname exakt; PPTH-Laufwerk ist Rekordbox-Platzhalter/, 'Platzhalter-Klassifikation sichtbar');
+assert.doesNotMatch(ph.stdout || '', /WARN \(weicht ab/, 'kein MISMATCH-WARN bei Platzhalter');
+
+// ---------------------------------------------------------------------------
 // 4) Read-Only-Beweis: alles byte-identisch
 // ---------------------------------------------------------------------------
 
