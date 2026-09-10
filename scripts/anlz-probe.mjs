@@ -174,6 +174,11 @@ function run(options) {
           path.join(dbDirAbs, 'share', 'PIONEER', 'USBANLZ'),
           path.join(dbDirAbs, 'PIONEER', 'USBANLZ'),
           path.join(dbDirAbs, 'USBANLZ'),
+          // Rekordbox-Layouts, in denen die DB in einem Unterordner liegt
+          // (z. B. D:\PIONEER\Master\master.db neben D:\PIONEER\USBANLZ):
+          path.join(dbDirAbs, '..', 'USBANLZ'),
+          path.join(dbDirAbs, '..', 'PIONEER', 'USBANLZ'),
+          path.join(dbDirAbs, '..', 'share', 'PIONEER', 'USBANLZ'),
         ].filter((f) => fs.existsSync(f));
         const scans = [dbReader.scanAnlzForPaths([audioPathFromDb])];
         if (extraFolders.length) scans.push(dbReader.scanAnlzForPaths([audioPathFromDb], extraFolders));
