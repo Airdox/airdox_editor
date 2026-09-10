@@ -300,6 +300,10 @@ function cloneEditSegments(segments: EditSegment[]): EditSegment[] {
   return segments.map((segment) => ({ ...segment, clipBuffer: segment.clipBuffer }));
 }
 
+/** The working audio and the visual source are deliberately separate. Edits
+ * never replace the genuine Rekordbox/ANLZ waveform attached to the track.
+ * The waveform is metadata from the source database, not a live re-analysis
+ * of the rendered working buffer. */
 /** A materialised working buffer is represented as one persisted REPLACE layer.
  * This keeps subsequent edits, undo/redo and project reload on the same timeline
  * instead of accidentally rebuilding from the untouched source. */
@@ -977,8 +981,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
       activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-      activeTrack.analysisVariants = undefined;
       setWorkingAudioBuffer(reRendered);
     } else {
       setTracks((prev) => [...prev]);
@@ -1011,8 +1013,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
       activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-      activeTrack.analysisVariants = undefined;
       setWorkingAudioBuffer(reRendered);
     } else {
       setTracks((prev) => [...prev]);
@@ -1151,8 +1151,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, currentTime, 0, clipboardBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
     activeTrack.duration = rendered.duration;
-    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
-    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
   };
 
@@ -1188,8 +1186,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, insertPos, 0, clipboardBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
     activeTrack.duration = rendered.duration;
-    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
-    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1247,8 +1243,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const rendered = spliceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, insertPos, 0, adapted.adaptedBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
     activeTrack.duration = rendered.duration;
-    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
-    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1296,8 +1290,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     const rendered = replaceAudioBuffer(audioEngine.getContext(), workingAudioBuffer, selection.start, selection.duration, adapted.adaptedBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
-    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
-    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1345,8 +1337,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     const rendered = overdubAudioBuffer(audioEngine.getContext(), workingAudioBuffer, selection.start, selection.duration, adapted.adaptedBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, rendered);
-    activeTrack.analysis = analyzeAudioBuffer(rendered, DataOrigin.PROJECT);
-    activeTrack.analysisVariants = undefined;
     setWorkingAudioBuffer(rendered);
 
     showOperationFeedback({
@@ -1432,7 +1422,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setWorkingAudioBuffer(newBuffer);
     activeTrack.duration = newBuffer.duration;
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, newBuffer);
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
 
     showOperationFeedback({
       title: 'Auswahl gelöscht (Delete)',
@@ -1476,7 +1465,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     setWorkingAudioBuffer(newBuffer);
     activeTrack.workingSegments = materializeWorkingBuffer(activeTrack, newBuffer);
-    activeTrack.analysis = analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
 
     showOperationFeedback({
       title: 'Bereich stummgeschaltet (Clear / Mute)',
