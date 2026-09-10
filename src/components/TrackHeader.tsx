@@ -7,7 +7,7 @@
 import React from 'react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
-import { APP_VERSION } from '../utils/appVersion';
+import { APP_BUILD } from '../utils/appVersion';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -160,9 +160,9 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
               )}
               <span
                 className="font-mono text-[9.5px] px-1 rounded-xs border border-neutral-700 bg-neutral-800/40 text-neutral-400"
-                title={`airdox_SMART_Editor Version ${APP_VERSION}`}
+                title={`airdox_SMART_Editor Version ${APP_BUILD}`}
               >
-                v{APP_VERSION}
+                v{APP_BUILD}
               </span>
             </div>
           </div>
