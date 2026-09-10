@@ -427,9 +427,17 @@ function findAnlzFolders(baseOverride) {
       roots.push(path.join(baseOverride, dirName));
     }
   } else if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      roots.push(path.join(appData, 'Pioneer', dirName, 'share', 'PIONEER'));
+    // The user's Rekordbox library and analysis data live on D:. Do not
+    // inspect AppData, the audio volume, or any other partition here: source
+    // selection must be deterministic and privacy-friendly.
+    const dRoots = [
+      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
+      'D:\\rekordbox7', 'D:\\rekordbox6',
+    ];
+    for (const base of dRoots) {
+      for (const dirName of ['', 'rekordbox7', 'rekordbox6', 'rekordbox']) {
+        roots.push(dirName ? path.join(base, dirName, 'share', 'PIONEER') : path.join(base, 'share', 'PIONEER'));
+      }
     }
   } else if (process.platform === 'darwin') {
     const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
@@ -604,6 +612,15 @@ function findTargetDriveAnlzFolders(targetPaths) {
       }
     } catch { /* inaccessible removable drive */ }
   };
+  // Analysis lookup is intentionally restricted to D: on Windows.
+  if (process.platform === 'win32') {
+    for (const candidate of [
+      'D:\\Pioneer\\USBANLZ', 'D:\\Pioneer\\ANLZ',
+      'D:\\rekordbox\\share\\PIONEER\\USBANLZ',
+      'D:\\Rekordbox\\share\\PIONEER\\USBANLZ',
+    ]) push(candidate);
+    return folders;
+  }
   for (const raw of Array.isArray(targetPaths) ? targetPaths : []) {
     let value = String(raw || '').trim();
     try { value = decodeURIComponent(value); } catch { /* keep raw */ }
