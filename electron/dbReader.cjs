@@ -544,9 +544,43 @@ function buildAnlzPpthIndex(folders) {
  * @param {string[]} targetPaths audio paths (any form; normalized internally)
  * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
  */
+function findTargetDriveAnlzFolders(targetPaths) {
+  const folders = [];
+  const seen = new Set();
+  const push = (dir) => {
+    if (seen.has(dir)) return;
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        seen.add(dir);
+        folders.push(dir);
+      }
+    } catch { /* inaccessible removable drive */ }
+  };
+  for (const raw of Array.isArray(targetPaths) ? targetPaths : []) {
+    let value = String(raw || '').trim();
+    try { value = decodeURIComponent(value); } catch { /* keep raw */ }
+    value = value.replace(/^file:\/\/(localhost)?\/?/i, '');
+    const drive = value.match(/^([a-zA-Z]):[\\/]/);
+    if (!drive) continue;
+    const root = `${drive[1].toUpperCase()}:\\`;
+    // Rekordbox USB exports commonly keep analysis beside PIONEER on the
+    // removable drive. Include the local-library layouts too, but never scan
+    // the whole drive.
+    for (const candidate of [
+      path.join(root, 'PIONEER', 'USBANLZ'),
+      path.join(root, 'PIONEER', 'ANLZ'),
+      path.join(root, 'PIONEER', 'share', 'PIONEER', 'USBANLZ'),
+    ]) push(candidate);
+  }
+  return folders;
+}
+
 function scanAnlzForPaths(targetPaths, folderOverride) {
   const started = Date.now();
-  const folders = folderOverride || findAnlzFolders();
+  const folders = folderOverride || [
+    ...findAnlzFolders(),
+    ...findTargetDriveAnlzFolders(targetPaths),
+  ];
   const { index, scanned } = buildAnlzPpthIndex(folders);
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
