@@ -551,9 +551,6 @@ function readPpthFromFile(filePath) {
     const buf = Buffer.alloc(len);
     const read = fs.readSync(handle, buf, 0, len, 0);
     if (read < 0x10) return null;
-    // Echte ANLZ-Container beginnen mit dem PMAI-Dateikopf; PPTH ist dann die
-    // erste Sektion direkt dahinter. Dateien ohne PMAI (ältere Exporte,
-    // Fixtures) starten direkt mit PPTH. Beide Formen werden gelesen.
     let ppthOffset = 0;
     if (buf.toString('ascii', 0, 4) === 'PMAI') {
       const headerLength = buf.readUInt32BE(4);
@@ -561,7 +558,6 @@ function readPpthFromFile(filePath) {
       ppthOffset = headerLength;
     }
     if (buf.toString('ascii', ppthOffset, ppthOffset + 4) !== 'PPTH') return null;
-    // Envelope: PPTH, u32 lenHeader (BE), u32 lenTag (BE), u32 lenPath (BE @ +0x0c)
     const lenPath = buf.readUInt32BE(ppthOffset + 0x0c);
     if (lenPath <= 0 || ppthOffset + 0x10 + lenPath > read) return null;
     return decodePpthPath(buf, ppthOffset + 0x10, lenPath);
@@ -570,6 +566,35 @@ function readPpthFromFile(filePath) {
   } finally {
     if (handle !== null) {
       try { fs.closeSync(handle); } catch { /* ignore */ }
+    }
+  }
+}
+
+async function readPpthFromFileAsync(filePath) {
+  let handle = null;
+  try {
+    handle = await fs.promises.open(filePath, 'r');
+    const stat = await handle.stat();
+    const size = stat.size;
+    const len = Math.min(ANLZ_HEADER_BYTES, size);
+    const buf = Buffer.alloc(len);
+    const { bytesRead } = await handle.read(buf, 0, len, 0);
+    if (bytesRead < 0x10) return null;
+    let ppthOffset = 0;
+    if (buf.toString('ascii', 0, 4) === 'PMAI') {
+      const headerLength = buf.readUInt32BE(4);
+      if (headerLength < 12 || headerLength + 0x10 > bytesRead) return null;
+      ppthOffset = headerLength;
+    }
+    if (buf.toString('ascii', ppthOffset, ppthOffset + 4) !== 'PPTH') return null;
+    const lenPath = buf.readUInt32BE(ppthOffset + 0x0c);
+    if (lenPath <= 0 || ppthOffset + 0x10 + lenPath > bytesRead) return null;
+    return decodePpthPath(buf, ppthOffset + 0x10, lenPath);
+  } catch {
+    return null;
+  } finally {
+    if (handle) {
+      try { await handle.close(); } catch { /* ignore */ }
     }
   }
 }
@@ -592,9 +617,9 @@ function normalizeAnlzPathKey(input) {
 
 /**
  * Async, non-blocking ANLZ PPTH index builder.
- * Reads only 1 KB headers per file, yields to event loop every 100 files
+ * Reads only 1 KB headers per file, yields to event loop every 50 files
  * so the Electron main process stays responsive even with 20k+ containers.
- * Every step is logged via optional onProgress callback.
+ * Every step is logged via optional onProgress callback (every 500 files).
  */
 async function buildAnlzPpthIndex(folders, onProgress) {
   const index = new Map();
@@ -612,7 +637,6 @@ async function buildAnlzPpthIndex(folders, onProgress) {
       return;
     }
     processedDirs++;
-    // Yield every 20 dirs to keep main responsive
     if (processedDirs % 20 === 0) {
       await new Promise((r) => setImmediate(r));
     }
@@ -630,13 +654,12 @@ async function buildAnlzPpthIndex(folders, onProgress) {
       if (onProgress && scanned % 500 === 0) {
         try { onProgress(scanned, index.size); } catch {}
       }
-      // Yield every 100 files
-      if (scanned % 100 === 0) {
+      if (scanned % 50 === 0) {
         await new Promise((r) => setImmediate(r));
       }
       let ppth = null;
       try {
-        ppth = readPpthFromFile(full);
+        ppth = await readPpthFromFileAsync(full);
       } catch {
         ppth = null;
       }
