@@ -103,6 +103,15 @@ export interface LoopPoint {
   origin: DataOrigin;
 }
 
+export interface PaletteWaveformData {
+  /** Downsampled genuine source waveform for the clip's time range. */
+  peaks: number[];
+  lowEnergy: number[];
+  midEnergy: number[];
+  highEnergy: number[];
+  origin: DataOrigin;
+}
+
 export interface PaletteClip {
   id: string;
   name: string;
@@ -117,7 +126,8 @@ export interface PaletteClip {
   key: string;
   color: string;
   audioBuffer?: AudioBuffer;
-  miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
+  miniPeaks?: number[]; // legacy fallback for palette preview
+  waveform?: PaletteWaveformData;
   origin: DataOrigin;
 }
 
@@ -233,6 +243,8 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
+  /** Timeline length is part of edit history (insert/delete change it). */
+  duration?: number;
   /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
   beatGrid?: BeatGrid;
 }

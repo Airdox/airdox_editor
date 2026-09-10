@@ -324,6 +324,38 @@ function findDatabaseFiles(appDir) {
 }
 
 /**
+ * Bounded discovery for installations whose Rekordbox library/database is on
+ * another Windows partition. The normal AppData/options.json path remains the
+ * first choice; D: is included because users commonly place the library on a
+ * dedicated data volume. Only folders with Rekordbox/Pioneer-like names are
+ * traversed and database filenames are matched exactly.
+ */
+function findDatabaseFilesOnWindowsVolume(volumeRoot) {
+  const results = [];
+  const seen = new Set();
+  const allowedDirectory = (name) => /^(pioneer|rekordbox|rekordbox[0-9]+|database|databases|library|share|storage|export)$/i.test(name);
+  const visit = (dir, depth) => {
+    if (depth > 6) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && /^(master|exportLibrary)\.db$/i.test(entry.name)) {
+        const resolved = path.resolve(full);
+        if (seen.has(resolved)) continue;
+        seen.add(resolved);
+        const kind = entry.name.toLowerCase() === 'exportlibrary.db' ? 'ONE_LIBRARY' : 'MASTER_DB';
+        results.push({ path: resolved, kind, label: `${entry.name} (Datenpartition)` });
+      } else if (entry.isDirectory() && allowedDirectory(entry.name)) {
+        visit(full, depth + 1);
+      }
+    }
+  };
+  if (volumeRoot && fs.existsSync(volumeRoot)) visit(volumeRoot, 0);
+  return results;
+}
+
+/**
  * Scans the standard Pioneer/Rekordbox application data directories for
  * master.db / exportLibrary.db (read-only).
  */
@@ -331,14 +363,30 @@ function locateRekordboxDatabases() {
   const candidates = [];
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    const pioneerRoot = path.join(appData, 'Pioneer');
+    // Rekordbox keeps the library location in the global
+    // Pioneer/rekordboxAgent/options.json even when master.db itself lives on
+    // another partition (for example D:). Read that pointer before scanning
+    // the conventional per-version folders.
+    candidates.push(...findDatabaseFiles(pioneerRoot));
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(appData, 'Pioneer', dirName)));
+      candidates.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
     }
   } else if (process.platform === 'darwin') {
     const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
       candidates.push(...findDatabaseFiles(path.join(base, dirName)));
     }
+  }
+
+  if (process.platform === 'win32') {
+    const configuredRoot = process.env.AIRDOX_REKORDBOX_ROOT;
+    const volumeRoots = [
+      configuredRoot,
+      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
+      'D:\\rekordbox7', 'D:\\rekordbox6',
+    ].filter(Boolean);
+    for (const root of volumeRoots) candidates.push(...findDatabaseFilesOnWindowsVolume(root));
   }
 
   // Deduplicate by resolved path; options.json entries rank first.
@@ -379,9 +427,17 @@ function findAnlzFolders(baseOverride) {
       roots.push(path.join(baseOverride, dirName));
     }
   } else if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      roots.push(path.join(appData, 'Pioneer', dirName, 'share', 'PIONEER'));
+    // The user's Rekordbox library and analysis data live on D:. Do not
+    // inspect AppData, the audio volume, or any other partition here: source
+    // selection must be deterministic and privacy-friendly.
+    const dRoots = [
+      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
+      'D:\\rekordbox7', 'D:\\rekordbox6',
+    ];
+    for (const base of dRoots) {
+      for (const dirName of ['', 'rekordbox7', 'rekordbox6', 'rekordbox']) {
+        roots.push(dirName ? path.join(base, dirName, 'share', 'PIONEER') : path.join(base, 'share', 'PIONEER'));
+      }
     }
   } else if (process.platform === 'darwin') {
     const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
@@ -501,26 +557,40 @@ function normalizeAnlzPathKey(input) {
 function buildAnlzPpthIndex(folders) {
   const index = new Map();
   let scanned = 0;
-  for (const folder of folders) {
+  // USBANLZ is normally a hash/UUID directory tree, not a flat folder.
+  // The previous implementation only inspected the root and therefore
+  // reported "0 Dateien" on valid Rekordbox exports. Walk only the analysis
+  // roots, with a depth/file guard so a malformed path cannot become a full
+  // disk scan.
+  const maxDepth = 6;
+  const maxFiles = 250000;
+  const visit = (folder, depth) => {
+    if (depth > maxDepth || scanned >= maxFiles) return;
     let entries = [];
-    try { entries = fs.readdirSync(folder); } catch { continue; }
-    for (const name of entries) {
-      const lower = name.toLowerCase();
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return; }
+    for (const entryInfo of entries) {
+      if (scanned >= maxFiles) return;
+      const full = path.join(folder, entryInfo.name);
+      if (entryInfo.isDirectory()) {
+        visit(full, depth + 1);
+        continue;
+      }
+      const lower = entryInfo.name.toLowerCase();
       if (!lower.startsWith('anlz')) continue;
       if (!lower.endsWith('.dat') && !lower.endsWith('.ext')) continue;
-      const full = path.join(folder, name);
       scanned += 1;
       const ppth = readPpthFromFile(full);
       if (!ppth) continue;
       const key = normalizeAnlzPathKey(ppth);
       if (!key) continue;
       const isDat = lower.endsWith('.dat');
-      const entry = index.get(key) || { ppth, datPath: null, extPath: null };
-      if (isDat) entry.datPath = full;
-      else if (!entry.extPath) entry.extPath = full;
-      index.set(key, entry);
+      const existing = index.get(key) || { ppth, datPath: null, extPath: null };
+      if (isDat) existing.datPath = full;
+      else if (!existing.extPath) existing.extPath = full;
+      index.set(key, existing);
     }
-  }
+  };
+  for (const folder of folders) visit(folder, 0);
   return { index, scanned };
 }
 
@@ -530,9 +600,52 @@ function buildAnlzPpthIndex(folders) {
  * @param {string[]} targetPaths audio paths (any form; normalized internally)
  * @param {string[]} [folderOverride] explicit ANLZ folders (tests)
  */
+function findTargetDriveAnlzFolders(targetPaths) {
+  const folders = [];
+  const seen = new Set();
+  const push = (dir) => {
+    if (seen.has(dir)) return;
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        seen.add(dir);
+        folders.push(dir);
+      }
+    } catch { /* inaccessible removable drive */ }
+  };
+  // Analysis lookup is intentionally restricted to D: on Windows.
+  if (process.platform === 'win32') {
+    for (const candidate of [
+      'D:\\Pioneer\\USBANLZ', 'D:\\Pioneer\\ANLZ',
+      'D:\\rekordbox\\share\\PIONEER\\USBANLZ',
+      'D:\\Rekordbox\\share\\PIONEER\\USBANLZ',
+    ]) push(candidate);
+    return folders;
+  }
+  for (const raw of Array.isArray(targetPaths) ? targetPaths : []) {
+    let value = String(raw || '').trim();
+    try { value = decodeURIComponent(value); } catch { /* keep raw */ }
+    value = value.replace(/^file:\/\/(localhost)?\/?/i, '');
+    const drive = value.match(/^([a-zA-Z]):[\\/]/);
+    if (!drive) continue;
+    const root = `${drive[1].toUpperCase()}:\\`;
+    // Rekordbox USB exports commonly keep analysis beside PIONEER on the
+    // removable drive. Include the local-library layouts too, but never scan
+    // the whole drive.
+    for (const candidate of [
+      path.join(root, 'PIONEER', 'USBANLZ'),
+      path.join(root, 'PIONEER', 'ANLZ'),
+      path.join(root, 'PIONEER', 'share', 'PIONEER', 'USBANLZ'),
+    ]) push(candidate);
+  }
+  return folders;
+}
+
 function scanAnlzForPaths(targetPaths, folderOverride) {
   const started = Date.now();
-  const folders = folderOverride || findAnlzFolders();
+  const folders = folderOverride || [
+    ...findAnlzFolders(),
+    ...findTargetDriveAnlzFolders(targetPaths),
+  ];
   const { index, scanned } = buildAnlzPpthIndex(folders);
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {

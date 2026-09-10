@@ -592,6 +592,13 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
                 return (
                   <div
                     key={clip.id}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'copy';
+                      e.dataTransfer.setData('application/x-airdox-palette-clip', clip.id);
+                      e.dataTransfer.setData('text/plain', clip.id);
+                    }}
+                    onDragEnd={(e) => e.dataTransfer.clearData()}
                     onClick={() => onSelectClip(clip)}
                     className={`p-1.5 rounded-xs border cursor-pointer transition-all flex items-center justify-between ${
                       isSelected

@@ -202,6 +202,7 @@ export interface SerializedPaletteClip {
   key: string;
   color: string;
   miniPeaks?: number[];
+  waveform?: PaletteClip['waveform'];
   origin: DataOrigin;
   clipWavBase64?: string;
 }
@@ -319,6 +320,7 @@ function serializeClip(clip: PaletteClip): SerializedPaletteClip {
     key: clip.key,
     color: clip.color,
     miniPeaks: clip.miniPeaks,
+    waveform: clip.waveform,
     origin: clip.origin,
   };
   if (clip.audioBuffer) {

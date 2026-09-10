@@ -36,6 +36,9 @@ jobs:
       - name: Renderer bauen (Vite)
         run: npm run build
 
+      - name: Waveform-Gates / Quellenherkunft verifizieren
+        run: npm run verify:waveform
+
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never
         env:
