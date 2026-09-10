@@ -466,7 +466,16 @@ function run(options) {
       ? 'ERGEBNIS: FAIL – Master-DB-Zugriff nicht hergestellt (Details oben).'
       : `ERGEBNIS: PASS – master.db lesbar, Schema entschlüsselt, Quelle unverändert.${warned ? ' (mit Warnungen)' : ''}`
   );
-  line(`Nächster Schritt: ${failed ? 'Fehler oben beheben (Pfad/Modul/Version), dann Probe erneut ausführen.' : 'npm run probe:masterdb -- --track <ID> und danach die ANLZ-Stufe.'}`);
+  if (failed) {
+    line('Nächster Schritt: Fehler oben beheben (Pfad/Modul/Version), dann Probe erneut ausführen.');
+  } else {
+    // Kopierbarer Folgebefehl OHNE Platzhalter: Pfad und erste Track-ID sind
+    // bereits eingesetzt (verhindert <…>-Syntaxfallen in der PowerShell).
+    const firstId = REPORT.samples[0]?.id;
+    const next = `npm run probe:anlz -- --db "${target.path}"${firstId ? ` --track ${firstId}` : ''}`;
+    line('Nächster Befehl (Werte eingesetzt – Zeile kopieren und einfügen):');
+    line(`  ${next}`);
+  }
   return failed ? 1 : 0;
 }
 
