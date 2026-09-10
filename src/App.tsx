@@ -151,6 +151,13 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
     console.info(`[ANLZ Auto] Keine deterministische Auflösung für AnalysisDataPath (${anlzPath}); manuelle ANLZ-Zuordnung erforderlich.`);
     return track;
   }
+  // Windows production contract: Rekordbox analysis is read exclusively from
+  // the D: partition. Never silently open an ANLZ file from AppData, G:, a
+  // network share, or any other volume.
+  if (/^[a-zA-Z]:[\\\\/]/.test(resolved) && !/^D:[\\\\/]/i.test(resolved)) {
+    logger.warn('DATABASE', '[ANLZ Auto] Analysepfad außerhalb D: abgelehnt.', { resolved, requiredVolume: 'D:' });
+    return track;
+  }
   const variantSummary = (e: AnlzExtractionResult) =>
     e.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length }));
   try {
