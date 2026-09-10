@@ -113,6 +113,23 @@ function detectDbType(filePath) {
   return null;
 }
 
+/**
+ * Klassifiziert DB-Fehler für verständliche Nutzer-Meldungen:
+ *  - LOCKED: Rekordbox läuft und hält die Schreib-Sperre (SQLITE_BUSY) —
+ *    Standard-Behandelung laut SQLite-Best-Practice: read-only öffnen
+ *    (wirft nie eine Schreib-Sperre) + busy_timeout; trotzdem gesperrt →
+ *    Nutzer soll Rekordbox schließen.
+ *  - ENCRYPTED_OR_CORRUPT: falsche Datei / falscher Key.
+ *  - UNREADABLE: Datei nicht vorhanden / nicht lesbar.
+ */
+function classifyDbOpenError(error) {
+  const message = String((error && error.message) || error || '');
+  if (/database is locked|SQLITE_BUSY|database file is locked/i.test(message)) return 'LOCKED';
+  if (/file is not a database|wrong key|not a database|decrypt/i.test(message)) return 'ENCRYPTED_OR_CORRUPT';
+  if (/cannot open|unable to open|no such file|EACCES|EPERM/i.test(message)) return 'UNREADABLE';
+  return 'UNKNOWN';
+}
+
 function openRekordboxDb(filePath) {
   const Database = getCipherModule();
   if (!Database) {
@@ -129,13 +146,19 @@ function openRekordboxDb(filePath) {
 
   try {
     const key = dbType === 'MASTER_DB' ? getMasterDbKey() : getOneLibraryKey();
-    const db = new Database(filePath, { readonly: true, fileMustExist: true });
+    // Read-only (wirft nie eine Schreib-Sperre) + timeout: bei Sperren durch
+    // laufendes Rekordbox wartet SQLite bis zu 10 s statt sofort zu scheitern
+    // (SQLite-Best-Practice: busy-Timeout auf jeder Verbindung).
+    const db = new Database(filePath, { readonly: true, fileMustExist: true, timeout: 10000 });
     try {
       db.pragma('cipher = sqlcipher');
       db.pragma('legacy = 4');
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+      // Zweite Verteidigungsebene zur Read-Only-Garantie: selbst ein
+      // versehentliches Schreiben scheitert auf Engine-Ebene.
+      db.pragma('query_only = ON');
       return { db, dbType };
     } catch (openError) {
       try {
@@ -143,15 +166,35 @@ function openRekordboxDb(filePath) {
       } catch {
         // ignore
       }
+      const kind = classifyDbOpenError(openError);
+      const detail = openError.message || openError;
+      if (kind === 'LOCKED') {
+        return {
+          available: false,
+          reason:
+            'Die Datenbank ist gesperrt — Rekordbox läuft vermutlich und hält die Sperre. ' +
+            'Bitte Rekordbox schließen und die Datenbank-Suche erneut ausführen. (' + detail + ')',
+        };
+      }
       return {
         available: false,
         reason:
           'Die Datenbank konnte nicht entschlüsselt werden. Bitte prüfe, ob die Datei eine ' +
-          `${dbType === 'MASTER_DB' ? 'Rekordbox-6/7-master.db' : 'OneLibrary-exportLibrary.db'} ist. (${openError.message || openError})`,
+          `${dbType === 'MASTER_DB' ? 'Rekordbox-6/7-master.db' : 'OneLibrary-exportLibrary.db'} ist. (${detail})`,
       };
     }
   } catch (error) {
-    return { available: false, reason: `Die Datenbankdatei kann nicht geöffnet werden: ${error.message || error}` };
+    const kind = classifyDbOpenError(error);
+    const detail = error.message || error;
+    if (kind === 'LOCKED') {
+      return {
+        available: false,
+        reason:
+          'Die Datenbank ist gesperrt — Rekordbox läuft vermutlich und hält die Sperre. ' +
+          'Bitte Rekordbox schließen und die Datenbank-Suche erneut ausführen. (' + detail + ')',
+      };
+    }
+    return { available: false, reason: `Die Datenbankdatei kann nicht geöffnet werden: ${detail}` };
   }
 }
 
@@ -761,6 +804,7 @@ module.exports = {
   getMasterDbKey,
   getOneLibraryKey,
   detectDbType,
+  classifyDbOpenError,
   readRekordboxDatabase,
   getDatabaseSearchRoots,
   isOnDriveD,
