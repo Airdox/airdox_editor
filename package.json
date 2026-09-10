@@ -1,7 +1,7 @@
 {
   "name": "airdox_SMART_Editor",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "airdox_SMART_Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
   "author": "Airdox",
   "type": "module",
