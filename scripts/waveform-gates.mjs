@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const failures = [];
 
 function runAgent(name, command, args) {
@@ -53,13 +54,13 @@ function sourceContractAgent() {
 // evidence meaningless, and a renderer failure makes the integration gate
 // unsafe to publish.
 sourceContractAgent();
-runAgent('Resolver + nested ANLZ scan agent', 'npm', ['exec', '--', 'tsx', 'tests/analysis-resolver.test.ts']);
-runAgent('Binary ANLZ/PQTZ/EXT provenance agent', 'npm', ['exec', '--', 'tsx', 'tests/anlz-real-format.test.ts']);
-runAgent('Waveform variants + renderer agent', 'npm', ['exec', '--', 'tsx', 'tests/waveform-variants.test.ts']);
-runAgent('Renderer no-synthesis + palette contract agent', 'npm', ['exec', '--', 'tsx', 'tests/renderer-original-data.test.ts']);
-runAgent('XML/DB integration agent', 'npm', ['exec', '--', 'tsx', 'tests/xml-exclusive-import.test.ts']);
-runAgent('TypeScript gatekeeper', 'npm', ['run', 'lint']);
-runAgent('Production build gatekeeper', 'npm', ['run', 'build']);
+runAgent('Resolver + nested ANLZ scan agent', npmCommand, ['exec', '--', 'tsx', 'tests/analysis-resolver.test.ts']);
+runAgent('Binary ANLZ/PQTZ/EXT provenance agent', npmCommand, ['exec', '--', 'tsx', 'tests/anlz-real-format.test.ts']);
+runAgent('Waveform variants + renderer agent', npmCommand, ['exec', '--', 'tsx', 'tests/waveform-variants.test.ts']);
+runAgent('Renderer no-synthesis + palette contract agent', npmCommand, ['exec', '--', 'tsx', 'tests/renderer-original-data.test.ts']);
+runAgent('XML/DB integration agent', npmCommand, ['exec', '--', 'tsx', 'tests/xml-exclusive-import.test.ts']);
+runAgent('TypeScript gatekeeper', npmCommand, ['run', 'lint']);
+runAgent('Production build gatekeeper', npmCommand, ['run', 'build']);
 
 if (failures.length) {
   console.error('\n[WAVEFORM GATEKEEPER] BLOCKED');
