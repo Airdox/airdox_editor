@@ -38,6 +38,7 @@ function sourceContractAgent() {
     ['palette consumes source waveform payload', /clip\.waveform/.test(palette) && /extractPaletteWaveform/.test(app)],
     ['ANLZ scan walks nested folders', /maxDepth\s*=\s*6/.test(dbReader) && /isDirectory\(\)/.test(dbReader)],
     ['ANLZ scan checks target media drives', /findTargetDriveAnlzFolders/.test(dbReader) && /PIONEER.*USBANLZ/.test(dbReader)],
+    ['database discovery checks D partition', /findDatabaseFilesOnWindowsVolume/.test(dbReader) && /D:/.test(dbReader)],
   ];
   const failed = checks.filter(([, ok]) => !ok).map(([label]) => label);
   if (failed.length) {
