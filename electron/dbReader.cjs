@@ -363,8 +363,14 @@ function locateRekordboxDatabases() {
   const candidates = [];
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    const pioneerRoot = path.join(appData, 'Pioneer');
+    // Rekordbox keeps the library location in the global
+    // Pioneer/rekordboxAgent/options.json even when master.db itself lives on
+    // another partition (for example D:). Read that pointer before scanning
+    // the conventional per-version folders.
+    candidates.push(...findDatabaseFiles(pioneerRoot));
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(appData, 'Pioneer', dirName)));
+      candidates.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
     }
   } else if (process.platform === 'darwin') {
     const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
