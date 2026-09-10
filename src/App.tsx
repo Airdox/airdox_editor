@@ -11,6 +11,7 @@ import {
   WaveformMode,
   SelectionRange,
   PaletteClip,
+  PaletteWaveformData,
   EditSegment,
   DataOrigin,
   EditHistoryEntry,
@@ -256,6 +257,40 @@ function shiftGridForDelete(track: TrackModel, start: number, end: number) {
   track.beatGrid = { ...track.beatGrid, firstBeat: track.beatGrid.firstBeat >= end ? track.beatGrid.firstBeat - amount : track.beatGrid.firstBeat,
     beats: track.beatGrid.beats.filter((beat) => beat.time < start || beat.time >= end)
       .map((beat) => beat.time >= end ? { ...beat, time: beat.time - amount } : beat) };
+}
+
+/** Build a palette preview from the genuine analysis attached to the source
+ * track. ANLZ buckets are clipped to the selected time range instead of being
+ * replaced by a second synthetic waveform calculation. */
+function extractPaletteWaveform(track: TrackModel, start: number, end: number, bucketCount = 64): PaletteWaveformData | undefined {
+  const candidates = track.analysisVariants && track.analysisVariants.length > 0
+    ? track.analysisVariants
+    : track.analysis ? [track.analysis] : [];
+  const analysis = candidates.slice().sort((a, b) => b.length - a.length)[0];
+  if (!analysis || analysis.length === 0 || track.duration <= 0) return undefined;
+  const first = Math.max(0, Math.floor((start / track.duration) * analysis.length));
+  const last = Math.min(analysis.length, Math.max(first + 1, Math.ceil((end / track.duration) * analysis.length)));
+  const peaks: number[] = [];
+  const lowEnergy: number[] = [];
+  const midEnergy: number[] = [];
+  const highEnergy: number[] = [];
+  for (let out = 0; out < bucketCount; out++) {
+    const from = first + Math.floor((out * (last - first)) / bucketCount);
+    const to = Math.max(from + 1, first + Math.floor(((out + 1) * (last - first)) / bucketCount));
+    let peak = 0; let low = 0; let mid = 0; let high = 0; let count = 0;
+    for (let i = from; i < Math.min(last, to); i++) {
+      peak = Math.max(peak, analysis.peaks[i] || 0);
+      low += analysis.lowEnergy[i] || 0;
+      mid += analysis.midEnergy[i] || 0;
+      high += analysis.highEnergy[i] || 0;
+      count++;
+    }
+    peaks.push(Math.min(1, peak));
+    lowEnergy.push(count ? low / count : 0);
+    midEnergy.push(count ? mid / count : 0);
+    highEnergy.push(count ? high / count : 0);
+  }
+  return { peaks, lowEnergy, midEnergy, highEnergy, origin: analysis.origin };
 }
 
 /** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
@@ -1071,6 +1106,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       color: '#00a2ff',
       audioBuffer: sliced,
       miniPeaks: extractMiniPeaks(sliced, 48),
+      waveform: extractPaletteWaveform(activeTrack, selection.start, selection.end),
       origin: DataOrigin.PROJECT,
     };
 
@@ -2122,6 +2158,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           color: clip.color,
           audioBuffer,
           miniPeaks: clip.miniPeaks,
+          waveform: clip.waveform,
           origin: clip.origin,
         });
       }
