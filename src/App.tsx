@@ -52,6 +52,12 @@ import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { MixLabView } from './components/MixLabView';
+import { OriginalProtectionModal } from './components/OriginalProtectionModal';
+import {
+  OriginalProtectionAgent,
+  GuardIntervention,
+  collectOriginals,
+} from './agent/originalProtectionAgent';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
@@ -502,6 +508,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // tracks/clips by id only and never writes to the project or originals.
   const [mixLabOpen, setMixLabOpen] = useState<boolean>(false);
 
+  // Original Protection Agent (permanent): watches every work step that
+  // touches a file. Originals are read-only — any risky operation (write,
+  // append, rename, move, delete, truncate) on a registered original is
+  // blocked and explained through the intervention popup. All work happens
+  // on working copies. The main process additionally enforces the same rule
+  // permanently (electron/originalGuard.cjs).
+  const guardAgent = useMemo(() => new OriginalProtectionAgent(), []);
+  const [guardIntervention, setGuardIntervention] = useState<GuardIntervention | null>(null);
+  const [guardProtectedCount, setGuardProtectedCount] = useState<number>(0);
+
   const showOperationFeedback = useCallback((telemetry: OperationTelemetry) => {
     setFeedbackTelemetry(telemetry);
     setFeedbackModalOpen(true);
@@ -605,6 +621,40 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
     return dbAnalysisIndexRef.current;
   }, []);
+
+  // Original Protection Agent: wire the intervention popup + durable logging
+  // (once per session). The agent only monitors and explains — it never
+  // touches files itself.
+  useEffect(() => {
+    guardAgent.setHandler((intervention) => setGuardIntervention(intervention));
+    guardAgent.setLogger((message, data) => {
+      logger.warn('SYSTEM', message, data);
+      void window.rekordboxDesktop?.appendLog?.({
+        ts: Date.now(),
+        level: 'WARN',
+        category: 'ORIGINAL_GUARD',
+        message,
+        data,
+      });
+    });
+  }, [guardAgent]);
+
+  // Original Protection Agent: keep the protection registry in sync with
+  // every original source the app knows about (track audio, ANLZ DAT/EXT,
+  // database analysis paths). Also registered in the permanent
+  // main-process guard. Read-only: collecting never touches the files.
+  useEffect(() => {
+    const anlzPaths: string[] = [];
+    for (const v of anlzPpthIndexRef.current.values()) {
+      if (v.datPath) anlzPaths.push(v.datPath);
+      if (v.extPath) anlzPaths.push(v.extPath);
+    }
+    for (const v of dbAnalysisIndexRef.current.values()) {
+      if (v.analysisDataPath) anlzPaths.push(v.analysisDataPath);
+    }
+    const count = guardAgent.syncOriginals(collectOriginals(tracks, paletteClips, { anlzPaths }));
+    setGuardProtectedCount(count);
+  }, [tracks, paletteClips, guardAgent]);
 
   // SQLCipher-unabhängige ANLZ-Auflösung: Jeder ANLZ-Container speichert den
   // exakten Audio-Pfad im PPTH-Header. Die Desktop-Bridge scannt die
@@ -2114,10 +2164,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
+      // Original Protection Agent: the permanent main-process guard rejects
+      // writes onto registered originals — surface it as the intervention
+      // popup instead of a generic error.
+      const intervention = guardAgent.reportMainGuardRejection(err, 'Projekt speichern');
+      if (intervention) {
+        setGuardIntervention(intervention);
+        return;
+      }
       console.error('[Projekt] Speichern fehlgeschlagen:', err);
       alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
+  }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback, guardAgent]);
 
   const handleOpenProject = useCallback(async () => {
     if (!window.rekordboxDesktop) {
@@ -2431,6 +2489,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onOpenMixLab={() => setMixLabOpen(true)}
+        originalGuardCount={guardProtectedCount}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -2620,6 +2679,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             workingAudioBuffer={workingAudioBuffer}
             protectedPaths={protectedPaths}
             onExportComplete={showOperationFeedback}
+            onGuardBlocked={(err) => {
+              const intervention = guardAgent.reportMainGuardRejection(err, 'Export (WAV/XML/JSON)');
+              if (intervention) setGuardIntervention(intervention);
+            }}
           />
           <DatabaseExtractionModal
             isOpen={dbExtractionModalOpen}
@@ -2679,6 +2742,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           paletteClips={paletteClips}
           activeTrackId={activeTrackId}
           onClose={() => setMixLabOpen(false)}
+        />
+      )}
+
+      {/* Original Protection Agent: Intervention-Popup. Öffnet sich, sobald
+          ein Arbeitsschritt eine Originalquelle ändern/löschen/verschieben
+          würde. Die Aktion bleibt abgebrochen; es arbeitet an Arbeitskopien. */}
+      {guardIntervention && (
+        <OriginalProtectionModal
+          intervention={guardIntervention}
+          onClose={() => setGuardIntervention(null)}
         />
       )}
     </div>

@@ -31,6 +31,8 @@ interface MenuBarProps {
   onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
   onOpenMixLab?: () => void;
+  /** Number of original sources currently protected by the Original Protection Agent. */
+  originalGuardCount?: number;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -56,6 +58,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenXmlCollection,
   onOpenSystemLogs,
   onOpenMixLab,
+  originalGuardCount,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -195,7 +198,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               </button>
               <div className="h-px bg-[#262830] my-1" />
               <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
-                Originalschutz aktiv (Read-Only)
+                {originalGuardCount && originalGuardCount > 0
+                  ? `Originalschutz aktiv · ${originalGuardCount} Originalquelle(n) geschützt (Read-Only)`
+                  : 'Originalschutz aktiv (Read-Only)'}
               </div>
             </div>
           )}

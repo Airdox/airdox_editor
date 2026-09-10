@@ -10,9 +10,31 @@
 
 const path = require('node:path');
 
-/** Normalize a path for comparison (resolved, slash-normalized, case-folded). */
+/**
+ * Normalize a path for comparison (slash-normalized, case-folded).
+ *
+ * Windows drive-letter paths are treated as a virtual root (no cwd prefix)
+ * and '.'/'..' segments are resolved, so the same original normalizes
+ * IDENTICALLY on every platform:
+ *   "D:\Music\T.wav" === "D:/Music/T.wav" === "d:/music/t.wav"
+ * Non-drive paths resolve against the cwd as before.
+ */
 function normalizeForCompare(filePath) {
-  return path.resolve(String(filePath)).replace(/\\/g, '/').toLowerCase();
+  const s = String(filePath).replace(/\\/g, '/');
+  const driveMatch = /^([a-zA-Z]):\//.exec(s);
+  if (driveMatch) {
+    const parts = [];
+    for (const raw of s.slice(2).split('/')) {
+      if (raw === '' || raw === '.') continue;
+      if (raw === '..') {
+        if (parts.length > 0) parts.pop();
+        continue;
+      }
+      parts.push(raw);
+    }
+    return `${driveMatch[1].toLowerCase()}:${'/' + parts.join('/')}`.toLowerCase();
+  }
+  return path.resolve(s).replace(/\\/g, '/').toLowerCase();
 }
 
 /**

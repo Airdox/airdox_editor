@@ -164,7 +164,38 @@ type GateResult = {
 - **UX-Agent:** verständliche Status- und Fehlertexte.
 - **Performance-Agent:** große Collections, Scanzeiten, Speicher.
 - **Release-Agent:** Lint, Tests, Build, Windows-Artefakte.
+- **Guard-Agent (Originalschutz):** permanentes Monitoring aller Arbeitsschritte,
+  die Dateien berühren — blockiert jede riskante Operation (Schreiben,
+  Anhängen, Umbenennen, Verschieben, Löschen, Leeren) an registrierten
+  Originalquellen und erklärt die Blockade dem Nutzer.
 - **Gatekeeper-Agent:** sammelt Ergebnisse, fordert bei FAIL eine Begründung und konkrete nächste Aktion an; blockiert Release bei fehlender Evidenz.
+
+### Originalschutz (permanent, Stage 3)
+
+Die Hauptregel gilt von A bis Z: Originaldateien (Audio, ANLZ, Datenbank,
+XML) werden ausschließlich mit Leserechten berührt — nichts weglassen,
+nichts manipulieren, nichts hinzufügen, nichts verändern. Alle Bearbeitung
+geschieht an Arbeitskopien. Umsetzung in zwei permanenten Schichten:
+
+1. **Main-Prozess-Guard** (`electron/originalGuard.cjs`): Registriert jede
+   bekannte Originalquelle und wird vom Schreibpfad
+   (`rekordbox:save-export-file`) immer konsultiert — auch wenn der
+   Renderer die protectedPaths vergisst. Blockaden werden protokolliert
+   (Kategorie `ORIGINAL_GUARD`) und als `ORIGINAL_GUARD_BLOCKED`-Marker
+   an den Renderer zurückgeworfen.
+2. **Originalschutz-Agent im Renderer** (`src/agent/originalProtectionAgent.ts`):
+   klassifiziert jeden Arbeitsschritt vor der Ausführung; bei Gefahr öffnet
+   sich das **Interventions-Popup** (`OriginalProtectionModal`) mit einer
+   umfassenden, für Laien verständlichen Erklärung (was beinahe passiert
+   wäre, warum es irreversibel ist, welche sichere Alternative gilt:
+   Arbeitskopie / neue Datei). Die Aktion bleibt abgebrochen.
+- Erkannt werden Originalpfade aus Track-Media (XML LOCATION + resolved
+  Path), ANLZ DAT/EXT-Containern und Datenbank-Analysepfaden.
+- Gates: `Original protection guard (main process) agent` +
+  `Original protection agent (renderer) agent` im Gatekeeper, zusätzlich
+  Source-Contract-Check, dass der Guard in den Main-Prozess-Schreibpfad
+  verdrahtet ist. Tests: `tests/original-guard.test.mjs`,
+  `tests/original-protection-agent.test.ts`.
 
 ### Regel für Nichterreichung
 

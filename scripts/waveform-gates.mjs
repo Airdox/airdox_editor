@@ -143,6 +143,7 @@ function runSourceContractGate() {
     const overview = readFileSync(resolve(root, 'src/components/TrackOverview.tsx'), 'utf8');
     const palette = readFileSync(resolve(root, 'src/components/PalettePanel.tsx'), 'utf8');
     const dbReader = readFileSync(resolve(root, 'electron/dbReader.cjs'), 'utf8');
+    const main = readFileSync(resolve(root, 'electron/main.cjs'), 'utf8');
     const checks = [
       ['renderer selects original analysis', /selectTrackWaveform\(track/.test(detail) && /selectTrackWaveform\(track/.test(overview)],
       ['no edit-time analysis replacement', !/activeTrack\.analysis\s*=\s*analyzeAudioBuffer/.test(app) && !/analysisVariants\s*=\s*undefined/.test(app)],
@@ -150,6 +151,9 @@ function runSourceContractGate() {
       ['ANLZ scan walks nested folders', /maxDepth\s*=\s*6/.test(dbReader) && /isDirectory\(\)/.test(dbReader)],
       ['ANLZ scan checks target media drives', /findTargetDriveAnlzFolders/.test(dbReader) && /PIONEER.*USBANLZ/.test(dbReader)],
       ['database discovery checks D partition', /findDatabaseFilesOnWindowsVolume/.test(dbReader) && /D:/.test(dbReader)],
+      // Permanent Original Protection: the main-process write path always
+      // consults the original guard registry (read-only originals).
+      ['original guard wired into the main-process write path', /originalGuard\.checkOperation\('WRITE'/.test(main) && /original-guard:register/.test(main)],
     ];
     const failed = checks.filter(([, ok]) => !ok).map(([label]) => label);
     return {
@@ -234,6 +238,20 @@ runCommandGate(
   tsxCommand,
   [...tsxPrefix, resolve(root, 'tests', 'xml-exclusive-import.test.ts')],
   'Fix the XML/DB import integration (exclusive import, D: discovery), then rerun npm run verify:waveform.'
+);
+runCommandGate(
+  'Guard',
+  'Original protection guard (main process) agent',
+  tsxCommand,
+  [resolve(root, 'tests', 'original-guard.test.mjs')],
+  'Restore the permanent original guard (electron/originalGuard.cjs): originals are read-only, all work happens on working copies. Then rerun npm run verify:waveform.'
+);
+runCommandGate(
+  'Guard',
+  'Original protection agent (renderer) agent',
+  tsxCommand,
+  [...tsxPrefix, resolve(root, 'tests', 'original-protection-agent.test.ts')],
+  'Restore the renderer Original Protection Agent (block + intervention popup for risky operations on originals), then rerun npm run verify:waveform.'
 );
 runCommandGate(
   'Release',

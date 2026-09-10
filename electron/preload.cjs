@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
+  // Original Protection Agent (permanent): registry + verdicts live in the
+  // main process; the renderer registers every original it knows about.
+  originalGuardRegister: (entries) => ipcRenderer.invoke('original-guard:register', entries),
+  originalGuardCheck: (operation, filePath, context) =>
+    ipcRenderer.invoke('original-guard:check', { operation, filePath, context }),
+  originalGuardList: () => ipcRenderer.invoke('original-guard:list'),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
   // Diagnostic log file (durable): mirrors every decisive pipeline parameter
   // into <userData>/airdox-smart-editor.log. Append-only, never throws.

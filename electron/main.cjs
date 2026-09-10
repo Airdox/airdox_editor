@@ -9,7 +9,13 @@ const {
   scanAnlzForPaths,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
+const { createOriginalGuard } = require('./originalGuard.cjs');
 const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
+
+// Permanent Original Protection Guard (main process): the write path ALWAYS
+// consults this registry, so originals stay read-only even when the renderer
+// forgets to pass protectedPaths. See electron/originalGuard.cjs.
+const originalGuard = createOriginalGuard();
 
 // Durable diagnostic log: <userData>/airdox-smart-editor.log (+ .prev.log
 // rotation). Created lazily because app.getPath('userData') is only valid
@@ -262,6 +268,26 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
     return { saved: false };
   }
   const targetPath = path.resolve(result.filePath);
+  // Permanent Original Protection Guard (layer 1, registry in the main
+  // process). The error carries a parseable marker so the renderer's
+  // Original Protection Agent can open its intervention popup.
+  const guardVerdict = originalGuard.checkOperation('WRITE', targetPath, 'rekordbox:save-export-file');
+  if (!guardVerdict.allowed) {
+    try {
+      getLogWriter().append(formatLogLine({
+        ts: Date.now(),
+        level: 'WARN',
+        category: 'ORIGINAL_GUARD',
+        message: `BLOCKED: Schreibzugriff auf Originalquelle „${guardVerdict.originalPath}“ verhindert (${guardVerdict.kind}).`,
+        data: { target: targetPath, original: guardVerdict.originalPath, kind: guardVerdict.kind, via: 'rekordbox:save-export-file' },
+      }));
+    } catch {
+      // Logging must never break the guard itself.
+    }
+    throw new Error(
+      `ORIGINAL_GUARD_BLOCKED|${targetPath}|${guardVerdict.originalPath}|${guardVerdict.kind}`
+    );
+  }
   if (isProtectedTarget(targetPath, protectedPaths)) {
     throw new Error(
       'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
@@ -313,6 +339,37 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
     size: details.size,
     modifiedAt: details.mtimeMs,
     accessMode: 'READ_ONLY',
+  };
+});
+
+// --- Original Protection Agent IPC (permanent, main-process registry) ---
+
+ipcMain.handle('original-guard:register', async (_event, entries) => {
+  const result = originalGuard.registerOriginals(entries);
+  try {
+    if (result.added > 0) {
+      getLogWriter().append(formatLogLine({
+        ts: Date.now(),
+        level: 'INFO',
+        category: 'ORIGINAL_GUARD',
+        message: `${result.added} Originalquelle(n) registriert — jetzt ${result.total} geschützt (Read-Only).`,
+      }));
+    }
+  } catch {
+    // Logging must never break registration.
+  }
+  return result;
+});
+
+ipcMain.handle('original-guard:check', async (_event, payload) => {
+  const { operation, filePath, context } = payload || {};
+  return originalGuard.checkOperation(operation, filePath, context);
+});
+
+ipcMain.handle('original-guard:list', async () => {
+  return {
+    originals: originalGuard.listOriginals(),
+    interventions: originalGuard.interventionsLog(),
   };
 });
 

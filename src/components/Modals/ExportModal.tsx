@@ -20,6 +20,13 @@ interface ExportModalProps {
   workingAudioBuffer: AudioBuffer | null;
   protectedPaths?: string[];
   onExportComplete?: (telemetry: OperationTelemetry) => void;
+  /**
+   * Called when the permanent Original Protection Guard (main process)
+   * rejects the export target because it collides with a registered
+   * original. The app opens its intervention popup; the export stays
+   * aborted.
+   */
+  onGuardBlocked?: (error: unknown) => void;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -30,6 +37,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   workingAudioBuffer,
   protectedPaths,
   onExportComplete,
+  onGuardBlocked,
 }) => {
   const [format, setFormat] = useState<'WAV' | 'XML' | 'JSON'>('WAV');
   const [isExporting, setIsExporting] = useState(false);
@@ -130,8 +138,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error(err);
-      alert(`Fehler beim Exportieren: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      // Original Protection Agent: permanent main-process guard rejection —
+      // the app shows the intervention popup; no generic error dialog.
+      if (onGuardBlocked && msg.startsWith('ORIGINAL_GUARD_BLOCKED')) {
+        onGuardBlocked(err);
+      } else {
+        console.error(err);
+        alert(`Fehler beim Exportieren: ${msg}`);
+      }
     } finally {
       setIsExporting(false);
     }

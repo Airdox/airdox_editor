@@ -68,6 +68,41 @@ declare global {
         defaultName: string;
         protectedPaths?: string[];
       }): Promise<{ saved: boolean; path?: string; bytes?: number; accessMode?: 'WRITE_NEW_ONLY' }>;
+      /**
+       * Original Protection Agent (permanent): registers original source
+       * paths in the main-process guard registry (read-only protection).
+       */
+      originalGuardRegister(entries: Array<{ path: string; kind: string }>): Promise<{
+        added: number;
+        total: number;
+      }>;
+      /** Verdict for one operation on one path (main-process guard). */
+      originalGuardCheck(
+        operation: string,
+        filePath: string,
+        context?: string | null
+      ): Promise<{
+        allowed: boolean;
+        verdict: 'ALLOWED' | 'BLOCKED_ORIGINAL' | 'ALLOWED_WORKING_COPY';
+        operation: string;
+        filePath: string;
+        originalPath?: string;
+        kind?: string;
+        reason?: string;
+        note?: string;
+      }>;
+      /** Lists registered originals and recent guard interventions. */
+      originalGuardList(): Promise<{
+        originals: Array<{ path: string; kind: string }>;
+        interventions: Array<{
+          ts: number;
+          operation: string;
+          target: string;
+          original: string;
+          kind: string;
+          context: string | null;
+        }>;
+      }>;
       openProjectFile(): Promise<{
         data: string;
         path: string;
