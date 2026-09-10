@@ -324,6 +324,38 @@ function findDatabaseFiles(appDir) {
 }
 
 /**
+ * Bounded discovery for installations whose Rekordbox library/database is on
+ * another Windows partition. The normal AppData/options.json path remains the
+ * first choice; D: is included because users commonly place the library on a
+ * dedicated data volume. Only folders with Rekordbox/Pioneer-like names are
+ * traversed and database filenames are matched exactly.
+ */
+function findDatabaseFilesOnWindowsVolume(volumeRoot) {
+  const results = [];
+  const seen = new Set();
+  const allowedDirectory = (name) => /^(pioneer|rekordbox|rekordbox[0-9]+|database|databases|library|share|storage|export)$/i.test(name);
+  const visit = (dir, depth) => {
+    if (depth > 6) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isFile() && /^(master|exportLibrary)\.db$/i.test(entry.name)) {
+        const resolved = path.resolve(full);
+        if (seen.has(resolved)) continue;
+        seen.add(resolved);
+        const kind = entry.name.toLowerCase() === 'exportlibrary.db' ? 'ONE_LIBRARY' : 'MASTER_DB';
+        results.push({ path: resolved, kind, label: `${entry.name} (Datenpartition)` });
+      } else if (entry.isDirectory() && allowedDirectory(entry.name)) {
+        visit(full, depth + 1);
+      }
+    }
+  };
+  if (volumeRoot && fs.existsSync(volumeRoot)) visit(volumeRoot, 0);
+  return results;
+}
+
+/**
  * Scans the standard Pioneer/Rekordbox application data directories for
  * master.db / exportLibrary.db (read-only).
  */
@@ -339,6 +371,16 @@ function locateRekordboxDatabases() {
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
       candidates.push(...findDatabaseFiles(path.join(base, dirName)));
     }
+  }
+
+  if (process.platform === 'win32') {
+    const configuredRoot = process.env.AIRDOX_REKORDBOX_ROOT;
+    const volumeRoots = [
+      configuredRoot,
+      'D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox',
+      'D:\\rekordbox7', 'D:\\rekordbox6',
+    ].filter(Boolean);
+    for (const root of volumeRoots) candidates.push(...findDatabaseFilesOnWindowsVolume(root));
   }
 
   // Deduplicate by resolved path; options.json entries rank first.
