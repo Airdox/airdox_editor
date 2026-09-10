@@ -60,6 +60,14 @@ Für Tracks mit Rekordbox-Herkunft (`REKORDBOX_XML`, `REKORDBOX_DB`, `REKORDBOX_
 
 Tests: `tests/xml-exclusive-import.test.ts` (PQTZ-Erhalt, Tail-Ergänzung, Legacy-Grid, Synthese-Verbot, Cue-Parser-Guard), `tests/anlz-ext-merge.test.ts` (Sibling-Ableitung DAT↔EXT, Merge-Prioritäten, Track-Integration), `tests/anlz-ppth-scan.test.mjs` (PPTH-Header-Scan: UTF-16BE/LE, DAT+EXT-Paarung, Tier-1-Exakttreffer, Tier-2-Name-Treffer inkl. Ambiguitäts-Ausschluss, `\\?\`-Präfix, Read-Only), `tests/import-simulation.test.ts` (u. a. Synthese-Verbot: keine Waveform/Phrasen ohne echte Quelle). Fixtures: `tests/fixtures/testDatasets.ts`.
 
+## Pipeline-Stufenplan & Master-DB-Trockenübung (10.09.2026)
+
+Der Aufbau der Pipeline ist in `docs/PIPELINE_PLAN.md` stufenweise dokumentiert (Stufe 0–7, je mit Befehl, Gate und Evidenz). Stufe 0 – der Nachweis, dass die verschlüsselte `master.db` auf `D:` lesbar ist – steht als eigener Diagnose-Befehl zur Verfügung:
+
+- `npm run probe:masterdb` (`scripts/masterdb-probe.mjs`): lokalisiert die Datenbank (Auto-Suche, `rekordboxAgent/options.json`, `--root "D:\"`), nimmt vor und nach dem Lauf einen SHA-256-Fingerabdruck, entschlüsselt **im Speicher** (`cipher=sqlcipher`, `legacy=4`, SQLite `readonly`), listet Tabellen/Zeilen, Spalten, den `AnalysisDataPath`-Füllgrad und Stichproben und beweist über den identischen Fingerabdruck die Read-Only-Garantie. Es wird bewusst **keine** unverschlüsselte Kopie erzeugt (kein `sqlcipher_export`); der Schlüssel wird nur maskiert referenziert.
+- Test `tests/masterdb-probe.test.mjs`: baut eine echt verschlüsselte `master.db`-Fixture, führt die CLI als Prozess aus und prüft Zählwerte, Read-Only-Beweis, „keine Kopie entstanden“ sowie Negativfälle.
+- **Behobener Fehler:** `openRekordboxDb()` lieferte bei Erfolg kein `available: true`, wodurch `readRekordboxDatabase()` jede erfolgreich entschlüsselte Datenbank als „nicht verfügbar“ zurückgab (und das Handle offen ließ). Der Regressionstest deckt genau diesen Pfad ab.
+
 ## Log-Datei (Diagnose aller entscheidenden Parameter)
 
 Jeder Eintrag des In-App-Logs wird in der Desktop-Version zusätzlich **dauerhaft** in eine Datei gespiegelt, damit eine fehlende Waveform nachträglich eindeutig diagnostizierbar ist:

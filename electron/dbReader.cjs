@@ -136,7 +136,11 @@ function openRekordboxDb(filePath) {
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
-      return { db, dbType };
+      // NOTE: `available: true` is part of the contract. Both callers
+      // (readRekordboxDatabase and scripts/masterdb-probe.mjs) branch on it;
+      // without the flag a successfully decrypted database was reported as
+      // "not available" and the handle leaked (never closed).
+      return { available: true, db, dbType };
     } catch (openError) {
       try {
         db.close();
@@ -710,8 +714,13 @@ module.exports = {
   getMasterDbKey,
   getOneLibraryKey,
   detectDbType,
+  // Low-level, read-only handle (SQLCipher key + SQLite readonly). Exported for
+  // the diagnostics CLI (scripts/masterdb-probe.mjs) so the key derivation has
+  // exactly one implementation. Callers MUST close the returned `db`.
+  openRekordboxDb,
   readRekordboxDatabase,
   locateRekordboxDatabases,
   scanAnlzForPaths,
+  readPpthFromFile,
   isCipherAvailable: () => getCipherModule() !== null,
 };
