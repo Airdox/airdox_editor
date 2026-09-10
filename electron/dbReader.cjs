@@ -417,6 +417,34 @@ function locateRekordboxDatabases() {
 
 const ANLZ_HEADER_BYTES = 1024;
 
+/**
+ * Bounded, read-only discovery of *ANLZ* folders under a root directory.
+ * Only Rekordbox-structural folder names are descended into (rekordbox*,
+ * pioneer, share, master, datasources, databases), so a custom library root
+ * like D:\PIONEER\Master\share\PIONEER\USBANLZ is found without ever
+ * walking the audio library. Max depth 4, max 8 folders per root.
+ */
+function walkAnlzFolders(root, maxDepth = 4, maxFound = 8) {
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > maxDepth || found.length >= maxFound) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const lower = ent.name.toLowerCase();
+      if (lower === 'usbanlz' || lower === 'anlz') {
+        found.push(path.join(dir, ent.name));
+      } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share'
+        || lower === 'master' || lower === 'datasources' || lower === 'databases') {
+        walk(path.join(dir, ent.name), depth + 1);
+      }
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
 function findAnlzFolders(baseOverride) {
   const folders = [];
   const push = (dir) => {
@@ -454,31 +482,26 @@ function findAnlzFolders(baseOverride) {
     push(path.join(root, 'ANLZ'));
   }
 
-  // Robust fallback: discover any *ANLZ* folder under the Pioneer root
-  // (rekordbox6/7/custom layouts differ), limited depth, read-only.
-  const pioneerRoot = baseOverride
-    ? baseOverride
-    : (process.platform === 'win32'
-        ? path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'Pioneer')
-        : path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer'));
-  if (!baseOverride && fs.existsSync(pioneerRoot)) {
-    const found = [];
-    const walk = (dir, depth) => {
-      if (depth > 4 || found.length >= 8) return;
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const ent of entries) {
-        if (!ent.isDirectory()) continue;
-        const lower = ent.name.toLowerCase();
-        if (lower === 'usbanlz' || lower === 'anlz') {
-          found.push(path.join(dir, ent.name));
-        } else if (lower.startsWith('rekordbox') || lower === 'pioneer' || lower === 'share') {
-          walk(path.join(dir, ent.name), depth + 1);
-        }
-      }
-    };
-    walk(pioneerRoot, 0);
-    for (const f of found) push(f);
+  // Robust fallback: discover any *ANLZ* folder under every known Pioneer
+  // root (rekordbox6/7/custom layouts differ — the real collection on the
+  // user's machine lives in a custom layout such as
+  // D:\PIONEER\Master\share\PIONEER\USBANLZ). Bounded depth, read-only:
+  // only folders named like Pioneer/Rekordbox/Share/Master/DataSources are
+  // descended into, never the audio library.
+  const fallbackRoots = [];
+  if (baseOverride) {
+    fallbackRoots.push(baseOverride);
+  } else if (process.platform === 'win32') {
+    fallbackRoots.push(path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'Pioneer'));
+    for (const base of ['D:\\Pioneer', 'D:\\rekordbox', 'D:\\Rekordbox', 'D:\\rekordbox7', 'D:\\rekordbox6']) {
+      fallbackRoots.push(base);
+    }
+  } else {
+    fallbackRoots.push(path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer'));
+  }
+  for (const root of fallbackRoots) {
+    if (!root || !fs.existsSync(root)) continue;
+    for (const f of walkAnlzFolders(root)) push(f);
   }
   return folders;
 }
@@ -723,6 +746,10 @@ module.exports = {
   getMasterDbKey,
   getOneLibraryKey,
   detectDbType,
+  // Read-only ANLZ folder discovery (bounded walk under known Pioneer roots).
+  // Exported for tests + diagnostics; the main process uses it internally.
+  findAnlzFolders,
+  walkAnlzFolders,
   // Low-level, read-only handle (SQLCipher key + SQLite readonly). Exported for
   // the diagnostics CLI (scripts/masterdb-probe.mjs) so the key derivation has
   // exactly one implementation. Callers MUST close the returned `db`.

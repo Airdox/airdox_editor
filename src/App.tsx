@@ -550,6 +550,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
       if (!candidates || candidates.length === 0) {
         console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
+        logger.warn('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden – ANLZ-Auflösung fällt auf den PPTH-Scan zurück');
         return dbAnalysisIndexRef.current;
       }
       for (const cand of candidates) {
@@ -557,6 +558,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
           if (!result.available || !result.rows) {
             console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
+            logger.warn('DATABASE', `[DB Auto] ${cand.path}: nicht lesbar`, { reason: result.reason || 'unbekannt' });
             continue;
           }
           const mapped = mapRekordboxDatabaseRows(
@@ -594,10 +596,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
         } catch (e) {
           console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
+          logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, { error: e instanceof Error ? e.message : String(e) });
         }
       }
     } catch (e) {
       console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
+      logger.warn('DATABASE', '[DB Auto] locateRekordboxDatabases fehlgeschlagen', { error: e instanceof Error ? e.message : String(e) });
     }
     return dbAnalysisIndexRef.current;
   }, []);

@@ -21,7 +21,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { scanAnlzForPaths } = require('../electron/dbReader.cjs');
+const { scanAnlzForPaths, findAnlzFolders } = require('../electron/dbReader.cjs');
 
 // ---------------------------------------------------------------------------
 // Build a fake %APPDATA%-like tree:
@@ -152,6 +152,35 @@ try {
   assert.strictEqual(prefixed.matchTier, 1, 'long-path prefix stays tier-1');
 } finally {
   fs.rmSync(base, { recursive: true, force: true });
+}
+
+// ─── Custom-layout folder discovery (real machine: D:\PIONEER\Master\…) ──
+// findAnlzFolders(baseOverride) must find *ANLZ* folders in custom library
+// layouts (Master/DataSources subfolders), never descend into the audio
+// library, and stay read-only. This mirrors the production win32 fallback
+// walk that covers D:\Pioneer-style roots.
+{
+  const disc = fs.mkdtempSync(path.join(os.tmpdir(), 'anlz-discover-'));
+  try {
+    fs.mkdirSync(path.join(disc, 'PIONEER', 'Master', 'share', 'PIONEER', 'USBANLZ'), { recursive: true });
+    fs.mkdirSync(path.join(disc, 'rekordbox7', 'share', 'PIONEER', 'USBANLZ'), { recursive: true });
+    fs.mkdirSync(path.join(disc, 'PIONEER', 'Master', 'Music', 'BigFolder', 'USBANLZ'), { recursive: true });
+    const found = findAnlzFolders(disc).map((f) => path.relative(disc, f).split(path.sep).join('/'));
+    assert.ok(
+      found.includes('PIONEER/Master/share/PIONEER/USBANLZ'),
+      'custom Master/share/PIONEER/USBANLZ layout discovered'
+    );
+    assert.ok(
+      found.includes('rekordbox7/share/PIONEER/USBANLZ'),
+      'standard rekordbox7 layout discovered'
+    );
+    assert.ok(
+      !found.some((f) => f.includes('Music')),
+      'audio library (Music/…) is never descended into'
+    );
+  } finally {
+    fs.rmSync(disc, { recursive: true, force: true });
+  }
 }
 
 console.log('ANLZ PPTH scan (SQLCipher-independent): OK');
