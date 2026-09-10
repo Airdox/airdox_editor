@@ -19,8 +19,10 @@ Release-Prozess: [`docs/VERSIONIERUNG.md`](docs/VERSIONIERUNG.md).
 
 Der Basis-Build benötigt **kein** Visual Studio: XML-/ANLZ-Import, Audio-Editor
 und Export funktionieren vollständig. Das optionale SQLCipher-Modul ist per
-`"npmRebuild": false` abgeschaltet, sodass der Build auch in Pfaden **mit
-Leerzeichen** und ohne C++-Toolchain durchläuft.
+`"npmRebuild": false` für den **Lokal-Build** ohne C++-Toolchain deaktiviert
+(dann ohne DB-Import, ANLZ-PPTH-Pfad bleibt aktiv). Der **CI-Build** (GitHub
+Actions) rebuildet das Modul dagegen automatisch gegen das Electron-ABI —
+deshalb funktioniert der DB-Import in allen CI-Releases.
 
 ## Bauen (PowerShell – Windows)
 
@@ -43,18 +45,22 @@ automatisch ein GitHub-Release mit den `.exe`-Dateien erzeugt — der
 empfohlene Weg ist das Release-Script, siehe
 [`docs/VERSIONIERUNG.md`](docs/VERSIONIERUNG.md).
 
-## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
+## Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 
-Der DB-Import (`better-sqlite3-multiple-ciphers`) ist optional. Ohne ihn bleibt
-der XML-/ANLZ-Import voll funktionsfähig; die App meldet den nicht verfügbaren
-DB-Import nachvollziehbar. Zum Aktivieren:
+Der DB-Import (`better-sqlite3-multiple-ciphers`, optionalDependency) ist
+**in allen CI-Releases aktiv**: Der Workflow rebuildet das native Modul nach
+`npm ci` mit `npm run rebuild:electron` gegen die Electron-Header — ohne
+diesen Schritt wäre das Modul gegen das Runner-Node kompiliert
+(`NODE_MODULE_VERSION`-Mismatch, DB nicht lesbar).
 
-1. Visual Studio **Build Tools** mit „Desktopentwicklung mit C++“ installieren.
-2. Modul für Electron kompilieren und erneut bauen:
-   ```powershell
-   npm run rebuild:electron
-   npm run package:win
-   ```
+Für einen **Lokal-Build** gilt: ohne Visual Studio Build Tools fehlt das
+Modul (App läuft ohne DB-Import, ANLZ-PPTH bleibt voll funktionsfähig); mit
+installierten Build Tools („Desktopentwicklung mit C++“) vor dem Paketieren:
+
+```powershell
+npm run rebuild:electron
+npm run package:win
+```
 
 ## Hinweise
 

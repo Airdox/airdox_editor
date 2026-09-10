@@ -30,6 +30,20 @@ jobs:
       - name: Abhängigkeiten installieren
         run: npm ci
 
+      - name: SQLCipher-Modul für Electron-ABI rebuilden (DB-Import im Release)
+        # better-sqlite3-multiple-ciphers ist eine optionalDependency:
+        # 'npm ci' kompiliert sie gegen das Node des Runners (ABI 115), aber
+        # Electron 44 verlangt ABI 149 (NODE_MODULE_VERSION). Ohne diesen
+        # Rebuild gegen die Electron-Header ist der Rekordbox-DB-Import im
+        # ausgelieferten Build tot ("compiled against a different Node.js
+        # version"). Der Runner hat VS Build Tools + Python vorinstalliert.
+        run: |
+          if (Test-Path "node_modules/better-sqlite3-multiple-ciphers") {
+            npm run rebuild:electron
+          } else {
+            Write-Host "::warning::better-sqlite3-multiple-ciphers fehlt (optional) — DB-Import in diesem Build deaktiviert, ANLZ-PPTH-Pfad bleibt aktiv."
+          }
+
       - name: TypeScript-Prüfung
         run: npm run lint
 
