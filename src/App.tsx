@@ -20,6 +20,7 @@ import {
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import {
   buildDbAnalysisIndex,
+  queryDbForExactPaths,
   seedAnlzIndexFromDb,
   dirOfPath,
   normalizeAudioKey,
@@ -620,6 +621,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             }
             console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
             logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
+            // STEP 1-Sichtbarkeit: Die Datenbank antwortet mit den genauen
+            // Pfaden (Audio-Datei → exakte ANLZ-Datei). Drei Musterzeilen im
+            // Log, damit der Nutzer die Antwort der DB prüfen kann.
+            const samples: Array<{ audio: string; anlz: string | null }> = [];
+            for (const [k, v] of dbAnalysisIndexRef.current) {
+              if (samples.length >= 3) break;
+              samples.push({ audio: k, anlz: resolveAnalysisFilePath(v.sourceDbDir, v.analysisDataPath) });
+            }
+            if (samples.length > 0) {
+              logger.info(
+                'DATABASE',
+                `[DB Abfrage] master.db antwortet mit ${dbAnalysisIndexRef.current.size} exakten Pfaden — Beispiel: „${samples[0].audio}“ → „${samples[0].anlz}“`,
+                { samples },
+              );
+            }
             if (mapped.warnings?.length || result.warnings?.length) {
               console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
             }
@@ -1676,6 +1692,44 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         tracks: fullTrackModels.length,
         withLocation: fullTrackModels.filter((t) => t.originalMedia?.location).length,
       });
+
+      // STEP 1 — die Datenbank nach den genauen Pfaden fragen: Bevor auch
+      // nur eine Datei geöffnet wird, prüft die App die importierte
+      // Collection gegen die exakten Ziele in master.db (Absolute Pfade +
+      // Rekordbox-7-Library-Pfade). Das Ergebnis ist im Log sichtbar.
+      void (async () => {
+        try {
+          const dbIndex = await ensureDbAnalysisIndex();
+          if (dbIndex.size === 0) {
+            logger.warn(
+              'DATABASE',
+              '[DB Abfrage] master.db lieferte keine exakten Pfade — siehe [DB Auto]-Hinweise (DB gefunden/lesbar?).',
+              {},
+            );
+            return;
+          }
+          const q = queryDbForExactPaths(
+            fullTrackModels.map((t) => t.originalMedia?.location),
+            dbIndex,
+          );
+          logger.info(
+            'DATABASE',
+            `[DB Abfrage] ${q.total} importierte Tracks: ${q.absoluteHits + q.relativeHits} exakte Pfade in master.db ` +
+              `(${q.absoluteHits} absolute, ${q.relativeHits} Library-Relative), ${q.missingCount} nicht in der DB`,
+            {
+              dbEntries: dbIndex.size,
+              withoutLocation: q.withoutLocation,
+              missing: q.missing.slice(0, 5),
+            },
+          );
+          if (q.missingCount > 0) {
+            console.info(`[DB Abfrage] Nicht in der DB (${q.missingCount}): ` + q.missing.join(', '));
+          }
+        } catch (e) {
+          console.warn('[DB Abfrage] fehlgeschlagen:', e);
+          logger.warn('DATABASE', '[DB Abfrage] Prüfung gegen master.db fehlgeschlagen', { error: String(e) });
+        }
+      })();
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should

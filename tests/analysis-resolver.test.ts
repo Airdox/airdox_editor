@@ -15,6 +15,7 @@ import {
   buildDbAnalysisIndex,
   dirOfPath,
   normalizeAudioKey,
+  queryDbForExactPaths,
   resolveAnalysisFilePath,
   seedAnlzIndexFromDb,
 } from '../src/rekordbox/analysisResolver';
@@ -332,6 +333,49 @@ runTest('rb7 relative', 'User scenario: XML contents_-location resolves to the e
     'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u9\\ANLZ0000.DAT',
     'Exact analysis file derived from the DB target'
   );
+});
+
+// ─── SUITE 8: STEP 1 — ask the DB for the exact paths (pure cross-check) ───
+runTest('db query', 'Counts absolute + relative hits and reports missing locations', () => {
+  const dbIndex = buildDbAnalysisIndex(
+    [
+      {
+        id: 'db-1',
+        originalMedia: { location: 'D:\\PIONEER\\Master\\contents_4136090260\\aa\\bb\\Song.mp3' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+      },
+      {
+        id: 'db-2',
+        originalMedia: { location: 'G:\\mp3 traktor\\neu 2015\\Linked.mp3' },
+        rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u2/ANLZ0000.DAT' },
+      },
+    ],
+    'D:\\PIONEER\\Master'
+  );
+  const q = queryDbForExactPaths(
+    [
+      'file://localhost//contents_4136090260/aa/bb/Song.mp3', // relative hit (RB7 lib)
+      'G:\\mp3 traktor\\neu 2015\\Linked.mp3', // absolute hit
+      'file://localhost/G:/mp3 traktor/neu 2015/Other.mp3', // absolute, NOT in DB
+      'file://localhost/H:/weird/Missing.mp3', // absolute, NOT in DB
+      '', // without location
+      undefined, // without location
+    ],
+    dbIndex
+  );
+  assertEqual(q.total, 6, 'Total locations');
+  assertEqual(q.relativeHits, 1, 'One library-relative hit');
+  assertEqual(q.absoluteHits, 1, 'One absolute hit');
+  assertEqual(q.missingCount, 2, 'Two locations the DB does not know');
+  assertEqual(q.withoutLocation, 2, 'Two empty locations');
+  assertEqual(q.missing.length, 2, 'Missing reported (capped list)');
+});
+
+runTest('db query', 'Empty DB index → zero hits, all present locations missing', () => {
+  const q = queryDbForExactPaths(['G:\\a.mp3', 'file://localhost//contents_1/a.mp3'], new Map());
+  assertEqual(q.absoluteHits + q.relativeHits, 0, 'No hits without a DB');
+  assertEqual(q.missingCount, 2, 'Both locations missing');
+  assertEqual(q.withoutLocation, 0, 'No empty locations');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

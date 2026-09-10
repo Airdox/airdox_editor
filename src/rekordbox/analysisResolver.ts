@@ -175,6 +175,67 @@ export function buildDbAnalysisIndex(
   return index;
 }
 
+export interface DbExactPathQuery {
+  total: number;
+  /** Locations with an absolute form (drive letter / UNC) that hit the DB. */
+  absoluteHits: number;
+  /** Library-relative locations (Rekordbox 7 contents_… export form) that hit the DB. */
+  relativeHits: number;
+  /** Locations with NO exact path in the database (raw values, capped). */
+  missing: string[];
+  missingCount: number;
+  /** Locations without any usable location value at all. */
+  withoutLocation: number;
+}
+
+function hasAbsolutePathForm(location: string): boolean {
+  let s = location.trim();
+  const fileMatch = s.match(/^file:\/\/(localhost)?\/?/i);
+  if (fileMatch) s = s.slice(fileMatch[0].length);
+  return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\');
+}
+
+/**
+ * STEP 1 of the resolution pipeline: ask the database for the EXACT paths.
+ *
+ * Pure cross-check of a set of audio locations (e.g. an imported XML
+ * collection) against the master.db index (exact targets, incl. the
+ * library-relative keys for Rekordbox 7 contents_… locations). No
+ * filesystem access, no guessing — it only reports what the database
+ * answers, so the result is fully visible in the log before any file is
+ * opened: N exact hits (absolute / relative) and which locations the
+ * database does NOT know.
+ */
+export function queryDbForExactPaths(
+  locations: readonly (string | null | undefined)[],
+  dbIndex: ReadonlyMap<string, DbAnalysisRef>
+): DbExactPathQuery {
+  const result: DbExactPathQuery = {
+    total: locations.length,
+    absoluteHits: 0,
+    relativeHits: 0,
+    missing: [],
+    missingCount: 0,
+    withoutLocation: 0,
+  };
+  for (const raw of locations) {
+    const key = normalizeAudioKey(raw);
+    if (!raw || !raw.trim() || !key) {
+      result.withoutLocation += 1;
+      continue;
+    }
+    const hit = dbIndex.get(key);
+    if (!hit) {
+      result.missingCount += 1;
+      if (result.missing.length < 10) result.missing.push(raw.trim());
+      continue;
+    }
+    if (hasAbsolutePathForm(raw)) result.absoluteHits += 1;
+    else result.relativeHits += 1;
+  }
+  return result;
+}
+
 export interface SeededAnlzEntry {
   datPath: string | null;
   extPath: string | null;
