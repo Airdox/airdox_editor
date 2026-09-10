@@ -18,14 +18,20 @@ const tsxPrefix = [resolve(root, 'node_modules', 'tsx', 'dist', 'cli.mjs')];
 const failures = [];
 
 function runAgent(name, command, args) {
-  process.stdout.write(`\n[WAVEFORM AGENT] ${name}\n$ ${command} ${args.join(' ')}\n`);
+  const q = (s) => (s.includes(' ') ? `"${s}"` : s);
+  process.stdout.write(`\n[WAVEFORM AGENT] ${name}\n$ ${q(command)} ${args.map(q).join(' ')}\n`);
   try {
+    // Windows: "C:\Program Files\nodejs\node.exe" contains a space.
+    // With shell:true, cmd.exe splits at the space and fails with
+    // "Der Befehl C:\Program ist entweder falsch geschrieben ...".
+    // Only .cmd shims (npm.cmd) need a shell; node.exe must run
+    // WITHOUT shell so CreateProcess handles the spaced path natively.
+    const needsShell = process.platform === 'win32' && command.toLowerCase().endsWith('.cmd');
     execFileSync(command, args, {
       cwd: root,
       stdio: 'inherit',
       env: process.env,
-      // Windows .cmd shims (npm/tsx) require a shell when spawned directly.
-      shell: process.platform === 'win32',
+      shell: needsShell,
     });
     console.log(`[GATE PASS] ${name}`);
   } catch (error) {
