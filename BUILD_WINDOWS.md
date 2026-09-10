@@ -5,9 +5,12 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.13-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.13-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-<version>-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-<version>-portable.exe`) |
 | `npm run package:win` | beide Varianten |
+
+Die `<version>` kommt automatisch aus `package.json` — Versions-Regeln und
+Release-Prozess: [`docs/VERSIONIERUNG.md`](docs/VERSIONIERUNG.md).
 
 ## Voraussetzungen (auf dem Windows-Rechner)
 
@@ -35,8 +38,10 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
 `main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
 beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.13 && git push --tags`) wird automatisch ein GitHub
-Release mit den `.exe`-Dateien erzeugt.
+Tag (z. B. `git tag v<version> && git push origin v<version>`) wird
+automatisch ein GitHub-Release mit den `.exe`-Dateien erzeugt — der
+empfohlene Weg ist das Release-Script, siehe
+[`docs/VERSIONIERUNG.md`](docs/VERSIONIERUNG.md).
 
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 

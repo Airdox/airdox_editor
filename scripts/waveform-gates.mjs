@@ -254,6 +254,13 @@ runCommandGate(
   'Restore the renderer Original Protection Agent (block + intervention popup for risky operations on originals), then rerun npm run verify:waveform.'
 );
 runCommandGate(
+  'Versioning',
+  'Version schema consistency (single source of truth)',
+  tsxCommand,
+  [resolve(root, 'tests', 'version-schema.test.mjs')],
+  'Restore the unified versioning contract (docs/VERSIONIERUNG.md): strict semver in package.json, Vite __APP_VERSION__ injection, no hardcoded version in src/utils/appVersion.ts, no stale version numbers in README.md/BUILD_WINDOWS.md, ${version} in artifact names. Then rerun npm run verify:waveform.'
+);
+runCommandGate(
   'Release',
   'TypeScript gatekeeper',
   npmCommand,
