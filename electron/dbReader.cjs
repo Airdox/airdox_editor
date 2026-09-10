@@ -501,26 +501,40 @@ function normalizeAnlzPathKey(input) {
 function buildAnlzPpthIndex(folders) {
   const index = new Map();
   let scanned = 0;
-  for (const folder of folders) {
+  // USBANLZ is normally a hash/UUID directory tree, not a flat folder.
+  // The previous implementation only inspected the root and therefore
+  // reported "0 Dateien" on valid Rekordbox exports. Walk only the analysis
+  // roots, with a depth/file guard so a malformed path cannot become a full
+  // disk scan.
+  const maxDepth = 6;
+  const maxFiles = 250000;
+  const visit = (folder, depth) => {
+    if (depth > maxDepth || scanned >= maxFiles) return;
     let entries = [];
-    try { entries = fs.readdirSync(folder); } catch { continue; }
-    for (const name of entries) {
-      const lower = name.toLowerCase();
+    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return; }
+    for (const entryInfo of entries) {
+      if (scanned >= maxFiles) return;
+      const full = path.join(folder, entryInfo.name);
+      if (entryInfo.isDirectory()) {
+        visit(full, depth + 1);
+        continue;
+      }
+      const lower = entryInfo.name.toLowerCase();
       if (!lower.startsWith('anlz')) continue;
       if (!lower.endsWith('.dat') && !lower.endsWith('.ext')) continue;
-      const full = path.join(folder, name);
       scanned += 1;
       const ppth = readPpthFromFile(full);
       if (!ppth) continue;
       const key = normalizeAnlzPathKey(ppth);
       if (!key) continue;
       const isDat = lower.endsWith('.dat');
-      const entry = index.get(key) || { ppth, datPath: null, extPath: null };
-      if (isDat) entry.datPath = full;
-      else if (!entry.extPath) entry.extPath = full;
-      index.set(key, entry);
+      const existing = index.get(key) || { ppth, datPath: null, extPath: null };
+      if (isDat) existing.datPath = full;
+      else if (!existing.extPath) existing.extPath = full;
+      index.set(key, existing);
     }
-  }
+  };
+  for (const folder of folders) visit(folder, 0);
   return { index, scanned };
 }
 
