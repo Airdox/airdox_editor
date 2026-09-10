@@ -56,6 +56,22 @@ function buildPpthFile(targetPath, encoding) {
   return buf;
 }
 
+// Echte ANLZ-Container beginnen mit einem PMAI-Dateikopf (0x1c Bytes),
+// danach folgt PPTH als erste Sektion – genau wie in tests/fixtures/testDatasets.
+function wrapWithPmai(ppthBuffer) {
+  const headerLen = 0x1c;
+  const out = Buffer.alloc(headerLen + ppthBuffer.length);
+  out.write('PMAI', 0, 'ascii');
+  out.writeUInt32BE(headerLen, 4);
+  out.writeUInt32BE(out.length, 8);
+  out.writeUInt32BE(1, 12);
+  out.writeUInt32BE(0x10000, 16);
+  out.writeUInt32BE(0x10000, 20);
+  out.writeUInt32BE(0, 24);
+  ppthBuffer.copy(out, headerLen);
+  return out;
+}
+
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'anlz-ppth-scan-'));
 try {
   const anlzDir = path.join(base, 'rekordbox7', 'share', 'PIONEER', 'USBANLZ');
@@ -68,6 +84,9 @@ try {
   fs.writeFileSync(path.join(anlzDir, 'ANLZ0002.DAT'), buildPpthFile(audioB, 'utf16le'));
   // Garbage: no PPTH tag
   fs.writeFileSync(path.join(anlzDir, 'ANLZ0003.DAT'), Buffer.from('PQTZgarbagegarbagegarbage'));
+  // Real layout: PMAI file header before PPTH – must be skipped by the scan
+  const audioD = 'C:\\Music\\DJ\\Delta.flac';
+  fs.writeFileSync(path.join(anlzDir, 'ANLZ0004.DAT'), wrapWithPmai(buildPpthFile(audioD, 'utf16be')));
   // Non-ANLZ file: ignored by the scan
   fs.writeFileSync(path.join(anlzDir, 'notes.txt'), Buffer.from('not an anl'));
 
@@ -81,14 +100,14 @@ try {
   fs.writeFileSync(path.join(anlzDir2, 'ANLZ0102.DAT'), buildPpthFile('C:\\B\\Twin.wav', 'utf16be'));
 
   const result = scanAnlzForPaths(
-    [audioA, 'c:/music/dj/BETA.mp3', 'C:\\Music\\DJ\\Gamma.wav'],
+    [audioA, 'c:/music/dj/BETA.mp3', 'C:\\Music\\DJ\\Gamma.wav', audioD],
     [anlzDir]
   );
 
-  // 4 ANLZ files scanned (notes.txt excluded)
-  assert.strictEqual(result.scanned, 4, 'scanned file count');
+  // 5 ANLZ files scanned (notes.txt excluded)
+  assert.strictEqual(result.scanned, 5, 'scanned file count');
 
-  assert.strictEqual(result.matches.length, 2, 'two exact matches (A + B, no Gamma)');
+  assert.strictEqual(result.matches.length, 3, 'three exact matches (A + B + D, no Gamma)');
 
   const matchA = result.matches.find((m) => /alpha\.wav$/i.test(m.path));
   assert.ok(matchA, 'match A (DAT+EXT pair)');
@@ -99,6 +118,11 @@ try {
   assert.ok(matchB, 'match B via UTF-16LE PPTH + case-insensitive target');
   assert.ok(/ANLZ0002\.DAT$/i.test(matchB.datPath || ''), 'match B resolves the DAT');
   assert.strictEqual(matchB.extPath, null, 'match B has no EXT sibling');
+
+  const matchD = result.matches.find((m) => /delta\.flac$/i.test(m.path));
+  assert.ok(matchD, 'match D behind PMAI file header');
+  assert.strictEqual(matchD.matchTier, 1, 'PMAI-prefixed PPTH stays tier-1');
+  assert.ok(/ANLZ0004\.DAT$/i.test(matchD.datPath || ''), 'match D resolves the DAT');
 
   // Gamma: no ANLZ recorded → no match, must not throw
   assert.ok(!result.matches.some((m) => /gamma/i.test(m.path)), 'no phantom match for Gamma');

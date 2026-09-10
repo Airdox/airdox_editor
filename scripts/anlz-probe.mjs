@@ -38,6 +38,7 @@ import {
   resolveAnalysisFilePath,
   deriveSiblingExtension,
   normalizeAudioKey,
+  joinAudioPath,
 } from '../src/rekordbox/analysisResolver.ts';
 
 const require = createRequire(import.meta.url);
@@ -154,7 +155,7 @@ function run(options) {
       }
       const folderPath = row.FolderPath ?? '';
       const fileName = row.FileNameL ?? '';
-      audioPathFromDb = `${folderPath}${fileName}`;
+      audioPathFromDb = joinAudioPath(folderPath, fileName);
       const adp = row.AnalysisDataPath ?? '';
       sub(`Track ${row.ID} · ${row.Title ?? ''} · Audio: ${audioPathFromDb}`);
       if (!String(adp).trim()) {
@@ -163,14 +164,39 @@ function run(options) {
         finish(false);
         return 1;
       }
-      resolved = resolveAnalysisFilePath(path.dirname(path.resolve(options.db)), String(adp));
+      const dbDirAbs = path.dirname(path.resolve(options.db));
+      resolved = resolveAnalysisFilePath(dbDirAbs, String(adp));
+      let pathSource = 'analysisResolver';
+      if (resolved && !fs.existsSync(resolved)) {
+        // Stufe-3-Fallback laut Stufenplan: PPTH-Scan der Standardordner.
+        // Nur exakte Tier-1-Treffer (PPTH == Audiopfad), niemals Fuzzy.
+        const extraFolders = [
+          path.join(dbDirAbs, 'share', 'PIONEER', 'USBANLZ'),
+          path.join(dbDirAbs, 'PIONEER', 'USBANLZ'),
+          path.join(dbDirAbs, 'USBANLZ'),
+        ].filter((f) => fs.existsSync(f));
+        const scans = [dbReader.scanAnlzForPaths([audioPathFromDb])];
+        if (extraFolders.length) scans.push(dbReader.scanAnlzForPaths([audioPathFromDb], extraFolders));
+        const tier1 = scans.flatMap((r) => r.matches).find((m) => m.matchTier === 1);
+        if (tier1?.datPath) {
+          resolved = tier1.datPath;
+          pathSource = 'PPTH-Scan (Stufe-3-Fallback, Tier 1: exakter PPTH-Treffer)';
+        }
+      }
       if (!resolved) {
         step(2, 'ANLZ-Quelle bestimmen', 'FAIL', `AnalysisDataPath nicht deterministisch auflösbar: ${adp}`);
         sub('Kein Raten: analysisResolver liefert nur absolute Pfade oder <dbDir>/share/PIONEER/…');
         finish(false);
         return 1;
       }
-      sub(`AnalysisDataPath: ${adp} → ${resolved}`);
+      if (!fs.existsSync(resolved)) {
+        step(2, 'ANLZ-Quelle bestimmen', 'FAIL', `aufgelöster Pfad existiert nicht: ${resolved}`);
+        sub('Weder <dbDir>/share/… noch PPTH-Scan (Tier 1) fanden den Container.');
+        sub('Manuell: npm run probe:anlz -- --anlz "<Pfad zur ANLZnnnn.DAT>"');
+        finish(false);
+        return 1;
+      }
+      sub(`AnalysisDataPath: ${adp} → ${resolved} · Quelle: ${pathSource}`);
     } finally {
       db.close();
     }

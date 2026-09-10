@@ -15,6 +15,7 @@ import {
   buildDbAnalysisIndex,
   dirOfPath,
   normalizeAudioKey,
+  joinAudioPath,
   resolveAnalysisFilePath,
 } from '../src/rekordbox/analysisResolver';
 
@@ -168,6 +169,29 @@ runTest('db index', 'Index links exact matches and skips incomplete rows', () =>
   assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
   assertEqual(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
   assertEqual(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
+});
+
+// ─── joinAudioPath (FolderPath-Varianten echter Rekordbox-7-DBs) ────────────
+runTest('joinAudioPath', 'Verzeichnis mit Abschluss-Separator + Name wird gefügt', () => {
+  assertEqual(joinAudioPath('D:\\Music\\Alpha\\', 'alpha.flac'), 'D:\\Music\\Alpha\\alpha.flac', 'Join mit Backslash');
+  assertEqual(joinAudioPath('D:/Music/Alpha/', 'alpha.flac'), 'D:/Music/Alpha/alpha.flac', 'Join mit Slash');
+});
+
+runTest('joinAudioPath', 'FolderPath enthält bereits den vollen Pfad (echte RB7-DB)', () => {
+  // Beobachtet am 10.09.2026 in D:\PIONEER\Master\master.db:
+  // FolderPath = voller Pfad ohne Separator, FileNameL = wiederholter Basisname.
+  assertEqual(
+    joinAudioPath('G:/mucke1/Dark Techno platten traktor/Dark/Zareh_Kan_-_Tekken.mp3', 'Zareh_Kan_-_Tekken.mp3'),
+    'G:/mucke1/Dark Techno platten traktor/Dark/Zareh_Kan_-_Tekken.mp3',
+    'Keine Duplizierung des Basisnamens'
+  );
+  assertEqual(joinAudioPath('C:\\Music\\Reference.wav', 'reference.wav'), 'C:\\Music\\Reference.wav', 'case-insensitiv');
+});
+
+runTest('joinAudioPath', 'Leere Anteile und Sonderfälle', () => {
+  assertEqual(joinAudioPath('', 'a.wav'), 'a.wav', 'nur Name');
+  assertEqual(joinAudioPath('D:/x/', ''), 'D:/x/', 'nur Ordner');
+  assertEqual(joinAudioPath(null, null), '', 'beides leer');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

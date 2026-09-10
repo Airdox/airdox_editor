@@ -528,11 +528,20 @@ function readPpthFromFile(filePath) {
     const buf = Buffer.alloc(len);
     const read = fs.readSync(handle, buf, 0, len, 0);
     if (read < 0x10) return null;
-    if (buf.toString('ascii', 0, 4) !== 'PPTH') return null;
+    // Echte ANLZ-Container beginnen mit dem PMAI-Dateikopf; PPTH ist dann die
+    // erste Sektion direkt dahinter. Dateien ohne PMAI (ältere Exporte,
+    // Fixtures) starten direkt mit PPTH. Beide Formen werden gelesen.
+    let ppthOffset = 0;
+    if (buf.toString('ascii', 0, 4) === 'PMAI') {
+      const headerLength = buf.readUInt32BE(4);
+      if (headerLength < 12 || headerLength + 0x10 > read) return null;
+      ppthOffset = headerLength;
+    }
+    if (buf.toString('ascii', ppthOffset, ppthOffset + 4) !== 'PPTH') return null;
     // Envelope: PPTH, u32 lenHeader (BE), u32 lenTag (BE), u32 lenPath (BE @ +0x0c)
-    const lenPath = buf.readUInt32BE(0x0c);
-    if (lenPath <= 0 || 0x10 + lenPath > read) return null;
-    return decodePpthPath(buf, 0x10, lenPath);
+    const lenPath = buf.readUInt32BE(ppthOffset + 0x0c);
+    if (lenPath <= 0 || ppthOffset + 0x10 + lenPath > read) return null;
+    return decodePpthPath(buf, ppthOffset + 0x10, lenPath);
   } catch {
     return null;
   } finally {

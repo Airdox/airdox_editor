@@ -110,6 +110,14 @@ FROM content
 WHERE id = '<uuid>';
 ```
 
+Audiopfad-Regel (beobachtet an der echten `D:\PIONEER\Master\master.db` am
+10.09.2026): `FolderPath` enthält versionsabhängig bereits den **vollen Dateipfad**,
+`FileNameL` wiederholt den Basisnamen. `joinAudioPath()` in
+`src/rekordbox/analysisResolver.ts` übernimmt `FolderPath` daher unverändert, wenn es auf
+`FileNameL` endet (case-insensitiv), und fügt sonst mit erkanntem Separator – die naive
+Verkettung (`…/x.mp3x.mp3`) würde den XML↔DB-Exakt-Match lautlos brechen. Regressionstests
+in `tests/analysis-resolver.test.ts`.
+
 **Gate:** `tsx tests/rekordbox-db-import.test.ts` **und** der neue Block in
 `tests/masterdb-probe.test.mjs`, der `readRekordboxDatabase()` gegen die verschlüsselte
 Fixture aufruft (`available: true`, 3 Tracks, 5 Cues, `BPM = 12400` roh,
@@ -157,6 +165,11 @@ read-only mitgeführt und nicht separat nachimplementiert.
 
 **Gate:** mindestens `PPTH + PQTZ/PQT2 + ein dekodierbarer PWV*-Tag`, sonst FAIL
 (kein „grün“ ohne Evidenz). Zusätzlich `[7] Fingerabdruck NACHHER = PASS`.
+
+Existiert der deterministisch aufgelöste Pfad nicht, greift der in Stufe 3 definierte
+Fallback: PPTH-Scan der Standardordner (inkl. `<dbDir>/USBANLZ`-Varianten), **nur exakte
+Tier-1-Treffer** (PPTH == Audiopfad, kein Fuzzy); die Quelle dieser Pfadwahl wird in der
+Ausgabe genannt (`analysisResolver` vs. `PPTH-Scan`).
 
 **Test:** `npx tsx tests/anlz-probe.test.ts` – baut `master.db` + `share/PIONEER/USBANLZ`
 mit den echt-formatigen Fixtures (.DAT: PMAI/PPTH/PQTZ/PCOB/PWV5; .EXT: PCO2/PWV3/PWV7/PSSI),
@@ -212,6 +225,7 @@ tatsächlichen Implementierung ab und wurden übernommen:
 | `PWAV`/`PWV2` „Amplituden 0–255“ | `PWAV` = 5-Bit-Wert im Byte (`& 0x1F` / 31), `PWV2` = 4-Bit-Wert (`& 0x0F` / 15), `PWV5` = 5-Bit-Peak + 3×3-Bit-Bandenergie in einem Big-Endian-UInt16. |
 | „Amplituden auf Pixeldichte skalieren“ | Zulässig ist ausschließlich **Aggregation vorhandener Stützstellen** (max-Wert pro Pixel). Neue Stützstellen werden nicht erzeugt. |
 | `PFIX` | In der implementierten Spezifikation nicht vorhanden; erweiterte Cues kommen aus `PCO2` (Einträge `PCP2`), klassische aus `PCOB` (Einträge `PCPT`). |
+| `FolderPath` + `FileNameL` naiv verkettet | Echte Rekordbox-7-DBs speichern in `FolderPath` teils den vollen Pfad; `FileNameL` wiederholt den Basisnamen (`…/x.mp3x.mp3`). Neue Regel `joinAudioPath()` (analysisResolver.ts, auch von `dbParser.ts` genutzt): endet `FolderPath` auf `FileNameL`, wird es unverändert übernommen. |
 
 ## 5. Befund vom 2026-09-10
 

@@ -116,6 +116,20 @@ function fingerprint(filePath) {
   };
 }
 
+// SYNC mit src/rekordbox/analysisResolver.ts joinAudioPath: Rekordbox 7 kann in
+// FolderPath bereits den vollen Dateipfad speichern; FileNameL wiederholt dann
+// den Basisnamen. Naive Verkettung ergäbe ".../x.mp3x.mp3".
+function joinAudioPath(folder, fileName) {
+  const file = String(fileName ?? '').trim();
+  const dir = String(folder ?? '').trim();
+  if (!file) return dir;
+  if (!dir) return file;
+  const stripped = dir.replace(/[\\/]+$/, '');
+  if (stripped.toLowerCase().endsWith(file.toLowerCase())) return stripped;
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return `${stripped}${sep}${file}`;
+}
+
 function maskKey(key) {
   if (!key) return '(kein Schluessel)';
   return `${key.slice(0, 6)}… (${key.length} Zeichen, sha256 ${crypto.createHash('sha256').update(key).digest('hex').slice(0, 8)})`;
@@ -407,7 +421,8 @@ function run(options) {
           const file = get('FileNameL', 'fileName');
           const analysis = analysisColumn ? get(analysisColumn) : '';
           sub(`ID ${id} · ${title}`);
-          sub(`   BPM ${(Number(bpm) / 100).toFixed(2)} · Länge ${length} s · ${folder ? `${folder}${file}` : file}`);
+          const audioPath = joinAudioPath(folder, file);
+          sub(`   BPM ${(Number(bpm) / 100).toFixed(2)} · Länge ${length} s · ${audioPath}`);
           sub(`   AnalysisDataPath: ${analysis || '(leer)'}`);
           const cueCount =
             cueTable && cueContentColumn
@@ -419,7 +434,7 @@ function run(options) {
             title: String(title),
             bpm: Number(bpm) / 100,
             lengthSeconds: Number(length),
-            audioPath: folder ? `${folder}${file}` : String(file),
+            audioPath: joinAudioPath(folder, file),
             analysisDataPath: String(analysis || ''),
             cues: cueCount,
           });

@@ -85,10 +85,33 @@ export function resolveAnalysisFilePath(
 }
 
 /**
- * Normalizes an audio location (XML `file://` LOCATION or DB
- * FolderPath+FileName) into a canonical key so both spellings of the same
- * file compare equal. URL-decoded, separator-unified, case-folded.
+ * Fügt `djmdContent.FolderPath` und `FileNameL` zum Audiopfad zusammen.
+ *
+ * Rekordbox-7-Datenbanken speichern in `FolderPath` versionsabhängig entweder
+ * das reine Verzeichnis (mit oder ohne Abschluss-Separator) **oder den vollen
+ * Dateipfad**; `FileNameL` wiederholt dann nur den Basisnamen. Eine naive
+ * Verkettung erzeugt `…/track.mp3track.mp3` und bricht lautlos den
+ * Exakt-Match-Link XML↔DB sowie den PPTH-Plausibilitätsvergleich (beobachtet
+ * an einer echten `D:\PIONEER\Master\master.db` am 10.09.2026).
+ *
+ * Regel (deterministisch, kein Raten): endet `FolderPath` (ohne
+ * Abschluss-Separatoren) case-insensitiv auf `FileNameL`, wird `FolderPath`
+ * unverändert übernommen; sonst Verzeichnis + erkannte Separator + Name.
  */
+export function joinAudioPath(
+  folder: string | undefined | null,
+  fileName: string | undefined | null
+): string {
+  const file = (fileName ?? '').trim();
+  const dir = (folder ?? '').trim();
+  if (!file) return dir;
+  if (!dir) return file;
+  const stripped = dir.replace(/[\\/]+$/, '');
+  if (stripped.toLowerCase().endsWith(file.toLowerCase())) return stripped;
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return `${stripped}${sep}${file}`;
+}
+
 export function normalizeAudioKey(input: string | undefined | null): string {
   if (!input) return '';
   let s = input.trim();

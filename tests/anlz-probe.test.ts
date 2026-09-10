@@ -157,6 +157,37 @@ assert.match(poor.stdout || '', /Gate PPTH\+PQTZ\+PWV\*\s+FAIL/);
 assert.match(poor.stdout || '', /ERGEBNIS: FAIL/);
 
 // ---------------------------------------------------------------------------
+// 4b) Stufe-3-Fallback: ANLZ liegt NICHT unter <dbDir>/share, sondern nur
+//     über den PPTH- exakten Audiopfad gefunden werden (Tier 1).
+// ---------------------------------------------------------------------------
+
+const workDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-anlz-fb-'));
+const dbDir2 = path.join(workDir2, 'db');
+const anlzDir2 = path.join(dbDir2, 'USBANLZ', 'x');   // bewusst NICHT unter share/
+fs.mkdirSync(anlzDir2, { recursive: true });
+fs.writeFileSync(path.join(anlzDir2, 'ANLZ0002.DAT'), Buffer.from(generateRealAnlzDatFixture(126)));
+fs.writeFileSync(path.join(anlzDir2, 'ANLZ0002.EXT'), Buffer.from(generateRealAnlzExtFixture(126)));
+
+const dbPath2 = path.join(dbDir2, 'master.db');
+{
+  const Database = require('better-sqlite3-multiple-ciphers');
+  const db = new Database(dbPath2);
+  db.pragma('cipher = sqlcipher');
+  db.pragma('legacy = 4');
+  db.pragma(`key = '${dbReader.getMasterDbKey()}'`);
+  db.exec(`
+    CREATE TABLE djmdContent (ID INTEGER PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, AnalysisDataPath TEXT);
+    INSERT INTO djmdContent VALUES (1, 'C:\\Music\\', 'Reference.wav', 'Reference FB', '/PIONEER/USBANLZ/x/ANLZ0002.DAT');
+  `);
+  db.close();
+}
+
+const fb = runProbe(['--db', dbPath2, '--track', '1']);
+assert.strictEqual(fb.status, 0, `Fallback muss Exit 0 liefern: ${fb.stdout} ${fb.stderr}`);
+assert.match(fb.stdout || '', /PPTH-Scan \(Stufe-3-Fallback, Tier 1/, 'Fallback-Quelle muss sichtbar sein');
+assert.match(fb.stdout || '', /ERGEBNIS: PASS/);
+
+// ---------------------------------------------------------------------------
 // 4) Read-Only-Beweis: alles byte-identisch
 // ---------------------------------------------------------------------------
 
