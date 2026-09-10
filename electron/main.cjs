@@ -6,7 +6,7 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
-  scanAnlzForPaths,
+  scanAnlzForPathsAsync,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { createOriginalGuard } = require('./originalGuard.cjs');
@@ -211,8 +211,29 @@ ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
 });
 
-ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
-  return scanAnlzForPaths(targetPaths);
+ipcMain.handle('rekordbox:scan-anlz-paths', async (event, targetPaths) => {
+  // Asynchron (setImmediate-Yields): der PPTH-Scan großer Bibliotheken
+  // (20k+ Header) darf den Main-Prozess NICHT blockieren — sonst hängt die
+  // ganze App während des Scans. Fortschritt wird an das Fenster gemeldet.
+  let userDataDir = null;
+  try {
+    userDataDir = app.getPath('userData');
+  } catch {
+    userDataDir = null;
+  }
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return scanAnlzForPathsAsync(targetPaths, {
+    userDataDir,
+    onProgress: (p) => {
+      try {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('anlz-ppth-scan-progress', p);
+        }
+      } catch {
+        // Progress is best-effort.
+      }
+    },
+  });
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {

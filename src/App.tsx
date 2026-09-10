@@ -684,31 +684,59 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         for (const t of xmlImportedTracks) pushTarget(t.originalMedia?.location);
         for (const t of tracks) pushTarget(t.originalMedia?.location);
         pushTarget(track.originalMedia?.location);
-        const result = await window.rekordboxDesktop!.scanAnlzPaths(Array.from(targets));
-        let added = 0;
-        for (const m of result.matches) {
-          if (!m.datPath && !m.extPath) continue;
-          anlzPpthIndexRef.current.set(normalizeAudioKey(m.path), {
-            datPath: m.datPath,
-            extPath: m.extPath,
-            matchTier: m.matchTier,
-            note: m.note,
-          });
-          added += 1;
+        // Fortschritt sichtbar halten: Der Scan läuft asynchron im
+        // Main-Prozess (UI bleibt bedienbar); bei 20k+ ANLZ-Dateien dauert
+        // das erste Mal — der Log zeigt, dass es läuft.
+        let lastProgressLog = 0;
+        const offProgress = window.rekordboxDesktop!.onAnlzScanProgress
+          ? window.rekordboxDesktop!.onAnlzScanProgress((p) => {
+              const now = Date.now();
+              if (p.phase === 'scanning' && now - lastProgressLog >= 2500) {
+                lastProgressLog = now;
+                logger.info(
+                  'DATABASE',
+                  `[ANLZ PPTH-Scan] läuft — ${p.scanned} Dateien gelesen, ${p.matched} Zuordnungen …`,
+                  { scanned: p.scanned, matched: p.matched },
+                );
+              }
+            })
+          : null;
+        try {
+          const result = await window.rekordboxDesktop!.scanAnlzPaths(Array.from(targets));
+          let added = 0;
+          for (const m of result.matches) {
+            if (!m.datPath && !m.extPath) continue;
+            anlzPpthIndexRef.current.set(normalizeAudioKey(m.path), {
+              datPath: m.datPath,
+              extPath: m.extPath,
+              matchTier: m.matchTier,
+              note: m.note,
+            });
+            added += 1;
+          }
+          anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
+          for (const t of targets) {
+            const k = normalizeAudioKey(t);
+            if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
+          }
+          console.info(
+            `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
+              `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
+          );
+          logger.info(
+            'DATABASE',
+            `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer` +
+              (result.cacheUsed ? ' (CACHE — keine Header-Neulesung)' : ''),
+            {
+              folders: result.folders,
+              elapsedMs: result.elapsedMs,
+              cacheUsed: result.cacheUsed ?? false,
+              headerReads: result.headerReads ?? result.scanned,
+            },
+          );
+        } finally {
+          if (offProgress) offProgress();
         }
-        anlzPpthScanInfoRef.current = { scanned: result.scanned, folders: result.folders.length, elapsedMs: result.elapsedMs };
-        for (const t of targets) {
-          const k = normalizeAudioKey(t);
-          if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
-        }
-        console.info(
-          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
-            `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
-        );
-        logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer`, {
-          folders: result.folders,
-          elapsedMs: result.elapsedMs,
-        });
       } catch (e) {
         console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);
       } finally {

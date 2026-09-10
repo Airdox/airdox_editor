@@ -688,6 +688,321 @@ function buildAnlzPpthIndex(folders) {
   return { index, scanned };
 }
 
+// ---------------------------------------------------------------------------
+// Async version of the PPTH index — runs WITHOUT blocking the main process
+// (the synchronous walk froze the whole UI on large libraries: 20k+ headers
+// took up to 3.5 minutes). Chunked with setImmediate yields so the UI stays
+// responsive; a persistent cache (userData) skips header reads when the
+// ANLZ tree is unchanged.
+// ---------------------------------------------------------------------------
+
+const ANLZ_CACHE_VERSION = 1;
+const ANLZ_SCAN_BATCH = 250;
+
+function anlzCachePath(userDataDir) {
+  return path.join(userDataDir, 'anlz-ppth-index.json');
+}
+
+async function readAnlzCache(userDataDir) {
+  try {
+    const raw = await fs.promises.readFile(anlzCachePath(userDataDir), 'utf8');
+    const data = JSON.parse(raw);
+    if (
+      data &&
+      data.version === ANLZ_CACHE_VERSION &&
+      Array.isArray(data.folders) &&
+      data.files &&
+      Array.isArray(data.index)
+    ) {
+      return data;
+    }
+  } catch {
+    // No cache / unreadable — fall back to a full scan.
+  }
+  return null;
+}
+
+async function writeAnlzCache(userDataDir, folders, fileMtimes, index) {
+  try {
+    const payload = {
+      version: ANLZ_CACHE_VERSION,
+      savedAt: Date.now(),
+      folders,
+      files: Object.fromEntries(fileMtimes),
+      index: [...index.entries()].map(([k, v]) => [k, v]),
+    };
+    await fs.promises.writeFile(anlzCachePath(userDataDir), JSON.stringify(payload), 'utf8');
+  } catch {
+    // Cache is an optimization only — never fail the scan because of it.
+  }
+}
+
+function sameFolderSet(a, b) {
+  if (a.length !== b.length) return false;
+  const setA = new Set(a);
+  return b.every((x) => setA.has(x));
+}
+
+/** Async walk that collects mtimeMs of every ANLZ file (no header reads). */
+async function currentAnlzFileMtimes(folders) {
+  const fileMtimes = new Map();
+  const maxDepth = 6;
+  const maxFiles = 250000;
+  const queue = folders.map((f) => [f, 0]);
+  let guard = 0;
+  while (queue.length > 0 && guard < maxFiles * 4) {
+    const [folder, depth] = queue.shift();
+    let entries = [];
+    try {
+      entries = await fs.promises.readdir(folder, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entryInfo of entries) {
+      guard += 1;
+      const full = path.join(folder, entryInfo.name);
+      if (entryInfo.isDirectory()) {
+        if (depth + 1 <= maxDepth) queue.push([full, depth + 1]);
+        continue;
+      }
+      const lower = entryInfo.name.toLowerCase();
+      if (!lower.startsWith('anlz') || (!lower.endsWith('.dat') && !lower.endsWith('.ext'))) continue;
+      try {
+        const st = await fs.promises.stat(full);
+        fileMtimes.set(full, st.mtimeMs);
+      } catch {
+        // Vanished file — simply not part of the map.
+      }
+    }
+  }
+  return fileMtimes;
+}
+
+/**
+ * Async PPTH index build: same semantics as buildAnlzPpthIndex, but non-
+ * blocking (fs.promises + setImmediate yields). onProgress receives
+ * { phase: 'scanning', scanned, matched } per batch.
+ */
+async function buildAnlzPpthIndexAsync(folders, onProgress) {
+  const index = new Map();
+  const fileMtimes = new Map();
+  let scanned = 0;
+  const maxDepth = 6;
+  const maxFiles = 250000;
+  const queue = folders.map((f) => [f, 0]);
+
+  const readHeader = async (full) => {
+    let handle = null;
+    try {
+      handle = await fs.promises.open(full, 'r');
+      const stat = await handle.stat();
+      const len = Math.min(ANLZ_HEADER_BYTES, stat.size);
+      const buf = Buffer.alloc(len);
+      const { bytesRead } = await handle.read(buf, 0, len, 0);
+      if (bytesRead < 0x10) return null;
+      if (buf.toString('ascii', 0, 4) !== 'PPTH') return null;
+      const lenPath = buf.readUInt32BE(0x0c);
+      if (lenPath <= 0 || 0x10 + lenPath > bytesRead) return null;
+      return decodePpthPath(buf, 0x10, lenPath);
+    } catch {
+      return null;
+    } finally {
+      if (handle !== null) {
+        try {
+          await handle.close();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
+
+  const notify = () => {
+    if (onProgress) {
+      try {
+        onProgress({ phase: 'scanning', scanned, matched: index.size });
+      } catch {
+        // Progress is best-effort.
+      }
+    }
+  };
+
+  while (queue.length > 0 && scanned < maxFiles) {
+    let batch = 0;
+    while (batch < ANLZ_SCAN_BATCH && queue.length > 0 && scanned < maxFiles) {
+      batch += 1;
+      const [folder, depth] = queue.shift();
+      let entries = [];
+      try {
+        entries = await fs.promises.readdir(folder, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entryInfo of entries) {
+        if (scanned >= maxFiles) break;
+        const full = path.join(folder, entryInfo.name);
+        if (entryInfo.isDirectory()) {
+          if (depth + 1 <= maxDepth) queue.push([full, depth + 1]);
+          continue;
+        }
+        const lower = entryInfo.name.toLowerCase();
+        if (!lower.startsWith('anlz') || (!lower.endsWith('.dat') && !lower.endsWith('.ext'))) continue;
+        scanned += 1;
+        const ppth = await readHeader(full);
+        try {
+          const st = await fs.promises.stat(full);
+          fileMtimes.set(full, st.mtimeMs);
+        } catch {
+          // ignore
+        }
+        if (!ppth) continue;
+        const key = normalizeAnlzPathKey(ppth);
+        if (!key) continue;
+        const isDat = lower.endsWith('.dat');
+        const existing = index.get(key) || { ppth, datPath: null, extPath: null };
+        if (isDat) existing.datPath = full;
+        else if (!existing.extPath) existing.extPath = full;
+        index.set(key, existing);
+      }
+    }
+    notify();
+    if (queue.length > 0) await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { index, scanned, fileMtimes };
+}
+
+/**
+ * Shared matching logic (Tier 1 exact path, Tier 2 unique basename) used by
+ * the sync and async scan so both behave identically.
+ */
+function matchTargetsAgainstIndex(index, targetPaths) {
+  const wanted = new Map();
+  for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
+    const key = normalizeAnlzPathKey(tp);
+    if (key && !wanted.has(key)) wanted.set(key, String(tp));
+  }
+  const matches = [];
+  const matchedKeys = new Set();
+
+  // Tier 1: exakter normalisierter Pfadtrenffer (PPTH == Audio-Pfad).
+  for (const [key, entry] of index) {
+    if (!wanted.has(key)) continue;
+    if (!entry.datPath && !entry.extPath) continue;
+    matches.push({
+      path: wanted.get(key),
+      datPath: entry.datPath,
+      extPath: entry.extPath,
+      matchTier: 1,
+    });
+    matchedKeys.add(key);
+  }
+
+  // Tier 2: Audio-Datei wurde nach der Analyse verschoben/umbenannt?
+  if (matchedKeys.size < wanted.size) {
+    const byBasename = new Map();
+    for (const [key, entry] of index) {
+      if (!entry.datPath && !entry.extPath) continue;
+      const bn = key.split('/').pop();
+      if (!byBasename.has(bn)) byBasename.set(bn, []);
+      byBasename.get(bn).push(key);
+    }
+    for (const [key, original] of wanted) {
+      if (matchedKeys.has(key)) continue;
+      const bn = key.split('/').pop();
+      const candidates = byBasename.get(bn);
+      if (!candidates || candidates.length !== 1) continue;
+      const entry = index.get(candidates[0]);
+      matches.push({
+        path: original,
+        datPath: entry.datPath,
+        extPath: entry.extPath,
+        matchTier: 2,
+        note: 'ANLZ per Dateiname zugeordnet (PPTH-Pfad weicht ab – vermutlich verschobene Datei). Zuordnung pruefen.',
+      });
+      matchedKeys.add(key);
+    }
+  }
+
+  // Diagnostik: erste PPTH-Pfade (Console/Log), ohne Vollindex zu senden.
+  const ppthSample = [];
+  for (const entry of index.values()) {
+    ppthSample.push(entry.ppth);
+    if (ppthSample.length >= 3) break;
+  }
+  return { matches, ppthSample };
+}
+
+/**
+ * Async scan (non-blocking main process) with persistent cache:
+ *  - unchanged ANLZ tree  → reuse cached index (no header reads),
+ *  - changed/new files    → full async rebuild + cache refresh.
+ * options: { folderOverride, userDataDir, onProgress }
+ */
+async function scanAnlzForPathsAsync(targetPaths, options = {}) {
+  const started = Date.now();
+  const { folderOverride, userDataDir, onProgress } = options;
+  const folders = folderOverride || [
+    ...findAnlzFolders(),
+    ...findTargetDriveAnlzFolders(targetPaths),
+  ];
+  if (folders.length === 0) {
+    return {
+      matches: [],
+      scanned: 0,
+      folders,
+      elapsedMs: Date.now() - started,
+      ppthSample: [],
+      cacheUsed: false,
+      headerReads: 0,
+    };
+  }
+
+  let index = null;
+  let scanned = 0;
+  let cacheUsed = false;
+
+  if (userDataDir) {
+    const cached = await readAnlzCache(userDataDir);
+    if (cached && sameFolderSet(cached.folders, folders)) {
+      const current = await currentAnlzFileMtimes(folders);
+      const cacheFiles = cached.files;
+      if (current.size === Object.keys(cacheFiles).length && [...current.entries()].every(([k, v]) => cacheFiles[k] === v)) {
+        index = new Map(cached.index);
+        scanned = current.size;
+        cacheUsed = true;
+        if (onProgress) {
+          try {
+            onProgress({ phase: 'cache', scanned, matched: index.size });
+          } catch {
+            // best-effort
+          }
+        }
+      }
+    }
+  }
+
+  if (!index) {
+    const built = await buildAnlzPpthIndexAsync(folders, onProgress);
+    index = built.index;
+    scanned = built.scanned;
+    if (userDataDir) {
+      // Fire-and-forget: the cache is an optimization, not a requirement.
+      writeAnlzCache(userDataDir, folders, built.fileMtimes, index);
+    }
+  }
+
+  const { matches, ppthSample } = matchTargetsAgainstIndex(index, targetPaths);
+  return {
+    matches,
+    scanned,
+    folders,
+    elapsedMs: Date.now() - started,
+    ppthSample,
+    cacheUsed,
+    headerReads: cacheUsed ? 0 : scanned,
+  };
+}
+
 /**
  * Matches the given audio paths against the PPTH headers of all ANLZ
  * containers in the standard Rekordbox analysis folders. Read-only.
@@ -741,62 +1056,7 @@ function scanAnlzForPaths(targetPaths, folderOverride) {
     ...findTargetDriveAnlzFolders(targetPaths),
   ];
   const { index, scanned } = buildAnlzPpthIndex(folders);
-  const wanted = new Map();
-  for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
-    const key = normalizeAnlzPathKey(tp);
-    if (key && !wanted.has(key)) wanted.set(key, String(tp));
-  }
-  const matches = [];
-  const matchedKeys = new Set();
-
-  // Tier 1: exakter normalisierter Pfadtrenffer (PPTH == Audio-Pfad).
-  for (const [key, entry] of index) {
-    if (!wanted.has(key)) continue;
-    if (!entry.datPath && !entry.extPath) continue;
-    matches.push({
-      path: wanted.get(key),
-      datPath: entry.datPath,
-      extPath: entry.extPath,
-      matchTier: 1,
-    });
-    matchedKeys.add(key);
-  }
-
-  // Tier 2: Audio-Datei wurde nach der Analyse verschoben/umbenannt?
-  // Dann stimmt nur der Dateiname ueberein. Ein Treffer gilt nur, wenn der
-  // Basename in der gesamten ANLZ-Index eindeutig ist (ansonsten ambig).
-  if (matchedKeys.size < wanted.size) {
-    const byBasename = new Map();
-    for (const [key, entry] of index) {
-      if (!entry.datPath && !entry.extPath) continue;
-      const bn = key.split('/').pop();
-      if (!byBasename.has(bn)) byBasename.set(bn, []);
-      byBasename.get(bn).push(key);
-    }
-    for (const [key, original] of wanted) {
-      if (matchedKeys.has(key)) continue;
-      const bn = key.split('/').pop();
-      const candidates = byBasename.get(bn);
-      if (!candidates || candidates.length !== 1) continue;
-      const entry = index.get(candidates[0]);
-      matches.push({
-        path: original,
-        datPath: entry.datPath,
-        extPath: entry.extPath,
-        matchTier: 2,
-        note: 'ANLZ per Dateiname zugeordnet (PPTH-Pfad weicht ab – vermutlich verschobene Datei). Zuordnung pruefen.',
-      });
-      matchedKeys.add(key);
-    }
-  }
-
-  // Diagnostik: erste PPTH-Pfade (Console/Log), ohne Vollindex zu senden.
-  const ppthSample = [];
-  for (const entry of index.values()) {
-    ppthSample.push(entry.ppth);
-    if (ppthSample.length >= 3) break;
-  }
-
+  const { matches, ppthSample } = matchTargetsAgainstIndex(index, targetPaths);
   return { matches, scanned, folders, elapsedMs: Date.now() - started, ppthSample };
 }
 
@@ -812,5 +1072,8 @@ module.exports = {
   findAnlzFolders,
   locateRekordboxDatabases,
   scanAnlzForPaths,
+  scanAnlzForPathsAsync,
+  buildAnlzPpthIndexAsync,
+  anlzCachePath,
   isCipherAvailable: () => getCipherModule() !== null,
 };

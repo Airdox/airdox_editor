@@ -11,6 +11,26 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
   scanAnlzPaths: (targetPaths) => ipcRenderer.invoke('rekordbox:scan-anlz-paths', targetPaths),
+  // ANLZ-Scan-Fortschritt (async scan): stabile interne Listener-Referenz,
+  // damit on/off sauber koppelbar ist. Liefert die unsubscribe-Funktion.
+  onAnlzScanProgress: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    if (!global.__anlzScanProgressListener) {
+      const listener = (_event, payload) => global.__anlzScanProgressSet.forEach((cb) => cb(payload));
+      global.__anlzScanProgressListener = listener;
+      global.__anlzScanProgressSet = new Set();
+      ipcRenderer.on('anlz-ppth-scan-progress', listener);
+    }
+    global.__anlzScanProgressSet.add(callback);
+    return () => {
+      global.__anlzScanProgressSet.delete(callback);
+      if (global.__anlzScanProgressSet.size === 0) {
+        ipcRenderer.removeListener('anlz-ppth-scan-progress', global.__anlzScanProgressListener);
+        global.__anlzScanProgressListener = null;
+        global.__anlzScanProgressSet = null;
+      }
+    };
+  },
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),

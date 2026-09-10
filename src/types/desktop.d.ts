@@ -51,6 +51,11 @@ declare global {
        * every ANLZ container in the standard Rekordbox analysis folders and
        * returns exact audio-path matches (DAT + EXT pair). Read-only.
        */
+      /**
+       * Runs asynchronously in the main process (non-blocking UI). A
+       * persistent cache in <userData> skips header reads when the ANLZ
+       * tree is unchanged (cacheUsed: true).
+       */
       scanAnlzPaths(targetPaths: string[]): Promise<{
         /**
          * matchTier 1 = exact PPTH path match; matchTier 2 = unique basename
@@ -61,7 +66,15 @@ declare global {
         folders: string[];
         elapsedMs: number;
         ppthSample?: string[];
+        cacheUsed?: boolean;
+        headerReads?: number;
       }>;
+      /**
+       * ANLZ-Scan progress (async scan). Returns an unsubscribe function.
+       */
+      onAnlzScanProgress?(
+        callback: (progress: { phase: 'scanning' | 'cache'; scanned: number; matched: number }) => void,
+      ): () => void;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
