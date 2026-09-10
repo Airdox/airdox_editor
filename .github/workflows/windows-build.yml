@@ -37,6 +37,8 @@ jobs:
         run: npm run build
 
       - name: Waveform-Gates / Quellenherkunft verifizieren
+        # Schreibt zusätzlich release/gate-report.json (und bei Fehlschlag
+        # release/gate-escalation.md) — Struktur, Retry und Eskalation.
         run: npm run verify:waveform
 
       - name: Electron Windows-Pakete (NSIS + Portable)
@@ -51,7 +53,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
-          path: release/*.exe
+          # Windows-Installer/Portable plus Gatebericht (gate-report.json)
+          # und bei blockierten Gates zusätzlich die Eskalation
+          # (gate-escalation.md). Läuft auch, wenn die Gates blockieren und
+          # keine .exe gebaut wurde — dann enthält das Artefakt den Bericht.
+          path: |
+            release/*.exe
+            release/gate-report.json
+            release/gate-escalation.md
           retention-days: 30
 
       - name: GitHub-Release bei Tag

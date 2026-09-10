@@ -163,6 +163,30 @@ Ein Agent darf nicht einfach „grün“ melden, wenn das Ziel nicht erreicht wu
 4. welcher Agent als Nächstes übernehmen soll,
 5. ob ein sicherer Blocker oder nur ein Warnhinweis vorliegt.
 
+### Gatebericht, Retry und Eskalation (umgesetzt, Stage 1 ab 0.4.20.1)
+
+Der Gatekeeper in `scripts/waveform-gates.mjs` liefert jede Gate-Run als
+strukturierten JSON-Bericht (Schema `airdox.waveform-gate-report` v1):
+
+- `release/gate-report.json` — pro Gate ein `GateResult` mit `agent`, `gate`,
+  `status`, `evidence`, `attempts`, `retried`, `durationMs`; finale Fehlschläge
+  zusätzlich mit `reason` und `nextAction`. Laufmetadaten (Zeitstempel,
+  App-Version, Plattform, Node, Commit) machen den Bericht reproduzierbar.
+- **Ein automatischer Retry:** jede fehlgeschlagene Gate wird genau einmal
+  wiederholt (`attempts: 2`, `retried: true`), bevor das Ergebnis als final
+  gilt. Ein Retry-„Pass“ bleibt ein Pass — aber mit transparenter Evidenz.
+- **Eskalation:** finale Fehlschläge erzeugen `escalations[]` im JSON-Bericht
+  (Grund, verantwortlicher Agent, konkrete nächste Aktion) plus
+  `release/gate-escalation.md`. Grün-Läufe entfernen eine alte
+  Eskalationsdatei.
+- **CI-Artefakt:** der Bericht wird zusammen mit dem Windows-Build im
+  Artefakt `airdox-smart-editor-windows` hochgeladen — auch bei BLOCKED, wenn
+  keine `.exe` gebaut wurde.
+
+Der Gatekeeper und sein Bericht sind reine Prüf- und Reporting-Infrastruktur:
+Sie lesen und verändern keine Rekordbox-Daten (ANLZ/PPTH/PWV, DB, XML, Audio)
+— sie dokumentieren nur, was die Quellen tatsächlich liefern.
+
 ## 6. Messbare Produktziele
 
 - 100 % der Rekordbox-Waveforms zeigen nachvollziehbare ANLZ-/PWV-Herkunft.
