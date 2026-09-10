@@ -15,9 +15,11 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
-  // Diagnostic log file (durable): mirrors every decisive pipeline parameter
-  // into <userData>/airdox-smart-editor.log. Append-only, never throws.
+  // Diagnostic log files (durable): mirrors every decisive pipeline parameter
+  // into <userData>/airdox-smart-editor.log + airdox-trace.log.
+  // Append-only, never throws. Two files for maximum transparency.
   appendLog: (entry) => ipcRenderer.invoke('airdox:append-log', entry),
   getLogFilePath: () => ipcRenderer.invoke('airdox:get-log-path'),
+  getTraceFilePath: () => ipcRenderer.invoke('airdox:get-trace-path'),
   revealLogFile: () => ipcRenderer.invoke('airdox:reveal-log'),
 });

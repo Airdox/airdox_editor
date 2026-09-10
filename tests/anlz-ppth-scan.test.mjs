@@ -99,7 +99,7 @@ try {
   fs.writeFileSync(path.join(anlzDir2, 'ANLZ0101.DAT'), buildPpthFile('C:\\A\\Twin.wav', 'utf16be'));
   fs.writeFileSync(path.join(anlzDir2, 'ANLZ0102.DAT'), buildPpthFile('C:\\B\\Twin.wav', 'utf16be'));
 
-  const result = scanAnlzForPaths(
+  const result = await scanAnlzForPaths(
     [audioA, 'c:/music/dj/BETA.mp3', 'C:\\Music\\DJ\\Gamma.wav', audioD],
     [anlzDir]
   );
@@ -134,7 +134,7 @@ try {
   // ─── Tier 2: file moved after analysis (basename only) ─────────────────
   // The target path differs from the PPTH, but the basename "Moved.wav" is
   // unique in the whole index → tier-2 match with verification note.
-  const r2 = scanAnlzForPaths(
+  const r2 = await scanAnlzForPaths(
     ['D:\\New\\Folder\\Moved.wav', 'E:\\Ambiguous\\Twin.wav'],
     [anlzDir2]
   );
@@ -146,7 +146,7 @@ try {
   assert.ok(!twin, 'ambiguous basename (two candidates) must NOT match');
 
   // ─── Windows long-path prefix normalization ─────────────────────────────
-  const r3 = scanAnlzForPaths(['\\\\?\\c:\\music\\dj\\alpha.wav'], [anlzDir]);
+  const r3 = await scanAnlzForPaths(['\\\\?\\c:\\music\\dj\\alpha.wav'], [anlzDir]);
   const prefixed = r3.matches.find((m) => /alpha\.wav$/i.test(m.path));
   assert.ok(prefixed, '\\\\?\\ long-path prefix normalizes to a match');
   assert.strictEqual(prefixed.matchTier, 1, 'long-path prefix stays tier-1');

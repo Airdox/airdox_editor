@@ -590,32 +590,56 @@ function normalizeAnlzPathKey(input) {
   return s.toLowerCase();
 }
 
-function buildAnlzPpthIndex(folders) {
+/**
+ * Async, non-blocking ANLZ PPTH index builder.
+ * Reads only 1 KB headers per file, yields to event loop every 100 files
+ * so the Electron main process stays responsive even with 20k+ containers.
+ * Every step is logged via optional onProgress callback.
+ */
+async function buildAnlzPpthIndex(folders, onProgress) {
   const index = new Map();
   let scanned = 0;
-  // USBANLZ is normally a hash/UUID directory tree, not a flat folder.
-  // The previous implementation only inspected the root and therefore
-  // reported "0 Dateien" on valid Rekordbox exports. Walk only the analysis
-  // roots, with a depth/file guard so a malformed path cannot become a full
-  // disk scan.
+  let processedDirs = 0;
   const maxDepth = 6;
   const maxFiles = 250000;
-  const visit = (folder, depth) => {
+
+  const visit = async (folder, depth) => {
     if (depth > maxDepth || scanned >= maxFiles) return;
     let entries = [];
-    try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch { return; }
+    try {
+      entries = await fs.promises.readdir(folder, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    processedDirs++;
+    // Yield every 20 dirs to keep main responsive
+    if (processedDirs % 20 === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
     for (const entryInfo of entries) {
       if (scanned >= maxFiles) return;
       const full = path.join(folder, entryInfo.name);
       if (entryInfo.isDirectory()) {
-        visit(full, depth + 1);
+        await visit(full, depth + 1);
         continue;
       }
       const lower = entryInfo.name.toLowerCase();
       if (!lower.startsWith('anlz')) continue;
       if (!lower.endsWith('.dat') && !lower.endsWith('.ext')) continue;
       scanned += 1;
-      const ppth = readPpthFromFile(full);
+      if (onProgress && scanned % 500 === 0) {
+        try { onProgress(scanned, index.size); } catch {}
+      }
+      // Yield every 100 files
+      if (scanned % 100 === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
+      let ppth = null;
+      try {
+        ppth = readPpthFromFile(full);
+      } catch {
+        ppth = null;
+      }
       if (!ppth) continue;
       const key = normalizeAnlzPathKey(ppth);
       if (!key) continue;
@@ -626,7 +650,10 @@ function buildAnlzPpthIndex(folders) {
       index.set(key, existing);
     }
   };
-  for (const folder of folders) visit(folder, 0);
+
+  for (const folder of folders) {
+    await visit(folder, 0);
+  }
   return { index, scanned };
 }
 
@@ -676,13 +703,13 @@ function findTargetDriveAnlzFolders(targetPaths) {
   return folders;
 }
 
-function scanAnlzForPaths(targetPaths, folderOverride) {
+async function scanAnlzForPaths(targetPaths, folderOverride, onProgress) {
   const started = Date.now();
   const folders = folderOverride || [
     ...findAnlzFolders(),
     ...findTargetDriveAnlzFolders(targetPaths),
   ];
-  const { index, scanned } = buildAnlzPpthIndex(folders);
+  const { index, scanned } = await buildAnlzPpthIndex(folders, onProgress);
   const wanted = new Map();
   for (const tp of Array.isArray(targetPaths) ? targetPaths : []) {
     const key = normalizeAnlzPathKey(tp);

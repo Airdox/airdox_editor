@@ -104,7 +104,7 @@ function fingerprint(filePath) {
 // Lauf
 // ---------------------------------------------------------------------------
 
-function run(options) {
+async function run(options) {
   line('AIRDOX SMART EDITOR · ANLZ-PROBE (Stufe 4, read-only Trockenuebung)');
   line('='.repeat(76));
   line('Vertrag: nur lesen · nichts erfinden · nichts aendern · Herkunft sichtbar');
@@ -180,8 +180,8 @@ function run(options) {
           path.join(dbDirAbs, '..', 'PIONEER', 'USBANLZ'),
           path.join(dbDirAbs, '..', 'share', 'PIONEER', 'USBANLZ'),
         ].filter((f) => fs.existsSync(f));
-        const scans = [dbReader.scanAnlzForPaths([audioPathFromDb])];
-        if (extraFolders.length) scans.push(dbReader.scanAnlzForPaths([audioPathFromDb], extraFolders));
+        const scans = [await dbReader.scanAnlzForPaths([audioPathFromDb])];
+        if (extraFolders.length) scans.push(await dbReader.scanAnlzForPaths([audioPathFromDb], extraFolders));
         const tier1 = scans.flatMap((r) => r.matches).find((m) => m.matchTier === 1);
         if (tier1?.datPath) {
           resolved = tier1.datPath;
@@ -380,7 +380,7 @@ if (options.help) {
 
 let exitCode = 1;
 try {
-  exitCode = run(options);
+  exitCode = await run(options);
 } catch (error) {
   line('');
   line(`PROBE ABGEBROCHEN: ${error?.message || error}`);

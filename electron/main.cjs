@@ -11,17 +11,54 @@ const {
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
 
-// Durable diagnostic log: <userData>/airdox-smart-editor.log (+ .prev.log
-// rotation). Created lazily because app.getPath('userData') is only valid
-// once the app is ready; writes never throw back into the app.
+// Durable diagnostic logs: two files for maximum transparency (user request:
+// "lieber eine Logdatei zuviel als eine zu wenig").
+//  - airdox-smart-editor.log      : decisive pipeline params (existing)
+//  - airdox-trace.log             : verbose event trace (every IPC, every step)
+// Both rotate at 5 MB. Created lazily because app.getPath('userData') is only
+// valid once the app is ready; writes never throw back into the app.
 let logWriter = null;
+let traceWriter = null;
 function getLogWriter() {
   if (!logWriter) {
-    logWriter = createLogWriter(
-      path.join(app.getPath('userData'), 'airdox-smart-editor.log')
-    );
+    try {
+      logWriter = createLogWriter(
+        path.join(app.getPath('userData'), 'airdox-smart-editor.log')
+      );
+    } catch {
+      // Before app ready, getPath fails – fallback to console only
+      return { append: () => false, filePath: 'NO_USERDATA_YET' };
+    }
   }
   return logWriter;
+}
+function getTraceWriter() {
+  if (!traceWriter) {
+    try {
+      traceWriter = createLogWriter(
+        path.join(app.getPath('userData'), 'airdox-trace.log')
+      );
+    } catch {
+      return { append: () => false, filePath: 'NO_USERDATA_YET' };
+    }
+  }
+  return traceWriter;
+}
+function logMain(level, category, message, data) {
+  try {
+    const line = formatLogLine({ ts: Date.now(), level, category, message, data });
+    getLogWriter().append(line);
+    getTraceWriter().append(line);
+  } catch {}
+  // Always mirror to console for DevTools
+  const consoleFn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
+  try { consoleFn(`[${category}] ${message}`, data || ''); } catch {}
+}
+function logTrace(category, message, data) {
+  try {
+    const line = formatLogLine({ ts: Date.now(), level: 'DEBUG', category, message, data });
+    getTraceWriter().append(line);
+  } catch {}
 }
 
 const APP_NAME = 'airdox_SMART_Editor';
@@ -157,14 +194,16 @@ function registerAppProtocol() {
 // (toLocalPath lives in pathGuard.cjs so it stays unit-testable.)
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
+  logTrace('DATABASE', '[IPC] inspect-location called', { location });
   const localPath = toLocalPath(location);
   if (!localPath) {
+    logMain('WARN', 'DATABASE', '[IPC] inspect-location: kein lokaler Pfad', { location });
     return { validLocation: false, exists: false, reason: 'Kein lokaler file://-Pfad.' };
   }
   try {
     await access(localPath, constants.R_OK);
     const details = await stat(localPath);
-    return {
+    const res = {
       validLocation: true,
       exists: details.isFile(),
       path: localPath,
@@ -172,78 +211,151 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
       modifiedAt: details.mtimeMs,
       accessMode: 'READ_ONLY',
     };
-  } catch {
+    logTrace('DATABASE', '[IPC] inspect-location OK', { path: localPath, exists: res.exists });
+    return res;
+  } catch (e) {
+    logMain('INFO', 'DATABASE', '[IPC] inspect-location: nicht vorhanden', { path: localPath, error: e.message });
     return { validLocation: true, exists: false, path: localPath, accessMode: 'READ_ONLY' };
   }
 });
 
 ipcMain.handle('rekordbox:choose-analysis-file', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Rekordbox-Analysequelle auswählen',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Rekordbox Analysis', extensions: ['DAT', 'EXT', '2EX', 'dat', 'ext', '2ex'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-  });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  logMain('INFO', 'DATABASE', '[IPC] choose-analysis-file: Dialog öffnen');
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Rekordbox-Analysequelle auswählen',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Rekordbox Analysis', extensions: ['DAT', 'EXT', '2EX', 'dat', 'ext', '2ex'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    const out = result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+    logMain('INFO', 'DATABASE', '[IPC] choose-analysis-file: Ergebnis', { canceled: result.canceled, path: out?.path || null });
+    return out;
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] choose-analysis-file: Fehler', { error: e.message });
+    throw e;
+  }
 });
 
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Rekordbox-Datenbank auswählen (nur lesend)',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Rekordbox Datenbank', extensions: ['db'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-  });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  logMain('INFO', 'DATABASE', '[IPC] choose-rekordbox-database: Dialog öffnen');
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Rekordbox-Datenbank auswählen (nur lesend)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Rekordbox Datenbank', extensions: ['db'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    const out = result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+    logMain('INFO', 'DATABASE', '[IPC] choose-rekordbox-database: Ergebnis', { canceled: result.canceled, path: out?.path || null });
+    return out;
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] choose-rekordbox-database: Fehler', { error: e.message });
+    throw e;
+  }
 });
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
-  return locateRekordboxDatabases();
+  logMain('INFO', 'DATABASE', '[IPC] locate-rekordbox-databases: Start');
+  try {
+    const start = Date.now();
+    const res = locateRekordboxDatabases();
+    logMain('INFO', 'DATABASE', `[DB Auto] Kandidaten gefunden: ${res.length}`, { candidates: res, elapsedMs: Date.now() - start });
+    return res;
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] locate-rekordbox-databases: Fehler', { error: e.message, stack: e.stack });
+    throw e;
+  }
 });
 
 ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
-  return scanAnlzForPaths(targetPaths);
+  const count = Array.isArray(targetPaths) ? targetPaths.length : 0;
+  logMain('INFO', 'DATABASE', `[IPC] scan-anlz-paths: Start – ${count} Ziel(e)`, { targets: count, first: Array.isArray(targetPaths) ? targetPaths.slice(0,3) : null });
+  try {
+    const start = Date.now();
+    // Non-blocking async scan with progress logging every 500 files
+    const result = await scanAnlzForPaths(targetPaths, undefined, (scanned, indexed) => {
+      logMain('INFO', 'DATABASE', `[ANLZ PPTH-Scan] läuft — ${scanned} Dateien gelesen, ${indexed} mit PPTH …`, { scanned, indexed });
+    });
+    logMain('INFO', 'DATABASE', `[ANLZ PPTH-Scan] fertig: ${result.scanned} Dateien, ${result.matches.length} Treffer`, {
+      scanned: result.scanned,
+      matches: result.matches.length,
+      folders: result.folders,
+      elapsedMs: result.elapsedMs,
+      ppthSample: result.ppthSample,
+      totalElapsedMs: Date.now() - start,
+    });
+    return result;
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] scan-anlz-paths: Fehler', { error: e.message, stack: e.stack });
+    throw e;
+  }
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
+  logMain('INFO', 'DATABASE', '[IPC] read-library-db: Start', { dbPath });
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
+    logMain('WARN', 'DATABASE', '[IPC] read-library-db: kein Pfad');
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
-  return readRekordboxDatabase(dbPath);
+  try {
+    const start = Date.now();
+    const res = readRekordboxDatabase(dbPath);
+    if (!res.available) {
+      logMain('WARN', 'DATABASE', `[DB Auto] ${dbPath}: nicht lesbar`, { reason: res.reason, elapsedMs: Date.now() - start });
+    } else {
+      logMain('INFO', 'DATABASE', `[DB Auto] ${dbPath}: ${res.stats?.tracks || 0} Tracks, ${res.stats?.cues || 0} Cues`, { dbType: res.dbType, stats: res.stats, elapsedMs: Date.now() - start, warnings: res.warnings });
+    }
+    return res;
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] read-library-db: Exception', { dbPath, error: e.message, stack: e.stack });
+    throw e;
+  }
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
+  logTrace('DATABASE', '[IPC] read-analysis-file: Start', { filePath });
   if (typeof filePath !== 'string' || !filePath.trim()) {
+    logMain('WARN', 'DATABASE', '[IPC] read-analysis-file: kein Pfad');
     throw new Error('Kein gültiger Analysepfad übergeben.');
   }
   const allowedExtensions = new Set(['.dat', '.ext', '.2ex']);
   if (!allowedExtensions.has(path.extname(filePath).toLowerCase())) {
+    logMain('WARN', 'DATABASE', '[IPC] read-analysis-file: falsche Extension', { filePath });
     throw new Error('Die ausgewählte Datei ist keine unterstützte Rekordbox-ANLZ-Datei.');
   }
-  const localPath = path.resolve(filePath);
-  await access(localPath, constants.R_OK);
-  const details = await stat(localPath);
-  if (!details.isFile()) throw new Error('Die ANLZ-Analysequelle verweist nicht auf eine Datei.');
-  if (details.size > 1024 * 1024 * 1024) {
-    throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
+  try {
+    const localPath = path.resolve(filePath);
+    await access(localPath, constants.R_OK);
+    const details = await stat(localPath);
+    if (!details.isFile()) throw new Error('Die ANLZ-Analysequelle verweist nicht auf eine Datei.');
+    if (details.size > 1024 * 1024 * 1024) {
+      throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
+    }
+    const data = await readFile(localPath);
+    logMain('INFO', 'DATABASE', '[ANLZ] Container gelesen (Main)', { path: localPath, bytes: details.size });
+    return {
+      data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      path: localPath,
+      size: details.size,
+      modifiedAt: details.mtimeMs,
+      accessMode: 'READ_ONLY',
+    };
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] read-analysis-file: Fehler', { filePath, error: e.message });
+    throw e;
   }
-  const data = await readFile(localPath);
-  return {
-    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-    path: localPath,
-    size: details.size,
-    modifiedAt: details.mtimeMs,
-    accessMode: 'READ_ONLY',
-  };
 });
 
 ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
+  logTrace('DATABASE', '[IPC] save-export-file: Start', { kind: payload?.kind, defaultName: payload?.defaultName });
   const { data, defaultName, kind, protectedPaths } = payload || {};
   if (!data || typeof data.byteLength !== 'number' || data.byteLength === 0) {
+    logMain('WARN', 'DATABASE', '[IPC] save-export-file: keine Daten');
     throw new Error('Keine Exportdaten übergeben.');
   }
   const kindFilters = {
@@ -253,67 +365,96 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
     PROJECT: { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
   }[kind] || { name: 'Datei', extensions: ['*'] };
 
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export speichern (nur neue Datei)',
-    defaultPath: typeof defaultName === 'string' ? defaultName : 'export',
-    filters: [kindFilters, { name: 'All files', extensions: ['*'] }],
-  });
-  if (result.canceled || !result.filePath) {
-    return { saved: false };
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export speichern (nur neue Datei)',
+      defaultPath: typeof defaultName === 'string' ? defaultName : 'export',
+      filters: [kindFilters, { name: 'All files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) {
+      logMain('INFO', 'SYSTEM', '[IPC] save-export-file: abgebrochen');
+      return { saved: false };
+    }
+    const targetPath = path.resolve(result.filePath);
+    if (isProtectedTarget(targetPath, protectedPaths)) {
+      logMain('WARN', 'SYSTEM', '[IPC] save-export-file: geschütztes Ziel', { targetPath });
+      throw new Error(
+        'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
+      );
+    }
+    const buffer = Buffer.from(data);
+    await writeFile(targetPath, buffer);
+    logMain('INFO', 'SYSTEM', '[IPC] save-export-file: gespeichert', { path: targetPath, bytes: buffer.length });
+    return { saved: true, path: targetPath, bytes: buffer.length, accessMode: 'WRITE_NEW_ONLY' };
+  } catch (e) {
+    logMain('ERROR', 'SYSTEM', '[IPC] save-export-file: Fehler', { error: e.message });
+    throw e;
   }
-  const targetPath = path.resolve(result.filePath);
-  if (isProtectedTarget(targetPath, protectedPaths)) {
-    throw new Error(
-      'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
-    );
-  }
-  const buffer = Buffer.from(data);
-  await writeFile(targetPath, buffer);
-  return { saved: true, path: targetPath, bytes: buffer.length, accessMode: 'WRITE_NEW_ONLY' };
 });
 
 ipcMain.handle('rekordbox:open-project-file', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Projekt öffnen (nur lesend)',
-    properties: ['openFile'],
-    filters: [
-      { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-  });
-  if (result.canceled) return null;
-  const localPath = path.resolve(result.filePaths[0]);
-  await access(localPath, constants.R_OK);
-  const details = await stat(localPath);
-  if (!details.isFile()) throw new Error('Die Projektdatei ist keine Datei.');
-  if (details.size > 64 * 1024 * 1024) {
-    throw new Error('Die Projektdatei ist größer als 64 MB und wird nicht geladen.');
+  logMain('INFO', 'SYSTEM', '[IPC] open-project-file: Dialog öffnen');
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Projekt öffnen (nur lesend)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled) {
+      logMain('INFO', 'SYSTEM', '[IPC] open-project-file: abgebrochen');
+      return null;
+    }
+    const localPath = path.resolve(result.filePaths[0]);
+    await access(localPath, constants.R_OK);
+    const details = await stat(localPath);
+    if (!details.isFile()) throw new Error('Die Projektdatei ist keine Datei.');
+    if (details.size > 64 * 1024 * 1024) {
+      throw new Error('Die Projektdatei ist größer als 64 MB und wird nicht geladen.');
+    }
+    const data = await readFile(localPath, 'utf-8');
+    logMain('INFO', 'SYSTEM', '[IPC] open-project-file: gelesen', { path: localPath, bytes: details.size });
+    return { data, path: localPath, size: details.size, modifiedAt: details.mtimeMs, accessMode: 'READ_ONLY' };
+  } catch (e) {
+    logMain('ERROR', 'SYSTEM', '[IPC] open-project-file: Fehler', { error: e.message });
+    throw e;
   }
-  const data = await readFile(localPath, 'utf-8');
-  return { data, path: localPath, size: details.size, modifiedAt: details.mtimeMs, accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
+  logTrace('DATABASE', '[IPC] read-original-audio: Start', { location });
   const localPath = toLocalPath(location);
-  if (!localPath) throw new Error('Die XML-Location ist kein lokaler Dateipfad.');
+  if (!localPath) {
+    logMain('WARN', 'DATABASE', '[IPC] read-original-audio: kein lokaler Pfad', { location });
+    throw new Error('Die XML-Location ist kein lokaler Dateipfad.');
+  }
   const allowedExtensions = new Set(['.wav', '.mp3', '.flac', '.aiff', '.aif', '.m4a', '.aac', '.ogg']);
   if (!allowedExtensions.has(path.extname(localPath).toLowerCase())) {
+    logMain('WARN', 'DATABASE', '[IPC] read-original-audio: falsche Extension', { localPath });
     throw new Error('Die referenzierte Originaldatei ist keine unterstützte Audiodatei.');
   }
-  await access(localPath, constants.R_OK);
-  const details = await stat(localPath);
-  if (!details.isFile()) throw new Error('Die XML-Location verweist nicht auf eine Datei.');
-  if (details.size > 1024 * 1024 * 1024) {
-    throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
+  try {
+    await access(localPath, constants.R_OK);
+    const details = await stat(localPath);
+    if (!details.isFile()) throw new Error('Die XML-Location verweist nicht auf eine Datei.');
+    if (details.size > 1024 * 1024 * 1024) {
+      throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
+    }
+    const data = await readFile(localPath);
+    logMain('INFO', 'DATABASE', '[IPC] read-original-audio: gelesen', { path: localPath, bytes: details.size });
+    return {
+      data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      path: localPath,
+      size: details.size,
+      modifiedAt: details.mtimeMs,
+      accessMode: 'READ_ONLY',
+    };
+  } catch (e) {
+    logMain('ERROR', 'DATABASE', '[IPC] read-original-audio: Fehler', { localPath, error: e.message });
+    throw e;
   }
-  const data = await readFile(localPath);
-  return {
-    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-    path: localPath,
-    size: details.size,
-    modifiedAt: details.mtimeMs,
-    accessMode: 'READ_ONLY',
-  };
 });
 
 // --- Log-File bridge: durable diagnostics for all decisive pipeline params ---
@@ -321,15 +462,30 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
 ipcMain.handle('airdox:append-log', async (_event, entry) => {
   try {
     if (!entry || typeof entry.message !== 'string') return false;
-    return getLogWriter().append(formatLogLine(entry));
-  } catch {
+    const ok = getLogWriter().append(formatLogLine(entry));
+    // Also mirror to trace log for full transparency
+    try { getTraceWriter().append(formatLogLine(entry)); } catch {}
+    return ok;
+  } catch (e) {
+    try { logMain('ERROR', 'SYSTEM', '[IPC] append-log: Fehler', { error: e.message }); } catch {}
     return false;
   }
 });
 
 ipcMain.handle('airdox:get-log-path', async () => {
   try {
-    return getLogWriter().filePath;
+    const p = getLogWriter().filePath;
+    const tp = getTraceWriter().filePath;
+    logTrace('SYSTEM', '[IPC] get-log-path', { main: p, trace: tp });
+    return p;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('airdox:get-trace-path', async () => {
+  try {
+    return getTraceWriter().filePath;
   } catch {
     return null;
   }
@@ -337,9 +493,12 @@ ipcMain.handle('airdox:get-log-path', async () => {
 
 ipcMain.handle('airdox:reveal-log', async () => {
   try {
-    shell.showItemInFolder(getLogWriter().filePath);
+    const p = getLogWriter().filePath;
+    logMain('INFO', 'SYSTEM', '[IPC] reveal-log', { path: p });
+    shell.showItemInFolder(p);
     return true;
-  } catch {
+  } catch (e) {
+    logMain('ERROR', 'SYSTEM', '[IPC] reveal-log: Fehler', { error: e.message });
     return false;
   }
 });

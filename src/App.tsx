@@ -542,20 +542,36 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // the Desktop bridge scans %APPDATA%/Pioneer/rekordbox* read-only and the
   // renderer builds the exact-match audio-path → AnalysisDataPath map.
   const ensureDbAnalysisIndex = useCallback(async () => {
-    if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
-    if (dbAutoLoadAttemptedRef.current) return dbAnalysisIndexRef.current;
-    if (!window.rekordboxDesktop) return dbAnalysisIndexRef.current;
+    if (dbAnalysisIndexRef.current.size > 0) {
+      logger.info('DATABASE', '[DB Auto] Index bereits vorhanden', { size: dbAnalysisIndexRef.current.size });
+      return dbAnalysisIndexRef.current;
+    }
+    if (dbAutoLoadAttemptedRef.current) {
+      logger.info('DATABASE', '[DB Auto] bereits versucht, kein Index', { size: dbAnalysisIndexRef.current.size });
+      return dbAnalysisIndexRef.current;
+    }
+    if (!window.rekordboxDesktop) {
+      logger.warn('DATABASE', '[DB Auto] kein Desktop-Bridge – kein DB-Auto');
+      return dbAnalysisIndexRef.current;
+    }
     dbAutoLoadAttemptedRef.current = true;
+    logger.info('DATABASE', '[DB Auto] START locateRekordboxDatabases');
+    console.info('[DB Auto] START locateRekordboxDatabases');
     try {
+      const start = Date.now();
       const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
+      logger.info('DATABASE', '[DB Auto] Kandidaten gefunden', { count: candidates?.length ?? 0, candidates, elapsedMs: Date.now() - start });
       if (!candidates || candidates.length === 0) {
         console.info('[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db). XML-Tracks bleiben bis zur DB-Zuordnung auf Vorschau.');
         logger.warn('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden – ANLZ-Auflösung fällt auf den PPTH-Scan zurück');
         return dbAnalysisIndexRef.current;
       }
       for (const cand of candidates) {
+        const candStart = Date.now();
+        logger.info('DATABASE', `[DB Auto] Lese ${cand.path}`, { label: cand.label, kind: cand.kind });
         try {
           const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
+          logger.info('DATABASE', `[DB Auto] Ergebnis ${cand.path}`, { available: result.available, dbType: (result as any).dbType, reason: (result as any).reason, elapsedMs: Date.now() - candStart, stats: (result as any).stats });
           if (!result.available || !result.rows) {
             console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
             logger.warn('DATABASE', `[DB Auto] ${cand.path}: nicht lesbar`, { reason: result.reason || 'unbekannt' });
@@ -590,18 +606,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             }
           }
           console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
-          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType });
+          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType, added, total: dbAnalysisIndexRef.current.size, elapsedMs: Date.now() - candStart });
           if (mapped.warnings?.length || result.warnings?.length) {
             console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
+            logger.warn('DATABASE', '[DB Auto] Hinweise', { warnings: [...(mapped.warnings || []), ...(result.warnings || [])] });
           }
         } catch (e) {
           console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
-          logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, { error: e instanceof Error ? e.message : String(e) });
+          logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
         }
       }
+      logger.info('DATABASE', '[DB Auto] DONE', { totalLinks: dbAnalysisIndexRef.current.size, elapsedMs: Date.now() - start });
     } catch (e) {
       console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
-      logger.warn('DATABASE', '[DB Auto] locateRekordboxDatabases fehlgeschlagen', { error: e instanceof Error ? e.message : String(e) });
+      logger.warn('DATABASE', '[DB Auto] locateRekordboxDatabases fehlgeschlagen', { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
     }
     return dbAnalysisIndexRef.current;
   }, []);
@@ -612,27 +630,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // exakte Treffer – so bekommt ein REKORDBOX_XML-Track seine echte
   // Rekordbox-Waveform, selbst wenn keine master.db/exportLibrary.db lesbar
   // ist. Einmalig lazy pro Session; bekannte Verfehlungen werden gemerkt.
+  // FIX für Häng-Problem (20.608 Dateien): Der Scan läuft async im Main
+  // (setImmediate Yield) und wird im Renderer NICHT blockierend abgewartet.
+  // Deck lädt sofort mit XML-Grid; ANLZ wird nachgereicht wenn Index fertig.
   const ensureAnlzPpthIndex = useCallback(async (track: TrackModel, linkKey: string): Promise<void> => {
     if (!window.rekordboxDesktop?.scanAnlzPaths) return;
-    if (anlzPpthIndexRef.current.has(linkKey)) return;
-    if (anlzPpthScanStateRef.current === 'DONE' && anlzPpthMissedKeysRef.current.has(linkKey)) return;
+    if (anlzPpthIndexRef.current.has(linkKey)) {
+      logger.info('DATABASE', '[ANLZ PPTH-Scan] Cache-Hit', { linkKey, matchTier: anlzPpthIndexRef.current.get(linkKey)?.matchTier });
+      return;
+    }
+    if (anlzPpthScanStateRef.current === 'DONE' && anlzPpthMissedKeysRef.current.has(linkKey)) {
+      logger.info('DATABASE', '[ANLZ PPTH-Scan] bereits als Fehlschlag gemerkt', { linkKey });
+      return;
+    }
+    if (anlzPpthScanStateRef.current === 'RUNNING') {
+      logger.info('DATABASE', '[ANLZ PPTH-Scan] läuft bereits – Deck lädt ohne Warten, ANLZ wird nachgereicht', { linkKey });
+      return;
+    }
     if (anlzPpthScanPromiseRef.current) {
-      await anlzPpthScanPromiseRef.current;
+      logger.info('DATABASE', '[ANLZ PPTH-Scan] Promise existiert bereits – kein Blockieren', { linkKey });
       return;
     }
     anlzPpthScanStateRef.current = 'RUNNING';
+    const targets = new Set<string>();
+    const pushTarget = (loc?: string | null) => {
+      if (loc && loc.trim()) targets.add(loc.trim());
+    };
+    for (const t of xmlImportedTracks) pushTarget(t.originalMedia?.location);
+    for (const t of tracks) pushTarget(t.originalMedia?.location);
+    pushTarget(track.originalMedia?.location);
+    const targetArray = Array.from(targets);
+    logger.info('DATABASE', '[ANLZ PPTH-Scan] START (non-blocking)', { targets: targetArray.length, first3: targetArray.slice(0, 3), linkKey });
+    console.info(`[ANLZ PPTH-Scan] START non-blocking für ${targetArray.length} Ziele (linkKey=${linkKey})`);
     const promise = (async () => {
       try {
-        // Alle bekannten Audio-Lokalisationen in einem Scan abfragen, damit
-        // ein Durchlauf die gesamte Sammlung beantwortet.
-        const targets = new Set<string>();
-        const pushTarget = (loc?: string | null) => {
-          if (loc && loc.trim()) targets.add(loc.trim());
-        };
-        for (const t of xmlImportedTracks) pushTarget(t.originalMedia?.location);
-        for (const t of tracks) pushTarget(t.originalMedia?.location);
-        pushTarget(track.originalMedia?.location);
-        const result = await window.rekordboxDesktop!.scanAnlzPaths(Array.from(targets));
+        const result = await window.rekordboxDesktop!.scanAnlzPaths(targetArray);
         let added = 0;
         for (const m of result.matches) {
           if (!m.datPath && !m.extPath) continue;
@@ -650,22 +682,27 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           if (k && !anlzPpthIndexRef.current.has(k)) anlzPpthMissedKeysRef.current.add(k);
         }
         console.info(
-          `[ANLZ PPTH-Scan] ${result.scanned} ANLZ-Dateien gescannt ` +
+          `[ANLZ PPTH-Scan] DONE ${result.scanned} ANLZ-Dateien gescannt ` +
             `(${result.folders.length} Ordner, ${result.elapsedMs} ms) → ${added} exakte Zuordnung(en).`
         );
-        logger.info('DATABASE', `[ANLZ PPTH-Scan] ${result.scanned} Dateien, ${added} Treffer`, {
+        logger.info('DATABASE', `[ANLZ PPTH-Scan] DONE ${result.scanned} Dateien, ${added} Treffer`, {
           folders: result.folders,
           elapsedMs: result.elapsedMs,
+          ppthSample: result.ppthSample?.slice(0, 3),
+          added,
+          totalIndex: anlzPpthIndexRef.current.size,
         });
       } catch (e) {
         console.warn('[ANLZ PPTH-Scan] fehlgeschlagen:', e);
+        logger.warn('DATABASE', '[ANLZ PPTH-Scan] fehlgeschlagen', { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
       } finally {
         anlzPpthScanStateRef.current = 'DONE';
         anlzPpthScanPromiseRef.current = null;
       }
     })();
     anlzPpthScanPromiseRef.current = promise;
-    await promise;
+    // NICHT await – Deck lädt sofort, Scan läuft im Hintergrund (non-blocking)
+    void promise;
   }, [xmlImportedTracks, tracks]);
 
   // Active track helper (supports empty state)
@@ -1507,6 +1544,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Non-blocking async Rekordbox XML file loading
   const loadXmlFile = async (file: File) => {
+    const startMs = Date.now();
+    logger.info('XML_IMPORT', '[XML Import] START', { fileName: file.name, sizeKB: (file.size / 1024).toFixed(1), sizeBytes: file.size });
+    console.info(`[XML Import] START ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
     try {
       setImportProgressModalOpen(true);
       setImportProgress({
@@ -1521,11 +1561,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         logMessages: [`Datei wird geladen: ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`],
       });
 
+      logger.info('XML_IMPORT', '[XML Import] file.text() START', { fileName: file.name });
       const text = await file.text();
+      logger.info('XML_IMPORT', '[XML Import] file.text() DONE', { fileName: file.name, textLength: text.length, elapsedMs: Date.now() - startMs });
 
+      logger.info('XML_IMPORT', '[XML Import] parseRekordboxXmlAsync START', { fileName: file.name });
       const { tracks: parsedTracks } = await parseRekordboxXmlAsync(text, (prog) => {
         setImportProgress(prog);
+        if (prog.percent % 20 === 0) {
+          logger.info('XML_IMPORT', `[XML Import] Progress ${prog.percent}%`, { phase: prog.phase, processed: prog.processedTracks, total: prog.totalTracks });
+        }
       });
+      logger.info('XML_IMPORT', '[XML Import] parseRekordboxXmlAsync DONE', { fileName: file.name, parsed: parsedTracks.length, elapsedMs: Date.now() - startMs });
 
       // Convert parsed entries to complete TrackModel instances
       const fullTrackModels: TrackModel[] = parsedTracks.map((pt, idx) =>
@@ -1538,7 +1585,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         fileName: file.name,
         tracks: fullTrackModels.length,
         withLocation: fullTrackModels.filter((t) => t.originalMedia?.location).length,
+        elapsedMs: Date.now() - startMs,
       });
+      console.info(`[XML Import] DONE ${file.name}: ${fullTrackModels.length} Tracks in ${Date.now() - startMs} ms`);
+
+      // Trigger background DB index build (non-blocking) so next track load has DB links
+      if (window.rekordboxDesktop) {
+        logger.info('XML_IMPORT', '[XML Import] Trigger DB Auto in background');
+        void ensureDbAnalysisIndex();
+      }
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should
@@ -1549,10 +1604,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         if (fullTrackModels.length > 0) {
           setXmlCollectionModalOpen(true);
         }
+        logger.info('XML_IMPORT', '[XML Import] Modal opened', { fileName: file.name, elapsedMs: Date.now() - startMs });
       }, 1200);
 
     } catch (err: any) {
       console.error('Fehler beim Einlesen der Rekordbox XML-Datei:', err);
+      logger.error('XML_IMPORT', '[XML Import] ERROR', { fileName: file.name, error: err?.message || String(err), stack: err?.stack, elapsedMs: Date.now() - startMs });
       setImportProgress({
         phase: 'ERROR',
         phaseText: `Fehler beim Import: ${err?.message || err}`,
@@ -1814,6 +1871,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // No synthetic audio is generated: if the original file is unavailable, the
   // track loads metadata-only and the UI states exactly what is missing.
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
+    const selStart = Date.now();
+    logger.info('XML_IMPORT', `[Deck-Load] START Auswahl „${selectedDef.title}“`, { id: selectedDef.id, origin: selectedDef.origin, location: selectedDef.originalMedia?.location });
     try {
       const audioCtx = audioEngine.getContext();
       const rbExclusive = isRekordboxOrigin(selectedDef.origin ?? DataOrigin.REKORDBOX_XML);
@@ -2056,8 +2115,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           timestamp: Date.now(),
         });
       }
+      logger.info('XML_IMPORT', `[Deck-Load] DONE „${loadedTrack.title}“`, { title: loadedTrack.title, elapsedMs: Date.now() - selStart, hasAudio: !!originalAudio, hasWaveform: !!loadedTrack.analysis });
     } catch (err) {
       console.error('Fehler beim Laden des Tracks in das Deck:', err);
+      logger.error('XML_IMPORT', '[Deck-Load] ERROR', { error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined, elapsedMs: Date.now() - selStart });
     }
   };
 
