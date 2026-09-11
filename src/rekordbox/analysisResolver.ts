@@ -33,20 +33,9 @@ export function dirOfPath(filePath: string): string {
 /**
  * Resolves an AnalysisDataPath value to a concrete ANLZ file path.
  *
- * Deterministic path derivation ONLY — never a guess:
- *  - leading separators are stripped, the path is normalized;
- *  - an optional leading `share/` component is dropped (it is re-added from
- *    the anchor below);
- *  - a remaining `PIONEER/USBANLZ/...` tail is re-anchored at
- *    `<dbDir>/share/PIONEER/USBANLZ/...`;
- *  - no music-folder mirroring, no filename construction, no track-name
- *    lookup, no recursive search, no hash-directory guessing, and no search
- *    of alternative storage locations.
- *
  * @param dbDir Directory containing the Rekordbox database (master.db /
  *   exportLibrary.db); used as the anchor for `<dbDir>/share/...`.
- * @param analysisDataPath Raw AnalysisDataPath value from the database row
- *   (e.g. `/PIONEER/USBANLZ/0e8/<UUID>/ANLZ0000.DAT` or an absolute path).
+ * @param analysisDataPath Raw AnalysisDataPath value from the database row.
  * @returns Absolute file path, or null when no deterministic resolution exists.
  */
 export function resolveAnalysisFilePath(
@@ -75,19 +64,43 @@ export function resolveAnalysisFilePath(
 
   // Device-relative form: [/][share/]PIONEER/USBANLZ/... → <dbDir>/share/PIONEER/...
   rel = rel.replace(/^[\\/]+/, '').replace(/^share[\\/]/i, '');
-  if (!/^PIONEER[\\/]/i.test(rel)) return null;
+  const segments = rel.split(/[\\/]+/);
+  if (
+    segments.length < 4 ||
+    segments[0].toLowerCase() !== 'pioneer' ||
+    segments[1].toLowerCase() !== 'usbanlz' ||
+    segments.some((part) => !part || part === '.' || part === '..')
+  ) return null;
 
   const dir = (dbDir ?? '').trim().replace(/[\\/]+$/, '');
   if (!dir) return null;
   const sep = dir.includes('\\') ? '\\' : '/';
-  const tail = rel.replace(/[\\/]+/g, sep);
-  return `${dir}${sep}share${sep}${tail}`;
+  return `${dir}${sep}share${sep}${segments.join(sep)}`;
 }
 
 /**
- * Normalizes an audio location (XML `file://` LOCATION or DB
- * FolderPath+FileName) into a canonical key so both spellings of the same
- * file compare equal. URL-decoded, separator-unified, case-folded.
+ * Joins djmdContent.FolderPath and FileNameL without corrupting Rekordbox 7
+ * rows where FolderPath already contains the complete media file path.
+ * This is deterministic path handling, not matching or guessing.
+ */
+export function joinAudioPath(
+  folder: string | undefined | null,
+  fileName: string | undefined | null
+): string {
+  const file = (fileName ?? '').trim();
+  const dir = (folder ?? '').trim();
+  if (!file) return dir;
+  if (!dir) return file;
+  const stripped = dir.replace(/[\\/]+$/, '');
+  const base = stripped.split(/[\\/]/).pop() ?? '';
+  if (base.toLowerCase() === file.toLowerCase()) return stripped;
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return `${stripped}${sep}${file}`;
+}
+
+/**
+ * Normalizes an audio location (XML `file://` LOCATION or DB media path) into
+ * a canonical exact key. URL-decoded, separator-unified, case-folded.
  */
 export function normalizeAudioKey(input: string | undefined | null): string {
   if (!input) return '';
@@ -116,6 +129,8 @@ export interface DbAnalysisRef {
   trackId: string;
   analysisDataPath: string;
   sourceDbDir: string;
+  /** Exact canonical spellings of djmdContent.FolderPath for identity checks. */
+  audioKeys?: string[];
 }
 
 /**
@@ -153,11 +168,69 @@ export function buildDbAnalysisIndex(
   sourceDbDir: string
 ): Map<string, DbAnalysisRef> {
   const index = new Map<string, DbAnalysisRef>();
+  const dbDirKey = normalizeAudioKey(sourceDbDir);
   for (const track of tracks) {
     const key = normalizeAudioKey(track.originalMedia?.location);
     const analysisDataPath = track.rawXmlAttributes?.analysisDataPath?.trim() ?? '';
     if (!key || !analysisDataPath || index.has(key)) continue;
-    index.set(key, { trackId: track.id, analysisDataPath, sourceDbDir });
+    const audioKeys = [key];
+    // Rekordbox 7 can export media below its library directory as a path
+    // relative to master.db: file://localhost//contents_<id>/... . The DB row
+    // contains the corresponding absolute path. Both keys are exact forms of
+    // the same address; deriving the relative spelling requires no search.
+    if (dbDirKey && key.startsWith(`${dbDirKey}/`)) {
+      const relative = key.slice(dbDirKey.length + 1);
+      if (relative) audioKeys.push(relative, `/${relative}`);
+    }
+    const ref = { trackId: track.id, analysisDataPath, sourceDbDir, audioKeys };
+    for (const audioKey of audioKeys) {
+      if (!index.has(audioKey)) index.set(audioKey, ref);
+    }
   }
   return index;
+}
+
+/**
+ * Indexes the exact desktop content identity separately from audio paths.
+ * Duplicate IDs are removed from the result so callers can never select an
+ * arbitrary row. This is the guarded Rekordbox 7.2.16 XML TrackID contract.
+ */
+export function buildDbAnalysisIdIndex(
+  tracks: {
+    id: string;
+    originalMedia?: { location: string };
+    rawXmlAttributes?: Record<string, string>;
+  }[],
+  sourceDbDir: string
+): Map<string, DbAnalysisRef> {
+  const result = new Map<string, DbAnalysisRef>();
+  const ambiguous = new Set<string>();
+  for (const track of tracks) {
+    const ref = buildDbAnalysisIndex([track], sourceDbDir).values().next().value as DbAnalysisRef | undefined;
+    if (!ref) continue;
+    const id = String(ref.trackId);
+    if (result.has(id) && result.get(id) !== ref) {
+      ambiguous.add(id);
+      result.delete(id);
+    } else if (!ambiguous.has(id)) {
+      result.set(id, ref);
+    }
+  }
+  return result;
+}
+
+/**
+ * Resolves XML TrackID only when the same ID exists exactly once in master.db
+ * and its FolderPath is the exact canonical XML Location. No path-only or
+ * metadata fallback is performed.
+ */
+export function resolveVerifiedDbIdentity(
+  idIndex: Map<string, DbAnalysisRef>,
+  xmlTrackId: string,
+  xmlLocation: string | undefined | null
+): DbAnalysisRef | null {
+  const ref = idIndex.get(String(xmlTrackId));
+  const xmlKey = normalizeAudioKey(xmlLocation);
+  if (!ref || !xmlKey || !ref.audioKeys?.includes(xmlKey)) return null;
+  return ref;
 }

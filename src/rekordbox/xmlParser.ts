@@ -7,24 +7,6 @@
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
 
-/**
- * Reconstructs a uniform grid from TEMPO/First-Beat scalars.
- *
- * This is the SINGLE documented fallback for grid building and may only run
- * when no detailed beat data exists (no PQTZ nodes, no persisted dense grid):
- *  - Rekordbox XML <TEMPO> carries only Inizio/Bpm/Metro/Battito scalars →
- *    the collection stays compact (beats: []) and this function expands the
- *    uniform grid (origin REKORDBOX_XML) when a track is loaded into a deck;
- *  - Rekordbox DB rows carry only BPM/First-Beat parameters → uniform grid
- *    with origin REKORDBOX_DB;
- *  - legacy project files saved before dense-beat persistence → uniform
- *    rebuild in adoptSerializedGrid (trackGuards.ts).
- *
- * Whenever genuine PQTZ beat nodes are present they take priority and this
- * function is NOT used for rendering: applyAnlzExtractionToTrack adopts the
- * decoded nodes verbatim. This function never manufactures Rekordbox-ANLZ
- * data — it only ever produces a grid labeled with the scalar source origin.
- */
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
   bpm: number,
@@ -191,8 +173,7 @@ function parseSingleTrackNode(
     querySelector: (tag: string) => any;
     querySelectorAll: (tag: string) => any;
   },
-  index: number,
-  buildDenseBeatGrid: boolean = true
+  index: number
 ): Partial<TrackModel> {
   const id = el.getAttribute('TrackID') || `rb-track-${index + 1}`;
   const title = el.getAttribute('Name') || 'Untitled Track';
@@ -338,18 +319,15 @@ function parseSingleTrackNode(
     firstBeat = rawFirstBeat;
   }
 
-  // A complete grid contains hundreds of objects per song.  Keep collection
-  // imports compact; the full grid is reconstructed only for the track loaded
-  // into a deck.
-  const beatGrid = buildDenseBeatGrid
-    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
-    : {
-        firstBeat,
-        bpm: tempoBpm,
-        meter,
-        beats: [],
-        origin: DataOrigin.REKORDBOX_XML,
-      };
+  // XML TEMPO contains grid-marker metadata, not the analyzed per-beat list.
+  // Detailed beat nodes are supplied exclusively by ANLZ PQTZ.
+  const beatGrid = {
+    firstBeat,
+    bpm: tempoBpm,
+    meter,
+    beats: [],
+    origin: DataOrigin.REKORDBOX_XML,
+  };
   markElements.forEach((mEl: any, mIdx: number) => {
     if (!hasPositionAttribute(mEl)) return;
     // Flexible attribute resolution: supports Rekordbox (Type/Start/Name/Num) and generic (type/position/time etc.)
@@ -559,7 +537,7 @@ export async function parseRekordboxXmlAsync(
   for (let i = 0; i < total; i += chunkSize) {
     const end = Math.min(i + chunkSize, total);
     for (let j = i; j < end; j++) {
-      const parsed = parseSingleTrackNode(trackElements[j], j, false);
+      const parsed = parseSingleTrackNode(trackElements[j], j);
       tracks.push(parsed);
 
       const memCount = (parsed.cues || []).filter((c) => c.type === 'MEMORY').length;

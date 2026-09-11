@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.13-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.13-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.18-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.18-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -35,14 +35,21 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
 `main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
 beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.13 && git push --tags`) wird automatisch ein GitHub
+Tag (z. B. `git tag v0.4.18 && git push --tags`) wird automatisch ein GitHub
 Release mit den `.exe`-Dateien erzeugt.
 
-## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
+## Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 
-Der DB-Import (`better-sqlite3-multiple-ciphers`) ist optional. Ohne ihn bleibt
-der XML-/ANLZ-Import voll funktionsfähig; die App meldet den nicht verfügbaren
-DB-Import nachvollziehbar. Zum Aktivieren:
+Der DB-Import (`better-sqlite3-multiple-ciphers`) ermöglicht die **gezielte**
+ANLZ-Auflösung pro Track (`AnalysisDataPath` → exakte Datei, kein Vollscan).
+**CI-Builds enthalten ihn automatisch**: Der Workflow kompiliert das Modul per
+`npm run rebuild:electron` für die Electron-ABI (die `windows-latest`-Runner
+haben VS Build Tools + Python vorinstalliert) und packt es per `asarUnpack`
+mit ein. Schlägt das Kompilieren fehl, ist der Build rot.
+
+Nur für **lokale** Windows-Builds ohne C++-Toolchain bleibt das Modul optional:
+Ohne es bleibt der XML-/ANLZ-Import voll funktionsfähig; die App meldet den
+nicht verfügbaren DB-Import nachvollziehbar. Zum lokalen Aktivieren:
 
 1. Visual Studio **Build Tools** mit „Desktopentwicklung mit C++“ installieren.
 2. Modul für Electron kompilieren und erneut bauen:

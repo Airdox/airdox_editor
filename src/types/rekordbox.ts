@@ -11,8 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
-  /** Own calculation used as a clearly labeled fallback when no Rekordbox
-   * source (ANLZ/DB/audio) provides the data. */
+  /** Explicitly generated test/demo material; never Rekordbox data. */
+  GENERATED_TEST = 'GENERATED_TEST',
+  /** @deprecated Kept only to read old project files; never create. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
@@ -32,11 +33,9 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
-  /**
-   * True only for uniform continuation nodes appended after the last verbatim
-   * PQTZ beat so the grid spans the full track duration. Verbatim Rekordbox
-   * beats never carry this flag (strict-PQTZ provenance).
-   */
+  /** Exact tempo stored on this PQTZ beat (tempo_x100 / 100). */
+  bpm?: number;
+  /** @deprecated Read-only compatibility for old project files; never generate. */
   tailExtended?: boolean;
 }
 
@@ -103,15 +102,6 @@ export interface LoopPoint {
   origin: DataOrigin;
 }
 
-export interface PaletteWaveformData {
-  /** Downsampled genuine source waveform for the clip's time range. */
-  peaks: number[];
-  lowEnergy: number[];
-  midEnergy: number[];
-  highEnergy: number[];
-  origin: DataOrigin;
-}
-
 export interface PaletteClip {
   id: string;
   name: string;
@@ -126,8 +116,7 @@ export interface PaletteClip {
   key: string;
   color: string;
   audioBuffer?: AudioBuffer;
-  miniPeaks?: number[]; // legacy fallback for palette preview
-  waveform?: PaletteWaveformData;
+  miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
   origin: DataOrigin;
 }
 
@@ -148,13 +137,29 @@ export interface EditSegment {
 
 export interface WaveformAnalysisData {
   length: number;
-  peaks: Float32Array; // max amplitude per bucket
+  peaks: Float32Array; // stored column height per bucket (0..1)
   peaksL: Float32Array;
   peaksR: Float32Array;
-  // Spectral energies for RGB and 3BAND modes
-  lowEnergy: Float32Array; // 20 - 250 Hz (bass/kicks - RED)
-  midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
-  highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
+  /**
+   * Per-bucket color/band components exactly as stored in the ANLZ source
+   * (0..1): for PWV5/PWV4 these are the red/green/blue components of the
+   * column color, for PWV6/PWV7 the low/mid/high band heights. They are
+   * visualized verbatim, never recombined.
+   */
+  lowEnergy: Float32Array; // red (PWV5/PWV4) / low band (PWV6/PWV7)
+  midEnergy: Float32Array; // green / mid band
+  highEnergy: Float32Array; // blue / high band
+  /**
+   * PWAV/PWV3 (MONO_5BIT): the three high-order bits, 0 = darkest blue …
+   * 7 = near white (documented whiteness of the blue waveform).
+   */
+  whiteness?: Float32Array;
+  /** PWV4 byte 1: luminance boost of the color columns (/127). */
+  luminance?: Float32Array;
+  /** PWV4: back column height = max(d2, red, green) (/127). */
+  backPeaks?: Float32Array;
+  /** PWV4: front column height = blue component d5 (/127). */
+  frontPeaks?: Float32Array;
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
@@ -243,8 +248,6 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
-  /** Timeline length is part of edit history (insert/delete change it). */
-  duration?: number;
   /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
   beatGrid?: BeatGrid;
 }

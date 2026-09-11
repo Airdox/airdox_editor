@@ -85,19 +85,18 @@ runTest('PQTZ preservation', 'DAT beat nodes are adopted verbatim (time/bar/beat
   }
 });
 
-runTest('PQTZ preservation', 'Uniform tail extension spans the full duration', () => {
+runTest('PQTZ preservation', 'A short source grid remains short and unmodified', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0); // 240s
   const extraction = parseAnlzBinary(generateRealAnlzDatFixture(DAT_BPM));
   const merged = applyAnlzExtractionToTrack(track, extraction);
 
+  const sourceBeats = extraction.beatGrid!.beats;
   const beats = merged.beatGrid.beats;
-  const spb = 60.0 / DAT_BPM;
-  const last = beats[beats.length - 1];
-  assert(last.time >= track.duration, `Grid spans duration (last=${last.time})`);
-  assert(last.time <= track.duration + spb + 1e-6, `No overshoot (last=${last.time})`);
-  for (let i = 1; i < beats.length; i++) {
-    assert(beats[i].time > beats[i - 1].time, `Beats strictly increasing at ${i}`);
-    assertEqual(beats[i].index, i, `Beat ${i} index`);
+  assertEqual(beats.length, sourceBeats.length, 'No uniform tail appended');
+  assert(beats[beats.length - 1].time < track.duration, 'Source coverage is reported honestly');
+  for (let i = 0; i < beats.length; i++) {
+    assertEqual(beats[i].time, sourceBeats[i].time, `Beat ${i} time`);
+    assertEqual(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} tempo`);
   }
 });
 
@@ -123,8 +122,8 @@ runTest('Partial ANLZ', 'Legacy bpm-only extraction keeps the XML grid (no rebui
   const merged = applyAnlzExtractionToTrack(track, extraction);
   assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
   assertEqual(merged.beatGrid.bpm, track.bpm, 'XML bpm retained');
-  assertEqual(merged.beatGrid.beats.length, track.beatGrid.beats.length, 'No beats invented');
-  assertEqual(merged.beatGrid.beats[0].time, track.beatGrid.beats[0].time, 'First beat untouched');
+  assertEqual(merged.beatGrid.beats.length, 0, 'No beats invented from legacy scalars');
+  assertEqual(track.beatGrid.beats.length, 0, 'XML TEMPO remains scalar metadata');
   assert(
     (merged.databaseRecord!.anlzWarnings ?? []).some((w) => w.includes('PQTZ')),
     'PQTZ gap is reported, not silent'

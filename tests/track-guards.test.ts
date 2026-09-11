@@ -14,6 +14,7 @@
  * Run with: npx tsx tests/track-guards.test.ts
  */
 
+import fs from 'node:fs';
 import {
   adoptSerializedGrid,
   describeGridEdit,
@@ -108,7 +109,7 @@ runTest('T7 ppth', 'PPTH plausibility tolerates encoding, flags mismatch', () =>
 
 runTest('T7 round-trip', 'Project save/load preserves verbatim nodes and grid origin', () => {
   const nodes: BeatNode[] = [
-    { index: 0, time: 0.469, isBarStart: true, barNumber: 1, beatInBar: 1 },
+    { index: 0, time: 0.469, isBarStart: true, barNumber: 1, beatInBar: 1, bpm: 128.02 },
     { index: 1, time: 0.937, isBarStart: false, barNumber: 1, beatInBar: 2 },
     { index: 2, time: 1.406, isBarStart: false, barNumber: 1, beatInBar: 3 },
     { index: 3, time: 1.875, isBarStart: false, barNumber: 1, beatInBar: 4, tailExtended: true },
@@ -155,6 +156,7 @@ runTest('T7 round-trip', 'Project save/load preserves verbatim nodes and grid or
     assertEqual(rebuilt.beats[i].time, nodes[i].time, `Node ${i} time verbatim`);
     assertEqual(rebuilt.beats[i].barNumber, nodes[i].barNumber, `Node ${i} bar`);
     assertEqual(rebuilt.beats[i].beatInBar, nodes[i].beatInBar, `Node ${i} beat-in-bar`);
+    assertEqual(rebuilt.beats[i].bpm, nodes[i].bpm, `Node ${i} per-beat bpm`);
     assertEqual(rebuilt.beats[i].index, i, `Node ${i} re-indexed`);
   }
   assertEqual(rebuilt.beats[3].tailExtended, true, 'Tail flag survives');
@@ -162,17 +164,15 @@ runTest('T7 round-trip', 'Project save/load preserves verbatim nodes and grid or
 });
 
 // ─── T8: guards ─────────────────────────────────────────────────────────────
-runTest('T8 legacy', 'Projects without persisted beats fall back to a uniform rebuild', () => {
+runTest('T8 legacy', 'Old Rekordbox projects without nodes remain sparse', () => {
   const rebuilt = adoptSerializedGrid(
     { firstBeat: 0.5, bpm: 128, meter: 4 },
     240,
     DataOrigin.REKORDBOX_XML
   );
-  assertEqual(rebuilt.origin, DataOrigin.REKORDBOX_XML, 'Track origin as documented fallback');
+  assertEqual(rebuilt.origin, DataOrigin.REKORDBOX_XML, 'Track origin retained');
   assertEqual(rebuilt.firstBeat, 0.5, 'Scalar anchor kept');
-  assert(rebuilt.beats.length > 100, 'Uniform grid expanded');
-  assertEqual(rebuilt.beats[0].time, 0.5, 'Starts at first beat');
-  assertEqual(rebuilt.beats[1].time - rebuilt.beats[0].time, 60.0 / 128, 'Uniform spacing');
+  assertEqual(rebuilt.beats.length, 0, 'No uniform Rekordbox grid invented');
 });
 
 runTest('T8 shift', 'Rigid shift preserves intervals and provenance', () => {
@@ -219,16 +219,6 @@ runTest('T8 notice', 'Grid edits produce a traceable USER_EDIT notice', () => {
   const shift = describeGridEdit('SHIFT', 1.0, 0.999, 5000);
   assert(shift.includes('Grid-Shift'), 'Shift source named');
   assert(shift.includes('-1.0 ms'), 'Negative delta signed');
-
-  // Editing a grid that came from Rekordbox analysis must state the deviation
-  // from the imported analysis explicitly; local/unrelated grids stay neutral.
-  const rbEdit = describeGridEdit('SET_1_1', 0.469, 0.512, 512, true);
-  assert(
-    rbEdit.includes('Beatgrid wurde gegenüber der importierten Rekordbox-Analyse verändert'),
-    'RB deviation sentence present'
-  );
-  const plainEdit = describeGridEdit('SET_1_1', 0.469, 0.512, 512, false);
-  assert(!plainEdit.includes('gegenüber der importierten Rekordbox-Analyse'), 'Non-RB grid notice neutral');
 });
 
 // ─── Bridge payload guard (desktop IPC regression) ──────────────────────────
@@ -269,6 +259,24 @@ runTest('Bridge payload', 'IPC-shaped ANLZ payload decodes after normalization',
   assert(extraction.tagsFound.includes('PQTZ'), 'PQTZ decoded');
   assert(extraction.waveform !== undefined, 'Waveform decoded');
   assertEqual(extraction.waveform!.length, 600, 'DAT buckets intact');
+});
+
+runTest('DB-direct contract', 'XML deck load never scans or falls back when the DB link fails', () => {
+  const appSource = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = appSource.indexOf('const handleSelectTrackFromXml = async');
+  const end = appSource.indexOf('// ---- Phase 4: Project persistence', start);
+  assert(start >= 0 && end > start, 'XML deck-load source found');
+  const deckLoad = appSource.slice(start, end);
+  assert(!deckLoad.includes('scanAnlzPaths('), 'No ANLZ filesystem scan in deck load');
+  assert(!deckLoad.includes('ensureAnlzPpthIndex('), 'No PPTH fallback in deck load');
+  assert(!deckLoad.includes('analyzeAudioBuffer('), 'Collection deck load never analyzes audio');
+  assert(!deckLoad.includes('buildBeatGridFromTempo('), 'Collection deck load never builds a uniform grid');
+  assert(deckLoad.includes('resolveVerifiedDbIdentity('), 'XML ID and exact DB path are both verified');
+  assert(deckLoad.includes('tryAutoLoadAnlz(loadedTrack)'), 'ANLZ auto-load is the primary path');
+  assert(deckLoad.includes('throw new Error(message)'), 'Missing exact DB address is a visible pipeline error');
+
+  const overviewSource = fs.readFileSync(new URL('../src/components/TrackOverview.tsx', import.meta.url), 'utf8');
+  assert(!overviewSource.includes('peakHoldColumn'), 'Overview does not aggregate ANLZ columns');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

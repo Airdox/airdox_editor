@@ -6,7 +6,6 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
-  scanAnlzForPaths,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
@@ -177,18 +176,6 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   }
 });
 
-ipcMain.handle('rekordbox:choose-analysis-file', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Rekordbox-Analysequelle auswählen',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Rekordbox Analysis', extensions: ['DAT', 'EXT', '2EX', 'dat', 'ext', '2ex'] },
-      { name: 'All files', extensions: ['*'] },
-    ],
-  });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
-});
-
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Rekordbox-Datenbank auswählen (nur lesend)',
@@ -203,10 +190,6 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
-});
-
-ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
-  return scanAnlzForPaths(targetPaths);
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {

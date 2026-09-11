@@ -751,3 +751,20 @@ export function generateRealAnlzExtFixture(
   ];
   return assembleAnlzFile(tags);
 }
+
+/**
+ * .2EX fixture containing only the Rekordbox three-band PWV7 waveform. It is
+ * deliberately separate from the EXT fixture so loader tests can prove that
+ * values from all three deterministic sibling containers reach the model.
+ */
+export function generateRealAnlz2ExFixture(): ArrayBuffer {
+  const body = new AnlzByteWriter();
+  const entries = 240;
+  body.u32(3).u32(entries).u32(0x00960000);
+  for (let i = 0; i < entries; i++) {
+    body.u8(24 + Math.floor(50 * Math.abs(Math.sin(i * 0.11))));
+    body.u8(18 + Math.floor(44 * Math.abs(Math.cos(i * 0.08))));
+    body.u8(12 + Math.floor(36 * Math.abs(Math.sin(i * 0.06))));
+  }
+  return assembleAnlzFile([{ tag: 'PWV7', lenHeader: 0x18, body: body.body }]);
+}

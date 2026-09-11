@@ -21,6 +21,7 @@
 import {
   deriveSiblingExtension,
 } from '../src/rekordbox/analysisResolver';
+import { loadAnlzContainerSet } from '../src/rekordbox/analysisContainerLoader';
 import {
   applyAnlzExtractionToTrack,
   extractTrackFromRekordboxXml,
@@ -30,6 +31,7 @@ import {
 import {
   generateRealAnlzDatFixture,
   generateRealAnlzExtFixture,
+  generateRealAnlz2ExFixture,
   SCENARIO_TECHNO_XML,
 } from './fixtures/testDatasets';
 import { DataOrigin } from '../src/types/rekordbox';
@@ -48,6 +50,23 @@ function runTest(suite: string, name: string, testFn: () => void) {
   const t0 = performance.now();
   try {
     testFn();
+    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
+  } catch (err: any) {
+    results.push({
+      suite,
+      name,
+      passed: false,
+      error: err?.message || String(err),
+      durationMs: Math.round((performance.now() - t0) * 100) / 100,
+    });
+  }
+}
+
+
+async function runAsyncTest(suite: string, name: string, testFn: () => Promise<void>) {
+  const t0 = performance.now();
+  try {
+    await testFn();
     results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
   } catch (err: any) {
     results.push({
@@ -92,6 +111,14 @@ runTest('sibling', 'POSIX DAT path resolves its EXT sibling verbatim', () => {
     deriveSiblingExtension(POSIX_ANLZ, 'EXT'),
     POSIX_ANLZ.replace(/\.DAT$/, '.EXT'),
     'POSIX EXT sibling'
+  );
+});
+
+runTest('sibling', 'DAT path resolves its deterministic 2EX sibling', () => {
+  assertEqual(
+    deriveSiblingExtension('D:\\PIONEER\\USBANLZ\\P001\\0001\\ANLZ0000.DAT', '2EX'),
+    'D:\\PIONEER\\USBANLZ\\P001\\0001\\ANLZ0000.2EX',
+    'Same directory and basename'
   );
 });
 
@@ -220,6 +247,55 @@ runTest('track', 'Merged DAT+EXT extraction lands on the XML track intact', () =
     merged.cues.some((c) => JSON.stringify(c).includes('Drop')),
     'PCO2 cue comment survives onto the track'
   );
+});
+
+// ─── SUITE 4: deterministic DAT/EXT/2EX loader integration ─────────────────
+await runAsyncTest('loader', 'DB-addressed DAT loads only exact EXT/2EX siblings and merges all three', async () => {
+  const datPath = 'C:\\rekordbox7\\share\\PIONEER\\USBANLZ\\P016\\0000875E\\ANLZ0000.DAT';
+  const extPath = datPath.replace(/\.DAT$/, '.EXT');
+  const twoExPath = datPath.replace(/\.DAT$/, '.2EX');
+  const files = new Map<string, ArrayBuffer>([
+    [datPath, generateRealAnlzDatFixture(128.0)],
+    [extPath, generateRealAnlzExtFixture(128.0)],
+    [twoExPath, generateRealAnlz2ExFixture()],
+  ]);
+  const reads: string[] = [];
+
+  const loaded = await loadAnlzContainerSet(datPath, async (path) => {
+    reads.push(path);
+    const data = files.get(path);
+    if (!data) throw new Error(`ENOENT: ${path}`);
+    return { data, size: data.byteLength };
+  });
+
+  assertEqual(reads.join('|'), [datPath, extPath, twoExPath].join('|'), 'No guessed or searched paths');
+  assertEqual(loaded.primary.path, datPath, 'DB-addressed DAT remains primary');
+  assertEqual(loaded.datExtSibling?.path, extPath, 'Exact same-directory EXT loaded');
+  assertEqual(loaded.twoExSibling?.path, twoExPath, 'Exact same-directory 2EX loaded');
+  assertEqual(loaded.extraction.beatGrid?.beats.length, 32, 'DAT PQTZ nodes remain authoritative');
+  assertEqual(loaded.extraction.phrases.length, 4, 'EXT PSSI reaches merged extraction');
+  assertEqual(loaded.twoExSibling?.extraction.waveform?.sourceTag, 'PWV7', '2EX PWV7 decoded');
+  assertEqual(loaded.twoExSibling?.extraction.waveform?.length, 240, '2EX values preserved');
+  assertEqual(loaded.extraction.waveformVariants.length, 4, 'DAT, EXT, and 2EX variants transported');
+});
+
+await runAsyncTest('loader', 'Missing optional 2EX preserves DAT/EXT data without alternatives', async () => {
+  const datPath = '/rekordbox7/share/PIONEER/USBANLZ/P016/0000875E/ANLZ0000.DAT';
+  const extPath = datPath.replace(/\.DAT$/, '.EXT');
+  const twoExPath = datPath.replace(/\.DAT$/, '.2EX');
+  const reads: string[] = [];
+  const loaded = await loadAnlzContainerSet(datPath, async (path) => {
+    reads.push(path);
+    if (path === datPath) return { data: generateRealAnlzDatFixture(128.0) };
+    if (path === extPath) return { data: generateRealAnlzExtFixture(128.0) };
+    throw new Error('ENOENT');
+  });
+
+  assertEqual(reads.join('|'), [datPath, extPath, twoExPath].join('|'), 'Only deterministic paths attempted');
+  assertEqual(loaded.twoExSibling, undefined, 'No invented 2EX extraction');
+  assert(loaded.twoExError === 'ENOENT', 'Optional absence is transparent');
+  assertEqual(loaded.extraction.waveformVariants.length, 3, 'DAT/EXT Rekordbox variants unchanged');
+  assertEqual(loaded.extraction.beatGrid?.beats.length, 32, 'PQTZ unchanged');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

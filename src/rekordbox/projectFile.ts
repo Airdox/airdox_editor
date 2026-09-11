@@ -122,6 +122,8 @@ export interface SerializedBeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number;
+  bpm?: number;
+  /** @deprecated Legacy project compatibility only. */
   tailExtended?: boolean;
 }
 
@@ -202,7 +204,6 @@ export interface SerializedPaletteClip {
   key: string;
   color: string;
   miniPeaks?: number[];
-  waveform?: PaletteClip['waveform'];
   origin: DataOrigin;
   clipWavBase64?: string;
 }
@@ -281,6 +282,7 @@ function serializeTrack(track: TrackModel): SerializedTrack {
             isBarStart: node.isBarStart,
             barNumber: node.barNumber,
             beatInBar: node.beatInBar,
+            ...(node.bpm !== undefined ? { bpm: node.bpm } : {}),
             ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
           }))
         : undefined,
@@ -320,7 +322,6 @@ function serializeClip(clip: PaletteClip): SerializedPaletteClip {
     key: clip.key,
     color: clip.color,
     miniPeaks: clip.miniPeaks,
-    waveform: clip.waveform,
     origin: clip.origin,
   };
   if (clip.audioBuffer) {
