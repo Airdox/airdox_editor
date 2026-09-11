@@ -25,7 +25,6 @@ import {
   resolveAnalysisFilePath,
   resolveVerifiedDbIdentity,
   DbAnalysisRef,
-  deriveSiblingExtension,
 } from './rekordbox/analysisResolver';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
@@ -34,7 +33,8 @@ import {
   XmlImportProgress,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
-import { applyAnlzExtractionToTrack, AnlzExtractionResult, mergeAnlzExtractions, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { applyAnlzExtractionToTrack, AnlzExtractionResult } from './rekordbox/databaseExtractor';
+import { loadAnlzContainerSet } from './rekordbox/analysisContainerLoader';
 import { initFileLogging } from './utils/fileLog';
 import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
@@ -156,83 +156,37 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
   const variantSummary = (e: AnlzExtractionResult) =>
     e.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length }));
   try {
-    const source = await window.rekordboxDesktop.readAnalysisFile(resolved);
-    let extraction = parseAnlzBinary(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
+    const loadedSet = await loadAnlzContainerSet(
+      resolved,
+      (filePath) => window.rekordboxDesktop!.readAnalysisFile(filePath)
+    );
+    const extraction = loadedSet.extraction;
     logger.info('DATABASE', '[ANLZ Auto] Primärcontainer gelesen', {
-      path: resolved,
-      bytes: source.size ?? null,
-      tags: extraction.tagsFound.join(','),
-      waveformVariants: variantSummary(extraction),
-      bestWaveform: extraction.waveform ? `${extraction.waveform.sourceTag}:${extraction.waveform.length}` : null,
-      beatNodes: extraction.beatGrid?.beats.length ?? 0,
-      bpm: extraction.bpm ?? null,
-      firstBeat: extraction.firstBeat ?? null,
-      cues: extraction.cues.length,
-      loops: extraction.loops.length,
-      phrases: extraction.phrases.length,
-      ppth: extraction.analysisPath ?? null,
+      path: loadedSet.primary.path,
+      bytes: loadedSet.primary.size ?? null,
+      tags: loadedSet.primary.extraction.tagsFound.join(','),
+      waveformVariants: variantSummary(loadedSet.primary.extraction),
     });
-    // Rekordbox splits every analysis across sibling containers: the resolved
-    // file (usually ANLZnnnn.DAT) plus ANLZnnnn.EXT in the same folder. The
-    // EXT carries the full-resolution color waveform (PWV5), PSSI phrases and
-    // PCO2 colored cues — without it the deck can only show the low-res
-    // preview. The sibling address is deterministic and read-only; a read
-    // failure is reported as a pipeline error and is never substituted.
-    const sibling =
-      deriveSiblingExtension(resolved, 'EXT') ?? deriveSiblingExtension(resolved, 'DAT');
-    if (sibling) {
-      try {
-        const extSource = await window.rekordboxDesktop.readAnalysisFile(sibling);
-        const extExtraction = parseAnlzBinary(ensureArrayBuffer(extSource.data as ArrayBuffer | Uint8Array));
-        // Positional merge: primary is always the DAT side (PQTZ authority),
-        // secondary the EXT side (PCO2/PSSI priority) — independent of which
-        // file the AnalysisDataPath resolved to first.
-        extraction = /\.ext$/i.test(sibling)
-          ? mergeAnlzExtractions(extraction, extExtraction)
-          : mergeAnlzExtractions(extExtraction, extraction);
-        logger.info('DATABASE', '[ANLZ Auto] Schwesterdatei gelesen & gemergt', {
-          path: sibling,
-          bytes: extSource.size ?? null,
-          tags: extExtraction.tagsFound.join(','),
-          waveformVariants: variantSummary(extExtraction),
-          mergedVariants: variantSummary(extraction),
-          phrases: extExtraction.phrases.length,
-          cues: extExtraction.cues.length,
-        });
-      } catch (siblingError) {
-        const message =
-          `[ANLZ Pipelinefehler] Rekordbox-Schwesterncontainer „${sibling}“ ist nicht lesbar: ` +
-          `${siblingError instanceof Error ? siblingError.message : String(siblingError)}`;
-        logger.error('DATABASE', message, { path: sibling });
-        throw new Error(message);
-      }
-    } else {
-      logger.info('DATABASE', '[ANLZ Auto] Keine DAT/EXT-Schwesterdatei abgeleitet.', { path: resolved });
+    if (loadedSet.datExtSibling) {
+      logger.info('DATABASE', '[ANLZ Auto] Schwesterdatei gelesen & gemergt', {
+        path: loadedSet.datExtSibling.path,
+        bytes: loadedSet.datExtSibling.size ?? null,
+        tags: loadedSet.datExtSibling.extraction.tagsFound.join(','),
+        waveformVariants: variantSummary(loadedSet.datExtSibling.extraction),
+      });
     }
-
-    // 3-band data lives in the deterministic .2EX sibling. Older analyses do
-    // not necessarily contain this optional container; a missing file changes
-    // no data and never triggers audio analysis or a filesystem search.
-    const twoEx = deriveSiblingExtension(resolved, '2EX');
-    if (twoEx) {
-      try {
-        const twoExSource = await window.rekordboxDesktop.readAnalysisFile(twoEx);
-        const twoExExtraction = parseAnlzBinary(
-          ensureArrayBuffer(twoExSource.data as ArrayBuffer | Uint8Array)
-        );
-        extraction = mergeAnlzExtractions(extraction, twoExExtraction);
-        logger.info('DATABASE', '[ANLZ Auto] 2EX-Schwesterncontainer gelesen', {
-          path: twoEx,
-          bytes: twoExSource.size ?? null,
-          tags: twoExExtraction.tagsFound.join(','),
-          waveformVariants: variantSummary(twoExExtraction),
-        });
-      } catch (twoExError) {
-        logger.info('DATABASE', '[ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert.', {
-          path: twoEx,
-          reason: twoExError instanceof Error ? twoExError.message : String(twoExError),
-        });
-      }
+    if (loadedSet.twoExSibling) {
+      logger.info('DATABASE', '[ANLZ Auto] 2EX-Schwesterncontainer gelesen', {
+        path: loadedSet.twoExSibling.path,
+        bytes: loadedSet.twoExSibling.size ?? null,
+        tags: loadedSet.twoExSibling.extraction.tagsFound.join(','),
+        waveformVariants: variantSummary(loadedSet.twoExSibling.extraction),
+      });
+    } else if (loadedSet.twoExError) {
+      logger.info('DATABASE', '[ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert.', {
+        path: resolved.replace(/\.[A-Za-z0-9]+$/, '.2EX'),
+        reason: loadedSet.twoExError,
+      });
     }
     const merged = applyAnlzExtractionToTrack(track, extraction);
     // Plausibility guard: the PPTH source path should reference the same audio file.
