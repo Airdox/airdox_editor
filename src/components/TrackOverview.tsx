@@ -10,7 +10,6 @@ import { TrackModel } from '../types/rekordbox';
 import {
   collectVisibleBeats,
   monoBlueColor,
-  peakHoldColumn,
   pwv4BackColor,
   pwv4FrontColor,
   rgbColumnColor,
@@ -117,45 +116,38 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         analysis.sourceTag === 'PWAV' ||
         analysis.sourceTag === 'PWV2' ||
         analysis.sourceTag === 'PWV3';
-      const bucketsPerCol = buckets / targetCols;
       const centerY = height / 2;
+      const maxHalf = (height - 4) / 2;
 
-      for (let col = 0; col < targetCols; col++) {
-        const startB = Math.floor(col * bucketsPerCol);
-        const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
-        // Peak-hold: take the stored values verbatim (per-band maximum),
-        // no averaging or smoothing of our own.
-        const held = peakHoldColumn(
-          analysis.peaks,
-          analysis.lowEnergy,
-          analysis.midEnergy,
-          analysis.highEnergy,
-          startB,
-          endB,
-          analysis.luminance,
-          analysis.backPeaks,
-          analysis.frontPeaks
-        );
-        const maxHalf = (height - 4) / 2;
+      // Draw every Rekordbox source column directly. Multiple source columns
+      // may land on the same display pixel at overview zoom, but Airdox does
+      // not combine them into a new maximum/average/smoothed value.
+      for (let bucket = 0; bucket < buckets; bucket++) {
+        const x = ((bucket + 0.5) / buckets) * width;
+        const nextX = ((bucket + 1.5) / buckets) * width;
+        const drawWidth = Math.max(0.25, nextX - x);
+        const peak = analysis.peaks[bucket] || 0;
+        const low = analysis.lowEnergy[bucket] || 0;
+        const mid = analysis.midEnergy[bucket] || 0;
+        const high = analysis.highEnergy[bucket] || 0;
 
         if (analysis.frontPeaks && analysis.luminance && analysis.backPeaks) {
-          // Documented PWV4 two-tone look, peak-held per column.
-          const backH = Math.max(1, held.back * maxHalf);
-          ctx.fillStyle = rgbCss(pwv4BackColor(held.low, held.mid, held.high, held.lum));
-          ctx.fillRect(col, centerY - backH, 1, backH * 2);
-          const frontH = Math.max(1, held.front * maxHalf);
-          ctx.fillStyle = rgbCss(pwv4FrontColor(held.low, held.mid, held.high, held.lum));
-          ctx.fillRect(col, centerY - frontH, 1, frontH * 2);
+          const lum = analysis.luminance[bucket] || 0;
+          const backH = Math.max(1, (analysis.backPeaks[bucket] || 0) * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4BackColor(low, mid, high, lum));
+          ctx.fillRect(x - drawWidth / 2, centerY - backH, drawWidth, backH * 2);
+          const frontH = Math.max(1, (analysis.frontPeaks[bucket] || 0) * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4FrontColor(low, mid, high, lum));
+          ctx.fillRect(x - drawWidth / 2, centerY - frontH, drawWidth, frontH * 2);
         } else if (isMonoPreview) {
-          // Documented blue ramp for mono variants.
-          const barH = Math.max(1, held.peak * maxHalf);
-          ctx.fillStyle = rgbCss(monoBlueColor(held.peak));
-          ctx.fillRect(col, centerY - barH, 1, barH * 2);
+          const barH = Math.max(1, peak * maxHalf);
+          const whiteness = analysis.whiteness?.[bucket] ?? peak;
+          ctx.fillStyle = rgbCss(monoBlueColor(whiteness));
+          ctx.fillRect(x - drawWidth / 2, centerY - barH, drawWidth, barH * 2);
         } else {
-          // Documented PWV5: stored RGB is the color, stored height the size.
-          const barH = Math.max(1, held.peak * maxHalf);
-          ctx.fillStyle = rgbCss(rgbColumnColor(held.low, held.mid, held.high));
-          ctx.fillRect(col, centerY - barH, 1, barH * 2);
+          const barH = Math.max(1, peak * maxHalf);
+          ctx.fillStyle = rgbCss(rgbColumnColor(low, mid, high));
+          ctx.fillRect(x - drawWidth / 2, centerY - barH, drawWidth, barH * 2);
         }
       }
     }

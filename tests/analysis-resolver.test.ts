@@ -13,10 +13,12 @@
 
 import {
   buildDbAnalysisIndex,
+  buildDbAnalysisIdIndex,
   dirOfPath,
   joinAudioPath,
   normalizeAudioKey,
   resolveAnalysisFilePath,
+  resolveVerifiedDbIdentity,
 } from '../src/rekordbox/analysisResolver';
 
 interface TestResult {
@@ -169,6 +171,41 @@ runTest('db index', 'Index links exact matches and skips incomplete rows', () =>
   assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
   assertEqual(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
   assertEqual(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
+});
+
+runTest('guarded identity', 'Rekordbox 7.2.16 requires matching ID and exact Location', () => {
+  const idIndex = buildDbAnalysisIdIndex(
+    [{
+      id: '4711',
+      originalMedia: { location: 'C:\\Music\\Exact.wav' },
+      rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+    }],
+    WIN_DB_DIR
+  );
+  assert(resolveVerifiedDbIdentity(idIndex, '4711', 'file://localhost/C:/Music/Exact.wav') !== null,
+    'same XML TrackID/djmdContent.ID and path accepted');
+  assertEqual(resolveVerifiedDbIdentity(idIndex, '9999', 'file://localhost/C:/Music/Exact.wav'), null,
+    'path-only match rejected');
+  assertEqual(resolveVerifiedDbIdentity(idIndex, '4711', 'file://localhost/C:/Music/Other.wav'), null,
+    'ID-only match with wrong path rejected');
+});
+
+runTest('guarded identity', 'Separate DB rows sharing one audio file retain their own IDs', () => {
+  const shared = 'C:\\Music\\Shared.wav';
+  const idIndex = buildDbAnalysisIdIndex([
+    { id: '100', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT' } },
+    { id: '101', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/b/u2/ANLZ0000.DAT' } },
+  ], WIN_DB_DIR);
+  assertEqual(idIndex.size, 2, 'both content identities retained');
+  assertEqual(resolveVerifiedDbIdentity(idIndex, '100', shared)?.trackId, '100', 'first exact row');
+  assertEqual(resolveVerifiedDbIdentity(idIndex, '101', shared)?.trackId, '101', 'second exact row');
+});
+
+runTest('path safety', 'Traversal and non-USBANLZ paths are rejected', () => {
+  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/USBANLZ/../secret/ANLZ0000.DAT'), null,
+    'parent traversal rejected');
+  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/ARTWORK/x/ANLZ0000.DAT'), null,
+    'non-USBANLZ path rejected');
 });
 
 // ─── SUITE 6: exact Rekordbox 7 address forms ───────────────────────────────

@@ -84,7 +84,7 @@ Die ANLZ-Daten werden unverändert übernommen; sämtliche Abweichung zum Origin
 - **Alternierende Takt-Schattierung** hinter der Wellenform (`isBarShaded` + `BAR_SHADE_FILL`) sowie dunkle Takt-Ticks auf der Overview.
 - **Scharfes Canvas**: Beide Wellenform-Canvases werden mit `devicePixelRatio`-Skalierung (ResizeObserver) hinterlegt statt gestrecktem 1200×320-Bitmap.
 - **Ehrlich leer statt Eigenberechnung**: Der ANLZ-lose Fallback hat zuerst eine selbst berechnete Pseudo-Wellenform (Kick/Sub/Hat-Hüllkurven, erfundene Break-Takte) und danach eine Block-Kontur mit Pseudo-Amplituden gezeichnet — beides entfernt. Ohne ANLZ bleibt das Wellenform-Pane leer wie im Original; nur Gitterdaten (Beat-Linien, Takt-Nummern, Overview-Ticks) und Hinweistext werden gezeichnet, Status/Footer melden `KEINE WAVEFORM (ANLZ fehlt)`.
-- **Overview ohne Mittelung**: Downsampling nimmt die gespeicherten Werte verbatim per Peak-Hold (`peakHoldColumn`, inkl. Luminanz/Back/Front-Kanäle), kein selbst berechneter Durchschnitt.
+- **Overview ohne Mittelung**: Jede geladene ANLZ-Spalte wird direkt auf ihre Displayposition abgebildet; keine Peak-Hold-, Mittelwert- oder Glättungsaggregation.
 - **Auto-Align** nutzt für die Transientensuche ausschließlich die gespeicherten Spaltenhöhen (`peaks`), keine eigene Kanal-Gewichtung.
 - **DB-Pfad-Diagnose sichtbar**: Der Status-Chip meldet bei fehlender ANLZ jetzt zusätzlich den Zustand des DB-Pfads (`DB x/y LESBAR • n LINKS` inkl. Grund, z. B. fehlendes SQLCipher-Modul oder keine DB gefunden); ein fehlgeschlagener DB-Erstversuch bekommt genau einen Retry (`dbIndexDiagRef` in `src/App.tsx`).
 

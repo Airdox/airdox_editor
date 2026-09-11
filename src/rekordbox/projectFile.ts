@@ -122,6 +122,8 @@ export interface SerializedBeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number;
+  bpm?: number;
+  /** @deprecated Legacy project compatibility only. */
   tailExtended?: boolean;
 }
 
@@ -280,6 +282,7 @@ function serializeTrack(track: TrackModel): SerializedTrack {
             isBarStart: node.isBarStart,
             barNumber: node.barNumber,
             beatInBar: node.beatInBar,
+            ...(node.bpm !== undefined ? { bpm: node.bpm } : {}),
             ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
           }))
         : undefined,

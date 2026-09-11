@@ -38,9 +38,6 @@ interface DatabaseExtractionModalProps {
   onApplyTrack?: (extractedTrack: TrackModel) => void;
   onSelectCue?: (time: number) => void;
   onLoadTrackByIndex?: (index: number) => void;
-  onImportAnlzFile?: (file: File) => void;
-  /** Windows desktop path: opens the analysis file via the read-only bridge. */
-  onImportAnlzFromDesktop?: () => void;
   onImportXmlFile?: (file: File) => void;
   /** Rekordbox 6/7 SQLCipher database (master.db / OneLibrary), read-only. */
   onOpenRekordboxDatabase?: () => void;
@@ -58,8 +55,6 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   onApplyTrack,
   onSelectCue,
   onLoadTrackByIndex,
-  onImportAnlzFile,
-  onImportAnlzFromDesktop,
   onImportXmlFile,
   onOpenRekordboxDatabase,
   onLocateRekordboxDatabases,
@@ -565,53 +560,6 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
           {activeTab === 'sources' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* ANLZ File Import */}
-                <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center space-x-2 text-white font-semibold text-xs mb-1">
-                      <FileCode size={15} className="text-[#00a2ff]" />
-                      <span>Pioneer ANLZ Binärdatei (.DAT / .EXT / .2EX)</span>
-                    </div>
-                    <p className="text-[11px] text-neutral-400">
-                      Enthält PCOB/PCO2 (Memory &amp; Hot Cues), PWV3/PWV5/PWV6/PWV7 (Waveform-Cache), PQTZ (Beatgrid) und PSSI (Song-Struktur).
-                    </p>
-                    <p className="text-[10px] text-neutral-500 mt-1">
-                      ANLZ-Dateien werden ausschließlich lesend geöffnet; die Quelle bleibt unverändert.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2 mt-4">
-                    {typeof window !== 'undefined' && window.rekordboxDesktop && (
-                      <button
-                        onClick={() => {
-                          onImportAnlzFromDesktop?.();
-                          onClose();
-                        }}
-                        className="w-full py-2 bg-[#0088ff] hover:bg-[#0077e6] text-white rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5"
-                      >
-                        <Upload size={13} />
-                        <span>Im Windows-Dateidialog auswählen (nur lesend)</span>
-                      </button>
-                    )}
-                    <label className="cursor-pointer w-full py-2 bg-[#0088ff]/15 hover:bg-[#0088ff]/25 border border-[#0088ff]/40 text-[#4fc3ff] rounded text-center font-medium text-[11px] transition-colors flex items-center justify-center space-x-1.5">
-                      <Upload size={13} />
-                      <span>ANLZ-Datei auswählen (.DAT / .EXT)...</span>
-                      <input
-                        type="file"
-                        accept=".DAT,.EXT,.2EX,.dat,.ext,.2ex"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            onImportAnlzFile(file);
-                            onClose();
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                </div>
-
                 {/* XML Import */}
                 <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
                   <div>

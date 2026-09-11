@@ -134,8 +134,18 @@ export function adoptSerializedGrid(
         isBarStart: node.isBarStart,
         barNumber: node.barNumber,
         beatInBar: node.beatInBar,
+        ...(node.bpm !== undefined ? { bpm: node.bpm } : {}),
         ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
       })),
+      origin,
+    };
+  }
+  if (isRekordboxOrigin(origin)) {
+    return {
+      firstBeat: persisted.firstBeat,
+      bpm: persisted.bpm,
+      meter: persisted.meter,
+      beats: [],
       origin,
     };
   }

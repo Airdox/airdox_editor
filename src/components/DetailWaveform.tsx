@@ -16,6 +16,7 @@ import {
   WaveformMode,
   SelectionRange,
   CuePoint,
+  DataOrigin,
 } from '../types/rekordbox';
 import {
   BAR_SHADE_FILL,
@@ -88,51 +89,15 @@ interface ContextMenuState {
   timeAtClick: number;
 }
 
-/**
- * ANLZ auto-lookup diagnostics (written by the deck loader into
- * track.rawXmlAttributes.anlzLookup): what the deterministic search found
- * (DB link / exact PPTH hit / unique-basename hit) or why nothing matched
- * (scan size, folders). Kept visible in the footer instead of DevTools.
- */
+/** Visible status for the deterministic master.db → AnalysisDataPath path. */
 function anlzLookupParts(track: TrackModel | null): { label: string; title: string } {
   if (track?.analysis && track.analysis.length > 0) {
-    return { label: `${track.analysis.length} BUCKETS`, title: 'Genuine Rekordbox-ANLZ zugeordnet.' };
+    return { label: `${track.analysis.length} BUCKETS`, title: 'Rekordbox-ANLZ aus dem master.db-Analysepfad geladen.' };
   }
-  const raw = track?.rawXmlAttributes?.anlzLookup;
-  if (!raw) return { label: '— KEINE WAVEFORM (ANLZ fehlt)', title: 'Keine ANLZ zugeordnet – wie im Original wird keine Wellenform gezeichnet; über DATA zuordnen.' };
-  try {
-    const lk = JSON.parse(raw) as {
-      via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
-      scanned: number;
-      folders: number;
-      note?: string;
-      db?: { found: number; readable: number; links: number; reasons: string[] };
-    };
-    // DB-Pfad-Diagnose: sichtbar machen, ob die lokale Rekordbox-DB gefunden
-    // und lesbar war und wie viele ANLZ-Links der Index liefert.
-    const dbShort = lk.db
-      ? `DB ${lk.db.readable}/${lk.db.found} LESBAR • ${lk.db.links} LINKS`
-      : '';
-    if (lk.via === 'PPTH_NAME') {
-      return { label: '— ANLZ via DATEINAME (PRÜFEN!)', title: lk.note || 'ANLZ per eindeutigem Dateinamen zugeordnet – Datei vermutlich nach der Analyse verschoben.' };
-    }
-    if (lk.via === 'PPTH' || lk.via === 'DB') {
-      return { label: '— ANLZ zugeordnet (Lese-Fehler)', title: 'ANLZ-Datei gefunden, aber das Lesen lieferte keine Waveform – Pfad prüfen.' };
-    }
-    return {
-      label: `— KEIN ANLZ${dbShort ? ` • ${dbShort}` : ''} • SCAN ${lk.scanned} DAT.`,
-      title:
-        `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung.` +
-        (lk.db
-          ? lk.db.readable === 0
-            ? ` DB-Pfad: ${lk.db.reasons.join(' | ') || 'keine lesbare master.db/exportLibrary.db.'}`
-            : ` DB lesbar (${lk.db.links} Links), aber kein exakter Audio-Pfad-Treffer für diesen Track.`
-          : '') +
-        ' Manuell über DATA zuordnen.',
-    };
-  } catch {
-    return { label: '— KEINE WAVEFORM', title: 'ANLZ-Status nicht lesbar.' };
-  }
+  return {
+    label: '— MISSING_REKORDBOX_ANALYSIS',
+    title: 'Keine Rekordbox-Waveformdaten geladen. Es wird keine Ersatz-Waveform erzeugt.',
+  };
 }
 
 export const DetailWaveform: React.FC<DetailWaveformProps> = ({
@@ -227,6 +192,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const before = bg.beats[Math.max(0, idx - 1)].time;
         return Math.max(0, Math.abs(after - t) < Math.abs(t - before) ? after : before);
       }
+      // A Rekordbox grid without PQTZ nodes is missing analysis, not a request
+      // to manufacture a uniform replacement from BPM/firstBeat.
+      if (
+        track.origin === DataOrigin.REKORDBOX_XML ||
+        track.origin === DataOrigin.REKORDBOX_DB ||
+        track.origin === DataOrigin.REKORDBOX_ANLZ
+      ) return t;
       const spb = 60.0 / bg.bpm;
       const beatIndex = Math.round((t - bg.firstBeat) / spb);
       return Math.max(0, bg.firstBeat + beatIndex * spb);
@@ -297,6 +269,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       let visibleBeats: VisibleBeat[];
       if (bg.beats && bg.beats.length > 0) {
         visibleBeats = collectVisibleBeats(bg.beats, viewOffset - 1, viewOffset + viewDuration + 1);
+      } else if (
+        track.origin === DataOrigin.REKORDBOX_XML ||
+        track.origin === DataOrigin.REKORDBOX_DB ||
+        track.origin === DataOrigin.REKORDBOX_ANLZ
+      ) {
+        // Missing PQTZ remains visibly missing for Rekordbox tracks.
+        visibleBeats = [];
       } else {
         const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
         const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);

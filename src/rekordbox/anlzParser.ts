@@ -332,7 +332,14 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
     const time = view.getUint32(entry + 4, false) / 1000;
     if (beatInBar < 1 || beatInBar > 16 || tempo < 1) return undefined;
     if (i === 0 || beatInBar === 1) barNumber++;
-    beats.push({ index: i, time, isBarStart: beatInBar === 1, barNumber, beatInBar });
+    beats.push({
+      index: i,
+      time,
+      isBarStart: beatInBar === 1,
+      barNumber,
+      beatInBar,
+      bpm: tempo / 100,
+    });
   }
 
   return {
@@ -555,12 +562,10 @@ function phrasesFromPssi(
   mood: number,
   endBeat: number,
   entries: AnlzPhraseEntry[],
-  bpm: number,
-  firstBeat: number,
+  beats: BeatNode[],
   durationSec: number
 ): PhraseSection[] {
   const moodLabels = PHRASE_LABELS[mood] || PHRASE_LABELS[2];
-  const spb = 60.0 / bpm;
   const phrases: PhraseSection[] = [];
 
   entries.forEach((entry, index) => {
@@ -568,11 +573,16 @@ function phrasesFromPssi(
     const startBeat = Math.max(1, entry.beat);
     const endBeatIncl =
       next && next.beat > startBeat ? next.beat - 1 : Math.max(startBeat, endBeat || startBeat);
-    const startTime = firstBeat + (startBeat - 1) * spb;
-    const endTime = Math.min(durationSec, firstBeat + endBeatIncl * spb);
+    const startNode = beats[startBeat - 1];
+    if (!startNode) return; // never estimate a missing PQTZ position
+    const exclusiveEndNode = beats[endBeatIncl];
+    const startTime = startNode.time;
+    const endTime = exclusiveEndNode
+      ? exclusiveEndNode.time
+      : Math.min(durationSec, beats[beats.length - 1]?.time ?? durationSec);
     const baseName = moodLabels[entry.kind] || 'VERSE';
-    const startBar = Math.floor((startBeat - 1) / 4) + 1;
-    const endBar = Math.floor((endBeatIncl - 1) / 4) + 1;
+    const startBar = startNode.barNumber;
+    const endBar = beats[Math.min(endBeatIncl - 1, beats.length - 1)]?.barNumber ?? startBar;
 
     phrases.push({
       id: `pssi-${entry.index}`,
@@ -580,7 +590,7 @@ function phrasesFromPssi(
       startBar,
       endBar,
       startTime: Math.max(0, startTime),
-      endTime: Math.max(0, endTime),
+      endTime: Math.max(startTime, endTime),
       color: PHRASE_COLORS[baseName],
       origin: DataOrigin.REKORDBOX_ANLZ,
     });
@@ -779,17 +789,16 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         result.pssiBank = decoded.bank;
         result.rawPhrases = decoded.entries;
 
-        if (result.bpm && result.firstBeat !== undefined) {
+        if ((result.beatGrid?.beats.length ?? 0) > 0) {
           result.phrases = phrasesFromPssi(
             decoded.mood,
             decoded.endBeat,
             decoded.entries,
-            result.bpm,
-            result.firstBeat,
+            result.beatGrid?.beats ?? [],
             24 * 60 * 60 // duration is clamped by the caller to the real track length
           );
         } else {
-          result.warnings.push('PSSI ohne bekannte BPM/First-Beat-Referenz übersprungen.');
+          result.warnings.push('PSSI ohne vollständige PQTZ-Beatpositionen übersprungen.');
         }
       }
     } else if (WAVEFORM_PRIORITY[tag]) {

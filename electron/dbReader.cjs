@@ -174,7 +174,7 @@ function openRekordboxDb(filePath) {
           available: false,
           reason:
             `Integritätsprüfung fehlgeschlagen (${probe.reason}) – ggf. Key-/Schema-Drift nach Rekordbox-Update. ` +
-            'Tracks fallen automatisch auf den PPTH-Fallback zurück.',
+            'Die Rekordbox-Pipeline wird abgebrochen; es gibt keinen Analyse-Fallback.',
         };
       }
       return { available: true, db, dbType };
@@ -398,20 +398,21 @@ function findDatabaseFiles(appDir) {
   const results = [];
   if (!appDir || !fs.existsSync(appDir)) return results;
 
-  const master = path.join(appDir, 'master.db');
-  if (fs.existsSync(master) && fs.statSync(master).isFile()) {
-    results.push({ path: master, kind: 'MASTER_DB', label: `master.db (${appDir})` });
-  }
-
-  // Rekordbox 6/7 keep the real database location in options.json.
+  // Rekordbox 6/7 keep the authoritative (possibly moved) database location
+  // in options.json. It must rank before a stale standard-location master.db.
   const fromOptions = candidateFromOptions(appDir);
   if (fromOptions) {
     const p = fromOptions.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1');
     if (fs.existsSync(p) && fs.statSync(p).isFile()) {
       const base = path.basename(p).toLowerCase();
       const kind = base === 'exportlibrary.db' ? 'ONE_LIBRARY' : base === 'master.db' ? 'MASTER_DB' : null;
-      if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)`, appVer: appVerFromOptions(appDir) });
+      if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)`, appVer: appVerFromOptions(appDir), authoritative: true });
     }
+  }
+
+  const master = path.join(appDir, 'master.db');
+  if (fs.existsSync(master) && fs.statSync(master).isFile()) {
+    results.push({ path: master, kind: 'MASTER_DB', label: `master.db (${appDir})` });
   }
 
   // OneLibrary exports live on prepared media; scan common subfolders lightly.

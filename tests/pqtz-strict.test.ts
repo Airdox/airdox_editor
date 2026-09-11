@@ -126,7 +126,7 @@ runTest('T3 verbatim', 'Variable-tempo PQTZ beats reach the model with exact tim
   assertEqual(merged.beatGrid.beats[4].barNumber, 2, 'Second bar after tempo change');
 });
 
-runTest('T3 verbatim', 'Tail continuation is flagged and never rewrites PQTZ nodes', () => {
+runTest('T3 verbatim', 'A short PQTZ grid is never extended with invented beats', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0); // 240s
   const extraction = parseAnlzBinary(generateRealAnlzDatFixture(128.0));
   const sourceBeats = extraction.beatGrid!.beats;
@@ -134,22 +134,15 @@ runTest('T3 verbatim', 'Tail continuation is flagged and never rewrites PQTZ nod
 
   const merged = applyAnlzExtractionToTrack(track, extraction);
   const beats = merged.beatGrid.beats;
-  assert(beats.length > sourceBeats.length, 'Tail extends the grid');
+  assertEqual(beats.length, sourceBeats.length, 'No beat is appended');
 
   for (let i = 0; i < sourceBeats.length; i++) {
     assertEqual(beats[i].time, sourceBeats[i].time, `Verbatim beat ${i} untouched`);
+    assertEqual(beats[i].beatInBar, sourceBeats[i].beatInBar, `Beat ${i} position untouched`);
+    assertEqual(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} PQTZ tempo untouched`);
     assert(!beats[i].tailExtended, `Verbatim beat ${i} unflagged`);
   }
-  for (let i = sourceBeats.length; i < beats.length; i++) {
-    assertEqual(beats[i].tailExtended, true, `Tail beat ${i} flagged`);
-  }
-  const spb = 60.0 / 128.0;
-  assertEqual(
-    beats[sourceBeats.length].time,
-    sourceBeats[sourceBeats.length - 1].time + spb,
-    'Tail continues uniformly from the last PQTZ beat'
-  );
-  assert(beats[beats.length - 1].time >= track.duration, 'Grid spans the duration');
+  assert(beats[beats.length - 1].time < track.duration, 'A short source remains honestly short');
 });
 
 runTest('T3 verbatim', 'PQT2 beat entries follow the same verbatim rule', () => {

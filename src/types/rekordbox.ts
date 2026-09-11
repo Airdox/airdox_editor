@@ -11,8 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
-  /** Own calculation used as a clearly labeled fallback when no Rekordbox
-   * source (ANLZ/DB/audio) provides the data. */
+  /** Explicitly generated test/demo material; never Rekordbox data. */
+  GENERATED_TEST = 'GENERATED_TEST',
+  /** @deprecated Kept only to read old project files; never create. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
@@ -32,11 +33,9 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
-  /**
-   * True only for uniform continuation nodes appended after the last verbatim
-   * PQTZ beat so the grid spans the full track duration. Verbatim Rekordbox
-   * beats never carry this flag (strict-PQTZ provenance).
-   */
+  /** Exact tempo stored on this PQTZ beat (tempo_x100 / 100). */
+  bpm?: number;
+  /** @deprecated Read-only compatibility for old project files; never generate. */
   tailExtended?: boolean;
 }
 

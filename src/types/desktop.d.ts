@@ -20,7 +20,6 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
-      chooseAnalysisFile(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       readAnalysisFile(filePath: string): Promise<{
         /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
         data: ArrayBuffer | Uint8Array;
@@ -46,33 +45,7 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string; appVer?: string | null }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
-      /**
-       * Deterministic ANLZ lookup without SQLCipher: reads the PPTH header of
-       * every ANLZ container in the standard Rekordbox analysis folders and
-       * returns exact audio-path matches (DAT + EXT pair). Read-only.
-       */
-      scanAnlzPaths(targetPaths: string[]): Promise<{
-        /**
-         * matchTier 1 = exact PPTH path match; matchTier 2 = unique basename
-         * match (file moved after analysis – must be verified by the user).
-         */
-        matches: Array<{ path: string; datPath: string | null; extPath: string | null; matchTier: 1 | 2; note?: string }>;
-        scanned: number;
-        /** Files that yielded a readable PPTH path (diagnoses extraction vs match failures). */
-        extracted: number;
-        folders: string[];
-        elapsedMs: number;
-        collectMs: number;
-        ppthSample?: string[];
-        /** True when the recursive scan hit a safety bound (depth/file count). */
-        truncated?: boolean;
-      }>;
-      /**
-       * Progress of the running ANLZ scan ({ scanned, total }, ~150 ms
-       * cadence). Returns an unsubscribe function.
-       */
-      onAnlzScanProgress(callback: (progress: { scanned: number; total: number }) => void): () => void;
-      saveExportFile(payload: {
+            saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
         defaultName: string;

@@ -237,7 +237,7 @@ runTest('Deck expansion', 'Builds a playable-format TrackModel without synthetic
   const deck = buildDeckTrackFromDatabase(mapped.tracks[0]!);
   assertEqual(deck.audioBuffer, null, 'No synthetic audio');
   assertEqual(deck.beatGrid.bpm, 128, 'Beat grid bpm');
-  assert(deck.beatGrid.beats.length > 0, 'Dense grid generated on load');
+  assertEqual(deck.beatGrid.beats.length, 0, 'No grid invented before PQTZ is loaded');
   assertEqual(deck.beatGrid.origin, DataOrigin.REKORDBOX_DB, 'Beat grid DB origin');
   assertEqual(deck.origin, DataOrigin.REKORDBOX_DB, 'Track DB origin');
   assertEqual(deck.originalSha256, 'NOT_COMPUTED_READ_ONLY_SOURCE', 'Read-only checksum marker');

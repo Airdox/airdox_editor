@@ -130,18 +130,11 @@ runTest('BeatGrid', 'Scenario 2 (Tech House): Offset Inizio (0.240s) & 125 BPM',
   assertEqual(track.bpm, 125.0, 'BPM');
   assertEqual(track.beatGrid!.firstBeat, 0.24, 'Beatgrid First Beat Offset');
 
-  // Verify first beat node
+  // XML TEMPO carries scalar/grid-marker metadata, not all analyzed beats.
+  // Detailed nodes must arrive from ANLZ PQTZ and are never synthesized here.
   const beats = track.beatGrid!.beats;
-  assert(beats.length > 10, 'Beat node list generated');
-  assertEqual(Math.round(beats[0].time * 1000), 240, 'First beat time in ms');
-  assertEqual(beats[0].isBarStart, true, 'First beat is bar start');
-  assertEqual(beats[0].barNumber, 1, 'First beat bar number is 1');
-  assertEqual(beats[0].beatInBar, 1, 'First beat beat in bar is 1');
-
-  // Second beat should be 0.240 + (60 / 125) = 0.240 + 0.480 = 0.720s
-  assertEqual(Math.round(beats[1].time * 1000), 720, 'Second beat time in ms');
-  assertEqual(beats[1].isBarStart, false, 'Second beat is not bar start');
-  assertEqual(beats[1].beatInBar, 2, 'Second beat is 2 in bar');
+  assertEqual(beats.length, 0, 'No beat nodes invented from XML BPM/firstBeat');
+  assertEqual(track.beatGrid!.origin, DataOrigin.REKORDBOX_XML, 'XML scalar provenance retained');
 });
 
 // ─── SUITE 3: High Tempo Phrase Blocks (Drum & Bass 174 BPM) ───────────────

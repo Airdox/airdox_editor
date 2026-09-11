@@ -95,6 +95,14 @@ runTest('sibling', 'POSIX DAT path resolves its EXT sibling verbatim', () => {
   );
 });
 
+runTest('sibling', 'DAT path resolves its deterministic 2EX sibling', () => {
+  assertEqual(
+    deriveSiblingExtension('D:\\PIONEER\\USBANLZ\\P001\\0001\\ANLZ0000.DAT', '2EX'),
+    'D:\\PIONEER\\USBANLZ\\P001\\0001\\ANLZ0000.2EX',
+    'Same directory and basename'
+  );
+});
+
 runTest('sibling', 'Already-target extension yields null (case-insensitive)', () => {
   assertEqual(deriveSiblingExtension(WIN_ANLZ.replace(/\.DAT$/, '.EXT'), 'EXT'), null, 'EXT → EXT');
   assertEqual(deriveSiblingExtension(WIN_ANLZ.replace(/\.DAT$/, '.ext'), 'EXT'), null, 'ext → EXT');

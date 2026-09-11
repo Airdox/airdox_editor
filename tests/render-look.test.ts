@@ -12,7 +12,6 @@
  *       drawn low → mid → high on the same axis.
  *  R5 – Comb geometry + alternate bar shading (reference 01/02).
  *  R6 – End-to-end PWV5 pass-through via parseAnlzBinary.
- *  R7 – Overview downsampling: peak-hold, never averaging.
  *  (No-ANLZ case: the renderers draw an empty pane like the original —
  *   nothing to compute, nothing to test in the pure model.)
  *
@@ -26,7 +25,6 @@ import {
   BAR_SHADE_FILL,
   columnDrawWidth,
   isBarShaded,
-  peakHoldColumn,
   pwv4BackColor,
   pwv4FrontColor,
   PWV4_FRONT_BOOST,
@@ -76,7 +74,7 @@ function assertEqual<T>(actual: T, expected: T, message: string) {
 }
 
 console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R7)       ');
+console.log('  RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R6)       ');
 console.log('═══════════════════════════════════════════════════════════════════\n');
 
 // ─── R1: PWV5 stored RGB is the column color ────────────────────────────────
@@ -189,27 +187,6 @@ runTest('R6 pass-through', 'Decoded PWV5 columns stay pure red/green/blue', () =
   assertEqual(blue.b, 255, 'blue column pure');
   assertEqual(v.peaks[0], 1, 'stored height decoded');
   assertEqual(v.whiteness, undefined, 'no whiteness invented for PWV5');
-});
-
-// ─── R7: peak-hold overview ──────────────────────────────────────────────────
-runTest('R7 peak-hold', 'Stored maxima, never averages; PWV4 channels held', () => {
-  const peaks = Float32Array.from([0.25, 0.75, 0.5]);
-  const low = Float32Array.from([0.125, 0.5, 0.25]);
-  const mid = Float32Array.from([0.25, 0.125, 0.5]);
-  const high = Float32Array.from([0.0625, 0.25, 0.875]);
-  const lum = Float32Array.from([0.5, 1, 0.25]);
-  const back = Float32Array.from([0.5, 0.625, 0.75]);
-  const front = Float32Array.from([0.0625, 0.25, 0.875]);
-  const held = peakHoldColumn(peaks, low, mid, high, 0, 3, lum, back, front);
-  assertEqual(held.peak, 0.75, 'peak max');
-  assertEqual(held.low, 0.5, 'low max (average would be ~0.29)');
-  assertEqual(held.mid, 0.5, 'mid max');
-  assertEqual(held.high, 0.875, 'high max');
-  assertEqual(held.lum, 1, 'luminance max');
-  assertEqual(held.back, 0.75, 'back max');
-  assertEqual(held.front, 0.875, 'front max');
-  const empty = peakHoldColumn(peaks, low, mid, high, 1, 1);
-  assertEqual(empty.peak, 0, 'empty range silent');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

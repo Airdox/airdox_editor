@@ -64,13 +64,18 @@ export function resolveAnalysisFilePath(
 
   // Device-relative form: [/][share/]PIONEER/USBANLZ/... → <dbDir>/share/PIONEER/...
   rel = rel.replace(/^[\\/]+/, '').replace(/^share[\\/]/i, '');
-  if (!/^PIONEER[\\/]/i.test(rel)) return null;
+  const segments = rel.split(/[\\/]+/);
+  if (
+    segments.length < 4 ||
+    segments[0].toLowerCase() !== 'pioneer' ||
+    segments[1].toLowerCase() !== 'usbanlz' ||
+    segments.some((part) => !part || part === '.' || part === '..')
+  ) return null;
 
   const dir = (dbDir ?? '').trim().replace(/[\\/]+$/, '');
   if (!dir) return null;
   const sep = dir.includes('\\') ? '\\' : '/';
-  const tail = rel.replace(/[\\/]+/g, sep);
-  return `${dir}${sep}share${sep}${tail}`;
+  return `${dir}${sep}share${sep}${segments.join(sep)}`;
 }
 
 /**
@@ -124,6 +129,8 @@ export interface DbAnalysisRef {
   trackId: string;
   analysisDataPath: string;
   sourceDbDir: string;
+  /** Exact canonical spellings of djmdContent.FolderPath for identity checks. */
+  audioKeys?: string[];
 }
 
 /**
@@ -166,18 +173,64 @@ export function buildDbAnalysisIndex(
     const key = normalizeAudioKey(track.originalMedia?.location);
     const analysisDataPath = track.rawXmlAttributes?.analysisDataPath?.trim() ?? '';
     if (!key || !analysisDataPath || index.has(key)) continue;
-    const ref = { trackId: track.id, analysisDataPath, sourceDbDir };
-    index.set(key, ref);
-
+    const audioKeys = [key];
     // Rekordbox 7 can export media below its library directory as a path
     // relative to master.db: file://localhost//contents_<id>/... . The DB row
     // contains the corresponding absolute path. Both keys are exact forms of
     // the same address; deriving the relative spelling requires no search.
     if (dbDirKey && key.startsWith(`${dbDirKey}/`)) {
       const relative = key.slice(dbDirKey.length + 1);
-      if (relative && !index.has(relative)) index.set(relative, ref);
-      if (relative && !index.has(`/${relative}`)) index.set(`/${relative}`, ref);
+      if (relative) audioKeys.push(relative, `/${relative}`);
+    }
+    const ref = { trackId: track.id, analysisDataPath, sourceDbDir, audioKeys };
+    for (const audioKey of audioKeys) {
+      if (!index.has(audioKey)) index.set(audioKey, ref);
     }
   }
   return index;
+}
+
+/**
+ * Indexes the exact desktop content identity separately from audio paths.
+ * Duplicate IDs are removed from the result so callers can never select an
+ * arbitrary row. This is the guarded Rekordbox 7.2.16 XML TrackID contract.
+ */
+export function buildDbAnalysisIdIndex(
+  tracks: {
+    id: string;
+    originalMedia?: { location: string };
+    rawXmlAttributes?: Record<string, string>;
+  }[],
+  sourceDbDir: string
+): Map<string, DbAnalysisRef> {
+  const result = new Map<string, DbAnalysisRef>();
+  const ambiguous = new Set<string>();
+  for (const track of tracks) {
+    const ref = buildDbAnalysisIndex([track], sourceDbDir).values().next().value as DbAnalysisRef | undefined;
+    if (!ref) continue;
+    const id = String(ref.trackId);
+    if (result.has(id) && result.get(id) !== ref) {
+      ambiguous.add(id);
+      result.delete(id);
+    } else if (!ambiguous.has(id)) {
+      result.set(id, ref);
+    }
+  }
+  return result;
+}
+
+/**
+ * Resolves XML TrackID only when the same ID exists exactly once in master.db
+ * and its FolderPath is the exact canonical XML Location. No path-only or
+ * metadata fallback is performed.
+ */
+export function resolveVerifiedDbIdentity(
+  idIndex: Map<string, DbAnalysisRef>,
+  xmlTrackId: string,
+  xmlLocation: string | undefined | null
+): DbAnalysisRef | null {
+  const ref = idIndex.get(String(xmlTrackId));
+  const xmlKey = normalizeAudioKey(xmlLocation);
+  if (!ref || !xmlKey || !ref.audioKeys?.includes(xmlKey)) return null;
+  return ref;
 }

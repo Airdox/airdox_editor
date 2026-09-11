@@ -20,8 +20,7 @@ import {
   TrackModel,
   WaveformAnalysisData,
 } from '../types/rekordbox';
-import { analyzeAudioBuffer } from '../waveform/analyzer';
-import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
+import { parseRekordboxXml } from './xmlParser';
 import { parseAnlzBinary as parseAnlzFile, WAVEFORM_PRIORITY } from './anlzParser';
 
 /**
@@ -147,13 +146,10 @@ export function mergeAnlzExtractions(
 }
 
 /**
- * Adopts the original Rekordbox beat positions decoded from PQTZ. The decoded
- * beat nodes are kept verbatim (strict-PQTZ guarantee); only when they do not
- * span the full track duration is a uniform continuation appended so the grid
- * never ends mid-track — appended nodes are flagged with `tailExtended` and
- * the original nodes stay untouched. Without decoded beat nodes there is
- * nothing to adopt: the track grid is returned unchanged (no uniform rebuild
- * as a substitute for missing PQTZ beats).
+ * Adopts the original Rekordbox beat positions decoded from PQTZ without
+ * adding, deleting, spacing, or otherwise rebuilding entries. Each node keeps
+ * the exact PQTZ timestamp, beat-in-bar and per-beat tempo decoded by the ANLZ
+ * parser. Without decoded entries there is no ANLZ grid to adopt.
  */
 function adoptAnlzBeatGrid(
   extraction: AnlzExtractionResult,
@@ -161,41 +157,13 @@ function adoptAnlzBeatGrid(
   bpm: number
 ): BeatGrid {
   const anlzBeats = extraction.beatGrid?.beats;
-  if (!anlzBeats || anlzBeats.length === 0) {
-    return track.beatGrid;
-  }
-
-  const meter = track.beatGrid.meter || 4;
-  const beats: BeatNode[] = anlzBeats.map((node, index) => ({ ...node, index }));
-  const spb = bpm > 0 ? 60.0 / bpm : 0.5;
-
-  // Uniform tail extension (original nodes untouched, appended nodes flagged).
-  let guard = 0;
-  let lastTime = beats[beats.length - 1].time;
-  let barNumber = beats[beats.length - 1].barNumber;
-  let beatInBar = beats[beats.length - 1].beatInBar;
-  while (lastTime + spb <= track.duration + spb && guard++ < 500000) {
-    lastTime += spb;
-    beatInBar += 1;
-    if (beatInBar > meter) {
-      beatInBar = 1;
-      barNumber += 1;
-    }
-    beats.push({
-      index: beats.length,
-      time: lastTime,
-      isBarStart: beatInBar === 1,
-      barNumber,
-      beatInBar,
-      tailExtended: true,
-    });
-  }
+  if (!anlzBeats || anlzBeats.length === 0) return track.beatGrid;
 
   return {
-    firstBeat: beats[0].time,
+    firstBeat: anlzBeats[0].time,
     bpm,
-    meter,
-    beats,
+    meter: extraction.beatGrid?.meter || track.beatGrid.meter || 4,
+    beats: anlzBeats.map((node) => ({ ...node })),
     origin: DataOrigin.REKORDBOX_ANLZ,
   };
 }
@@ -304,7 +272,13 @@ export function extractTrackFromRekordboxXml(
   const rawTrack = tracks[targetTrackIndex] || tracks[0];
   const bpm = rawTrack.bpm || 130.0;
   const duration = rawTrack.duration || (audioBuffer ? audioBuffer.duration : 300.0);
-  const bg = rawTrack.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration);
+  const bg = rawTrack.beatGrid || {
+    firstBeat: 0,
+    bpm,
+    meter: 4,
+    beats: [],
+    origin: DataOrigin.REKORDBOX_XML,
+  };
 
   // Enrich memory cues with bar/beat alignment and inMsec
   const secondsPerBeat = 60.0 / bpm;
@@ -324,13 +298,9 @@ export function extractTrackFromRekordboxXml(
     };
   });
 
-  // Waveform: ANLZ/database data always takes priority; analysis computed
-  // from a decoded audio buffer is LOCAL_ANALYSIS. Without genuine data the
-  // track carries NO waveform — own peak/metadata synthesis was removed
-  // (XML-exclusive guarantee); renderers show the honest empty state.
-  const analysis: WaveformAnalysisData | null = audioBuffer
-    ? analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS)
-    : null;
+  // XML extraction never analyzes the optional playback buffer. Waveform
+  // values are attached later and exclusively by applyAnlzExtractionToTrack.
+  const analysis: WaveformAnalysisData | null = null;
 
   // No template phrases: PSSI song structure comes only from ANLZ.
   const phrases: PhraseSection[] = [];
