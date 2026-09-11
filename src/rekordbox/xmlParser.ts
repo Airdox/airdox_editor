@@ -7,24 +7,6 @@
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
 
-/**
- * Reconstructs a uniform grid from TEMPO/First-Beat scalars.
- *
- * This is the SINGLE documented fallback for grid building and may only run
- * when no detailed beat data exists (no PQTZ nodes, no persisted dense grid):
- *  - Rekordbox XML <TEMPO> carries only Inizio/Bpm/Metro/Battito scalars →
- *    the collection stays compact (beats: []) and this function expands the
- *    uniform grid (origin REKORDBOX_XML) when a track is loaded into a deck;
- *  - Rekordbox DB rows carry only BPM/First-Beat parameters → uniform grid
- *    with origin REKORDBOX_DB;
- *  - legacy project files saved before dense-beat persistence → uniform
- *    rebuild in adoptSerializedGrid (trackGuards.ts).
- *
- * Whenever genuine PQTZ beat nodes are present they take priority and this
- * function is NOT used for rendering: applyAnlzExtractionToTrack adopts the
- * decoded nodes verbatim. This function never manufactures Rekordbox-ANLZ
- * data — it only ever produces a grid labeled with the scalar source origin.
- */
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
   bpm: number,

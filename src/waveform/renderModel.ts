@@ -7,7 +7,7 @@
  * it. Covered by tests/waveform-variants.test.ts.
  */
 
-import { BeatGrid, BeatNode, DataOrigin, WaveformAnalysisData } from '../types/rekordbox';
+import { BeatNode } from '../types/rekordbox';
 
 /** First index with beats[i].time >= time (beat nodes are time-ordered). */
 export function beatIndexAtOrAfter(beats: BeatNode[], time: number): number {
@@ -98,109 +98,175 @@ function indexOfMax(values: number[]): number {
   return best;
 }
 
-/** Structural view of a TrackModel that the renderer selection needs. */
-export interface RenderTrackWaveformSource {
-  duration: number;
-  analysis?: WaveformAnalysisData | null;
-  analysisVariants?: WaveformAnalysisData[];
+// ---------------------------------------------------------------------------
+// Authentic visual lock (reference/01–03): the renderers must visualize the
+// stored ANLZ band values verbatim — no recombination, no invented spectral
+// formulas. Pinned by tests/render-look.test.ts.
+// ---------------------------------------------------------------------------
+
+export interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export function rgbCss(c: Rgb): string {
+  return `rgb(${c.r}, ${c.g}, ${c.b})`;
+}
+
+// ---------------------------------------------------------------------------
+// Documented visualizations (Deep Symmetry / crate-digger ANLZ spec). The
+// renderers only apply these mappings to the stored values — nothing is
+// recombined or invented. Pinned by tests/render-look.test.ts.
+// ---------------------------------------------------------------------------
+
+/** Blue waveform (PWAV/PWV2/PWV3): whiteness 0 = darkest blue … 1 = near white. */
+export const MONO_BLUE_DARK: Rgb = { r: 0, g: 0, b: 140 };
+export const MONO_BLUE_WHITE: Rgb = { r: 225, g: 240, b: 255 };
+
+export function monoBlueColor(whiteness: number): Rgb {
+  const t = Math.min(1, Math.max(0, whiteness));
+  return {
+    r: Math.round(MONO_BLUE_DARK.r + (MONO_BLUE_WHITE.r - MONO_BLUE_DARK.r) * t),
+    g: Math.round(MONO_BLUE_DARK.g + (MONO_BLUE_WHITE.g - MONO_BLUE_DARK.g) * t),
+    b: Math.round(MONO_BLUE_DARK.b + (MONO_BLUE_WHITE.b - MONO_BLUE_DARK.b) * t),
+  };
+}
+
+/** PWV5 color detail: the stored red/green/blue components ARE the column color. */
+export function rgbColumnColor(r: number, g: number, b: number): Rgb {
+  const to255 = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255);
+  return { r: to255(r), g: to255(g), b: to255(b) };
+}
+
+/** PWV4 color preview: two-tone columns, back = rgb·luminance, front brighter. */
+export const PWV4_FRONT_BOOST = 32 / 127;
+
+export function pwv4BackColor(r: number, g: number, b: number, luminance: number): Rgb {
+  const lum = Math.min(1, Math.max(0, luminance));
+  return {
+    r: Math.round(Math.min(1, r) * lum * 255),
+    g: Math.round(Math.min(1, g) * lum * 255),
+    b: Math.round(Math.min(1, b) * lum * 255),
+  };
+}
+
+export function pwv4FrontColor(r: number, g: number, b: number, luminance: number): Rgb {
+  const lum = Math.min(1, Math.max(0, luminance));
+  const boosted = (v: number) => Math.min(1, Math.min(1, v) * lum + PWV4_FRONT_BOOST);
+  return {
+    r: Math.round(boosted(r) * 255),
+    g: Math.round(boosted(g) * 255),
+    b: Math.round(boosted(b) * 255),
+  };
 }
 
 /**
- * Resolves the genuine waveform a renderer must draw for the current zoom.
- *
- * Only real data is ever returned: the ANLZ variants attached to the track
- * (plus the plain `analysis` variant). When the track carries no Rekordbox
- * waveform at all this returns null and the renderer shows the honest empty
- * state — it never synthesizes columns from BPM/beatgrid.
+ * 3-band waveform (PWV6/PWV7): documented colors — lows dark blue, mid-range
+ * amber, highs white — drawn on the same axis, highs last. The mid band is
+ * translucent so the low+mid overlap reads brown, as in the original.
  */
-export function selectTrackWaveform(
-  track: RenderTrackWaveformSource,
-  viewDurationSec: number,
-  widthPx: number
-): WaveformAnalysisData | null {
-  const candidates =
-    track.analysisVariants && track.analysisVariants.length > 0
-      ? track.analysisVariants
-      : track.analysis
-        ? [track.analysis]
-        : [];
-  if (candidates.length === 0) return null;
-  const index = selectWaveformVariant(
-    candidates.map((candidate) => candidate.length),
-    viewDurationSec,
-    track.duration,
-    widthPx
-  );
-  return index >= 0 ? candidates[index] : null;
+export const THREE_BAND_LOW: Rgb = { r: 0, g: 0, b: 190 };
+export const THREE_BAND_MID: Rgb = { r: 255, g: 176, b: 0 };
+export const THREE_BAND_HIGH: Rgb = { r: 255, g: 255, b: 255 };
+export const THREE_BAND_MID_ALPHA = 0.75;
+
+export interface BandLayer {
+  color: Rgb;
+  alpha: number;
+  /** Half height of the centered bar in px; 0 = silent, nothing drawn. */
+  halfHeight: number;
+}
+
+export function threeBandLayers(
+  low: number,
+  mid: number,
+  high: number,
+  maxHalfH: number
+): BandLayer[] {
+  const scale = (v: number) => (v > 0 ? Math.max(1, Math.min(1, v) * maxHalfH) : 0);
+  return [
+    { color: THREE_BAND_LOW, alpha: 1, halfHeight: scale(low) },
+    { color: THREE_BAND_MID, alpha: THREE_BAND_MID_ALPHA, halfHeight: scale(mid) },
+    { color: THREE_BAND_HIGH, alpha: 1, halfHeight: scale(high) },
+  ];
 }
 
 /**
- * Human-readable missing-waveform status (honest empty state). Distinguishes
- * Rekordbox-sourced tracks (their waveform may only come from ANLZ, so a
- * missing waveform means "no Rekordbox analysis data found") from local
- * tracks without an analysis.
+ * Comb look from the reference: once a column slot is wider than 2 px a 1 px
+ * black gap separates neighbouring columns; narrow columns stay solid.
  */
-export function waveformMissingNotice(track: { origin?: DataOrigin }): {
-  title: string;
-  hint: string;
+export function columnDrawWidth(slotWidth: number): number {
+  if (!(slotWidth > 0)) return 1;
+  if (slotWidth <= 2) return slotWidth;
+  return Math.max(1, slotWidth - 1);
+}
+
+/** Rekordbox shades alternate bars slightly lighter behind the waveform. */
+export function isBarShaded(barNumber: number): boolean {
+  return barNumber % 2 === 0;
+}
+
+/** Background tone painted behind shaded (even) bars. */
+export const BAR_SHADE_FILL = '#101117';
+
+// ---------------------------------------------------------------------------
+// Without ANLZ there is no waveform data at all: the renderers draw an empty
+// pane (like the original) plus an honest hint — no invented amplitudes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Peak-hold downsampling for the overview: takes the stored values verbatim
+ * (per-band maximum inside the column) — no averaging, no smoothing, nothing
+ * computed beyond selecting stored samples. Pinned by R7.
+ */
+export function peakHoldColumn(
+  peaks: Float32Array,
+  lowEnergy: Float32Array,
+  midEnergy: Float32Array,
+  highEnergy: Float32Array,
+  start: number,
+  end: number,
+  luminance?: Float32Array,
+  backPeaks?: Float32Array,
+  frontPeaks?: Float32Array
+): {
+  peak: number;
+  low: number;
+  mid: number;
+  high: number;
+  lum: number;
+  back: number;
+  front: number;
 } {
-  const origin = track.origin;
-  const isRekordbox =
-    origin === DataOrigin.REKORDBOX_XML ||
-    origin === DataOrigin.REKORDBOX_DB ||
-    origin === DataOrigin.REKORDBOX_ANLZ;
-  return isRekordbox
-    ? {
-        title: 'Keine Rekordbox-Waveformdaten vorhanden.',
-        hint: 'Keine Rekordbox-Analysedaten gefunden – ANLZ über DATA zuordnen oder AnalysisDataPath prüfen.',
-      }
-    : {
-        title: 'Keine Waveformdaten vorhanden.',
-        hint: 'Für diesen Track existiert keine Wellenform-Analyse.',
-      };
-}
-
-export interface GridRenderSelection {
-  beats: VisibleBeat[];
-  /** True only when no stored beat nodes existed (documented uniform case). */
-  uniformFallback: boolean;
-}
-
-/**
- * Resolves the beat lines a renderer must draw for a view window.
- *
- * Original Rekordbox beat nodes (PQTZ / persisted dense grid) have priority
- * and are used verbatim — their exact times are never re-quantized. The
- * uniform firstBeat+bpm reconstruction runs ONLY for grids without stored
- * nodes (the documented compact-entry case) and reports itself through
- * `uniformFallback` so views can mark the difference.
- */
-export function selectGridRenderBeats(
-  beatGrid: Pick<BeatGrid, 'beats' | 'firstBeat' | 'bpm' | 'meter'>,
-  winStart: number,
-  winEnd: number,
-  cap: number = 50000
-): GridRenderSelection {
-  if (beatGrid.beats && beatGrid.beats.length > 0) {
-    return {
-      beats: collectVisibleBeats(beatGrid.beats, winStart, winEnd, cap),
-      uniformFallback: false,
-    };
+  let peak = 0;
+  let low = 0;
+  let mid = 0;
+  let high = 0;
+  let lum = 0;
+  let back = 0;
+  let front = 0;
+  for (let b = start; b < end; b++) {
+    const p = peaks[b] || 0;
+    if (p > peak) peak = p;
+    const l = lowEnergy[b] || 0;
+    if (l > low) low = l;
+    const m = midEnergy[b] || 0;
+    if (m > mid) mid = m;
+    const h = highEnergy[b] || 0;
+    if (h > high) high = h;
+    if (luminance) {
+      const v = luminance[b] || 0;
+      if (v > lum) lum = v;
+    }
+    if (backPeaks) {
+      const v = backPeaks[b] || 0;
+      if (v > back) back = v;
+    }
+    if (frontPeaks) {
+      const v = frontPeaks[b] || 0;
+      if (v > front) front = v;
+    }
   }
-  const bpm = beatGrid.bpm > 0 ? beatGrid.bpm : 130;
-  const meter = beatGrid.meter > 0 ? beatGrid.meter : 4;
-  const secondsPerBeat = 60.0 / bpm;
-  const startBeat = Math.max(0, Math.floor((winStart - beatGrid.firstBeat) / secondsPerBeat));
-  const endBeat = Math.ceil((winEnd - beatGrid.firstBeat) / secondsPerBeat);
-  const beats: VisibleBeat[] = [];
-  for (let b = startBeat; b <= endBeat; b++) {
-    beats.push({
-      time: beatGrid.firstBeat + b * secondsPerBeat,
-      isBar: b % meter === 0,
-      barNumber: Math.floor(b / meter) + 1,
-      tail: false,
-    });
-    if (beats.length >= cap) break;
-  }
-  return { beats, uniformFallback: true };
+  return { peak, low, mid, high, lum, back, front };
 }

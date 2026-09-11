@@ -8,8 +8,14 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
 import {
-  selectTrackWaveform,
-  waveformMissingNotice,
+  collectVisibleBeats,
+  monoBlueColor,
+  peakHoldColumn,
+  pwv4BackColor,
+  pwv4FrontColor,
+  rgbColumnColor,
+  rgbCss,
+  selectWaveformVariant,
 } from '../waveform/renderModel';
 
 interface TrackOverviewProps {
@@ -32,6 +38,29 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [fitTick, setFitTick] = useState(0);
+
+  // Crisp canvas: back the CSS box with devicePixelRatio-scaled pixels.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
+    const fit = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        setFitTick((t) => t + 1);
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
 
   // Draw overview canvas
   useEffect(() => {
@@ -65,10 +94,20 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     const targetCols = width;
 
     // Zoom-matched variant (the overview shows the full track): genuine ANLZ
-    // data only — the selector just picks the fitting resolution. Tracks
-    // without any waveform render the honest empty state below (never a
-    // synthesized contour from BPM/beatgrid).
-    const analysis = selectTrackWaveform(track, duration, targetCols);
+    // data only — the selector just picks the fitting resolution.
+    const candidates =
+      track.analysisVariants && track.analysisVariants.length > 0
+        ? track.analysisVariants
+        : track.analysis
+          ? [track.analysis]
+          : [];
+    const variantIdx = selectWaveformVariant(
+      candidates.map((c) => c.length),
+      duration,
+      track.duration,
+      targetCols
+    );
+    const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
 
     if (analysis && analysis.length > 0) {
       const buckets = analysis.length;
@@ -79,61 +118,63 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         analysis.sourceTag === 'PWV2' ||
         analysis.sourceTag === 'PWV3';
       const bucketsPerCol = buckets / targetCols;
+      const centerY = height / 2;
 
       for (let col = 0; col < targetCols; col++) {
         const startB = Math.floor(col * bucketsPerCol);
         const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
+        // Peak-hold: take the stored values verbatim (per-band maximum),
+        // no averaging or smoothing of our own.
+        const held = peakHoldColumn(
+          analysis.peaks,
+          analysis.lowEnergy,
+          analysis.midEnergy,
+          analysis.highEnergy,
+          startB,
+          endB,
+          analysis.luminance,
+          analysis.backPeaks,
+          analysis.frontPeaks
+        );
+        const maxHalf = (height - 4) / 2;
 
-        let maxPeak = 0;
-        let sumLow = 0;
-        let sumMid = 0;
-        let sumHigh = 0;
-        let count = 0;
-
-        for (let b = startB; b < endB; b++) {
-          const p = analysis.peaks[b] || 0;
-          if (p > maxPeak) maxPeak = p;
-          sumLow += analysis.lowEnergy[b] || 0;
-          sumMid += analysis.midEnergy[b] || 0;
-          sumHigh += analysis.highEnergy[b] || 0;
-          count++;
-        }
-
-        const low = count > 0 ? sumLow / count : 0;
-        const mid = count > 0 ? sumMid / count : 0;
-        const high = count > 0 ? sumHigh / count : 0;
-
-        const barH = Math.max(2, maxPeak * (height - 4));
-        const yTop = (height - barH) / 2;
-
-        if (isMonoPreview) {
-          // Classic Rekordbox preview blue for mono variants
-          ctx.fillStyle = '#00a2ff';
-          ctx.fillRect(col, yTop, 1, barH);
-          ctx.fillStyle = '#b3e5fc';
-          ctx.fillRect(col, yTop + barH * 0.3, 1, barH * 0.4);
+        if (analysis.frontPeaks && analysis.luminance && analysis.backPeaks) {
+          // Documented PWV4 two-tone look, peak-held per column.
+          const backH = Math.max(1, held.back * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4BackColor(held.low, held.mid, held.high, held.lum));
+          ctx.fillRect(col, centerY - backH, 1, backH * 2);
+          const frontH = Math.max(1, held.front * maxHalf);
+          ctx.fillStyle = rgbCss(pwv4FrontColor(held.low, held.mid, held.high, held.lum));
+          ctx.fillRect(col, centerY - frontH, 1, frontH * 2);
+        } else if (isMonoPreview) {
+          // Documented blue ramp for mono variants.
+          const barH = Math.max(1, held.peak * maxHalf);
+          ctx.fillStyle = rgbCss(monoBlueColor(held.peak));
+          ctx.fillRect(col, centerY - barH, 1, barH * 2);
         } else {
-          // Rekordbox RGB spectral styling: bass orange-red, mids green,
-          // highs ice blue; full-spectrum columns render to white.
-          const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
-          const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
-          const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
-
-          ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-          ctx.fillRect(col, yTop, 1, barH);
+          // Documented PWV5: stored RGB is the color, stored height the size.
+          const barH = Math.max(1, held.peak * maxHalf);
+          ctx.fillStyle = rgbCss(rgbColumnColor(held.low, held.mid, held.high));
+          ctx.fillRect(col, centerY - barH, 1, barH * 2);
         }
       }
-    } else {
-      // Honest empty state: no waveform is invented when no Rekordbox ANLZ
-      // data is attached. The cue markers, phrase bar and viewport frame still
-      // draw on top; a clear status label keeps the lane readable.
-      const notice = waveformMissingNotice(track);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
-      ctx.font = '8px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(notice.title, width / 2, height / 2 + 3);
-      ctx.textAlign = 'left';
     }
+
+    // Authentic per-bar separators (reference 01: dark ticks on the strip) —
+    // pure grid data, drawn with or without analysis.
+    if (track.beatGrid.beats && track.beatGrid.beats.length > 0) {
+      const barTicks = collectVisibleBeats(track.beatGrid.beats, 0, duration, 4000).filter(
+        (v) => v.isBar
+      );
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      for (const vbar of barTicks) {
+        const bx = Math.round((vbar.time / duration) * width);
+        ctx.fillRect(bx, 0, 1, height);
+      }
+    }
+
+    // Without ANLZ there is no waveform data — like the original, the strip
+    // stays empty (no invented contour); only the grid ticks above remain.
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
     if (track.phrases && track.phrases.length > 0) {
@@ -202,7 +243,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, height);
     ctx.stroke();
-  }, [track, currentTime, viewOffset, viewDuration]);
+  }, [track, currentTime, viewOffset, viewDuration, fitTick]);
 
   // Handle click or drag on overview to seek / pan
   const handlePointerInteraction = useCallback(

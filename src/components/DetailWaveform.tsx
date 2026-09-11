@@ -18,10 +18,19 @@ import {
   CuePoint,
 } from '../types/rekordbox';
 import {
+  BAR_SHADE_FILL,
   beatIndexAtOrAfter,
-  selectGridRenderBeats,
-  selectTrackWaveform,
-  waveformMissingNotice,
+  collectVisibleBeats,
+  columnDrawWidth,
+  isBarShaded,
+  monoBlueColor,
+  pwv4BackColor,
+  pwv4FrontColor,
+  rgbColumnColor,
+  rgbCss,
+  selectWaveformVariant,
+  threeBandLayers,
+  VisibleBeat,
 } from '../waveform/renderModel';
 import {
   Plus,
@@ -70,8 +79,6 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
-  /** Drop a palette clip onto the deck timeline at the pointer position. */
-  onDropClip?: (clipId: string, time: number) => void;
 }
 
 interface ContextMenuState {
@@ -92,29 +99,39 @@ function anlzLookupParts(track: TrackModel | null): { label: string; title: stri
     return { label: `${track.analysis.length} BUCKETS`, title: 'Genuine Rekordbox-ANLZ zugeordnet.' };
   }
   const raw = track?.rawXmlAttributes?.anlzLookup;
-  if (!raw) {
-    return {
-      label: '— KEINE ANLZ-WAVEFORM',
-      title: 'Keine Rekordbox-Analysedaten gefunden – ehrlicher Leerzustand (keine erfundene Waveform).',
-    };
-  }
+  if (!raw) return { label: '— KEINE WAVEFORM (ANLZ fehlt)', title: 'Keine ANLZ zugeordnet – wie im Original wird keine Wellenform gezeichnet; über DATA zuordnen.' };
   try {
-    const lk = JSON.parse(raw) as { via: 'DB' | 'PPTH' | 'PPTH_NAME' | null; scanned: number; folders: number; note?: string };
+    const lk = JSON.parse(raw) as {
+      via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
+      scanned: number;
+      folders: number;
+      note?: string;
+      db?: { found: number; readable: number; links: number; reasons: string[] };
+    };
+    // DB-Pfad-Diagnose: sichtbar machen, ob die lokale Rekordbox-DB gefunden
+    // und lesbar war und wie viele ANLZ-Links der Index liefert.
+    const dbShort = lk.db
+      ? `DB ${lk.db.readable}/${lk.db.found} LESBAR • ${lk.db.links} LINKS`
+      : '';
     if (lk.via === 'PPTH_NAME') {
       return { label: '— ANLZ via DATEINAME (PRÜFEN!)', title: lk.note || 'ANLZ per eindeutigem Dateinamen zugeordnet – Datei vermutlich nach der Analyse verschoben.' };
     }
     if (lk.via === 'PPTH' || lk.via === 'DB') {
-      return { label: '— ANLZ gefunden (Lese-Fehler)', title: 'ANLZ-Datei gefunden, aber das Lesen lieferte keine Waveform – Pfad prüfen.' };
+      return { label: '— ANLZ zugeordnet (Lese-Fehler)', title: 'ANLZ-Datei gefunden, aber das Lesen lieferte keine Waveform – Pfad prüfen.' };
     }
     return {
-      label: `— KEIN ANLZ (SCAN ${lk.scanned} DAT.)`,
-      title: `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung. Manuell über DATA zuordnen.`,
+      label: `— KEIN ANLZ${dbShort ? ` • ${dbShort}` : ''} • SCAN ${lk.scanned} DAT.`,
+      title:
+        `Automatische ANLZ-Suche: ${lk.scanned} ANLZ-Dateien in ${lk.folders} Ordner(n) gescannt, keine Übereinstimmung.` +
+        (lk.db
+          ? lk.db.readable === 0
+            ? ` DB-Pfad: ${lk.db.reasons.join(' | ') || 'keine lesbare master.db/exportLibrary.db.'}`
+            : ` DB lesbar (${lk.db.links} Links), aber kein exakter Audio-Pfad-Treffer für diesen Track.`
+          : '') +
+        ' Manuell über DATA zuordnen.',
     };
   } catch {
-    return {
-      label: '— KEINE ANLZ-WAVEFORM',
-      title: 'Keine Rekordbox-Analysedaten gefunden – ehrlicher Leerzustand (keine erfundene Waveform).',
-    };
+    return { label: '— KEINE WAVEFORM', title: 'ANLZ-Status nicht lesbar.' };
   }
 }
 
@@ -153,7 +170,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
-  onDropClip,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -163,6 +179,26 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
   const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Crisp canvas: back the CSS box with devicePixelRatio-scaled pixels so the
+  // visual lock stays sharp on HiDPI displays instead of a stretched bitmap.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
+    const fit = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
 
   // Time to pixel / pixel to time conversions
   const timeToPixel = useCallback(
@@ -254,17 +290,26 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
-      // Original Rekordbox beat nodes (PQTZ/persisted) are drawn at their exact
-      // recorded times; the uniform firstBeat+bpm reconstruction is only used
-      // for compact grids without stored nodes (documented single fallback).
+      // Original Rekordbox beat nodes (PQTZ/XML) have priority; the uniform
+      // firstBeat+bpm reconstruction runs only for compact grids without nodes.
       const bg = track.beatGrid;
       const secondsPerBeat = 60.0 / bg.bpm;
-      const gridSelection = selectGridRenderBeats(
-        bg,
-        viewOffset - 1,
-        viewOffset + viewDuration + 1
-      );
-      const visibleBeats = gridSelection.beats;
+      let visibleBeats: VisibleBeat[];
+      if (bg.beats && bg.beats.length > 0) {
+        visibleBeats = collectVisibleBeats(bg.beats, viewOffset - 1, viewOffset + viewDuration + 1);
+      } else {
+        const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
+        const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+        visibleBeats = [];
+        for (let b = startBeat; b <= endBeat; b++) {
+          visibleBeats.push({
+            time: bg.firstBeat + b * secondsPerBeat,
+            isBar: b % bg.meter === 0,
+            barNumber: Math.floor(b / bg.meter) + 1,
+            tail: false,
+          });
+        }
+      }
 
       // Bar-label decluttering: Rekordbox numbers bars only as densely as the
       // zoom allows (e.g. every 4 bars: 129, 133). Below ~40 px per bar only
@@ -318,6 +363,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
+      // 2a. Authentic alternating bar shading behind the waveform
+      // (reference 01/02: even bars sit on a slightly lighter ground).
+      const barStarts = visibleBeats.filter((v) => v.isBar);
+      for (let i = 0; i < barStarts.length; i++) {
+        const a = barStarts[i];
+        if (!isBarShaded(a.barNumber)) continue;
+        const nextTime =
+          i + 1 < barStarts.length ? barStarts[i + 1].time : viewOffset + viewDuration + 1;
+        const x1 = Math.max(0, timeToPixel(a.time, width));
+        const x2 = Math.min(width, timeToPixel(nextTime, width));
+        if (x2 - x1 <= 0) continue;
+        ctx.fillStyle = BAR_SHADE_FILL;
+        ctx.fillRect(x1, 18, x2 - x1, height - 18);
+      }
+
       // 2b. Rekordbox Phrase Blocks (PSSI Song Structure)
       if (track.phrases && track.phrases.length > 0) {
         track.phrases.forEach((p) => {
@@ -344,12 +404,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 3. Render Waveform (BLUE / RGB / 3BAND)
-      // Zoom-matched variant: every candidate is genuine Rekordbox ANLZ data —
-      // the selector only decides which resolution fits the current view.
-      // When the track carries no waveform at all, `analysis` stays null and
-      // the renderer shows the honest missing-data state (never synthesized).
-      const analysis = selectTrackWaveform(track, viewDuration, width);
-      let missingNotice: { title: string; hint: string } | null = null;
+      // Zoom-matched variant: every candidate is genuine ANLZ data — the
+      // selector only decides which resolution fits the current view.
+      const candidates =
+        track.analysisVariants && track.analysisVariants.length > 0
+          ? track.analysisVariants
+          : track.analysis
+            ? [track.analysis]
+            : [];
+      const variantIdx = selectWaveformVariant(
+        candidates.map((c) => c.length),
+        viewDuration,
+        track.duration,
+        width
+      );
+      const analysis = variantIdx >= 0 ? candidates[variantIdx] : null;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         // DAT-only preview variants (PWAV/PWV2/PWV3) carry one mono channel;
@@ -370,50 +439,54 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const centerT = t + secPerBucket * 0.5;
           const x = timeToPixel(centerT, width);
           const nextX = timeToPixel(centerT + secPerBucket, width);
-          const colW = Math.max(1.2, nextX - x);
+          // Comb look: 1 px black gap between columns once zoomed in enough.
+          const colW = columnDrawWidth(Math.max(1, nextX - x));
 
           const peak = analysis.peaks[b];
           const low = analysis.lowEnergy[b];
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
-          if (waveformMode === 'BLUE' || (waveformMode === 'RGB' && isMonoPreview)) {
-            // High-contrast electric blue waveform (also the authentic look
-            // for mono preview variants, matching Rekordbox's preview blue)
-            const barH = Math.max(2, peak * maxHalfH);
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB spectral mapping: bass orange-red, mids
-            // green, highs ice blue; full-spectrum columns render to white.
-            const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 255 + mid * 110 + high * 40));
-            const g = Math.min(255, Math.floor(low * 80 + mid * 215 + high * 150));
-            const bCol = Math.min(255, Math.floor(mid * 45 + high * 250));
+          const colX = x - colW * 0.5;
 
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
-            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
+          if (waveformMode === '3BAND') {
+            // Documented 3-band look (PWV6/PWV7): same axis, lows dark blue,
+            // mids amber translucent, highs white last.
+            for (const layer of threeBandLayers(low, mid, high, maxHalfH)) {
+              if (layer.halfHeight <= 0) continue;
+              ctx.globalAlpha = layer.alpha;
+              ctx.fillStyle = rgbCss(layer.color);
+              ctx.fillRect(colX, centerY - layer.halfHeight, colW, layer.halfHeight * 2);
+            }
+            ctx.globalAlpha = 1;
+          } else if (waveformMode === 'BLUE') {
+            // Documented blue waveform: stored height + stored whiteness.
+            const w = analysis.whiteness ? analysis.whiteness[b] : peak;
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(monoBlueColor(w));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
+          } else if (analysis.frontPeaks && analysis.luminance && analysis.backPeaks) {
+            // Documented PWV4 two-tone: back column rgb·luminance at the back
+            // height, brighter front column at the stored front height.
+            const lum = analysis.luminance[b];
+            const backH = Math.max(1, analysis.backPeaks[b] * maxHalfH);
+            ctx.fillStyle = rgbCss(pwv4BackColor(low, mid, high, lum));
+            ctx.fillRect(colX, centerY - backH, colW, backH * 2);
+            const frontH = Math.max(1, analysis.frontPeaks[b] * maxHalfH);
+            ctx.fillStyle = rgbCss(pwv4FrontColor(low, mid, high, lum));
+            ctx.fillRect(colX, centerY - frontH, colW, frontH * 2);
+          } else if (isMonoPreview) {
+            // Mono variant in RGB mode: the documented blue ramp.
+            const w = analysis.whiteness ? analysis.whiteness[b] : peak;
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(monoBlueColor(w));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
           } else {
-            // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.85);
-            const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.55);
-
-            // Lows (Red)
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
-            // Mids (Cyan/Green)
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
+            // Documented PWV5: stored RGB is the column color, stored 5-bit
+            // value the column height.
+            const barH = Math.max(1, peak * maxHalfH);
+            ctx.fillStyle = rgbCss(rgbColumnColor(low, mid, high));
+            ctx.fillRect(colX, centerY - barH, colW, barH * 2);
           }
         }
 
@@ -427,11 +500,18 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.textAlign = 'left';
         }
       } else {
-        // Honest empty state: no synthetic waveform is ever drawn when
-        // Rekordbox analysis data is missing. The beatgrid overlay, phrases,
-        // cues and loops still render above this lane; the explicit status
-        // message is drawn on top after all overlay layers (see below).
-        missingNotice = waveformMissingNotice(track);
+        // Without ANLZ there is no waveform data — the original Rekordbox
+        // shows an empty waveform pane here. We draw nothing invented (no
+        // fake contour, no amplitudes); the beatgrid lines and ruler above
+        // already visualize the imported grid data. Only the honest hint:
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('KEINE WAVEFORM-DATEN (ANLZ fehlt) – das Original zeigt hier ebenfalls keine Wellenform', width / 2, height - 10);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.font = '9px sans-serif';
+        ctx.fillText('Beatgrid & Cues stammen aus dem Rekordbox-Import – für echte Peaks ANLZ über DATA zuordnen', width / 2, height - 22);
+        ctx.textAlign = 'left';
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
@@ -592,26 +672,10 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const rawX = timeToPixel(hoveredTime, width);
 
         if (snappedX >= 0 && snappedX <= width) {
-          // Badge reads the ORIGINAL stored beat node (verbatim PQTZ times);
-          // uniform scalar math only runs for grids without stored nodes.
-          let isBar: boolean;
-          let barNum: number;
-          let beatInBar: number;
-          if (bg.beats && bg.beats.length > 0) {
-            const nodeIdx = Math.min(
-              beatIndexAtOrAfter(bg.beats, snappedTime),
-              bg.beats.length - 1
-            );
-            const node = bg.beats[nodeIdx];
-            isBar = node.isBarStart;
-            barNum = node.barNumber;
-            beatInBar = node.beatInBar;
-          } else {
-            const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
-            isBar = beatIndex % bg.meter === 0;
-            barNum = Math.floor(beatIndex / bg.meter) + 1;
-            beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
-          }
+          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
+          const isBar = beatIndex % bg.meter === 0;
+          const barNum = Math.floor(beatIndex / bg.meter) + 1;
+          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
 
           // Subtle glowing translucent beam along the snapped grid line
           const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
@@ -685,18 +749,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         ctx.lineTo(playX, 6);
         ctx.closePath();
         ctx.fill();
-      }
-
-      // 8b. Honest missing-waveform status (topmost layer, never fake data)
-      if (missingNotice) {
-        ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText(missingNotice.title, width / 2, height - 20);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.font = '10px sans-serif';
-        ctx.fillText(missingNotice.hint, width / 2, height - 6);
-        ctx.textAlign = 'left';
       }
 
       animId = requestAnimationFrame(render);
@@ -859,21 +911,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
-
-        // Palette clips use an internal MIME type so dropping them never
-        // falls through to the file importer. The pointer position becomes
-        // the insert point, just like dropping a snippet in the original.
-        const clipId = e.dataTransfer.getData('application/x-airdox-palette-clip') ||
-          e.dataTransfer.getData('text/plain');
-        if (clipId && onDropClip && track && containerRef.current) {
-          const rect = containerRef.current.getBoundingClientRect();
-          const waveformLeft = rect.left + 48; // left control column
-          const waveformWidth = Math.max(1, rect.width - 48);
-          const x = Math.max(0, Math.min(waveformWidth, e.clientX - waveformLeft));
-          const time = Math.max(0, Math.min(track.duration, viewOffset + (x / waveformWidth) * viewDuration));
-          onDropClip(clipId, time);
-          return;
-        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }
@@ -1123,7 +1160,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               const anl = anlzLookupParts(track);
               return (
                 <span className="text-neutral-400" title={anl.title}>
-                  {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'KEINE ANLZ-WAVEFORM • '}
+                  {track.analysis?.sourceTag ? `${track.analysis.sourceTag} • ` : track.analysis ? '' : 'KEINE WAVEFORM • '}
                   {anl.label}
                   {track.analysisVariants && track.analysisVariants.length > 1
                     ? ` • ${track.analysisVariants.length} VARIANTEN`

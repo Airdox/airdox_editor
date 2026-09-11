@@ -36,8 +36,14 @@ jobs:
       - name: Renderer bauen (Vite)
         run: npm run build
 
-      - name: Waveform-Gates / Quellenherkunft verifizieren
-        run: npm run verify:waveform
+      - name: SQLCipher-Modul für Electron bauen (DB-Import)
+        # windows-latest hat VS Build Tools + Python vorinstalliert.
+        # Kompiliert better-sqlite3-multiple-ciphers für die Electron-ABI,
+        # damit master.db/exportLibrary.db lesbar sind (gezielte
+        # ANLZ-Auflösung pro Track via AnalysisDataPath, kein Vollscan).
+        # Schlägt das Kompilieren fehl, ist der Build rot – ein grüner
+        # Build enthält garantiert den DB-Import.
+        run: npm run rebuild:electron
 
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never

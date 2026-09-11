@@ -33,20 +33,9 @@ export function dirOfPath(filePath: string): string {
 /**
  * Resolves an AnalysisDataPath value to a concrete ANLZ file path.
  *
- * Deterministic path derivation ONLY — never a guess:
- *  - leading separators are stripped, the path is normalized;
- *  - an optional leading `share/` component is dropped (it is re-added from
- *    the anchor below);
- *  - a remaining `PIONEER/USBANLZ/...` tail is re-anchored at
- *    `<dbDir>/share/PIONEER/USBANLZ/...`;
- *  - no music-folder mirroring, no filename construction, no track-name
- *    lookup, no recursive search, no hash-directory guessing, and no search
- *    of alternative storage locations.
- *
  * @param dbDir Directory containing the Rekordbox database (master.db /
  *   exportLibrary.db); used as the anchor for `<dbDir>/share/...`.
- * @param analysisDataPath Raw AnalysisDataPath value from the database row
- *   (e.g. `/PIONEER/USBANLZ/0e8/<UUID>/ANLZ0000.DAT` or an absolute path).
+ * @param analysisDataPath Raw AnalysisDataPath value from the database row.
  * @returns Absolute file path, or null when no deterministic resolution exists.
  */
 export function resolveAnalysisFilePath(

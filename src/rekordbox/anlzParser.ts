@@ -231,6 +231,10 @@ function createWaveform(
   const lowEnergy = new Float32Array(entryCount);
   const midEnergy = new Float32Array(entryCount);
   const highEnergy = new Float32Array(entryCount);
+  const whiteness = style === 'MONO_5BIT' ? new Float32Array(entryCount) : undefined;
+  const luminance = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
+  const backPeaks = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
+  const frontPeaks = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
 
   for (let i = 0; i < entryCount; i++) {
     const p = dataOffset + i * entryBytes;
@@ -240,13 +244,17 @@ function createWaveform(
     let high = 0;
 
     if (style === 'MONO_5BIT') {
+      // Documented blue waveform: 5 low-order bits = column height,
+      // 3 high-order bits = whiteness of the blue shade.
       const value = view.getUint8(p);
       peak = (value & 0x1f) / 31;
+      whiteness![i] = ((value >> 5) & 0x07) / 7;
       low = mid = high = peak;
     } else if (style === 'MONO_4BIT') {
       peak = (view.getUint8(p) & 0x0f) / 15;
       low = mid = high = peak;
     } else if (style === 'RGB_5BIT') {
+      // Documented color detail: 3 bits red, 3 green, 3 blue, 5 bits height.
       const value = view.getUint16(p, false);
       low = ((value >> 13) & 0x07) / 7;
       mid = ((value >> 10) & 0x07) / 7;
@@ -259,13 +267,22 @@ function createWaveform(
       low = view.getUint8(p + 2) / 255;
       peak = Math.max(low, mid, high);
     } else if (style === 'COLOR_6BYTE') {
-      // PWV4: 6 bytes per column. The exact Rekordbox color mapping is not
-      // fully published; the final three bytes carry the dominant band
-      // energy and are used as a labeled visual approximation.
-      low = view.getUint8(p + 3) / 255;
-      mid = view.getUint8(p + 4) / 255;
-      high = view.getUint8(p + 5) / 255;
-      peak = Math.max(low, mid, high);
+      // Documented PWV4 layout (jan2000 / Deep Symmetry): byte0 unknown,
+      // byte1 luminance boost, byte2 blue-waveform intensity, byte3 red,
+      // byte4 green, byte5 blue (= front waveform height). Back column
+      // height = max(byte2, red, green); all values are 7-bit (/127).
+      const lum = (view.getUint8(p + 1) & 0x7f) / 127;
+      const d2 = (view.getUint8(p + 2) & 0x7f) / 127;
+      const r = (view.getUint8(p + 3) & 0x7f) / 127;
+      const g = (view.getUint8(p + 4) & 0x7f) / 127;
+      const b = (view.getUint8(p + 5) & 0x7f) / 127;
+      low = r;
+      mid = g;
+      high = b;
+      luminance![i] = lum;
+      frontPeaks![i] = b;
+      backPeaks![i] = Math.max(d2, r, g);
+      peak = backPeaks![i];
     }
 
     peaks[i] = peak;
@@ -284,6 +301,10 @@ function createWaveform(
     lowEnergy,
     midEnergy,
     highEnergy,
+    whiteness,
+    luminance,
+    backPeaks,
+    frontPeaks,
     origin: DataOrigin.REKORDBOX_ANLZ,
   };
 }

@@ -219,16 +219,6 @@ runTest('T8 notice', 'Grid edits produce a traceable USER_EDIT notice', () => {
   const shift = describeGridEdit('SHIFT', 1.0, 0.999, 5000);
   assert(shift.includes('Grid-Shift'), 'Shift source named');
   assert(shift.includes('-1.0 ms'), 'Negative delta signed');
-
-  // Editing a grid that came from Rekordbox analysis must state the deviation
-  // from the imported analysis explicitly; local/unrelated grids stay neutral.
-  const rbEdit = describeGridEdit('SET_1_1', 0.469, 0.512, 512, true);
-  assert(
-    rbEdit.includes('Beatgrid wurde gegenüber der importierten Rekordbox-Analyse verändert'),
-    'RB deviation sentence present'
-  );
-  const plainEdit = describeGridEdit('SET_1_1', 0.469, 0.512, 512, false);
-  assert(!plainEdit.includes('gegenüber der importierten Rekordbox-Analyse'), 'Non-RB grid notice neutral');
 });
 
 // ─── Bridge payload guard (desktop IPC regression) ──────────────────────────
