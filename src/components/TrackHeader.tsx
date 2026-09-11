@@ -68,7 +68,7 @@ function AnlzStatusChip({ track }: { track: TrackModel }) {
   } else {
     label = 'KEIN ANLZ';
     cls = 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10';
-    title = 'Keine ANLZ zugeordnet – Beatgrid-Vorschau aktiv. ANLZ über DATA oder automatische Zuordnung erhalten.';
+    title = 'ANLZ-Pipelinefehler: Der exakte AnalysisDataPath aus master.db wurde noch nicht geladen.';
   }
 
   return (

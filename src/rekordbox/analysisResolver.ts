@@ -74,9 +74,28 @@ export function resolveAnalysisFilePath(
 }
 
 /**
- * Normalizes an audio location (XML `file://` LOCATION or DB
- * FolderPath+FileName) into a canonical key so both spellings of the same
- * file compare equal. URL-decoded, separator-unified, case-folded.
+ * Joins djmdContent.FolderPath and FileNameL without corrupting Rekordbox 7
+ * rows where FolderPath already contains the complete media file path.
+ * This is deterministic path handling, not matching or guessing.
+ */
+export function joinAudioPath(
+  folder: string | undefined | null,
+  fileName: string | undefined | null
+): string {
+  const file = (fileName ?? '').trim();
+  const dir = (folder ?? '').trim();
+  if (!file) return dir;
+  if (!dir) return file;
+  const stripped = dir.replace(/[\\/]+$/, '');
+  const base = stripped.split(/[\\/]/).pop() ?? '';
+  if (base.toLowerCase() === file.toLowerCase()) return stripped;
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return `${stripped}${sep}${file}`;
+}
+
+/**
+ * Normalizes an audio location (XML `file://` LOCATION or DB media path) into
+ * a canonical exact key. URL-decoded, separator-unified, case-folded.
  */
 export function normalizeAudioKey(input: string | undefined | null): string {
   if (!input) return '';
@@ -142,11 +161,23 @@ export function buildDbAnalysisIndex(
   sourceDbDir: string
 ): Map<string, DbAnalysisRef> {
   const index = new Map<string, DbAnalysisRef>();
+  const dbDirKey = normalizeAudioKey(sourceDbDir);
   for (const track of tracks) {
     const key = normalizeAudioKey(track.originalMedia?.location);
     const analysisDataPath = track.rawXmlAttributes?.analysisDataPath?.trim() ?? '';
     if (!key || !analysisDataPath || index.has(key)) continue;
-    index.set(key, { trackId: track.id, analysisDataPath, sourceDbDir });
+    const ref = { trackId: track.id, analysisDataPath, sourceDbDir };
+    index.set(key, ref);
+
+    // Rekordbox 7 can export media below its library directory as a path
+    // relative to master.db: file://localhost//contents_<id>/... . The DB row
+    // contains the corresponding absolute path. Both keys are exact forms of
+    // the same address; deriving the relative spelling requires no search.
+    if (dbDirKey && key.startsWith(`${dbDirKey}/`)) {
+      const relative = key.slice(dbDirKey.length + 1);
+      if (relative && !index.has(relative)) index.set(relative, ref);
+      if (relative && !index.has(`/${relative}`)) index.set(`/${relative}`, ref);
+    }
   }
   return index;
 }

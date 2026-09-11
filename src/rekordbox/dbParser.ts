@@ -20,6 +20,7 @@ import {
   TrackModel,
 } from '../types/rekordbox';
 import { buildBeatGridFromTempo } from './xmlParser';
+import { joinAudioPath } from './analysisResolver';
 
 export type RekordboxDbType = 'MASTER_DB' | 'ONE_LIBRARY';
 
@@ -75,10 +76,7 @@ function normalizeRating(raw: unknown): number {
 }
 
 function joinWindowsPath(folder: string | undefined, fileName: string | undefined): string | undefined {
-  if (!fileName) return folder || undefined;
-  if (!folder) return fileName;
-  const sep = folder.includes('\\') ? '\\' : '/';
-  return folder.replace(/[\\/]+$/, '') + sep + fileName;
+  return joinAudioPath(folder, fileName) || undefined;
 }
 
 interface CueRowNormalized {

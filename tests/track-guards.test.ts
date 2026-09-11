@@ -14,6 +14,7 @@
  * Run with: npx tsx tests/track-guards.test.ts
  */
 
+import fs from 'node:fs';
 import {
   adoptSerializedGrid,
   describeGridEdit,
@@ -259,6 +260,17 @@ runTest('Bridge payload', 'IPC-shaped ANLZ payload decodes after normalization',
   assert(extraction.tagsFound.includes('PQTZ'), 'PQTZ decoded');
   assert(extraction.waveform !== undefined, 'Waveform decoded');
   assertEqual(extraction.waveform!.length, 600, 'DAT buckets intact');
+});
+
+runTest('DB-direct contract', 'XML deck load never scans or falls back when the DB link fails', () => {
+  const appSource = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = appSource.indexOf('const handleSelectTrackFromXml = async');
+  const end = appSource.indexOf('// ---- Phase 4: Project persistence', start);
+  assert(start >= 0 && end > start, 'XML deck-load source found');
+  const deckLoad = appSource.slice(start, end);
+  assert(!deckLoad.includes('scanAnlzPaths('), 'No ANLZ filesystem scan in deck load');
+  assert(!deckLoad.includes('ensureAnlzPpthIndex('), 'No PPTH fallback in deck load');
+  assert(deckLoad.includes('throw new Error(message)'), 'Missing exact DB address is a visible pipeline error');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────

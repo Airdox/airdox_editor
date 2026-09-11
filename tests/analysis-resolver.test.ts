@@ -14,6 +14,7 @@
 import {
   buildDbAnalysisIndex,
   dirOfPath,
+  joinAudioPath,
   normalizeAudioKey,
   resolveAnalysisFilePath,
 } from '../src/rekordbox/analysisResolver';
@@ -168,6 +169,44 @@ runTest('db index', 'Index links exact matches and skips incomplete rows', () =>
   assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
   assertEqual(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
   assertEqual(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
+});
+
+// ─── SUITE 6: exact Rekordbox 7 address forms ───────────────────────────────
+runTest('DB media address', 'FolderPath already containing FileNameL is not duplicated', () => {
+  assertEqual(
+    joinAudioPath('G:\\Music\\Artist\\track.mp3', 'track.mp3'),
+    'G:\\Music\\Artist\\track.mp3',
+    'Full FolderPath remains the exact DB address'
+  );
+  assertEqual(
+    joinAudioPath('G:\\Music\\Artist\\', 'track.mp3'),
+    'G:\\Music\\Artist\\track.mp3',
+    'Directory FolderPath receives the filename once'
+  );
+});
+
+runTest('DB media address', 'XML contents_ path resolves to the same exact DB row', () => {
+  const sourceDbDir = 'D:\\PIONEER\\Master';
+  const analysisDataPath = '/PIONEER/USBANLZ/0e8/u9/ANLZ0000.DAT';
+  const index = buildDbAnalysisIndex(
+    [{
+      id: 'db-rb7',
+      originalMedia: {
+        location: 'D:\\PIONEER\\Master\\contents_4136090260\\artist\\album\\track.mp3',
+      },
+      rawXmlAttributes: { analysisDataPath },
+    }],
+    sourceDbDir
+  );
+  const xmlLocation = 'file://localhost//contents_4136090260/artist/album/track.mp3';
+  const hit = index.get(normalizeAudioKey(xmlLocation));
+  assert(hit !== undefined, 'Relative XML address hits the exact absolute DB row');
+  assertEqual(hit!.analysisDataPath, analysisDataPath, 'The DB AnalysisDataPath is retained verbatim');
+  assertEqual(
+    resolveAnalysisFilePath(hit!.sourceDbDir, hit!.analysisDataPath),
+    'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u9\\ANLZ0000.DAT',
+    'The final ANLZ address is derived directly from master.db'
+  );
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
