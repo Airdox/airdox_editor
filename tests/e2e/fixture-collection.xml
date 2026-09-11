@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.2.16" Company="AlphaTheta" />
+  <COLLECTION Entries="3">
+    <TRACK TrackID="101" Name="Obsidian Voltage (Club Mix)" Artist="Klangfeld" Album="Subterranean Records"
+           Genre="Techno" TotalTime="240" AverageBpm="128.00" Tonality="6A" BitRate="320"
+           Location="file://localhost/D:/Music/Klangfeld/Obsidian%20Voltage.wav"
+           Comments="ID-Vertrag: TrackID == djmdContent.ID + exakter Pfad" Year="2025" Rating="255" PlayCount="18">
+      <TEMPO Inizio="0.000" Bpm="128.00" Metro="4/4" Battito="1" />
+      <POSITION_MARK Name="Intro Start" Type="0" Start="0.000" Num="-1" Red="255" Green="34" Blue="34" />
+      <POSITION_MARK Name="DROP 1" Type="0" Start="105.000" Num="-1" Red="255" Green="34" Blue="34" />
+      <POSITION_MARK Name="Hot Cue A" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255" />
+      <POSITION_MARK Name="Buildup 8-Bar Loop" Type="4" Start="75.000" End="90.000" Num="-1" Red="255" Green="170" Blue="0" />
+    </TRACK>
+    <TRACK TrackID="999" Name="Foreign-ID Roller" Artist="Subsonic Pulse" Album="Neurofunk Archives"
+           Genre="Drum &amp; Bass" TotalTime="240" AverageBpm="128.00" Tonality="4A" BitRate="320"
+           Location="file://localhost/D:/Music/Subsonic/Foreign%20ID%20Roller.wav"
+           Comments="Pfadvertrag: fremde TrackID, aber eindeutiger exakter Pfadtreffer" Year="2025" Rating="204" PlayCount="3">
+      <TEMPO Inizio="0.000" Bpm="128.00" Metro="4/4" Battito="1" />
+      <POSITION_MARK Name="First Beat" Type="0" Start="0.000" Num="-1" Red="255" Green="34" Blue="34" />
+    </TRACK>
+    <TRACK TrackID="777" Name="Unbekannter Track (nicht in master.db)" Artist="Niemand" Album="Nirgendwo"
+           Genre="Ambient" TotalTime="240" AverageBpm="120.00" Tonality="1A" BitRate="320"
+           Location="file://localhost/D:/Music/Missing/Not%20In%20DB.wav"
+           Comments="Pipelinefehler-Nachweis: weder ID- noch Pfadvertrag" Year="2025" Rating="0" PlayCount="0">
+      <TEMPO Inizio="0.000" Bpm="120.00" Metro="4/4" Battito="1" />
+    </TRACK>
+  </COLLECTION>
+</DJ_PLAYLISTS>

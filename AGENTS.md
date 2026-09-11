@@ -21,7 +21,7 @@ Rekordbox XML identity → master.db row → AnalysisDataPath → DAT/EXT/2EX
 
 1. `master.db` is authoritative for the exact track row and `AnalysisDataPath`.
 2. Runtime linkage must be deterministic, unique, and diagnosable. Never use title, artist, BPM, filename similarity, fuzzy matching, directory scanning, or manual ANLZ assignment.
-3. XML `TrackID == djmdContent.ID` is not an official cross-version guarantee. For Rekordbox 7.2.16 it may only be used as a guarded contract: exactly one ID row plus exact canonical XML-Location/DB-FolderPath consistency. A mismatch is a pipeline error, never permission to guess.
+3. XML `TrackID == djmdContent.ID` is not an official cross-version guarantee. For Rekordbox 7.2.16 it may only be used as a guarded contract: exactly one ID row plus exact canonical XML-Location/DB-FolderPath consistency. When the ID contract does not confirm, the **unique exact canonical path contract** (XML `Location` ↔ `djmdContent.FolderPath`, the verified 52af2dc pipeline) is the only permitted secondary linkage: ambiguous paths (same path, different analysis rows) are hard-excluded from the index. If neither contract resolves, it is a visible pipeline error, never permission to guess.
 4. Resolve `AnalysisDataPath` only relative to the directory containing the opened `master.db`: strip leading separators and an optional `share/`, then resolve below `<db-root>/share/`. Reject traversal.
 5. DAT/EXT/2EX siblings may only be obtained by replacing the final extension in the same DB-addressed directory.
 6. PPTH may be decoded for diagnostics only. It must never locate or select an ANLZ file.

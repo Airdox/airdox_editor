@@ -168,11 +168,16 @@ export function buildDbAnalysisIndex(
   sourceDbDir: string
 ): Map<string, DbAnalysisRef> {
   const index = new Map<string, DbAnalysisRef>();
+  // A canonical audio path that maps to more than one distinct analysis
+  // reference is ambiguous: linking it would mean picking an arbitrary row.
+  // Ambiguous keys are excluded entirely — a truthful pipeline error beats a
+  // silently wrong waveform.
+  const ambiguousKeys = new Set<string>();
   const dbDirKey = normalizeAudioKey(sourceDbDir);
   for (const track of tracks) {
     const key = normalizeAudioKey(track.originalMedia?.location);
     const analysisDataPath = track.rawXmlAttributes?.analysisDataPath?.trim() ?? '';
-    if (!key || !analysisDataPath || index.has(key)) continue;
+    if (!key || !analysisDataPath) continue;
     const audioKeys = [key];
     // Rekordbox 7 can export media below its library directory as a path
     // relative to master.db: file://localhost//contents_<id>/... . The DB row
@@ -184,7 +189,18 @@ export function buildDbAnalysisIndex(
     }
     const ref = { trackId: track.id, analysisDataPath, sourceDbDir, audioKeys };
     for (const audioKey of audioKeys) {
-      if (!index.has(audioKey)) index.set(audioKey, ref);
+      if (ambiguousKeys.has(audioKey)) continue;
+      const existing = index.get(audioKey);
+      if (!existing) {
+        index.set(audioKey, ref);
+      } else if (
+        existing.analysisDataPath !== ref.analysisDataPath ||
+        existing.sourceDbDir !== ref.sourceDbDir
+      ) {
+        // Same physical audio path, different analysis rows → never guess.
+        index.delete(audioKey);
+        ambiguousKeys.add(audioKey);
+      }
     }
   }
   return index;

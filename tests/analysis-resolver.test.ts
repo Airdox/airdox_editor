@@ -201,6 +201,63 @@ runTest('guarded identity', 'Separate DB rows sharing one audio file retain thei
   assertEqual(resolveVerifiedDbIdentity(idIndex, '101', shared)?.trackId, '101', 'second exact row');
 });
 
+runTest('db index', 'Ambiguous audio paths are excluded, never guessed', () => {
+  const shared = 'C:\\Music\\Shared.wav';
+  const index = buildDbAnalysisIndex(
+    [
+      { id: '100', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT' } },
+      { id: '101', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/b/u2/ANLZ0000.DAT' } },
+      { id: '102', originalMedia: { location: 'C:\\Music\\Unique.wav' }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/c/u3/ANLZ0000.DAT' } },
+    ],
+    WIN_DB_DIR
+  );
+  assertEqual(index.get(normalizeAudioKey(shared)), undefined,
+    'shared path with two distinct analysis rows is removed from the index');
+  assertEqual(index.get(normalizeAudioKey('C:\\Music\\Unique.wav'))?.trackId, '102',
+    'unique path still links exactly');
+});
+
+runTest('db index', 'Duplicate rows with the identical analysis reference stay linked', () => {
+  const shared = 'C:\\Music\\SameAnalysis.wav';
+  const index = buildDbAnalysisIndex(
+    [
+      { id: '200', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT' } },
+      { id: '201', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT' } },
+    ],
+    WIN_DB_DIR
+  );
+  const hit = index.get(normalizeAudioKey(shared));
+  assert(hit !== undefined, 'identical analysis target is unambiguous');
+  assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT', 'exact analysis path kept');
+});
+
+runTest('combined contracts', 'ID contract first, unique exact path second, never a guess', () => {
+  const rows = [{
+    id: '4711',
+    originalMedia: { location: 'C:\\Music\\Exact.wav' },
+    rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT' },
+  }];
+  const idIndex = buildDbAnalysisIdIndex(rows, WIN_DB_DIR);
+  const pathIndex = buildDbAnalysisIndex(rows, WIN_DB_DIR);
+  const xmlLocation = 'file://localhost/C:/Music/Exact.wav';
+
+  // Contract 1: XML TrackID == djmdContent.ID + exact path.
+  const viaId = resolveVerifiedDbIdentity(idIndex, '4711', xmlLocation);
+  assert(viaId !== null, 'ID contract resolves');
+
+  // Contract 2 (restored from the verified 52af2dc pipeline): XML TrackID is
+  // foreign (other exporter), but the exact canonical path is unique in the DB.
+  const viaIdForeign = resolveVerifiedDbIdentity(idIndex, '9999', xmlLocation);
+  assertEqual(viaIdForeign, null, 'foreign TrackID never resolves via ID contract');
+  const viaPath = pathIndex.get(normalizeAudioKey(xmlLocation));
+  assert(viaPath !== undefined, 'unique exact path contract resolves as fallback');
+  assertEqual(viaPath!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'verbatim AnalysisDataPath');
+
+  // Neither contract: nothing resolves — the caller raises a pipeline error.
+  assertEqual(pathIndex.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined,
+    'unknown path resolves nothing (visible pipeline error, no substitution)');
+});
+
 runTest('path safety', 'Traversal and non-USBANLZ paths are rejected', () => {
   assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/USBANLZ/../secret/ANLZ0000.DAT'), null,
     'parent traversal rejected');

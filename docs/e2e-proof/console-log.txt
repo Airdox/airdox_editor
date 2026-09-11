@@ -1,0 +1,40 @@
+[error] Failed to load resource: net::ERR_CONNECTION_CLOSED
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[log] %c[02:17:42.609] [SYSTEM] Umfassendes Log-System erfolgreich initialisiert (Max Transparenz). color: #00a2ff; font-weight: bold 
+[info] [DB Auto] master.db (E2E-Fixture): 2 Tracks, 2 neue ANLZ-Links (gesamt 2)
+[log] %c[02:17:42.748] [DATABASE] [DB Auto] D:\PIONEER\Master\master.db: 2 Tracks, 2 ANLZ-Links color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:46.202] [XML_IMPORT] [XML Import] Collection gelesen color: #00a2ff; font-weight: bold [object Object]
+[warn] [XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio). Error: E2E: Original-Audio absichtlich nicht verfügbar (kein Ersatz erlaubt)
+[info] [Track-Link] XML-Track exakt mit DB-Analyse verknüpft (ID-Vertrag, DB-Track 101).
+[log] %c[02:17:48.569] [DATABASE] [ANLZ Auto] Auflösung „Obsidian Voltage (Club Mix)" color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:48.602] [DATABASE] [ANLZ Auto] Primärcontainer gelesen color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:48.607] [DATABASE] [ANLZ Auto] Schwesterdatei gelesen & gemergt color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:48.608] [DATABASE] [ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert. color: #00a2ff; font-weight: bold [object Object]
+[warn] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen.
+[warn] %c[02:17:48.609] [DATABASE] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen. color: #f59e0b; font-weight: bold [object Object]
+[log] %c[02:17:48.610] [DATABASE] [ANLZ Auto] Übernommen color: #00a2ff; font-weight: bold [object Object]
+[info] [ANLZ Auto] D:\PIONEER\Master\share\PIONEER\USBANLZ\0e8\u1\ANLZ0000.DAT → PPTH, PQTZ, PCOB, PWV5, PCO2, PWV3, PWV7, PSSI
+[log] %c[02:17:48.611] [XML_IMPORT] [Deck] „Obsidian Voltage (Club Mix)" geladen color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:52.492] [XML_IMPORT] [XML Import] Collection gelesen color: #00a2ff; font-weight: bold [object Object]
+[warn] [XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio). Error: E2E: Original-Audio absichtlich nicht verfügbar (kein Ersatz erlaubt)
+[info] [Track-Link] XML-Track exakt mit DB-Analyse verknüpft (eindeutiger Pfadvertrag, DB-Track 555).
+[log] %c[02:17:54.534] [DATABASE] [Track-Link] ID-Vertrag nicht bestätigt — eindeutiger exakter Pfadtreffer verwendet. color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:54.535] [DATABASE] [ANLZ Auto] Auflösung „Foreign-ID Roller" color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:54.556] [DATABASE] [ANLZ Auto] Primärcontainer gelesen color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:54.559] [DATABASE] [ANLZ Auto] Schwesterdatei gelesen & gemergt color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:54.560] [DATABASE] [ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert. color: #00a2ff; font-weight: bold [object Object]
+[warn] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen.
+[warn] %c[02:17:54.561] [DATABASE] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen. color: #f59e0b; font-weight: bold [object Object]
+[log] %c[02:17:54.561] [DATABASE] [ANLZ Auto] Übernommen color: #00a2ff; font-weight: bold [object Object]
+[info] [ANLZ Auto] D:\PIONEER\Master\share\PIONEER\USBANLZ\0e8\u1\ANLZ0000.DAT → PPTH, PQTZ, PCOB, PWV5, PCO2, PWV3, PWV7, PSSI
+[log] %c[02:17:54.562] [XML_IMPORT] [Deck] „Foreign-ID Roller" geladen color: #00a2ff; font-weight: bold [object Object]
+[log] %c[02:17:58.412] [XML_IMPORT] [XML Import] Collection gelesen color: #00a2ff; font-weight: bold [object Object]
+[warn] [XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio). Error: E2E: Original-Audio absichtlich nicht verfügbar (kein Ersatz erlaubt)
+[error] %c[02:18:00.454] [DATABASE] [ANLZ Pipelinefehler] Kein exakter master.db-Datensatz für den XML-Track „Unbekannter Track (nicht in master.db)“ (TrackID 777). Weder der ID-Vertrag (djmdContent.ID + exakter Pfad) noch ein eindeutiger exakter Pfadtreffer haben geliefert. XML-Adresse: d:/music/missing/not in db.wav; DBs gefunden/lesbar: 1/1; Index-Schlüssel: 2; Diagnose: kein technischer Grund protokolliert color: #ef4444; font-weight: bold [object Object] Error
+    at LoggerService.log (http://127.0.0.1:3000/src/utils/logger.ts:58:17)
+    at LoggerService.error (http://127.0.0.1:3000/src/utils/logger.ts:129:17)
+    at handleSelectTrackFromXml (http://127.0.0.1:3000/src/App.tsx:1292:18)
+[error] Fehler beim Laden des Tracks in das Deck: Error: [ANLZ Pipelinefehler] Kein exakter master.db-Datensatz für den XML-Track „Unbekannter Track (nicht in master.db)“ (TrackID 777). Weder der ID-Vertrag (djmdContent.ID + exakter Pfad) noch ein eindeutiger exakter Pfadtreffer haben geliefert. XML-Adresse: d:/music/missing/not in db.wav; DBs gefunden/lesbar: 1/1; Index-Schlüssel: 2; Diagnose: kein technischer Grund protokolliert
+[ALERT] [ANLZ Pipelinefehler] Kein exakter master.db-Datensatz für den XML-Track „Unbekannter Track (nicht in master.db)“ (TrackID 777). Weder der ID-Vertrag (djmdContent.ID + exakter Pfad) noch ein eindeutiger exakter Pfadtreffer haben geliefert. XML-Adresse: d:/music/missing/not in db.wav; DBs gefunden/lesbar: 1/1; Index-Schlüssel: 2; Diagnose: kein technischer Grund protokolliert

@@ -1624,7 +1624,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
       // UI-Diagnostik: was hat die automatische ANLZ-Zuordnung getan?
       let anlzLookup: {
-        via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
+        via: 'DB' | 'DB_PATH' | 'PPTH' | 'PPTH_NAME' | null;
         scanned: number;
         folders: number;
         elapsedMs: number;
@@ -1645,24 +1645,44 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         };
         const xmlLocation = selectedDef.originalMedia?.location || selectedDef.originalMedia?.resolvedPath || '';
         const linkKey = normalizeAudioKey(xmlLocation);
-        const linkRef = resolveVerifiedDbIdentity(
+        // Primärvertrag (Rekordbox 7.2.16): XML TrackID == djmdContent.ID und
+        // identischer kanonischer Dateipfad.
+        const idRef = resolveVerifiedDbIdentity(
           dbAnalysisIdIndexRef.current,
           selectedDef.id,
           xmlLocation
         );
+        // Sekundärvertrag (Stand 52af2dc, der verifiziert funktionierende
+        // Dropbox-/master.db-Weg): exakter kanonischer Pfadtreffer gegen die
+        // djmdContent-Zeile. Kein Fuzzy-Matching, kein Scan, keine Metadaten-
+        // Ähnlichkeit — mehrdeutige Pfade sind im Index hart ausgeschlossen
+        // (buildDbAnalysisIndex entfernt sie), es wird also nie geraten.
+        const pathRef = !idRef && linkKey ? dbAnalysisIndexRef.current.get(linkKey) : undefined;
+        const linkRef = idRef ?? pathRef ?? null;
         if (linkRef) {
           linkedRawXmlAttributes = {
             ...(selectedDef.rawXmlAttributes ?? {}),
             analysisDataPath: linkRef.analysisDataPath,
             sourceDbDir: linkRef.sourceDbDir,
           };
-          anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0, db: dbDiag };
-          console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
+          anlzLookup = { via: idRef ? 'DB' : 'DB_PATH', scanned: 0, folders: 0, elapsedMs: 0, db: dbDiag };
+          if (idRef) {
+            console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (ID-Vertrag, DB-Track ${linkRef.trackId}).`);
+          } else {
+            console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (eindeutiger Pfadvertrag, DB-Track ${linkRef.trackId}).`);
+            logger.info('DATABASE', '[Track-Link] ID-Vertrag nicht bestätigt — eindeutiger exakter Pfadtreffer verwendet.', {
+              xmlTrackId: selectedDef.id,
+              dbTrackId: linkRef.trackId,
+              normalizedXmlLocation: linkKey,
+              analysisDataPath: linkRef.analysisDataPath,
+            });
+          }
         } else {
           const reasons = dbDiag.reasons.length > 0 ? dbDiag.reasons.join(' | ') : 'kein technischer Grund protokolliert';
           const message =
-            `[ANLZ Pipelinefehler] Rekordbox-7.2.16-Identität nicht bestätigt für XML-Track „${selectedDef.title}“ ` +
-            `(TrackID ${selectedDef.id}). Erforderlich sind dieselbe djmdContent.ID und derselbe exakte Dateipfad. ` +
+            `[ANLZ Pipelinefehler] Kein exakter master.db-Datensatz für den XML-Track „${selectedDef.title}“ ` +
+            `(TrackID ${selectedDef.id}). Weder der ID-Vertrag (djmdContent.ID + exakter Pfad) noch ein ` +
+            `eindeutiger exakter Pfadtreffer haben geliefert. ` +
             `XML-Adresse: ${linkKey || '(leer)'}; DBs gefunden/lesbar: ${dbDiag.found}/${dbDiag.readable}; ` +
             `Index-Schlüssel: ${dbDiag.links}; Diagnose: ${reasons}`;
           logger.error('DATABASE', message, {
