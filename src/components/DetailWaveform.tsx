@@ -80,6 +80,8 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
+  /** Drop a palette clip onto the deck timeline at the pointer position. */
+  onDropClip?: (clipId: string, time: number) => void;
 }
 
 interface ContextMenuState {
@@ -135,6 +137,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
+  onDropClip,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -890,6 +893,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
+
+        // Palette clips use an internal MIME type so dropping them never
+        // falls through to the file importer. The pointer position becomes
+        // the insert point, just like dropping a snippet in the original.
+        const clipId = e.dataTransfer.getData('application/x-airdox-palette-clip') ||
+          e.dataTransfer.getData('text/plain');
+        if (clipId && onDropClip && track && containerRef.current) {
+          const rect = containerRef.current.getBoundingClientRect();
+          const waveformLeft = rect.left + 48; // left control column
+          const waveformWidth = Math.max(1, rect.width - 48);
+          const x = Math.max(0, Math.min(waveformWidth, e.clientX - waveformLeft));
+          const time = Math.max(0, Math.min(track.duration, viewOffset + (x / waveformWidth) * viewDuration));
+          onDropClip(clipId, time);
+          return;
+        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }

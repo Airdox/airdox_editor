@@ -1,0 +1,18 @@
+[error] Failed to load resource: net::ERR_CONNECTION_CLOSED
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[log] %c[03:06:41.336] [SYSTEM] Umfassendes Log-System erfolgreich initialisiert (Max Transparenz). color: #00a2ff; font-weight: bold 
+[info] [DB Auto] master.db (E2E-Fixture): 1 Tracks, 1 neue ANLZ-Links (gesamt 1)
+[log] %c[03:06:41.490] [DATABASE] [DB Auto] D:\PIONEER\Master\master.db: 1 Tracks, 1 ANLZ-Links color: #00a2ff; font-weight: bold [object Object]
+[log] %c[03:06:44.716] [XML_IMPORT] [XML Import] Collection gelesen color: #00a2ff; font-weight: bold [object Object]
+[info] [Track-Link] XML-Track exakt mit DB-Analyse verknüpft (ID-Vertrag, DB-Track 101).
+[log] %c[03:06:46.859] [DATABASE] [ANLZ Auto] Auflösung „Obsidian Voltage (Club Mix)" color: #00a2ff; font-weight: bold [object Object]
+[log] %c[03:06:46.861] [DATABASE] [ANLZ Auto] Primärcontainer gelesen color: #00a2ff; font-weight: bold [object Object]
+[log] %c[03:06:46.865] [DATABASE] [ANLZ Auto] Schwesterdatei gelesen & gemergt color: #00a2ff; font-weight: bold [object Object]
+[log] %c[03:06:46.865] [DATABASE] [ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert. color: #00a2ff; font-weight: bold [object Object]
+[warn] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen.
+[warn] %c[03:06:46.867] [DATABASE] [ANLZ Auto] PPTH-Verweis (C:\Music\Reference.wav) weicht vom Track-Pfad ab – Zuordnung prüfen. color: #f59e0b; font-weight: bold [object Object]
+[log] %c[03:06:46.867] [DATABASE] [ANLZ Auto] Übernommen color: #00a2ff; font-weight: bold [object Object]
+[info] [ANLZ Auto] D:\PIONEER\Master\share\PIONEER\USBANLZ\0e8\u1\ANLZ0000.DAT → PPTH, PQTZ, PCOB, PWV5, PCO2, PWV3, PWV7, PSSI
+[log] %c[03:06:46.868] [XML_IMPORT] [Deck] „Obsidian Voltage (Club Mix)" geladen color: #00a2ff; font-weight: bold [object Object]
