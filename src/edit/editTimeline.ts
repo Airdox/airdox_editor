@@ -351,6 +351,81 @@ export function locateSpan(
   return null;
 }
 
+/**
+ * A window on the ORIGINAL source material that corresponds exactly to a window
+ * on the (possibly already edited) project timeline. This is the only honest way
+ * to answer "where does this selection come from?": every claim made here can be
+ * followed back to stored material, everything else must stay unmapped.
+ */
+export interface SourceWindowMapping {
+  /** Track whose stored audio/ANLZ describes the window (may be another deck). */
+  trackId: string;
+  /** Seconds inside that track's original source timeline. */
+  sourceStart: number;
+  duration: number;
+  /** 'original' = untouched deck material, 'clip' = pasted palette material. */
+  via: 'original' | 'clip';
+}
+
+/**
+ * Maps a project-timeline window to its source window.
+ *
+ * Deliberately strict, because a wrong mapping is worse than none: a silently
+ * shifted source position makes a copied clip play (or draw) material from
+ * somewhere else. Therefore
+ *   - the window must lie completely INSIDE a single span (a selection across a
+ *     cut joins two source regions that are not adjacent — no single window exists),
+ *   - 'original' spans map by their own sourceStart plus the offset,
+ *   - 'clip' spans map transitively (pasted material keeps its origin) but only
+ *     while nothing was retuned: `spanAllowsVerbatimClipColumns` guards that,
+ *   - silence and any transformed/unknown span returns null — the caller must then
+ *     say "Eigenmaterial aus dem Edit-Audio" instead of guessing a position.
+ */
+export function mapWindowToSourceWindow(
+  timeline: ProjectedTimeline | null | undefined,
+  trackId: string,
+  startSec: number,
+  endSec: number
+): SourceWindowMapping | null {
+  if (!timeline || !trackId || !(endSec > startSec)) return null;
+  const found = locateSpan(timeline, startSec);
+  if (!found) return null;
+  let index = found.index;
+  let span = found.span;
+  let offset = found.offset;
+  // `locateSpan` answers a boundary time with either neighbour (both are inside
+  // its tolerance). For a window START the answer must be the span that begins
+  // there: after a cut at 3.000 s the material from 3.000 s on is the material
+  // behind the cut, and the span before it has nothing to do with it.
+  if (offset >= span.duration - TIME_EPS && index + 1 < timeline.spans.length) {
+    index += 1;
+    span = timeline.spans[index];
+    offset = Math.max(0, startSec - span.projectStart);
+  }
+  if (!(span.duration > 0)) return null;
+  // The whole window has to lie inside this one span — otherwise the two halves
+  // come from different material and no single source window describes them.
+  if (endSec > span.projectStart + span.duration + TIME_EPS) return null;
+  const duration = Math.min(endSec, span.projectStart + span.duration) - startSec;
+  if (!(duration > 0)) return null;
+  // The middle of the window decides which span it belongs to; a point exactly on
+  // a boundary never does.
+  const tail = locateSpan(timeline, startSec + duration * 0.5);
+  if (!tail || tail.index !== index) return null;
+  if (span.kind === 'original') {
+    return { trackId, sourceStart: span.sourceStart + offset, duration, via: 'original' };
+  }
+  if (span.kind === 'clip' && spanAllowsVerbatimClipColumns(span)) {
+    return {
+      trackId: span.sourceTrackId as string,
+      sourceStart: (span.sourceClipStart ?? 0) + offset,
+      duration,
+      via: 'clip',
+    };
+  }
+  return null;
+}
+
 /** Position of the material inside the clip buffer that is actually played. */
 export function clipBufferTimeOf(span: TimelineSpan, offsetInSpan: number): number {
   return Math.max(0, span.sourceStart + offsetInSpan);

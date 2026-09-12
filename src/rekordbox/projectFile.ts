@@ -213,6 +213,11 @@ export interface SerializedPaletteClip {
   key: string;
   color: string;
   miniPeaks?: number[];
+  /** 'ANLZ' = Vorschau aus gespeicherten Spalten, 'EDIT' = aus dem Clip-Audio. */
+  previewOrigin?: 'ANLZ' | 'EDIT';
+  previewNote?: string;
+  /** Nur true, wenn sourceStart/sourceEnd ein geprüftes Fenster im ORIGINAL sind. */
+  sourceMapped?: boolean;
   origin: DataOrigin;
   clipWavBase64?: string;
 }
@@ -335,6 +340,12 @@ function serializeClip(clip: PaletteClip): SerializedPaletteClip {
     key: clip.key,
     color: clip.color,
     miniPeaks: clip.miniPeaks,
+    ...(clip.previewOrigin ? { previewOrigin: clip.previewOrigin } : {}),
+    ...(clip.previewNote ? { previewNote: clip.previewNote } : {}),
+    // Bewusst nur `true`/`false`, nie weglassen: ein Projekt aus einer älteren
+    // Version kennt die Prüfung nicht und darf nach dem Laden kein
+    // Quellfenster behaupten.
+    sourceMapped: clip.sourceMapped === true,
     origin: clip.origin,
   };
   if (clip.audioBuffer) {

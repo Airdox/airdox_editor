@@ -168,3 +168,87 @@ Zusätzlich dokumentiert, bewusst **nicht** geändert:
 - Der Workspace-Reset hat in dieser Session einen Commit (`63c6284`) entfernt, Dateiinhalte aber behalten → vor Verlassen auf `git log` prüfen und **am Ende jeder Session committen**.
 - Canvas-Assertions niemals mit fester Frame-Anzahl (`waitForFrames(n)`) — `waitUntilDrawn()` benutzen.
 - `npm run coverage` ist die einzige verlässliche Deckungszahl; einzelne `npx vitest run --coverage`- oder `c8 node …`-Läufe zeigen nur eine Pipeline und sehen dadurch schlechter aus.
+
+## 10. Nachtrag: COPY / PASTE / CLONE und echte Herkunftsprüfung (auf Nutzerbericht)
+
+**Aufgabe (O-Ton, Sprachdiktat):** „Der Bereich, den ich selektiere … der soll geklont
+werden — und zwar exakt an der Originalposition. … dass nichts selbst generiert ist,
+sondern alles aus den Analyse-Dateien von rekordbox abgeleitet und visualisiert wird. …
+Ausschnitt kopiert, eingefügt → er fügt nicht den ausgewählten Bereich ein, und die
+Wellenform passt nicht … nicht mit so einer heißen Rakete, sondern wirklich in
+verschiedenen Kombinationen die Funktionalität überprüft.“
+
+**Befund (durch Codelesen bestätigt, dann durch Tests nachgebaut):**
+
+| # | Verhalten vorher | Nutzer-Eindruck |
+| --- | --- | --- |
+| 1 | `handleAddSelectionToPalette` setzte `sourceStart = from` (Projektzeit!), wenn die Rückführung fehlschlug | Klon zeigt Vorschau und Quellangabe vom falschen Punkt im Original |
+| 2 | `mapWindowToSource` akzeptierte nur „Kopf- und Fuß-Span identisch“ ohne Toleranz an Span-Grenzen | Kopieren direkt hinter einem Schnitt schlug fehl |
+| 3 | `handlePaste` = `pasteClipboardAt(currentTime)` — Selektion wurde ignoriert | Einfügen landet an der Wiedergabeposition, nicht an der gewählten Stelle |
+| 4 | INSERT bewarb im Tooltip „mit Zeittransformation“, ausführte aber keine | falsches Versprechen im UI |
+| 5 | Palette-Vorschau nutzte `extractMiniPeaks(sliced)` = **eigene Analyse** | verbotene Selbstgenerierung im Produktionspfad |
+| 6 | Overdub projizierte nur die Basisspalten (Maximum-Overlay), Label MIX | Bild ≠ Klang bei zwei übereinandergelegten Dateien |
+
+**Umsetzung:**
+
+* `src/edit/editTimeline.ts`: neuer exportierter `mapWindowToSourceWindow(timeline, trackId, start, end)`
+  — Kopf-/Fußpunkt in **einem** Span, Span-Grenzen werden korrekt aufgelöst (Start an einer
+  Grenze gehört zum folgenden Span; Entscheidung über die Fenstermitte statt über einen
+  Randpunkt).Erlaubt ist die Rückführung nur für `kind:'original'` und für untransformierte `kind:'clip'`-Spans
+  (transitiv über `sourceTrackId`/`sourceClipStart`); Stille, Clear, Tempo/Pitch ≠ Identität,
+  Grenzen außerhalb des Spans → `null`. **Kein Raten mehr.**
+* `src/waveform/preview.ts` (neu): `miniPeaksFromStoredColumns` wählt **nur vorhandene, echte
+  Spalten** (nächste Spalte, kein Mitteln/Interpolieren) und liefert `null`, wenn die Analyse
+  das Fenster nicht abdeckt. `clipPreviewProfile(...)` entscheidet pro Clip und notiert die
+  Herkunft; `describePreviewOrigin` formuliert den deutschen Text dazu.
+* `src/edit/editWaveform.ts`: Overdub **verrechnet beide gespeicherten Spaltensätze** pro
+  Spalte (`min(1, base + over·gain)`, Farbkanäle werden mitgenommen, nicht gemischt);
+  Clip-Auflösung preferiert jetzt die gespeicherten Spalten der **Quelldatei**; neue Zähler
+  `mixStoredColumns` / `mixComputedColumns` + Text in `describeEditWaveform`.
+* `src/App.tsx`: Palette-Clip trägt `sourceMapped` / `previewOrigin` / `previewNote` und
+  **beansprucht eine Quellposition nur nach erfolgreicher Rückführung**; `handleDropClipOnDeck`
+  gibt `sourceTrackId`/`sourceClipStart` nur bei verifiziertem Fenster weiter; `handlePaste`
+  nutzt die Selektion, `handleInsert` die Wiedergabeposition; Projekt laden/speichern
+  persistiert die drei Felder (alte Projekte → `sourceMapped: false`, beanspruchen nichts).
+* `src/types/rekordbox.ts` + `src/rekordbox/projectFile.ts`: Felder im Modell und im JSON.
+* `src/components/PalettePanel.tsx`: Provenienz-Badge je Clip (`QUELLE GEPRÜFT` /
+  `EDIT-MATERIAL`, test-id `clip-provenance-<id>`) plus Vorschau-Herkunft im Tooltipp.
+* `src/components/BottomControlBlock.tsx`: COPY/PASTE/INSERT-Tooltips beschreiben das reale
+  Verhalten (falsche Zeittransformations-Ankündigung entfernt).
+
+**Verifikation (Kombinationen, nicht Einzelpunkt):**
+
+* `tests/edit-clipboard.test.ts` (tsx, neu): S1–S7 Rückführungsregeln (inkl. Verschiebung nach
+  Schnitt 0.4 → 0.6 s, Verweigerung über die Schnittfuge, verweilte Clip-Spalten nur untransformiert),
+  P1–P6 Projektions-Identität — **P1 prüft Spaltenwert für Spaltenwert, dass die eingefügten
+  Spalten exakt die gespeicherten am QUELLIndex sind und dass kein einziger vom Projektindex
+  stammt**; P4 prüft die Überlagerungsrechnung gegen `min(1, base+overlay)` mit **0 Analyzer-Aufrufen**;
+  P5 belegt, dass ohne gespeicherte Spalten tatsächlich analysiert und als BERECHNET gemeldet wird;
+  V1–V4 Vorschau-Ehrlichkeit (kein Mitteln, Lücken → `null`).
+* `tests/ui/app-clipboard.test.tsx` (vitest, neu): C1 Zielselektion statt Playhead, C2 Fallback
+  auf Playhead + Rückmeldung, C3 Quelleangabe „Originalmaterial ab 6.000s“ nach vorangegangenem
+  Schnitt, C4 Fuge → `EDIT-MATERIAL` statt falscher Quelle, C5 verifiziertes Fenster im Tooltipp,
+  C6 Drop unbekannten Materials bleibt konsistent und wird als `BERECHNET` markiert, C7 Tastatur
+  (Strg+C/Strg+V) equal zu den Buttons + Undo.
+* `tests/workflow/edit-combinations.test.ts`: neue Kette K1–K4 direkt auf der Engine —
+  CUT → COPY hinter dem Schnitt → PASTE (Quelle 5.0 s, verschobenes Material bleibt
+  konsistent), K2 „Paste wieder entfernen = exakt dasselbe Layout wie vorher“, K3
+  Kopie *aus einem eingefügten Clip* erbt das Quellfenster transitiv (beide Spalten
+  `spansVerbatimClip`, 0 berechnete Spalten), K4 Fenster über die Fuge → keine
+  Herkunfts-Behauptung, Projekt-Label `USER_EDIT` bei gleichzeitig 100 % gespeicherten
+  ANLZ-Spalten (beide Ebenen sind wahr und werden getrennt geprüft).
+* `tests/edit-dnd.test.ts` E3 **umgeschrieben statt entfernt**: die Suite verlangte bisher,
+  dass die Overdub-Überlagerung *aus dem Clip-Audio gemessen* wird. Genau das ist jetzt
+  verboten — die Überlagerung liest die gespeicherten Spalten **beider** Dateien und addiert
+  sie. Die neue E3 prüft 0 Analyzer-Aufrufe, Addition statt Maximum, dass außerhalb des
+  Überlagerungsfensters nichts angefasst wird, und `mixStoredColumns == mixColumns` /
+  `mixComputedColumns == 0`. (Befund: ein laufender Test, der durch eine bewusste
+  Verhaltensänderung fällt, muss umgeschrieben und die Änderung begründet werden — ein
+  Suite-Datei-Löschen wäre Vertuschen gewesen.)
+* Gates nach `npm test`: `tsc --noEmit` sauber, **28/28 Skript-Suiten + 215 vitest-Tests grün**,
+  `vite build` sauber, `git diff --check` leer, `npm run coverage` 89,6 % Zeilen (App.tsx 68,5 → 69,1 %).
+
+**Bewusst nicht verdeckt:** Wo keine gespeicherte Analyse existiert (Nutzer-Import ohne ANLZ),
+wird weiter aus dem Edit-Audio berechnet — jetzt aber sichtbar als `BERECHNET`/`EDIT-MATERIAL`
+gekennzeichnet, statt als Original ausgegeben. Der Weg „Originalanalyse fehlt → nichts erfinden“
+gilt unverändert für das Fehlen von PWAV/PWV2–7 (`MISSING_REKORDBOX_ANALYSIS`).

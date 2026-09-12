@@ -138,3 +138,14 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
 * Testbasis: 204 vitest-Tests + 25 Skript-Suiten, `npm run coverage` mit **best-of-pipelines**-Merge (89,5 % Lines in `src/**`), Registry-Guard gegen „Suite läuft nie", `tests/helpers/appHarness.tsx` als gemeinsamer UI-Treiber (Beschriftungen nur noch ein Pflegeort).
 * Sechs Produktfehler aus den Szenario-Tests behoben (Ablehnungs-Hinweis Drop, doppelte `Date.now()`-ID, CLONE-Knopf ohne Wirkung, Bars-Beschriftung 16× falsch, XML-Export-Crash bei leerem Modell, 1-ms-Timeline-Schrumpfung beim Fenster-Drop ans Ende) — Details und Belege: [`sessions/2026-09-12-testabdeckung.md`](sessions/2026-09-12-testabdeckung.md).
 * Ordnung: `docs/` mit Lesereihenfolge und Session-Protokollen, echtes `README.md`, versionsfreie Build-Doku, `npm test` als ein entdeckender Runner statt 26-Glieder-Kette.
+
+## Nachtrag 2026-09-12 (nach dem Windows-Build, auf Nutzerbericht)
+
+Die Analyse oben hat eine Lücke übersehen, die nur im Zusammenspiel sichtbar wird: Die
+**Rückführungsprüfung** von Edit-Fenstern auf Originalpositionen wurde bei Misserfolg
+*geglättet* statt verweigert (Palette-Clips haben Projektzeit als Quellzeit getragen), die
+Palette-Vorschau wurde **selbst analysiert** statt aus gespeicherten Spalten abgeleitet, und
+PASTE ignorierte die Zielselektion. Alles korrigiert und durch Kombinations-Tests belegt
+(`tests/edit-clipboard.test.ts`, `tests/ui/app-clipboard.test.tsx`); Details in
+`docs/sessions/2026-09-12-testabdeckung.md` §10. Lehre für die Roadmap: E-Punkte müssen die
+*Identität des Inhalts* prüfen (welche Spalte landet wo), nicht nur Strukturtext.

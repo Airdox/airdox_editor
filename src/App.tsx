@@ -40,6 +40,7 @@ import {
 import {
   extendGridAcrossGap,
   locateSpan,
+  mapWindowToSourceWindow,
   projectEditTimeline,
   retimeBeatNodes,
   retimeCues,
@@ -48,6 +49,7 @@ import {
   type StructuralEditDelta,
 } from './edit/editTimeline';
 import { describeEditWaveform } from './edit/editWaveform';
+import { clipPreviewProfile, describePreviewOrigin, type PreviewProfile } from './waveform/preview';
 import { isFileDrag, isInternalDrag } from './dnd/dragPayload';
 import { planClipDrop } from './edit/editDrop';
 import { audioEngine } from './audio/audioEngine';
@@ -560,7 +562,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const projectionRef = useRef<TrackProjection | null>(null);
   const [spanViews, setSpanViews] = useState<ProjectedSpanView[]>([]);
   /** Copied material keeps its source window, so it can reuse stored columns. */
-  const [clipboardSource, setClipboardSource] = useState<{ trackId: string; sourceStart: number } | null>(null);
+  const [clipboardSource, setClipboardSource] = useState<{
+    trackId: string;
+    sourceStart: number;
+    duration: number;
+    via: 'original' | 'clip';
+  } | null>(null);
 
   /**
    * Re-derives the deck's project state from its edit list and publishes it to
@@ -631,18 +638,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
    * span — that is the exact condition under which stored ANLZ columns may be
    * reused instead of being recomputed from audio.
    */
+  /**
+   * Where does a window of the (possibly edited) timeline come from? Delegates to
+   * the strict mapper in editTimeline: a window is only "original material" when it
+   * lies inside one span, otherwise nothing is guessed — callers must then say
+   * honestly that the material is edit audio (and must not reuse any position in
+   * the original file as if it were the source).
+   */
   const mapWindowToSource = (
     track: TrackModel | null,
     startSec: number,
     endSec: number
-  ): { trackId: string; sourceStart: number } | null => {
-    const timeline = projectionRef.current?.timeline;
-    if (!track || !timeline) return null;
-    const head = locateSpan(timeline, startSec);
-    const tail = locateSpan(timeline, Math.max(startSec, endSec - 1e-6));
-    if (!head || !tail) return null;
-    if (head.span.kind !== 'original' || tail.span !== head.span) return null;
-    return { trackId: track.id, sourceStart: head.span.sourceStart + head.offset };
+  ): { trackId: string; sourceStart: number; duration: number; via: 'original' | 'clip' } | null => {
+    const mapped = mapWindowToSourceWindow(projectionRef.current?.timeline, track?.id ?? '', startSec, endSec);
+    return mapped ? { ...mapped } : null;
   };
 
   // Stringent empty project: no demo bootstrap. The deck starts empty and
@@ -1207,6 +1216,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       name: `${activeTrack.title} (${barsOfWindow.toFixed(1)} Bars)`,
       sourceTrackId: sourceWindow?.trackId ?? activeTrack.id,
       sourceTrackName: activeTrack.title,
+      // Only a verified window may be read back as source material. Unmapped clips
+      // keep the EDIT-timeline window (what the user actually heard) and are marked
+      // `sourceMapped: false`, so no drop may reinterpret these seconds as a position
+      // inside the original file.
+      sourceMapped: sourceWindow !== null,
       sourceStart: sourceWindow ? sourceWindow.sourceStart : from,
       sourceEnd: sourceWindow ? sourceWindow.sourceStart + (to - from) : to,
       duration: to - from,
@@ -1216,7 +1230,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       key: activeTrack.key,
       color: '#00a2ff',
       audioBuffer: sliced,
-      miniPeaks: extractMiniPeaks(sliced, 48),
+      ...((): { miniPeaks: number[]; previewOrigin: PreviewProfile['origin']; previewNote: string } => {
+        const profile = sourceWindow
+          ? clipPreviewProfile(
+              sourcePreviewVariant(activeTrack),
+              sourceWindow.sourceStart,
+              to - from,
+              48,
+              () => extractMiniPeaks(sliced, 48)
+            )
+          : {
+              peaks: extractMiniPeaks(sliced, 48),
+              origin: 'EDIT' as const,
+              columns: 0,
+            };
+        return { miniPeaks: profile.peaks, previewOrigin: profile.origin, previewNote: describePreviewOrigin(profile) };
+      })(),
       origin: DataOrigin.PROJECT,
     };
 
@@ -1227,6 +1256,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     });
     setSelectedClipId(newClipId);
     if (!paletteOpen) setPaletteOpen(true);
+  };
+
+  /** Stored analysis variant that describes the track's ORIGINAL source times. */
+  const sourcePreviewVariant = (track: TrackModel | null) => {
+    if (!track) return null;
+    const candidates = [
+      ...(track.baseAnalysisVariants ?? []),
+      track.baseAnalysis ?? null,
+      ...(track.analysisVariants ?? []),
+      track.analysis ?? null,
+    ].filter((v): v is NonNullable<typeof v> => Boolean(v && v.length > 0 && !v.isEditComposite));
+    return candidates[0] ?? null;
   };
 
   // Copy selection (with its source window, for verbatim column reuse on paste)
@@ -1245,7 +1286,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   /** Inserts the clipboard at the playhead (paste == insert on the timeline). */
-  const pasteClipboardAt = (projectStart: number) => {
+  const pasteClipboardAt = (projectStart: number, atLabel = 'Wiedergabeposition') => {
     if (!clipboardBuffer || !activeTrack) return;
     pushHistorySnapshot('Paste');
     const dur = clipboardBuffer.duration;
@@ -1265,10 +1306,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       title: 'Zwischenablage eingefügt (Insert)',
       operationType: 'INSERT',
       description:
-        `${dur.toFixed(3)}s an Position ${projectStart.toFixed(3)}s eingefügt; folgendes Material rückt um +${dur.toFixed(3)}s. ` +
+        `${dur.toFixed(3)}s an der ${atLabel} (${projectStart.toFixed(3)}s) eingefügt; folgendes Material rückt um +${dur.toFixed(3)}s. ` +
         (clipboardSource
-          ? 'Quelle: Originalmaterial – gespeicherte Wellenform-Spalten werden übernommen.'
-          : 'Quelle: gemischtes Material – Spalten werden aus dem Edit-Audio berechnet.') +
+          ? `Quelle: Originalmaterial ab ${clipboardSource.sourceStart.toFixed(3)}s${
+              clipboardSource.via === 'clip' ? ' (über bereits eingefügtes Material nachgeführt)' : ''
+            } – gespeicherte Wellenform-Spalten werden übernommen.`
+          : 'Quelle: Material aus dem Edit-Audio – keine eindeutige Quellposition im Original; Spalten werden daraus berechnet und als BERECHNET gekennzeichnet.') +
         ` ${waveformFollowUpNote(projection)}` +
         ` Verschoben: ${retimed.cues} Cues, ${retimed.beats} Beat-Knoten${retimed.gridFilled ? `, ${retimed.gridFilled} Grid-Füllbeats im neuen Bereich` : ''}.`,
       timeRangeSec: { start: projectStart, end: projectStart + dur, duration: dur },
@@ -1278,8 +1321,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     });
   };
 
-  const handlePaste = () => pasteClipboardAt(currentTime);
-  const handleInsert = () => pasteClipboardAt(currentTime);
+  /**
+   * PASTE goes where the user pointed: a live selection wins (that is the place
+   * the user selected as target), otherwise the playhead. INSERT is the explicit
+   * playhead variant — both say so in their feedback, no silent re-anchoring.
+   */
+  const handlePaste = () => pasteClipboardAt(selection?.start ?? currentTime, selection ? 'Auswahlposition' : 'Wiedergabeposition');
+  const handleInsert = () => pasteClipboardAt(currentTime, 'Wiedergabeposition');
 
   /**
    * Drag & drop from the clip palette onto the deck timeline. The drop position
@@ -1307,8 +1355,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const pitchShift = adapted.semitonesShifted;
     const source = {
       clipId: clip.id,
-      sourceTrackId: clip.sourceTrackId,
-      sourceClipStart: clip.sourceStart,
+      // `sourceMapped` is the guard against a silently wrong source position: only
+      // clips whose window was verified against the timeline may reuse the stored
+      // columns of the original material. Everything else is drawn from the clip's
+      // own audio and labelled accordingly.
+      ...(clip.sourceMapped ? { sourceTrackId: clip.sourceTrackId, sourceClipStart: clip.sourceStart } : {}),
       tempoRatio,
       pitchShift,
     };
@@ -2075,6 +2126,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           color: clip.color,
           audioBuffer,
           miniPeaks: clip.miniPeaks,
+          previewOrigin: clip.previewOrigin,
+          previewNote: clip.previewNote,
+          // Strenge Übernahme: nur ein explizit verifiziertes Fenster aus einem
+          // Projekt dieser Version darf wieder als Quellfenster gelesen werden.
+          sourceMapped: clip.sourceMapped === true,
           origin: clip.origin,
         });
       }

@@ -572,45 +572,60 @@ runTest('DropConsequence', 'E2: cues follow the drop exactly like the audio', ()
   assertNoAnalysis('a replace of analysed material never needs own analysis');
 });
 
-runTest('DropConsequence', 'E3: an overdub drop mixes columns and leaves length and markers alone', () => {
-  // A quiet original (0.01 per column) so the louder overlay wins the maximum.
+runTest('DropConsequence', 'E3: an overdub drop mixes the stored columns of both files', () => {
+  // A quiet original (0.01 per column) under a loud overlay. The point of an
+  // overdub is that TWO analysis files are laid on top of each other and their
+  // values are combined — so both layers have to come from stored columns and the
+  // result must be the sum (clamped at full scale), not the louder of the two.
   const deck = makeTrack('deck', 'Deck Track', 0.01);
   const { clip, sourceTrackId } = makeClip();
   analysisCalls.length = 0;
   const { track } = performDrop(deck, clip, sourceTrackId, 'overdub', 5.0);
-  // A mix has no stored ancestor: only the OVERLAID window is read from the clip
-  // audio (labelled MIX), never the untouched original material.
-  const ranges = [...analysisCalls];
-  const projection = projectTrackEdits(
-    track,
-    [clip],
-    [track, makeSourceTrack(sourceTrackId)],
-    { createBuffer: emptyBufferFactory, analyzeRange: recordingAnalyzer }
-  );
-  assert(ranges.length > 0, 'the overlaid window must be measured from the clip audio');
-  for (const range of ranges) {
-    assert(
-      range.start >= clip.sourceStart - 1e-9 && range.end <= clip.sourceEnd + 1e-9,
-      `analysis must stay inside the clip material (got ${range.start}–${range.end})`
-    );
-  }
+  const source = makeSourceTrack(sourceTrackId);
+  const projection = projectTrackEdits(track, [clip], [track, source], {
+    createBuffer: emptyBufferFactory,
+    analyzeRange: recordingAnalyzer,
+  });
+  assertNoAnalysis('an overdub of analysed material reads the stored columns of BOTH files');
   near(projection.timeline.duration, SECONDS, 'an overdub never changes the project length');
-  const peaks = projection.variants[0].peaks;
+  near(
+    track.cues.find((c) => c.id === 'cue-after')!.position,
+    7.0,
+    'an overdub never moves the markers behind the mix'
+  );
+  const basePeaks = deck.baseAnalysis!.peaks;
+  const srcPeaks = source.baseAnalysis!.peaks;
   const mixedIdx = Math.round(5.5 / BUCKET);
-  const own = 0.01 * (mixedIdx + 1);
-  const overlay = Math.min(1, 0.9 * 0.85);
-  near(peaks[mixedIdx], Math.max(own, overlay), 'a mixed column takes the louder of both sources');
-  assert(peaks[mixedIdx] > own, 'the overlay must actually be visible in the mix');
+  const overlayIdx = Math.round((clip.sourceStart + (5.5 - 5.0)) / BUCKET);
+  const expected = Math.min(1, basePeaks[mixedIdx] + srcPeaks[overlayIdx] * 1.0);
+  near(
+    projection.variants[0].peaks[mixedIdx],
+    expected,
+    'a mixed column adds both stored values (clamped at full scale), it is not a maximum'
+  );
+  assert(projection.variants[0].peaks[mixedIdx] > basePeaks[mixedIdx], 'the overlay must actually be visible in the mix');
   const loudIdx = COLUMNS - 1;
-  near(peaks[loudIdx], Math.max(0.01 * (loudIdx + 1), 0.0), 'a column outside the mix window stays untouched');
+  near(
+    projection.variants[0].peaks[loudIdx],
+    basePeaks[loudIdx],
+    'a column outside the overlaid window stays exactly as the original stored it'
+  );
   assert(
-    projection.variants.some((v) => v.provenance && v.provenance[Math.round(5.5 / BUCKET)] === ColumnSource.MIX),
+    projection.variants[0].provenance![mixedIdx] === ColumnSource.MIX,
     'mixed columns must be labelled as a mix, not as ANLZ'
   );
+  assert(
+    projection.variants[0].provenance![loudIdx] !== ColumnSource.MIX,
+    'only the overlaid window may be marked as a mix'
+  );
   assert(projection.stats!.mixColumns > 0, 'the mix must be counted as MIX, not silently folded in');
+  near(
+    projection.stats!.mixStoredColumns,
+    projection.stats!.mixColumns,
+    'every overlay column came from stored analysis data'
+  );
+  assert(projection.stats!.mixComputedColumns === 0, 'nothing in the overlay was measured from audio');
   assert(projection.stats!.computedColumns === 0, 'the underlying original needs no new analysis');
-  assert(projection.variants[0].provenance![loudIdx] !== ColumnSource.MIX,
-    'only the overlaid window may be marked as a mix');
 });
 
 runTest('DropConsequence', 'E4: dropping a clip without ANLZ provenance computes — and labels — its columns', () => {

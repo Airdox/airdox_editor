@@ -152,6 +152,10 @@ export interface EditWaveformStats {
   clipColumns: number;
   computedColumns: number;
   mixColumns: number;
+  /** Overdub overlay taken from STORED columns of the clip source (nothing computed). */
+  mixStoredColumns: number;
+  /** Overdub overlay that had to be measured from the clip audio (no stored columns). */
+  mixComputedColumns: number;
   silenceColumns: number;
   missingColumns: number;
   truncated: boolean;
@@ -310,6 +314,33 @@ function blockCopy(
   return true;
 }
 
+/**
+ * Adds one real overlay column onto a layout column. Both sides are measured
+ * values (stored ANLZ column or analyzed peak of the actual clip audio) — the
+ * function only sums them and limits the result to the normalized range, it
+ * never invents, smooths or averages across neighbours.
+ */
+function overlayColumns(
+  out: ColumnArrays,
+  outIdx: number,
+  src: ColumnArrays,
+  srcIdx: number,
+  gain: number
+): void {
+  const g = Number.isFinite(gain) ? Math.max(0, gain) : 1;
+  const mix = (base: number, over: number) => Math.min(1, base + over * g);
+  out.peaks[outIdx] = mix(out.peaks[outIdx], src.peaks[srcIdx]);
+  out.peaksL[outIdx] = mix(out.peaksL[outIdx], src.peaksL[srcIdx]);
+  out.peaksR[outIdx] = mix(out.peaksR[outIdx], src.peaksR[srcIdx]);
+  out.lowEnergy[outIdx] = mix(out.lowEnergy[outIdx], src.lowEnergy[srcIdx]);
+  out.midEnergy[outIdx] = mix(out.midEnergy[outIdx], src.midEnergy[srcIdx]);
+  out.highEnergy[outIdx] = mix(out.highEnergy[outIdx], src.highEnergy[srcIdx]);
+  // Colour/whiteness channels are only ever carried over from the layer that is
+  // drawn: mixing them arithmetically would create colors neither source had.
+  if (out.backPeaks) out.backPeaks[outIdx] = mix(out.backPeaks[outIdx], src.backPeaks?.[srcIdx] ?? src.peaks[srcIdx]);
+  if (out.frontPeaks) out.frontPeaks[outIdx] = mix(out.frontPeaks[outIdx], src.frontPeaks?.[srcIdx] ?? src.peaks[srcIdx]);
+}
+
 function writeComputed(
   out: ColumnArrays,
   outStart: number,
@@ -395,6 +426,8 @@ export function buildEditWaveformVariants(input: EditWaveformInput): {
     clipColumns: 0,
     computedColumns: 0,
     mixColumns: 0,
+    mixStoredColumns: 0,
+    mixComputedColumns: 0,
     silenceColumns: 0,
     missingColumns: 0,
     truncated: false,
@@ -536,9 +569,12 @@ export function buildEditWaveformVariants(input: EditWaveformInput): {
       stats.spansMissing += 1;
     }
 
-    // Overdub overlays mix on top of the layout columns (per-column maximum:
-    // a peak view of the summed signal, explicitly labelled MIX — never passed
-    // off as stored ANLZ data).
+    // Overdub overlays are OVERLAID, not picked: both column sets are real
+    // (stored ANLZ of the clip source when available, otherwise measured from
+    // the clip audio) and are summed onto the layout columns, then limited to the
+    // normalized 0..1 range. The previous per-column maximum simply discarded the
+    // quieter layer, so the picture did not match the audible mix. Labelled MIX —
+    // never passed off as pure stored ANLZ data.
     for (const od of timeline.overdubs) {
       if (!(od.duration > 0)) continue;
       const span = overdubAsSpan(od);
@@ -549,7 +585,40 @@ export function buildEditWaveformVariants(input: EditWaveformInput): {
       );
       const count = Math.max(0, endIdx - startIdx + 1);
       if (count <= 0) continue;
-      const channels = input.clipResolver(span)?.playChannels ?? null;
+      const resolved = input.clipResolver(span);
+      const overlayVariant =
+        spanAllowsVerbatimClipColumns(span) && resolved && resolved.sourceVariants.length > 0
+          ? resolved.sourceVariants[0]
+          : null;
+
+      if (overlayVariant) {
+        const clipBucketSeconds =
+          overlayVariant.secPerBucket && overlayVariant.secPerBucket > 0
+            ? overlayVariant.secPerBucket
+            : (resolved?.sourceDuration ?? 0) / Math.max(1, overlayVariant.length);
+        const tmp = allocate(overlayVariant, count);
+        const written = fillFromVariant(
+          tmp,
+          0,
+          count,
+          overlayVariant,
+          clipBucketSeconds,
+          0,
+          bucketSeconds,
+          ColumnSource.CLIP_ANLZ,
+          (i) => sourceTrackTimeOf(span, (startIdx + i) * bucketSeconds - span.projectStart)
+        );
+        for (let i = 0; i < written; i++) {
+          overlayColumns(out, startIdx + i, tmp, i, span.gain);
+          stats.mixStoredColumns += 1;
+          if (out.provenance[startIdx + i] !== ColumnSource.SILENCE) {
+            out.provenance[startIdx + i] = ColumnSource.MIX;
+          }
+        }
+        continue;
+      }
+
+      const channels = resolved?.playChannels ?? null;
       if (!channels) continue;
       const usable = Math.min(span.duration, channels.right.length / channels.sampleRate - span.sourceStart);
       if (!(usable > 0)) continue;
@@ -560,19 +629,25 @@ export function buildEditWaveformVariants(input: EditWaveformInput): {
         bucketSeconds
       );
       const n = Math.min(count, analysis.peaks.length);
+      const overlayGain = span.gain * 0.85;
       for (let i = 0; i < n; i++) {
         const j = startIdx + i;
         if (j >= out.peaks.length) break;
-        const overlayGain = span.gain * 0.85;
-        const p = Math.min(1, analysis.peaks[i] * overlayGain);
-        out.peaks[j] = Math.max(out.peaks[j], p);
-        out.peaksL[j] = Math.max(out.peaksL[j], p);
-        out.peaksR[j] = Math.max(out.peaksR[j], p);
-        out.lowEnergy[j] = Math.max(out.lowEnergy[j], analysis.lowEnergy[i] * overlayGain);
-        out.midEnergy[j] = Math.max(out.midEnergy[j], analysis.midEnergy[i] * overlayGain);
-        out.highEnergy[j] = Math.max(out.highEnergy[j], analysis.highEnergy[i] * overlayGain);
-        if (out.backPeaks) out.backPeaks[j] = Math.max(out.backPeaks[j], p);
-        if (out.frontPeaks) out.frontPeaks[j] = Math.max(out.frontPeaks[j], p);
+        overlayColumns(
+          out,
+          j,
+          {
+            peaks: analysis.peaks,
+            peaksL: analysis.peaksL ?? analysis.peaks,
+            peaksR: analysis.peaksR ?? analysis.peaks,
+            lowEnergy: analysis.lowEnergy,
+            midEnergy: analysis.midEnergy,
+            highEnergy: analysis.highEnergy,
+          } as unknown as ColumnArrays,
+          i,
+          overlayGain
+        );
+        stats.mixComputedColumns += 1;
         if (out.provenance[j] !== ColumnSource.SILENCE) out.provenance[j] = ColumnSource.MIX;
       }
     }
@@ -673,7 +748,14 @@ export function describeEditWaveform(stats: EditWaveformStats, projectDurationSe
     );
   }
   if (stats.computedColumns > 0) parts.push(`${stats.computedColumns} Spalten aus Edit-Audio berechnet`);
-  if (stats.mixColumns > 0) parts.push(`${stats.mixColumns} Spalten Overdub-Mix`);
+  if (stats.mixColumns > 0) {
+    const stored = stats.mixStoredColumns ?? 0;
+    const measured = stats.mixComputedColumns ?? 0;
+    const how: string[] = [];
+    if (stored > 0) how.push(`${stored} aus gespeicherten Spalten überlagert`);
+    if (measured > 0) how.push(`${measured} Overlay aus Edit-Audio gemessen`);
+    parts.push(`${stats.mixColumns} Spalten Overdub-Mix${how.length ? ` (${how.join(', ')})` : ''}`);
+  }
   if (stats.silenceColumns > 0) parts.push(`${stats.silenceColumns} Spalten Stille`);
   if (stats.missingColumns > 0) parts.push(`${stats.missingColumns} Spalten ohne Daten (nicht erfunden)`);
   parts.push(`Projekt ${projectDurationSec.toFixed(3)}s`);

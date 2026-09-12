@@ -239,7 +239,13 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                   setDraggingClipId(null);
                 }}
                 onClick={() => onSelectClip(clip)}
-                title="In die Deck-Ansicht ziehen (Drop = Einfügen) · Klick = auswählen · Auf Papierkorb ziehen = löschen"
+                title={[
+                  'In die Deck-Ansicht ziehen (Drop = Einfügen) · Klick = auswählen · Auf Papierkorb ziehen = löschen',
+                  clip.sourceMapped
+                    ? `Quellfenster im Original geprüft: ${clip.sourceStart.toFixed(3)}s–${clip.sourceEnd.toFixed(3)}s von „${clip.sourceTrackName}“`
+                    : 'Kein geprüftes Quellfenster: Material aus dem Edit-Audio (Position im Original wird nicht behauptet)',
+                  clip.previewNote,
+                ].filter(Boolean).join(' · ')}
                 className={`p-1.5 rounded-xs border transition-all cursor-grab active:cursor-grabbing ${
                   isSelected
                     ? 'bg-[#181a24] border-[#0088ff] shadow-sm'
@@ -303,6 +309,25 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                       </span>
                       <span className="text-neutral-500 text-[9.5px] font-mono">
                         {clip.bars.toFixed(1)} Bars • {clip.beats} Beats
+                      </span>
+                      {/* Where the drawn contour comes from — the project rule is
+                          that nothing is generated where stored analysis exists. */}
+                      <span className="flex items-center gap-1 text-[8px] font-mono tracking-wider">
+                        <span
+                          data-testid={`clip-provenance-${clip.id}`}
+                          className={`px-1 rounded-[1px] border ${
+                            clip.sourceMapped
+                              ? 'text-[#7ee787] border-[#1f4a29] bg-[#0f2415]'
+                              : 'text-[#ffb340] border-[#4a3a1f] bg-[#241a0f]'
+                          }`}
+                        >
+                          {clip.sourceMapped ? 'QUELLE GEPRÜFT' : 'EDIT-MATERIAL'}
+                        </span>
+                        {clip.previewOrigin ? (
+                          <span className="text-neutral-500">
+                            {clip.previewOrigin === 'ANLZ' ? 'Vorschau: gespeicherte Spalten' : 'Vorschau: aus Edit-Audio'}
+                          </span>
+                        ) : null}
                       </span>
                     </div>
                   </div>

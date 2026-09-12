@@ -123,6 +123,20 @@ export interface PaletteClip {
   color: string;
   audioBuffer?: AudioBuffer;
   miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
+  /**
+   * Provenance of the preview profile: 'ANLZ' = columns selected from the stored
+   * analysis of the source window (nothing re-analyzed), 'EDIT' = measured from
+   * this clip's own edit audio because no stored columns describe it.
+   */
+  previewOrigin?: 'ANLZ' | 'EDIT';
+  /** Human-readable explanation of `previewOrigin` (tooltip). */
+  previewNote?: string;
+  /**
+   * True only when `sourceStart`/`sourceEnd` are a verified window inside the
+   * ORIGINAL source material. False/undefined means the numbers describe the EDIT
+   * timeline and must never be reinterpreted as a position in the original file.
+   */
+  sourceMapped?: boolean;
   origin: DataOrigin;
 }
 

@@ -231,7 +231,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCopy}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Kopieren (Ctrl+C)"
+            title="Auswahl in die Zwischenablage (Strg+C) – inklusive geprüftem Quellfenster im Original"
           >
             <Copy size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -243,7 +243,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onPaste}
             disabled={!hasClipboard}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen (Ctrl+V)"
+            title="Einfügen (Strg+V) – an der gewählten Auswahl, sonst an der Wiedergabeposition"
           >
             <ClipboardPaste size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -255,7 +255,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onInsert}
             disabled={!hasClipboard}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen mit Zeittransformation (Insert)"
+            title="Einfügen an der Wiedergabeposition (Insert)"
           >
             <ArrowRightLeft size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">

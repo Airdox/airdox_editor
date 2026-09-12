@@ -167,6 +167,24 @@ export function dropClipOnDeck(
   fireEvent(card, makeDragEvent('dragend', { dataTransfer }));
 }
 
+/** Buttons are found by the text the user reads in the tooltip. */
+export function buttonByTitle(root: ParentNode, title: RegExp): HTMLElement {
+  const el = Array.from(root.querySelectorAll('button')).find((b) => title.test(b.title)) as
+    | HTMLElement
+    | undefined;
+  if (!el) throw new Error(`kein Button mit title ${title}`);
+  return el;
+}
+
+/** A click without dragging seeks the playhead (a drag of length > 0 selects). */
+export async function seek(container: HTMLElement, time: number) {
+  const canvas = deckCanvas(container);
+  const x = timeToClientX(time, 0, VIEW_DURATION);
+  fireEvent(canvas, makePointerEvent('mousedown', x, 120));
+  fireEvent(canvas, makePointerEvent('mouseup', x, 120));
+  await waitForFrames(2);
+}
+
 /** First mm:ss.s time read-out = the project/timeline length in the header. */
 export function durationText(container: HTMLElement): string {
   const match = container.textContent?.match(/(\d\d:\d\d\.\d)/);

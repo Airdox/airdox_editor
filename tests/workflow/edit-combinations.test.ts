@@ -20,7 +20,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import { planClipDrop } from '../../src/edit/editDrop';
-import { projectEditTimeline, retimeCues, retimeLoops } from '../../src/edit/editTimeline';
+import {
+  locateSpan,
+  mapWindowToSourceWindow,
+  projectEditTimeline,
+  retimeCues,
+  retimeLoops,
+  spanAllowsVerbatimClipColumns,
+} from '../../src/edit/editTimeline';
 import { projectTrackEdits, waveformOriginAfterEdit } from '../../src/edit/editModel';
 import { ColumnSource } from '../../src/edit/editWaveform';
 import { DataOrigin } from '../../src/types/rekordbox';
@@ -478,5 +485,141 @@ describe('Workflow-Matrix — Edit-Operationen × Position × Tempo', () => {
     );
     const projection = projectTrackEdits(track, [clip(0, 4, 'zero')], [track]);
     expect(projection.timeline.duration).toBeCloseTo(SECONDS, 6);
+  });
+});
+
+/**
+ * K1–K4 — the clipboard chain as a combination, on top of the operation matrix.
+ *
+ * A user does not perform one operation: they cut, select what remains, copy it,
+ * point somewhere else and paste. Every step of that chain has to agree with the
+ * step before — above all about WHERE THE MATERIAL COMES FROM, because that is
+ * what both the audible content and the drawn waveform are derived from. These
+ * four cases are the answer to the report „er fügt nicht den ausgewählten Bereich
+ * ein, und die Wellenform passt nicht“.
+ */
+describe('Kette — CUT → COPY → PASTE (Herkunft über die ganze Kette)', () => {
+  const cutAt = (id: string, start: number, duration: number): EditSegment =>
+    ({
+      id,
+      type: 'CUT',
+      trackId: 'deck',
+      sourceStart: start,
+      sourceEnd: start + duration,
+      projectStart: start,
+      projectDuration: duration,
+      gain: 1,
+    }) as unknown as EditSegment;
+
+  const pasteAt = (id: string, projectStart: number, sourceStart: number, duration: number): EditSegment =>
+    ({
+      id,
+      type: 'INSERT',
+      trackId: 'deck',
+      clipId: `${id}-clip`,
+      sourceTrackId: 'deck',
+      sourceStart,
+      sourceEnd: sourceStart + duration,
+      sourceClipStart: sourceStart,
+      tempoRatio: 1,
+      pitchShift: 0,
+      projectStart,
+      projectDuration: duration,
+      gain: 1,
+    }) as unknown as EditSegment;
+
+  it('K1: material behind a cut is copied from its ORIGINAL position and pasted with provenance', () => {
+    const segments = [baseSegment(), cutAt('cut-1', 2, 1.5)];
+    const afterCut = projectEditTimeline({ segments, sourceDuration: SECONDS });
+    expect(afterCut.duration).toBeCloseTo(8.5, 6);
+    // The window right behind the gap lies on the shifted original span: its
+    // source is 5.0 s, never the project coordinate 3.5 s.
+    const mapped = mapWindowToSourceWindow(afterCut, 'deck', 3.5, 5);
+    expect(mapped).not.toBeNull();
+    expect(mapped!.via).toBe('original');
+    expect(mapped!.sourceStart).toBeCloseTo(5, 9);
+    expect(mapped!.duration).toBeCloseTo(1.5, 9);
+
+    const withPaste = projectEditTimeline({
+      segments: [...segments, pasteAt('paste-1', 0, mapped!.sourceStart, mapped!.duration)],
+      sourceDuration: SECONDS,
+    });
+    expect(withPaste.duration).toBeCloseTo(10, 6);
+    const span = locateSpan(withPaste, 0.75)!.span;
+    expect(span.kind).toBe('clip');
+    expect(span.sourceStart).toBeCloseTo(5, 9);
+    expect(span.sourceClipStart).toBeCloseTo(5, 9);
+    expect(span.sourceTrackId).toBe('deck');
+    // Because the clip is untransformed, its columns may come from the stored
+    // analysis — the same claim the waveform compositor makes.
+    expect(spanAllowsVerbatimClipColumns(span)).toBe(true);
+    // The material behind the paste keeps its original position.
+    const shifted = locateSpan(withPaste, 2.0)!.span;
+    expect(shifted.kind).toBe('original');
+    expect(shifted.sourceStart).toBeCloseTo(0, 9);
+    expect(locateSpan(withPaste, 2.0)!.offset).toBeCloseTo(0.5, 9);
+  });
+
+  it('K2: dropping the paste again restores the previous layout exactly (non-destructive)', () => {
+    const before = [baseSegment(), cutAt('cut-1', 2, 1.5)];
+    const withPaste = projectEditTimeline({
+      segments: [...before, pasteAt('paste-1', 0, 5, 1.5)],
+      sourceDuration: SECONDS,
+    });
+    const afterUndo = projectEditTimeline({ segments: before, sourceDuration: SECONDS });
+    expect(withPaste.spans.length).toBeGreaterThan(afterUndo.spans.length);
+    expect(afterUndo.spans.map((s) => [s.id, s.kind, s.projectStart, s.duration, s.sourceStart])).toEqual(
+      [
+        ['base', 'original', 0, 2, 0],
+        ['base@3.500000', 'original', 2, 6.5, 3.5],
+      ]
+    );
+  });
+
+  it('K3: copying from a PASTED clip inherits the source window transitively', () => {
+    const segments = [baseSegment(), pasteAt('paste-1', 2, 4, 2)];
+    const timeline = projectEditTimeline({ segments, sourceDuration: SECONDS });
+    // 2.6–3.4 lies inside the inserted clip, whose own source is 4.0–6.0 → 4.6–5.4.
+    const mapped = mapWindowToSourceWindow(timeline, 'deck', 2.6, 3.4);
+    expect(mapped).not.toBeNull();
+    expect(mapped!.via).toBe('clip');
+    expect(mapped!.trackId).toBe('deck');
+    expect(mapped!.sourceStart).toBeCloseTo(4.6, 9);
+
+    const twice = projectEditTimeline({
+      segments: [...segments, pasteAt('paste-2', 0, mapped!.sourceStart, mapped!.duration)],
+      sourceDuration: SECONDS,
+    });
+    // 10 s deck + 2 s first paste + 0.8 s copy of it — the deck never loses material.
+    expect(twice.duration).toBeCloseTo(12.8, 6);
+    const span = locateSpan(twice, 0.2)!.span;
+    expect(span.sourceTrackId).toBe('deck');
+    expect(span.sourceClipStart).toBeCloseTo(4.6, 9);
+    // Both copies point at stored material, so no column of either is invented.
+    const track = makeTrack(twice.spans.length > 0 ? [...segments, pasteAt('paste-2', 0, 4.6, 0.8)] : segments, 120);
+    const projection = projectTrackEdits(track, [], [track]);
+    expect(projection.stats).not.toBeNull();
+    // Both copies point at stored material, so nothing had to be re-analysed.
+    expect(projection.stats!.computedColumns).toBe(0);
+    expect(projection.stats!.missingColumns).toBe(0);
+    expect(projection.stats!.spansVerbatimClip).toBe(2);
+  });
+
+  it('K4: a window across the cut join stays unclaimed — and its columns are then honest', () => {
+    const segments = [baseSegment(), cutAt('cut-1', 2, 1.5)];
+    const timeline = projectEditTimeline({ segments, sourceDuration: SECONDS });
+    expect(mapWindowToSourceWindow(timeline, 'deck', 1.9, 2.1)).toBeNull();
+    const track = makeTrack(segments, 120);
+    const projection = projectTrackEdits(track, [], [track]);
+    // The deck itself still renders from stored columns only (the cut leaves a
+    // pure original layout); the refusal above only concerns what a CLONE may claim.
+    expect(projection.timeline.spans.every((s) => s.kind === 'original')).toBe(true);
+    expect(projection.stats!.computedColumns).toBe(0);
+    expect(projection.stats!.missingColumns).toBe(0);
+    // The PROJECT is user-edited (that is what the provenance badge says), while
+    // every column inside it is still a stored ANLZ value — the two statements
+    // are different levels and both have to be true at once.
+    expect(waveformOriginAfterEdit(projection)).toBe(DataOrigin.USER_EDIT);
+    expect(projection.variants[0]?.sourceTag).toBe('ANLZ0000');
   });
 });
