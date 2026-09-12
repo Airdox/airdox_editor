@@ -62,14 +62,18 @@ import {
 import { applyAnlzExtractionToTrack, AnlzExtractionResult } from './rekordbox/databaseExtractor';
 import { loadAnlzContainerSet } from './rekordbox/analysisContainerLoader';
 import { initFileLogging } from './utils/fileLog';
-import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
+import { adoptSerializedGrid, describeGridEdit, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import { nextId } from './utils/ids';
+import {
+  rebuildTrackFromSerialized,
+  reopenTrackSourceAudio,
+  restorePaletteClips,
+} from './project/restore';
 import { useStableCallback } from './utils/useStableCallback';
 import {
   serializeProject,
   deserializeProject,
-  base64ToBytes,
   SerializedTrack,
 } from './rekordbox/projectFile';
 
@@ -255,84 +259,6 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
     });
     throw error instanceof Error ? error : new Error(message);
   }
-}
-
-/** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
-async function decodeWavBase64(audioCtx: AudioContext, base64?: string): Promise<AudioBuffer | undefined> {
-  if (!base64) return undefined;
-  const bytes = base64ToBytes(base64);
-  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  return audioCtx.decodeAudioData(ab);
-}
-
-/**
- * Rebuilds a persisted project track into a playable TrackModel. The original
- * audio is NOT duplicated here for Rekordbox-sourced tracks (it is re-opened
- * from its read-only path); embedded clip/original audio is decoded on demand.
- */
-async function rebuildTrackFromSerialized(
-  st: SerializedTrack,
-  audioCtx: AudioContext
-): Promise<TrackModel> {
-  const segments: EditSegment[] = [];
-  for (const seg of st.workingSegments) {
-    const clipBuffer = await decodeWavBase64(audioCtx, seg.clipWavBase64);
-    segments.push({
-      id: seg.id,
-      type: seg.type,
-      trackId: seg.trackId,
-      sourceStart: seg.sourceStart,
-      sourceEnd: seg.sourceEnd,
-      projectStart: seg.projectStart,
-      projectDuration: seg.projectDuration,
-      clipId: seg.clipId,
-      clipBuffer,
-      gain: seg.gain,
-      ...(seg.sourceTrackId ? { sourceTrackId: seg.sourceTrackId } : {}),
-      ...(seg.sourceClipStart !== undefined ? { sourceClipStart: seg.sourceClipStart } : {}),
-      ...(seg.tempoRatio !== undefined ? { tempoRatio: seg.tempoRatio } : {}),
-      ...(seg.pitchShift !== undefined ? { pitchShift: seg.pitchShift } : {}),
-    });
-  }
-
-  const embeddedOriginal = st.originalAudioBase64
-    ? await decodeWavBase64(audioCtx, st.originalAudioBase64)
-    : undefined;
-
-  return {
-    id: st.id,
-    title: st.title,
-    artist: st.artist,
-    album: st.album,
-    genre: st.genre,
-    label: st.label,
-    rating: st.rating,
-    playCount: st.playCount,
-    year: st.year,
-    comments: st.comments,
-    dateAdded: st.dateAdded,
-    remixer: st.remixer,
-    isrc: st.isrc,
-    bpm: st.bpm,
-    key: st.key,
-    duration: st.duration,
-    sampleRate: st.sampleRate,
-    channels: st.channels,
-    originalSha256: st.originalSha256,
-    isOriginalUntouched: st.isOriginalUntouched,
-    audioBuffer: embeddedOriginal ?? null,
-    // Verbatim adoption of persisted nodes (grid origin included); a uniform
-    // rebuild happens only for projects saved before beat persistence.
-    beatGrid: adoptSerializedGrid(st.beatGrid, st.duration, st.origin),
-    cues: st.cues,
-    loops: st.loops,
-    analysis: null,
-    origin: st.origin,
-    phrases: st.phrases,
-    rawXmlAttributes: st.rawXmlAttributes,
-    originalMedia: st.originalMedia,
-    workingSegments: segments,
-  };
 }
 
 export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
@@ -1794,25 +1720,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       let originalMedia = selectedDef.originalMedia;
 
       // The native bridge can resolve the XML Location and only ever opens the
-      // original audio read-only.
-      if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
-        try {
-          const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-          originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
-          originalMedia = {
-            ...originalMedia,
-            resolvedPath: source.path,
-            size: source.size,
-            modifiedAt: source.modifiedAt,
-            status: 'AVAILABLE',
-          };
-        } catch (error) {
-          logger.warn('DATABASE', '[XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio).', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          originalMedia = { ...originalMedia, status: 'MISSING' };
+      // original audio read-only. Ein Ersatz-Audio wird nie erzeugt: was fehlt,
+      // bleibt fehlen und wird als MISSING benannt.
+      ({ audioBuffer: originalAudio, originalMedia } = await reopenTrackSourceAudio(
+        { audioBuffer: originalAudio, originalMedia },
+        audioCtx,
+        {
+          category: 'DATABASE',
+          message: '[XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio).',
         }
-      }
+      ));
 
       const bpm = selectedDef.bpm || 130.0;
       const durationDef = selectedDef.duration || 300.0;
@@ -2110,33 +2027,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         rebuiltTracks.push(await rebuildTrackFromSerialized(st, audioCtx));
       }
 
-      // Rebuild the palette with its embedded clip audio.
-      const rebuiltClips = [];
-      for (const clip of doc.paletteClips) {
-        const audioBuffer = await decodeWavBase64(audioCtx, clip.clipWavBase64);
-        rebuiltClips.push({
-          id: clip.id,
-          name: clip.name,
-          sourceTrackId: clip.sourceTrackId,
-          sourceTrackName: clip.sourceTrackName,
-          sourceStart: clip.sourceStart,
-          sourceEnd: clip.sourceEnd,
-          duration: clip.duration,
-          beats: clip.beats,
-          bars: clip.bars,
-          bpm: clip.bpm,
-          key: clip.key,
-          color: clip.color,
-          audioBuffer,
-          miniPeaks: clip.miniPeaks,
-          previewOrigin: clip.previewOrigin,
-          previewNote: clip.previewNote,
-          // Strenge Übernahme: nur ein explizit verifiziertes Fenster aus einem
-          // Projekt dieser Version darf wieder als Quellfenster gelesen werden.
-          sourceMapped: clip.sourceMapped === true,
-          origin: clip.origin,
-        });
-      }
+      // Rebuild the palette with its embedded clip audio. The strict source-window
+      // rule lives in src/project/restore.ts, where it is testable directly.
+      const rebuiltClips = await restorePaletteClips(doc.paletteClips, audioCtx);
 
       setProjectName(doc.projectName);
       setSelection(doc.selection);
@@ -2152,21 +2045,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // path (if it has one) and re-applies the stored edit segments.
       const activeTrack = rebuiltTracks.find((t) => t.id === (doc.activeTrackId || rebuiltTracks[0]?.id)) ?? null;
       if (activeTrack) {
-        let originalAudio = activeTrack.audioBuffer;
-        let originalMedia = activeTrack.originalMedia;
-
-        if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
-          try {
-            const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-            originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
-            originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
-          } catch (error) {
-            logger.warn('SYSTEM', '[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', {
-              error: error instanceof Error ? error.message : String(error),
-            });
-            originalMedia = { ...originalMedia, status: 'MISSING' as const };
-          }
-        }
+        const reopened = await reopenTrackSourceAudio(activeTrack, audioCtx, {
+          category: 'SYSTEM',
+          message: '[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.',
+        });
+        const originalAudio = reopened.audioBuffer;
+        const originalMedia = reopened.originalMedia;
 
         if (originalAudio) {
           // RB-exclusive: a Rekordbox track is never re-analyzed on project
