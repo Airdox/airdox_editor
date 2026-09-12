@@ -586,7 +586,7 @@ function scanWindowForPath(buffer, start, end, encoding) {
   const s = String.fromCharCode(...chars);
   const marker = s.search(/[a-zA-Z]:[\\/]|file:\/\/|\/(?=[A-Za-z])/);
   if (marker < 0) return null;
-  const trimmed = s.slice(marker).replace(/[\s ]+$/, '');
+  const trimmed = s.slice(marker).replace(/[\s\x00]+$/, '');
   return looksLikeAudioPath(trimmed) ? trimmed : null;
 }
 

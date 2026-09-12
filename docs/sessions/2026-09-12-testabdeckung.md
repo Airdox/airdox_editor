@@ -69,6 +69,12 @@ Branch-/Funktionsabdeckung ist niedriger als Zeilenabdeckung, weil viele Kurzzwe
 
 ### 3.2 Neue Test-Suiten
 
+Nach Abschluss dieser Session zusätzlich: `tests/source-hygiene.test.ts` (4 Prüfungen über 94
+Quelldateien: kein rohes Steuerzeichen, kein BOM, nur LF, Newline am Dateiende) — ausgelöst durch
+ein rohes NUL-Byte in `electron/dbReader.cjs:589`, das die Datei für `git diff`, `grep` und die
+GitHub-PR-Ansicht zur Binärdatei machte (Behoben, Details in
+[`../PROJEKTANALYSE_2026-09-12.md`](../PROJEKTANALYSE_2026-09-12.md) Abschnitt A4).
+
 | Suite | Tests | Deckt ab |
 |---|---|---|
 | `tests/ui/detail-waveform.test.tsx` | 19 | Render-/Provenienzpfade des Detail-Waveforms, Drop-Modi, Ablehnungs-Hinweise, Selection-Chip, Beatgrid-Buttons |

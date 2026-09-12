@@ -25,6 +25,8 @@ Größenordnung der Hotspots: `src/App.tsx` 2 671 Zeilen (39 × `useState`, 48 H
 
 **A3 — `metadata.json` und das `clean`-Skript verweisen auf AI-Studio-Reste.** `metadata.json` deklariert `MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API`, `"clean": "rm -rf dist release server.js"` löscht eine `server.js`, die es nicht mehr gibt. Vorschlag: `metadata.json` entweder löschen oder auf das reale Produkt umbiegen (Name „Rekordbox DJ Audio Editor" ≠ `productName` `airdox_SMART_Editor`), `clean` auf `dist release coverage` stellen. *Risiko:* nur, falls der AI-Studio-Workflow der Nutzer die Datei braucht — deshalb nicht eigenmächtig gelöscht.
 
+**A4 — `electron/dbReader.cjs` war für GitHub eine Binärdatei.** In Zeile 589 stand ein **rohes NUL-Byte** in einem Regex-Zeichenfeld (`/[\s<00>]+$/` statt `/[\s\x00]+$/`). Semantisch identisch, praktisch: `grep` („binary file matches“, `git diff` („Binary files differ“ und die PR-Ansicht konnten 960 Zeilen der meistgeänderten Datei im Electron-Teil nicht mehr anzeigen — Reviews dort waren blind. Behoben (Escape-Folge) und durch `tests/source-hygiene.test.ts` dauerhaft gesichert: kein rohes Steuerzeichen, kein BOM, nur LF, Newline am Dateiende — 94 Quelldateien, 4 Prüfungen.
+
 ## B. Refactoring / Vereinfachung
 
 **B1 — `src/App.tsx` in drei Schichten zerlegen (größter Hebel).**
@@ -95,7 +97,11 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
   sind zwei Quellen, die mitgeführt werden müssen** — `npm ci --dry-run` im Pre-Push-Hook oder der
   `tests`-Job fängt das jetzt ab. (Die Dev-Dependencies sind wieder eingetragen, der Lock neu
   synchronisiert.)
-* `npm run coverage` ist weiterhin kein Gate. Vorschlag: Schwellwert im Coverage-Skript
+* **Neu:** `tests/source-hygiene.test.ts` (A4) läuft in beiden CI-Betriebsystemen mit; die
+  Suite wird vom Runner automatisch entdeckt (27 Skript-Suiten), ohne dass package.json angefasst
+  werden muss — genau dafür ist `node tests/run-all.mjs` als `npm test` da.
+* `npm run coverage` ist weiterhin kein Gate (der `tests`-Job misst, macht aber keinen Fehlschritt
+  daraus). Vorschlag: Schwellwert im Coverage-Skript
   (`--fail-under=89` mit begründeter Ausnahme-Liste), damit die Zahl nicht heimlich sinkt.
 * **Versionspolitik ist invertiert:** `main` hat `package.json` 0.4.20, die letzten Releases sind
   v0.5.10 (auf dem Tag stand 0.5.10). Der Commit `4acc0dc Versioning: einheitliches Schema

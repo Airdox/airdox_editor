@@ -39,8 +39,37 @@ manuell auf einem Zweig starten:
 ```bash
 gh workflow run windows-build.yml --ref <branch>          # Build anstoßen
 gh run list --workflow windows-build.yml --limit 3        # Lauf finden
+gh run watch <run-id>                                     # bis "success" begleiten
 gh run download <run-id> -n airdox-smart-editor-windows -D release   # Artefakt holen
 ```
+
+Im Artifact `airdox-smart-editor-windows` liegen `airdox_SMART_Editor-<Version>-setup.exe`,
+`airdox_SMART_Editor-<Version>-portable.exe` **und** `SHA256SUMS.txt` (von einem CI-Schritt
+erzeugt: SHA256, Dateigröße, Zahl der nativen Module im Paket, asar-Größe). Nach dem Download
+prüfen:
+
+```powershell
+Get-FileHash .\airdox_SMART_Editor-<Version>-portable.exe -Algorithm SHA256   # Windows
+sha256sum airdox_SMART_Editor-<Version>-portable.exe                          # Linux/macOS
+```
+
+Zwei weitere Knöpfe am Workflow:
+
+* **`release_draft`** (nur `workflow_dispatch`, Bool, Standard `false`): legt die beiden `.exe`
+  als **Entwurf** (`draft` + `prerelease`) an den rollenden Tag `ci-windows-build`. Damit ist ein
+  Zweig-Build per Browser downloadbar, ohne ein öffentliches Release zu erzeugen; jeder neue
+  dispatch-Lauf überschreibt die Dateien (`overwrite_files`). Normal-Builds (PR, `main`,
+  Cron) bleiben unberührt.
+* Ein zweiter Job **`tests`** läuft auf ubuntu **und** windows (`npm ci` → `npm run lint` →
+  `npm test` → `npm run coverage`). Er blockiert das Artefakt nicht, zieht aber die Ampel —
+  seit ein Build grün wurde, obwohl `npm ci` die Test-Stack-`devDependencies` weggelassen hatte.
+
+Die Artefakt-/Release-Download-URLs liegen auf Azure-Blob-Hosts
+(`*.blob.core.windows.net`); in abgeschotteten Umgebungen (CI-Sandboxen, manche Firmennetze) sind
+sie geblockt — dann die `.exe` im Browser von der Actions-/Release-Seite holen und die SHA256 aus
+`SHA256SUMS.txt` vergleichen. Der Dateiname folgt der `version` in `package.json` (aktuell
+`0.4.20`), die Release-Tags sind separat gezählt (`v0.5.x`) — siehe
+`docs/PROJEKTANALYSE_2026-09-12.md`, Abschnitt G.
 
 ## Automatischer Build (GitHub Actions)
 
