@@ -33,7 +33,7 @@ interface PalettePanelProps {
   targetKey?: string;
 }
 
-export const PalettePanel: React.FC<PalettePanelProps> = ({
+const PalettePanelBase: React.FC<PalettePanelProps> = ({
   isOpen,
   onToggle,
   clips,
@@ -364,3 +364,19 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
     </div>
   );
 };
+
+/**
+ * Memoisiert: die Palette ändert sich über `clips` (State) und die Auswahl — nicht
+ * über den 60-fps-Playhead-Takt der Deck-Views. Ohne dieses Memo würden alle
+ * Clip-Kacheln (inkl. Canvas-Vorschauen) bei jedem Transport-Takt neu gerendert.
+ * Voraussetzung: die stabilen Callbacks aus `useStableCallback` in `App`.
+ *
+ * Bewusst NICHT memoisiert: ClipDeckView, TrackHeader und BrowserMultiTrackBar.
+ * Die bekommen `activeTrack` bzw. `tracks` — Objekte, die die Edit-Pipeline
+ * unterwegs *mutiert* (duration, analysis, editInfo). Ein Memo würde den
+ * alten Zustand festhalten, und die UI würde nach einem Edit eine falsche Länge
+ * zeigen; elf UI-Tests haben genau das angezeigt. Freigeschaltet wird das Memo
+ * erst, sobald die Projektion den Track unmutabel ersetzt (see
+ * docs/PROJEKTANALYSE_2026-09-12.md, Punkt B1/C2).
+ */
+export const PalettePanel = React.memo(PalettePanelBase);

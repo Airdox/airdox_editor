@@ -65,6 +65,7 @@ import { initFileLogging } from './utils/fileLog';
 import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
 import { nextId } from './utils/ids';
+import { useStableCallback } from './utils/useStableCallback';
 import {
   serializeProject,
   deserializeProject,
@@ -2428,6 +2429,48 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
+  // ── Stabile Props für die memoisierten Baugruppen ──────────────────────────
+  // Der Playhead läuft in einem requestAnimationFrame-Takt über setCurrentTime.
+  // Ohne diese Wrapper würden Palette, Deck-Ansicht und Browser-Leiste bei jedem
+  // Tick mit rendern, weil jedes Inline-Pfeilchen im JSX eine neue Funktion ist und
+  // damit React.memo aushebelt. useStableCallback hält die IDENTITÄT konstant und
+  // ruft trotzdem die Implementierung des aktuellen Renders auf — kein stale
+  // closure, keine Abhängigkeitsliste, die man pflegen muss.
+  const stableSeek = useStableCallback(handleSeek);
+  const stablePanView = useStableCallback(handlePanView);
+  const stableZoomIn = useStableCallback(handleZoomIn);
+  const stableZoomOut = useStableCallback(handleZoomOut);
+  const stableResetZoom = useStableCallback(handleResetZoom);
+  const stableAddToPalette = useStableCallback(handleAddSelectionToPalette);
+  const stableInsertClip = useStableCallback(handleInsertClipToDeckA);
+  const stableReplaceClip = useStableCallback(handleReplaceDeckAWithClip);
+  const stableOverdubClip = useStableCallback(handleOverdubDeckAWithClip);
+  const stableSelectClip = useStableCallback((clip: PaletteClip) => setSelectedClipId(clip.id));
+  const stableDeleteClip = useStableCallback((id: string) => {
+    setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+    setSelectedClipId((prev) => (prev === id ? null : prev));
+  });
+  const stableDropClipFromDeck = useStableCallback((clipId: string) => {
+    const clip = paletteClipsRef.current.find((c) => c.id === clipId);
+    if (clip) handleInsertClipToDeckA(clip);
+  });
+  const stableTogglePalette = useStableCallback(() => setPaletteOpen((prev) => !prev));
+  const stableToggleBrowser = useStableCallback(() => setBrowserOpen((prev) => !prev));
+  const stableExpandPalette = useStableCallback(() => setPaletteViewMode('FULL_DECK'));
+  const stableCloseDeckView = useStableCallback(() => setPaletteViewMode('SIDEBAR'));
+  const stableDropWindow = useStableCallback((startSec: number, endSec: number) => {
+    // The dropped window is authoritative — it is what the user dragged, even if
+    // the visible selection changed in the meantime.
+    if (endSec - startSec > 0.02) handleAddSelectionToPalette(startSec, endSec);
+  });
+  const stableSelectTrack = useStableCallback((id: string) => {
+    const track = tracksRef.current.find((t) => t.id === id);
+    if (track) loadTrackIntoDeck(track);
+  });
+  const stablePickXmlFile = useStableCallback(() => xmlFileInputRef.current?.click());
+  const stablePickAudioFile = useStableCallback(() => audioFileInputRef.current?.click());
+  const stableOpenXmlCollection = useStableCallback(() => setXmlCollectionModalOpen(true));
+
   return (
     <div className="w-screen h-screen bg-[#0a0b0d] flex flex-col overflow-hidden select-none text-neutral-200">
       {/* Hidden file pickers */}
@@ -2507,8 +2550,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         currentTime={currentTime}
         viewOffset={viewOffset}
         viewDuration={viewDuration}
-        onSeek={handleSeek}
-        onPanView={handlePanView}
+        onSeek={stableSeek}
+        onPanView={stablePanView}
       />
 
       {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
@@ -2563,22 +2606,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         {paletteViewMode === 'SIDEBAR' && (
           <PalettePanel
             isOpen={paletteOpen}
-            onToggle={() => setPaletteOpen(!paletteOpen)}
+            onToggle={stableTogglePalette}
             clips={paletteClips}
-            onAddFromSelection={handleAddSelectionToPalette}
-            onDeleteClip={(id) => {
-              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-              if (selectedClipId === id) setSelectedClipId(null);
-            }}
-            onSelectClip={(clip) => setSelectedClipId(clip.id)}
+            onAddFromSelection={stableAddToPalette}
+            onDeleteClip={stableDeleteClip}
+            onSelectClip={stableSelectClip}
             selectedClipId={selectedClipId}
             hasSelection={selection !== null && selection.duration > 0}
-            onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
-            onDropSelection={(startSec, endSec) => {
-              // The dropped window is authoritative — it is what the user dragged,
-              // even if the visible selection changed in the meantime.
-              if (endSec - startSec > 0.02) handleAddSelectionToPalette(startSec, endSec);
-            }}
+            onExpandToDeckView={stableExpandPalette}
+            onDropSelection={stableDropWindow}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
             targetBpm={activeTrack?.bpm}
@@ -2593,24 +2629,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           <ClipDeckView
             clips={paletteClips}
             activeClipId={selectedClipId}
-            onSelectClip={(clip) => setSelectedClipId(clip.id)}
-            onDeleteClip={(id) => {
-              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-              if (selectedClipId === id) setSelectedClipId(null);
-            }}
-            onAddFromSelection={handleAddSelectionToPalette}
+            onSelectClip={stableSelectClip}
+            onDeleteClip={stableDeleteClip}
+            onAddFromSelection={stableAddToPalette}
             hasSelectionInDeckA={selection !== null && selection.duration > 0}
             activeTrack={activeTrack}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
-            onInsertClipToDeckA={handleInsertClipToDeckA}
-            onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
-            onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
-            onDropClipIntoDeckA={(clipId) => {
-              const clip = paletteClips.find((c) => c.id === clipId);
-              if (clip) handleInsertClipToDeckA(clip);
-            }}
-            onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
+            onInsertClipToDeckA={stableInsertClip}
+            onReplaceDeckAWithClip={stableReplaceClip}
+            onOverdubDeckAWithClip={stableOverdubClip}
+            onDropClipIntoDeckA={stableDropClipFromDeck}
+            onCloseDeckView={stableCloseDeckView}
             waveformMode={waveformMode}
           />
         </div>
@@ -2644,16 +2674,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
       <BrowserMultiTrackBar
         isOpen={browserOpen}
-        onToggle={() => setBrowserOpen(!browserOpen)}
+        onToggle={stableToggleBrowser}
         tracks={tracks}
         activeTrackId={activeTrackId}
-        onSelectTrack={(id) => {
-          const t = tracks.find((tr) => tr.id === id);
-          if (t) loadTrackIntoDeck(t);
-        }}
-        onImportXml={() => xmlFileInputRef.current?.click()}
-        onImportAudio={() => audioFileInputRef.current?.click()}
-        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
+        onSelectTrack={stableSelectTrack}
+        onImportXml={stablePickXmlFile}
+        onImportAudio={stablePickAudioFile}
+        onOpenXmlCollection={stableOpenXmlCollection}
       />
 
       {/* Modals */}
