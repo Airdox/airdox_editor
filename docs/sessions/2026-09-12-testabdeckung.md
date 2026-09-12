@@ -19,37 +19,39 @@ Branch `arena/01a0933a-airdox-editor` (Arbeitszweig dieser Session), Stand nach 
 
 | Messgröße | Vor der Session | Nach der Session |
 |---|---|---|
-| `src/**` Lines (gemergt, beide Pipelines) | 43,05 % | **89,4 %** |
-| Statements | — | 89,4 % |
+| `src/**` Lines (gemergt, beide Pipelines) | 43,05 % | **89,5 %** |
+| Statements | — | 89,5 % |
 | Branches | 68,6 % | 67,8 % |
 | Funktionen | 72,0 % | 72,1 % |
-| Dateien unter 90 % Lines | ~40 | **8** |
-| Vitest-Tests (Komponente/Workflow/Unit) | 0 | **203** in 8 Dateien |
+| Dateien unter 90 % Lines | ~40 | **7** |
+| Vitest-Tests (Komponente/Workflow/Unit) | 0 | **204** in 8 Dateien |
 | Skript-Suiten (`tests/*.test.ts`, unverändert) | 25 | 25 (alle grün) |
 | `node tests/run-all.mjs` | — | 26/26 Suiten grün |
 
 Kommandozeile (alles läuft über npm):
 
 ```
-npm test          # Registry-Guard + alle Skript-Suiten + vitest (203 Tests)
+npm test          # Registry-Guard + alle Skript-Suiten + vitest (204 Tests)
 npm run test:all  # dasselbe über den Runner tests/run-all.mjs
 npm run coverage  # beide Pipelines getrennt gemessen, pro Datei zusammengeführt
 npm run lint      # tsc --noEmit (prüft auch tests/)
 npm run build     # Vite-Produktionsbuild
 ```
 
-### Dateien unter 90 % Lines (bewusste Restliste)
+### Dateien unter 90 % Lines (bewusste Restliste, Stand nach den Nachträgen)
 
 | Datei | Lines | Warum nicht höher |
 |---|---|---|
-| `src/App.tsx` | 68,4 % | 2 671 Statements in einem einzigen React-Container. Die beiden App-Suiten fahren die Import-/Editier-/Drop-/Speichern-Pfade; offen bleiben Elektronur-Dialogpfade (`openDialog`), DB-Lesung über `master.db`, Projekt-Wiederherstellung mit eingebettetem Clip-Audio und die Pitch/Tempo-Panel-Interaktionen. |
+| `src/App.tsx` | 68,5 % | 2 671 Statements in einem einzigen React-Container. Die beiden App-Suiten fahren die Import-/Editier-/Drop-/Speichern-Pfade; offen bleiben Elektronur-Dialogpfade (`openDialog`), DB-Lesung über `master.db`, Projekt-Wiederherstellung mit eingebettetem Clip-Audio und die Pitch/Tempo-Panel-Interaktionen. |
 | `src/rekordbox/xmlParser.ts` | 74,8 % | Playlist-/ verschachtelte TEMPO-Abschnitte und Fehlerzweige werden von den Fixture-XMLs nicht durchlaufen. |
 | `src/audio/audioEngine.ts` | 81,5 % | `renderWorkingAudio`, Meters und Compressor-Kette brauchen einen `OfflineAudioContext`, den jsdom nicht hat. |
 | `src/audio/pitchTempoEngine.ts` | 80,4 % | Wie oben: echte Stretch-/Resample-Pfade laufen nur mit echtem Web Audio. |
 | `src/components/ClipDeckView.tsx` | 86,0 % | Canvas-Zeichenloops der Doppeldeck-Ansicht (Zoom, Layer-Farben) sind abgedeckt, die Preview-Wiedergabe-Animation nicht vollständig. |
 | `src/components/ErrorBoundary.tsx` | 88,4 % | Reset-Pfad nach dem Absturz (zweiter Anlauf) nicht getestet — folgt unten als Nacharbeit. |
-| `src/components/Modals/ExportModal.tsx` | 88,0 % | JSON-Zweig hat **keine UI-Schaltfläche** (nur WAV und XML wählbar) → von Hand nicht erreichbar. |
 | `src/edit/editModel.ts` | 89,6 % | Randzweige für `MISSING`-Vorfahren und Mehrspur-Overlay-Kombinationen. |
+
+> `ExportModal.tsx` war mit 88,0 % dabei und ist nach dem zusätzlichen
+> Export-Absturz-Test (Log-Routing, Nachtrag Abschnitt 8) über 90 % — die Datei ist nicht mehr in der Liste.
 
 Branch-/Funktionsabdeckung ist niedriger als Zeilenabdeckung, weil viele Kurzzweige (`if (!x) return`) in Aggregatfunktionen nur einseitig getestet sind.
 
@@ -111,7 +113,7 @@ Zusätzlich dokumentiert, bewusst **nicht** geändert:
 
 ## 5. Erfüllung der Aufgabenpunkte
 
-1. **Alle elementaren Codeabschnitte mit Tests, global 90 %** — *nahezu erreicht*: 89,4 % Lines global, jede Datei aus `src/**` wird von mindestens einer fokussierten Suite berührt (vorher: App.tsx, alle Modals, ClipDeckView, MenuBar, EditModeBar, BottomControlBlock, TrackOverview/Header, ErrorBoundary, main.tsx, logger/fileLog, analyzer = 0 %). Acht Dateien liegen noch darunter (Tabelle 2). 100 % pro Datei wurden **nicht** erzwungen, wo der Code ohne echtes Web Audio / ohne Desktop-Bridge nicht erreichbar ist — stattdessen ist jede Lücke begründet.
+1. **Alle elementaren Codeabschnitte mit Tests, global 90 %** — *nahezu erreicht*: 89,5 % Lines global, jede Datei aus `src/**` wird von mindestens einer fokussierten Suite berührt (vorher: App.tsx, alle Modals, ClipDeckView, MenuBar, EditModeBar, BottomControlBlock, TrackOverview/Header, ErrorBoundary, main.tsx, logger/fileLog, analyzer = 0 %). Sieben Dateien liegen noch darunter (Tabelle 2). 100 % pro Datei wurden **nicht** erzwungen, wo der Code ohne echtes Web Audio / ohne Desktop-Bridge nicht erreichbar ist — stattdessen ist jede Lücke begründet.
 2. **Dokumentation von Session, Auftrag und Erfüllungsgrad** — erreicht (diese Datei).
 3. **Viele Workflow-Szenarien auf Funktionskombinationen geprüft, Abweichungen dokumentiert** — erreicht: 32 App-Szenarien in echtem DOM + 105 Matrix-Fälle + 24 Dialog-Szenarien; sieben Abweichungen identifiziert, sechs behoben, eine dokumentiert (Tabelle 4).
 4. **Zweck-Testdateien nach Effizienz/Nachhaltigkeit** — erreicht: Helfer sind geteilt (ein Pflegeort für Beschriftungen), Fixtures bleiben in `tests/fixtures/`, keine Demo-Daten in `src/`, keine Wegwerf-Skripte; der Registry-Guard sicherstellt, dass keine Suite und kein Messpfad verloren geht.

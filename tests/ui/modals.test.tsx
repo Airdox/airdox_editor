@@ -18,6 +18,7 @@ import { SystemLogModal } from '../../src/components/Modals/SystemLogModal';
 import { DatabaseExtractionModal } from '../../src/components/Modals/DatabaseExtractionModal';
 import { RekordboxXmlImportModal } from '../../src/components/Modals/RekordboxXmlImportModal';
 import { logger } from '../../src/utils/logger';
+import { audioEngine } from '../../src/audio/audioEngine';
 import type { XmlImportProgress } from '../../src/rekordbox/xmlParser';
 import { makeDeckTrack, makePaletteClip } from '../helpers/trackFixtures';
 import { dialogs, resetDialogs, waitForFrames } from '../setup/ui';
@@ -429,6 +430,40 @@ describe('ExportModal', () => {
     });
     await waitForFrames(2);
     expect(dialogs.alerts.join(' ')).toContain('Keine Audiodaten für Export vorhanden');
+  });
+
+  it('routes an export crash into the log instead of only the console', async () => {
+    // The failure must be visible twice: to the user (alert) and in the durable
+    // log (file log + System-Protokoll), because this is the report users send.
+    const exportSpy = vi.spyOn(audioEngine, 'exportToWavBlob').mockImplementation(() => {
+      throw new Error('Encoder-Laufzeitfehler');
+    });
+    const logSpy = vi.spyOn(logger, 'error');
+    const { container } = render(
+      <ExportModal
+        isOpen
+        onClose={() => {}}
+        track={track()}
+        workingAudioBuffer={null}
+        onExportComplete={vi.fn()}
+      />
+    );
+    fireEvent.click(labelText(container, /Master Audio/));
+    fireEvent.click(buttonText(container, /Rendern & Schichten prüfen/));
+    const download = findButton(container, /herunterladen|Rendert Schichten/i) as HTMLButtonElement;
+    await waitForEnabled(download);
+    await act(async () => {
+      fireEvent.click(download);
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+    });
+    await waitForFrames(2);
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    expect(dialogs.alerts.join(' ')).toContain('Fehler beim Exportieren: Encoder-Laufzeitfehler');
+    const entry = logSpy.mock.calls.find(([, message]) => message === 'Export fehlgeschlagen');
+    expect(entry, 'Export-Fehler muss als SYSTEM-Fehler im Log landen').toBeDefined();
+    expect(entry![0]).toBe('SYSTEM');
+    expect(entry![2]).toMatchObject({ error: 'Encoder-Laufzeitfehler', format: 'WAV' });
+    expect(container.textContent).not.toContain('erfolgreich');
   });
 
   it('saves through the desktop bridge with the protected paths, never over an original', async () => {

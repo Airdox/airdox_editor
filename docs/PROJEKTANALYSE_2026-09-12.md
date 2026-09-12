@@ -7,7 +7,7 @@ Grundlage sind Messungen im Repo (keine Vermutungen); jede Zahl ist mit dem Komm
 find src -name '*.ts*' | xargs wc -l | tail -1     # 17 777 Zeilen in 45 Dateien
 find tests -name '*.test.*' | xargs wc -l | tail -1  # 9 148 Zeilen in 33 Suiten
 find electron -name '*.cjs' | xargs wc -l | tail -1  # 1 500 Zeilen
-npm run coverage                                    # 89,4 % Lines, 89,4 % Stmts, 67,8 % Branch, 72,1 % Funkt.
+npm run coverage                                    # 89,5 % Lines, 89,5 % Stmts, 67,8 % Branch, 72,1 % Funkt.
 npx tsc --noEmit                                    # fehlerfrei (prüft auch tests/)
 ```
 
@@ -36,7 +36,7 @@ Größenordnung der Hotspots: `src/App.tsx` 2 671 Zeilen (39 × `useState`, 48 H
 Ist: 2 671 Zeilen, 48 Handler, 39 Einzelfelder. Die Datei enthält vier klar getrennte Zuständigkeiten: (1) Import-/Quellenversorgung (XML/DB/ANLZ, Zeilen ~380–560, ~1530–1830), (2) Deck-Transport und Audio-Bereitstellung (~539–820), (3) Editier-Projektion und Grid-Werkzeuge (~816–1520), (4) Projekt-Persistenz (~1960–2250).
 Vorschlag: daraus vier Hooks machen — `useSourceLoader`, `useDeckTransport`, `useEditProjector`, `useProjectIO` — und den Zustand in einen `useReducer` pro Domäne legen; App.tsx behält nur noch Komposition + Layout (Ziel: < 600 Zeilen).
 Warum das sicher ist: die 32 App-Szenario-Tests in `tests/ui/app-workflows.test.tsx` + `tests/ui/app-tools.test.tsx` fahren genau diese Pfade über sichtbare Titel/Labels und bleiben bei korrekter Zerlegung unverändert grün — der beste vorhanden Refactoring-Sicherheitsgurt. Kein Verhalten, keine Strings ändern; Reihung: erst `useProjectIO` (am unabhängigsten), dann `useSourceLoader`.
-*Nutzen:* Deckungsanzeige wird aussagekräftig (App.tsx ist mit 68,4 % der Ausreißer, weil ein Render-Block mit 2 671 Statements gemessen wird), Review-Blast-Radius sinkt, Wiederverwendung für Deck B/C. *Aufwand:* 2–3 Sessions. *Risiko:* mittel (Effekt-Reihenfolge, Cleanup von `addEventListener` in Zeile ~2318) → in Teilschritten mit je einem Gate-Lauf.
+*Nutzen:* Deckungsanzeige wird aussagekräftig (App.tsx ist mit 68,5 % der Ausreißer, weil ein Render-Block mit 2 671 Statements gemessen wird), Review-Blast-Radius sinkt, Wiederverwendung für Deck B/C. *Aufwand:* 2–3 Sessions. *Risiko:* mittel (Effekt-Reihenfolge, Cleanup von `addEventListener` in Zeile ~2318) → in Teilschritten mit je einem Gate-Lauf.
 
 **B2 — Zeichenschleifen dreimal parallel.** `DetailWaveform.tsx` (23 × `fillRect`, 3 rAF-Schleifen), `ClipDeckView.tsx` (2 × `fillRect`, 2 rAF), `TrackOverview.tsx` (10 × `fillRect`). Die Datenseite ist bereits sauber ausgelagert (`src/waveform/renderModel.ts`, 99,0 % gedeckt, malt selbst nichts) — die Pixel-Seite nicht. Vorschlag: `src/waveform/painter.ts` mit `paintBands(ctx, model, geometry, style)` / `paintGrid` / `paintSelection`, die drei Komponenten rufen nur noch Geometrie + Stil auf. *Nutzen:* identische Darstellung an allen drei Orten (heute: unterschiedliche Randbehandlung beim Zoom), halb so viel Canvas-Code, Deckungsproblem der drei Komponenten löst sich mit. *Aufwand:* 1 Session. *Risiko:*gering — visuell, deshalb vor/nach mit den Referenz-Screenshots in `reference/` abgleichen.
 
@@ -135,6 +135,6 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
 
 ## Was in dieser Session zusätzlich schon erledigt ist
 
-* Testbasis: 203 vitest-Tests + 25 Skript-Suiten, `npm run coverage` mit **best-of-pipelines**-Merge (89,4 % Lines in `src/**`), Registry-Guard gegen „Suite läuft nie", `tests/helpers/appHarness.tsx` als gemeinsamer UI-Treiber (Beschriftungen nur noch ein Pflegeort).
+* Testbasis: 204 vitest-Tests + 25 Skript-Suiten, `npm run coverage` mit **best-of-pipelines**-Merge (89,5 % Lines in `src/**`), Registry-Guard gegen „Suite läuft nie", `tests/helpers/appHarness.tsx` als gemeinsamer UI-Treiber (Beschriftungen nur noch ein Pflegeort).
 * Sechs Produktfehler aus den Szenario-Tests behoben (Ablehnungs-Hinweis Drop, doppelte `Date.now()`-ID, CLONE-Knopf ohne Wirkung, Bars-Beschriftung 16× falsch, XML-Export-Crash bei leerem Modell, 1-ms-Timeline-Schrumpfung beim Fenster-Drop ans Ende) — Details und Belege: [`sessions/2026-09-12-testabdeckung.md`](sessions/2026-09-12-testabdeckung.md).
 * Ordnung: `docs/` mit Lesereihenfolge und Session-Protokollen, echtes `README.md`, versionsfreie Build-Doku, `npm test` als ein entdeckender Runner statt 26-Glieder-Kette.
