@@ -20,6 +20,7 @@ import {
   TrackModel,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { nextId } from '../utils/ids';
 import { parseRekordboxXml } from './xmlParser';
 import { parseAnlzBinary as parseAnlzFile, WAVEFORM_PRIORITY } from './anlzParser';
 
@@ -342,7 +343,7 @@ export function extractTrackFromRekordboxXml(
     databaseRecord: dbRecord,
     workingSegments: [
       {
-        id: `seg-init-${Date.now()}`,
+        id: nextId('seg-init'),
         type: 'ORIGINAL',
         trackId: rawTrack.id || '1',
         sourceStart: 0,

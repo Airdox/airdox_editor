@@ -34,6 +34,7 @@ import {
   rebaseTrackAnalysis,
   toSpanViews,
   waveformOriginAfterEdit,
+  createSegment,
   type ProjectedSpanView,
   type TrackProjection,
 } from './edit/editModel';
@@ -63,6 +64,7 @@ import { loadAnlzContainerSet } from './rekordbox/analysisContainerLoader';
 import { initFileLogging } from './utils/fileLog';
 import { adoptSerializedGrid, describeGridEdit, ensureArrayBuffer, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
 import { logger } from './utils/logger';
+import { nextId } from './utils/ids';
 import {
   serializeProject,
   deserializeProject,
@@ -101,7 +103,9 @@ function buildCollectionTrackModel(
 ): TrackModel {
   const duration = pt.duration && !isNaN(pt.duration) ? pt.duration : 300.0;
   const bpm = pt.bpm && !isNaN(pt.bpm) ? pt.bpm : 130.0;
-  const id = pt.id || `${origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml'}-${Date.now()}-${idx}`;
+  // One id source for the whole app: a timestamp is only probably unique and is a
+  // separate read per field, which is how a track and its segments once disagreed.
+  const id = pt.id || nextId(origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml');
   return {
     id,
     title: pt.title || 'Untitled Track',
@@ -788,7 +792,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const beatNumber = (beatIndex % 4) + 1;
 
     const newCue: CuePoint = {
-      id: `mem-${Date.now()}`,
+      id: nextId('mem'),
       position: currentTime,
       inMsec: Math.round(currentTime * 1000),
       type: 'MEMORY',
@@ -1098,22 +1102,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     projectDuration: number,
     buffer: AudioBuffer | null,
     source: ClipSourceInfo = {}
-  ): EditSegment => ({
-    id: `${type.toLowerCase()}-${Date.now()}-${Math.round(projectStart * 1000)}`,
-    type,
-    trackId: activeTrack?.id ?? '',
-    sourceStart: source.sourceStart ?? 0,
-    sourceEnd: (source.sourceStart ?? 0) + projectDuration,
-    projectStart,
-    projectDuration,
-    clipId: source.clipId,
-    clipBuffer: buffer ?? undefined,
-    gain: 1.0,
-    sourceTrackId: source.sourceTrackId,
-    sourceClipStart: source.sourceClipStart,
-    tempoRatio: source.tempoRatio ?? 1.0,
-    pitchShift: source.pitchShift ?? 0,
-  });
+  ): EditSegment =>
+    createSegment({
+      type,
+      trackId: activeTrack?.id ?? '',
+      projectStart,
+      projectDuration,
+      sourceStart: source.sourceStart,
+      clipId: source.clipId,
+      clipBuffer: buffer ?? undefined,
+      sourceTrackId: source.sourceTrackId,
+      sourceClipStart: source.sourceClipStart,
+      tempoRatio: source.tempoRatio,
+      pitchShift: source.pitchShift,
+    });
 
   /**
    * The single path every edit takes: append the segment, re-time the follow-up
@@ -1202,7 +1204,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (from === undefined || to === undefined || !activeTrack || !workingAudioBuffer) return;
     if (!(to > from)) return;
     const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, from, to);
-    const newClipId = `clip-${Date.now()}`;
+    const newClipId = nextId('clip');
     // Keep the source window when the copied range is genuine original material:
     // a clip inserted from it can then reuse the stored ANLZ columns verbatim.
     const sourceWindow = mapWindowToSource(activeTrack, from, to);
@@ -1585,7 +1587,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!activeTrack) return;
     pushHistorySnapshot('Add Cue');
     const newCue = {
-      id: `cue-${Date.now()}`,
+      id: nextId('cue'),
       name: `Cue ${activeTrack.cues.length + 1}`,
       type: 'MEMORY' as const,
       position: pos,
@@ -1898,7 +1900,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       let loadedTrack: TrackModel = {
         ...selectedDef,
-        id: selectedDef.id || `track-${Date.now()}`,
+        id: selectedDef.id || nextId('track'),
         title: selectedDef.title || 'Rekordbox Track',
         artist: selectedDef.artist || 'Unknown Artist',
         album: selectedDef.album || 'Rekordbox Collection',
@@ -1929,7 +1931,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         origin: selectedDef.origin ?? DataOrigin.REKORDBOX_XML,
         workingSegments: [
           {
-            id: `seg-${Date.now()}`,
+            id: nextId('seg-edit'),
             type: 'ORIGINAL',
             trackId: selectedDef.id || '1',
             sourceStart: 0,
@@ -2235,7 +2237,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       // One id for the track AND its original segment: they must agree, so the
       // timestamp is sampled once (two Date.now() calls could straddle a tick).
-      const newTrackId = `track-${Date.now()}`;
+      const newTrackId = nextId('track');
       const newTrack: TrackModel = {
         id: newTrackId,
         title: file.name.replace(/\.[^/.]+$/, ''),
@@ -2255,7 +2257,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         beatGrid: buildBeatGridFromTempo(0.0, 130.0, decoded.duration, 4, DataOrigin.LOCAL_ANALYSIS),
         cues: [
           {
-            id: `cue-${Date.now()}`,
+            id: nextId('cue'),
             name: 'Cue 1',
             type: 'MEMORY',
             position: 0.0,
@@ -2271,7 +2273,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         origin: DataOrigin.LOCAL_ANALYSIS,
         workingSegments: [
           {
-            id: `seg-${Date.now()}`,
+            id: nextId('seg-edit'),
             type: 'ORIGINAL',
             trackId: newTrackId,
             sourceStart: 0,

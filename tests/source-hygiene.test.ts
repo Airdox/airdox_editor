@@ -15,27 +15,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-interface TestResult {
-  name: string;
-  passed: boolean;
-  error?: string;
-}
-
-const results: TestResult[] = [];
-
-function runTest(name: string, fn: () => void) {
-  try {
-    fn();
-    results.push({ name, passed: true });
-  } catch (err: any) {
-    results.push({ name, passed: false, error: err?.message || String(err) });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
+import { runTest, assert, report } from './helpers/microTest.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const TEXT_EXTENSIONS = new Set(['.ts', '.tsx', '.mjs', '.cjs', '.js', '.jsx', '.json', '.md', '.css', '.html', '.yml', '.yaml']);
@@ -116,13 +96,55 @@ runTest('H5: src/ logt ausschließlich über utils/logger (eine Senke für Konso
   );
 });
 
-const failed = results.filter((r) => !r.passed);
-console.log('\n' + '═'.repeat(70));
-console.log('  SOURCE HYGIENE GUARD');
-console.log('═'.repeat(70));
-for (const r of results) {
-  console.log(`  ${r.passed ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${r.name}${r.error ? ` — ${r.error}` : ''}`);
-}
-console.log(`\n  ${files.length} Quelldateien geprüft (src, electron, tests, .github)`);
-console.log('─'.repeat(70) + '\n');
-if (failed.length) process.exit(1);
+runTest('H6: Identitäten kommen aus utils/ids — kein Date.now() als id', () => {
+  // Zwei `Date.now()`-Aufrufe in einem Objekt können bei einem Tick-Übergang
+  // verschiedene Werte liefern (beobachtet: Track-Id vs. Segment-`trackId` beim
+  // LOCAL-IMPORT). Eine Projektion, die ein Segment über seine Id auflöst, verliert
+  // dann genau diesen Schnitt — still.
+  const ID_FROM_CLOCK = /[\w]*[iI]d\s*[:=]\s*[^\n]*Date\.now\(\)/;
+  const offenders: string[] = [];
+  for (const file of files) {
+    if (!file.startsWith('src/')) continue;
+    const lines = readFileSync(join(root, file), 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      // Kommentarzeilen sind keine Aufrufe (die Doku in utils/ids nennt Präfixe als Beispiel).
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
+      if (ID_FROM_CLOCK.test(line)) offenders.push(`${file}:${i + 1}`);
+    });
+  }
+  assert(
+    offenders.length === 0,
+    `id-Werte aus der Uhr sind nicht eindeutig und können pro Feld auseinanderlaufen — utils/ids.ts (nextId/nextEditId) verwenden: ${offenders.join(', ')}`
+  );
+});
+
+runTest('H7: neue Id-Präfixe kollidieren nicht mit Ids der Importer', () => {
+  // nextId('seg') würde `seg-1` erzeugen — xmlParser/dbParser nennen ihre
+  // importierten Segmente aber genauso (`seg-${index}`). Eine doppelte Id pro Track
+  // ist kein Kosmetikfehler: `segById` entscheidet dann über das falsche Edit.
+  const idPrefixes = new Set<string>();
+  for (const file of files.filter((f) => f.startsWith('src/'))) {
+    const text = readFileSync(join(root, file), 'utf8');
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+      for (const m of line.matchAll(/nextId\(\s*'([^']+)'\s*\)/g)) idPrefixes.add(m[1]);
+    }
+  }
+  assert(idPrefixes.size > 0, 'utils/ids wird in src/ gar nicht benutzt — Guard verpufft?');
+  const parserIds = new Set<string>();
+  for (const file of ['src/rekordbox/xmlParser.ts', 'src/rekordbox/dbParser.ts', 'src/App.tsx']) {
+    const text = readFileSync(join(root, file), 'utf8');
+    for (const m of text.matchAll(/id:\s*`([a-z0-9-]+)-\$\{(?:idx|index|mIdx|hotNum|beatIdx|i)\}/g)) {
+      parserIds.add(m[1]);
+    }
+  }
+  const collisions = [...idPrefixes].filter((prefix) => parserIds.has(prefix));
+  assert(
+    collisions.length === 0,
+    `Laufzeit-Ids und Importer-Ids teilen ein Präfix (Kollisionsgefahr in segById): ${collisions.join(', ')}`
+  );
+});
+
+report('SOURCE HYGIENE GUARD');

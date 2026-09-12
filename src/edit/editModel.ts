@@ -24,6 +24,11 @@ import {
   TrackModel,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { nextEditId } from '../utils/ids';
+
+/** Re-export: the edit domain owns the name, the counter lives in utils/ids. */
+export { nextEditId };
+
 import {
   ProjectedTimeline,
   TimelineSpan,
@@ -146,6 +151,52 @@ function materialDurationOf(seg: EditSegment): number {
  * @param clips   palette clips (clip → source-track provenance)
  * @param tracks  all loaded tracks (to resolve a clip's source analysis)
  */
+/**
+ * The single factory for an edit segment.
+ *
+ * Id and the fields derived from the same moment (source window, project window)
+ * are produced in ONE step: `id` comes from `nextEditId()`, so it cannot disagree
+ * with the rest of the object, and nothing here reads the wall clock. Every call
+ * site — paste, drop, cut, clear — therefore produces an addressable segment,
+ * which is what `segById` in the projection and Undo/Redo rely on.
+ */
+export interface SegmentInput {
+  type: EditSegment['type'];
+  trackId: string;
+  projectStart: number;
+  projectDuration: number;
+  /** Start inside the deck's pristine source (0 for pure timeline operations). */
+  sourceStart?: number;
+  clipId?: string;
+  clipBuffer?: AudioBuffer;
+  sourceTrackId?: string;
+  sourceClipStart?: number;
+  tempoRatio?: number;
+  pitchShift?: number;
+  gain?: number;
+}
+
+export function createSegment(input: SegmentInput): EditSegment {
+  const duration = input.projectDuration;
+  const sourceStart = input.sourceStart ?? 0;
+  return {
+    id: nextEditId(),
+    type: input.type,
+    trackId: input.trackId,
+    sourceStart,
+    sourceEnd: sourceStart + duration,
+    projectStart: input.projectStart,
+    projectDuration: duration,
+    clipId: input.clipId,
+    clipBuffer: input.clipBuffer,
+    gain: input.gain ?? 1.0,
+    sourceTrackId: input.sourceTrackId,
+    sourceClipStart: input.sourceClipStart,
+    tempoRatio: input.tempoRatio ?? 1.0,
+    pitchShift: input.pitchShift ?? 0,
+  };
+}
+
 export function projectTrackEdits(
   track: TrackModel,
   clips: PaletteClip[],

@@ -27,6 +27,8 @@ import {
   SelectionRange,
   TrackModel,
 } from '../types/rekordbox';
+import { adoptIds } from '../utils/ids';
+
 
 export const PROJECT_FORMAT = 'airdox-project';
 export const PROJECT_VERSION = 1;
@@ -395,6 +397,29 @@ export function deserializeProject(json: string): SerializedProjectDocument {
   if (!Array.isArray(doc.tracks)) {
     throw new Error('Die Projektdatei enthält keine Track-Liste.');
   }
+
+  /**
+   * Ids from a previous session are adopted, so the id counter of THIS session can
+   * never hand out an id the loaded project already uses. The projection resolves
+   * segments by id — a duplicate would silently edit the wrong edit.
+   */
+  const loadedIds: string[] = [];
+  for (const raw of (doc.tracks ?? []) as unknown as Array<Record<string, unknown> | null>) {
+    if (!raw) continue;
+    if (typeof raw.id === 'string') loadedIds.push(raw.id);
+    for (const key of ['segments', 'cues', 'loops', 'phrases', 'beats'] as const) {
+      const list = raw[key];
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        const id = (item as { id?: unknown } | null)?.id;
+        if (typeof id === 'string') loadedIds.push(id);
+      }
+    }
+  }
+  for (const clip of (doc.paletteClips ?? []) as unknown as Array<{ id?: unknown } | null>) {
+    if (typeof clip?.id === 'string') loadedIds.push(clip.id);
+  }
+  adoptIds(loadedIds);
 
   return {
     format: PROJECT_FORMAT,

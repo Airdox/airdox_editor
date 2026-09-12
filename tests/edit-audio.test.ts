@@ -10,34 +10,7 @@ import { EditSegment } from '../src/types/rekordbox';
 import { projectEditTimeline } from '../src/edit/editTimeline';
 import { ChannelSource, renderProjectedChannels } from '../src/edit/projectedAudio';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err), durationMs: 0 });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(a: number, b: number, message: string, tol = 1e-5) {
-  if (!(Math.abs(a - b) <= tol)) throw new Error(`Assertion Failed: ${message} (got ${a}, want ${b})`);
-}
-
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
 const SR = 1000;
 
 function buf(values: Float32Array, channels = 2): ChannelSource {
@@ -168,22 +141,5 @@ runTest('audio', 'A6 pasting a sub-range reads the clip buffer at its offset', (
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-const RESET = '\x1b[0m';
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  console.log(`${status}[${icon}]${RESET} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-if (failedCount > 0) process.exit(1);
+
+report('EDIT-AUDIO SUITE');

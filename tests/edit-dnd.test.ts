@@ -44,33 +44,7 @@ import {
   WaveformAnalysisData,
 } from '../src/types/rekordbox';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err), durationMs: 0 });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(a: number, b: number, message: string, tol = 1e-6) {
-  if (!(Math.abs(a - b) <= tol)) throw new Error(`Assertion Failed: ${message} (got ${a}, want ${b})`);
-}
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
 
 // ── fake DataTransfer ───────────────────────────────────────────────────────
 
@@ -706,25 +680,4 @@ runTest('DropConsequence', 'E5: removing the dropped segment restores the untouc
 
 // ── summary ─────────────────────────────────────────────────────────────────
 
-const passed = results.filter((r) => r.passed).length;
-const failed = results.length - passed;
-console.log('\n' + '═'.repeat(78));
-console.log('  TEST SUMMARY — Drag & Drop protocol, drop planner and drop consequences');
-console.log('═'.repeat(78));
-const bySuite: Record<string, TestResult[]> = {};
-for (const r of results) (bySuite[r.suite] ??= []).push(r);
-for (const [suite, list] of Object.entries(bySuite)) {
-  console.log(`\n  [${suite}]`);
-  for (const r of list) {
-    const mark = r.passed ? '✓' : '✗';
-    console.log(
-      `    ${r.passed ? '\x1b[32m' : '\x1b[31m'}${mark}\x1b[0m ${r.name} [${r.durationMs.toFixed(1)} ms]${
-        r.error ? ` — ERROR: ${r.error}` : ''
-      }`
-    );
-  }
-}
-console.log('\n' + '─'.repeat(78));
-console.log(`  Total: ${results.length} | Passed: ${passed} | Failed: ${failed}`);
-console.log('─'.repeat(78) + '\n');
-if (failed > 0) process.exit(1);
+report('EDIT-DND SUITE');

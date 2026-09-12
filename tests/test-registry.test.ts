@@ -15,27 +15,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-
-interface TestResult {
-  name: string;
-  passed: boolean;
-  error?: string;
-}
-
-const results: TestResult[] = [];
-
-function runTest(name: string, fn: () => void) {
-  try {
-    fn();
-    results.push({ name, passed: true });
-  } catch (err: any) {
-    results.push({ name, passed: false, error: err?.message || String(err) });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
+import { runTest, assert, report } from './helpers/microTest.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -83,7 +63,6 @@ let __listed: any = null;
 function listedVitestDirs(payload: any): string[] {
   return (payload?.vitestDirs ?? []).map((f: string) => f.split('\\').join('/'));
 }
-
 
 runTest('T1: npm test delegates to the discovering runner (no hand-maintained suite list)', () => {
   assert(
@@ -149,13 +128,23 @@ runTest('T4: measurement entry points agree with the runner', () => {
   assert(!/\.test\.(ts|mjs|tsx)/.test(testScript), 'package.json "test" verzeichnet weiterhin Suiten von Hand (Dateinamen in der Kette)');
 });
 
-const failed = results.filter((r) => !r.passed);
-console.log('\n' + '═'.repeat(70));
-console.log('  TEST REGISTRY GUARD');
-console.log('═'.repeat(70));
-for (const r of results) {
-  console.log(`  ${r.passed ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${r.name}${r.error ? ` — ${r.error}` : ''}`);
-}
-console.log(`\n  ${allTests.length} Testdateien: ${scriptTests.length} Skript-Suiten, ${vitestTests.length} vitest-Suiten`);
-console.log('─'.repeat(70) + '\n');
-if (failed.length) process.exit(1);
+runTest('T5: one micro engine for the script suites (kein privater TestRing mehr)', () => {
+  // Why: every script suite used to carry its own ~15-line results/runTest/assert/
+  // footer block — five variants of the same thing, so a fix had to be applied five
+  // times and a suite could report nothing at all. The shared engine is
+  // tests/helpers/microTest.mjs; `.mjs` suites that only use node:assert directly are
+  // fine (they define no framework), a hand-rolled ring is not.
+  const PRIVATE_RING = /const results: TestResult\[\] = \[\];|^function runTest\(/m;
+  const offenders = scriptTests.filter((file) => PRIVATE_RING.test(readFileSync(join(root, file), 'utf8')));
+  assert(
+    offenders.length === 0,
+    `Suiten mit eigenem Test-Ring (bitte tests/helpers/microTest.mjs benutzen): ${offenders.join(', ')}`
+  );
+  const tsSuites = scriptTests.filter((file) => file.endsWith('.ts'));
+  const noEngine = tsSuites.filter((file) => !readFileSync(join(root, file), 'utf8').includes('microTest.mjs'));
+  assert(noEngine.length === 0, `.ts-Suiten ohne geteilte Engine (würden ohne report() unsichtbar grün): ${noEngine.join(', ')}`);
+  const noReport = tsSuites.filter((file) => !/(^|\n)report\(/.test(readFileSync(join(root, file), 'utf8')));
+  assert(noReport.length === 0, `.ts-Suiten ohne report()-Aufruf (Fälle registriert, nie ausgeführt): ${noReport.join(', ')}`);
+});
+
+report('TEST REGISTRY GUARD');

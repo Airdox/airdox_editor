@@ -19,6 +19,7 @@ import {
   PartialTrackModel,
   TrackModel,
 } from '../types/rekordbox';
+import { nextId } from '../utils/ids';
 import { joinAudioPath } from './analysisResolver';
 
 export type RekordboxDbType = 'MASTER_DB' | 'ONE_LIBRARY';
@@ -292,7 +293,7 @@ export function buildDeckTrackFromDatabase(
   const duration = durationOverride && durationOverride > 0 ? durationOverride : partial.duration || 300;
   const bpm = partial.bpm || 130;
   return {
-    id: partial.id || `rb-db-${Date.now()}`,
+    id: partial.id || nextId('rb-db'),
     title: partial.title || 'Rekordbox Track',
     artist: partial.artist || 'Unknown Artist',
     album: partial.album || '',
@@ -322,7 +323,7 @@ export function buildDeckTrackFromDatabase(
     originalMedia: partial.originalMedia,
     workingSegments: [
       {
-        id: `seg-db-${Date.now()}`,
+        id: nextId('seg-db'),
         type: 'ORIGINAL',
         trackId: partial.id || '1',
         sourceStart: 0,

@@ -37,116 +37,78 @@ import {
 } from '../src/waveform/renderModel';
 import { parseAnlzBinary } from '../src/rekordbox/databaseExtractor';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({
-      suite,
-      name,
-      passed: false,
-      error: err?.message || String(err),
-      durationMs: Math.round((performance.now() - t0) * 100) / 100,
-    });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string) {
-  if (actual !== expected) {
-    throw new Error(`Assertion Failed [${message}]: expected ${expected}, got ${actual}`);
-  }
-}
-
-console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R6)       ');
-console.log('═══════════════════════════════════════════════════════════════════\n');
+import { runTest, assert, same, report } from './helpers/microTest.mjs';
 
 // ─── R1: PWV5 stored RGB is the column color ────────────────────────────────
 runTest('R1 PWV5 color', 'Components pass through verbatim', () => {
   const red = rgbColumnColor(1, 0, 0);
-  assertEqual(red.r, 255, 'red full');
-  assertEqual(red.g, 0, 'no invented green');
-  assertEqual(red.b, 0, 'no invented blue');
+  same(red.r, 255, 'red full');
+  same(red.g, 0, 'no invented green');
+  same(red.b, 0, 'no invented blue');
   const half = rgbColumnColor(0.5, 0.25, 1);
-  assertEqual(half.r, 128, '0.5 → 128');
-  assertEqual(half.g, 64, '0.25 → 64');
-  assertEqual(half.b, 255, '1 → 255');
+  same(half.r, 128, '0.5 → 128');
+  same(half.g, 64, '0.25 → 64');
+  same(half.b, 255, '1 → 255');
   const clamped = rgbColumnColor(2, -1, 0.5);
-  assertEqual(clamped.r, 255, 'clamp high');
-  assertEqual(clamped.g, 0, 'clamp low');
+  same(clamped.r, 255, 'clamp high');
+  same(clamped.g, 0, 'clamp low');
 });
 
 // ─── R2: blue waveform whiteness ramp ────────────────────────────────────────
 runTest('R2 blue ramp', '0 = darkest blue, 1 = near white, monotonic', () => {
   const dark = monoBlueColor(0);
-  assertEqual(dark.r, MONO_BLUE_DARK.r, 'dark red');
-  assertEqual(dark.b, MONO_BLUE_DARK.b, 'dark blue');
+  same(dark.r, MONO_BLUE_DARK.r, 'dark red');
+  same(dark.b, MONO_BLUE_DARK.b, 'dark blue');
   const white = monoBlueColor(1);
-  assertEqual(white.r, MONO_BLUE_WHITE.r, 'white red');
-  assertEqual(white.b, MONO_BLUE_WHITE.b, 'white blue');
+  same(white.r, MONO_BLUE_WHITE.r, 'white red');
+  same(white.b, MONO_BLUE_WHITE.b, 'white blue');
   const mid = monoBlueColor(0.5);
   assert(mid.b > dark.b && white.b >= mid.b, 'blue monotonic');
   assert(mid.r > dark.r, 'whiter with whiteness');
-  assertEqual(monoBlueColor(-0.2).r, MONO_BLUE_DARK.r, 'clamped below');
-  assertEqual(monoBlueColor(1.4).r, MONO_BLUE_WHITE.r, 'clamped above');
+  same(monoBlueColor(-0.2).r, MONO_BLUE_DARK.r, 'clamped below');
+  same(monoBlueColor(1.4).r, MONO_BLUE_WHITE.r, 'clamped above');
 });
 
 // ─── R3: PWV4 two-tone formulas ──────────────────────────────────────────────
 runTest('R3 PWV4', 'back = rgb·luminance, front = rgb·luminance + boost', () => {
   const back = pwv4BackColor(1, 0.5, 0, 0.5);
-  assertEqual(back.r, 128, 'red scaled by luminance');
-  assertEqual(back.g, 64, 'green scaled by luminance');
-  assertEqual(back.b, 0, 'blue stays 0');
+  same(back.r, 128, 'red scaled by luminance');
+  same(back.g, 64, 'green scaled by luminance');
+  same(back.b, 0, 'blue stays 0');
   const front = pwv4FrontColor(1, 0.5, 0, 0.5);
   const boostPx = Math.round(PWV4_FRONT_BOOST * 255);
-  assertEqual(front.r, Math.min(255, 128 + boostPx), 'front boosted, clipped at 1');
-  assertEqual(front.b, boostPx, 'front blue from boost alone');
+  same(front.r, Math.min(255, 128 + boostPx), 'front boosted, clipped at 1');
+  same(front.b, boostPx, 'front blue from boost alone');
   assert(front.r > back.r, 'front brighter than back');
 });
 
 // ─── R4: documented 3-band look ──────────────────────────────────────────────
 runTest('R4 3-band', 'dark blue / amber / white on the same axis, high last', () => {
   const layers = threeBandLayers(1, 0.5, 0.25, 100);
-  assertEqual(layers.length, 3, 'three layers');
-  assertEqual(layers[0].color.b, THREE_BAND_LOW.b, 'low dark blue');
-  assertEqual(layers[0].color.r, 0, 'low no red');
-  assertEqual(layers[1].color.r, THREE_BAND_MID.r, 'mid amber red');
-  assertEqual(layers[1].color.g, THREE_BAND_MID.g, 'mid amber green');
-  assertEqual(layers[2].color.r, THREE_BAND_HIGH.r, 'high white');
-  assertEqual(layers[0].alpha, 1, 'low opaque');
-  assertEqual(layers[1].alpha, THREE_BAND_MID_ALPHA, 'mid translucent (brown overlap)');
-  assertEqual(layers[2].alpha, 1, 'high opaque, drawn last');
-  assertEqual(layers[0].halfHeight, 100, 'low verbatim');
-  assertEqual(layers[1].halfHeight, 50, 'mid verbatim');
-  assertEqual(layers[2].halfHeight, 25, 'high verbatim');
+  same(layers.length, 3, 'three layers');
+  same(layers[0].color.b, THREE_BAND_LOW.b, 'low dark blue');
+  same(layers[0].color.r, 0, 'low no red');
+  same(layers[1].color.r, THREE_BAND_MID.r, 'mid amber red');
+  same(layers[1].color.g, THREE_BAND_MID.g, 'mid amber green');
+  same(layers[2].color.r, THREE_BAND_HIGH.r, 'high white');
+  same(layers[0].alpha, 1, 'low opaque');
+  same(layers[1].alpha, THREE_BAND_MID_ALPHA, 'mid translucent (brown overlap)');
+  same(layers[2].alpha, 1, 'high opaque, drawn last');
+  same(layers[0].halfHeight, 100, 'low verbatim');
+  same(layers[1].halfHeight, 50, 'mid verbatim');
+  same(layers[2].halfHeight, 25, 'high verbatim');
   const silent = threeBandLayers(0, 0, 0, 100);
   assert(silent.every((l) => l.halfHeight === 0), 'silent bands draw nothing');
 });
 
 // ─── R5: comb + shading ──────────────────────────────────────────────────────
 runTest('R5 comb/shading', '1 px gap above 2 px slots, even bars shaded', () => {
-  assertEqual(columnDrawWidth(2), 2, 'solid below 2 px');
-  assertEqual(columnDrawWidth(3), 2, 'gap at 3 px');
-  assertEqual(columnDrawWidth(0), 1, 'degenerate fallback');
-  assertEqual(isBarShaded(2), true, 'even shaded');
-  assertEqual(isBarShaded(3), false, 'odd plain');
-  assertEqual(BAR_SHADE_FILL, '#101117', 'shade tone pinned');
+  same(columnDrawWidth(2), 2, 'solid below 2 px');
+  same(columnDrawWidth(3), 2, 'gap at 3 px');
+  same(columnDrawWidth(0), 1, 'degenerate fallback');
+  same(isBarShaded(2), true, 'even shaded');
+  same(isBarShaded(3), false, 'odd plain');
+  same(BAR_SHADE_FILL, '#101117', 'shade tone pinned');
 });
 
 // ─── R6: PWV5 end-to-end pass-through ────────────────────────────────────────
@@ -175,44 +137,20 @@ runTest('R6 pass-through', 'Decoded PWV5 columns stay pure red/green/blue', () =
       packRgb5(0, 0, 7, 31),
     ])
   );
-  assertEqual(extraction.waveformVariants.length, 1, 'PWV5 variant decoded');
+  same(extraction.waveformVariants.length, 1, 'PWV5 variant decoded');
   const v = extraction.waveformVariants[0];
-  assertEqual(v.sourceTag, 'PWV5', 'tag kept');
+  same(v.sourceTag, 'PWV5', 'tag kept');
   const red = rgbColumnColor(v.lowEnergy[0], v.midEnergy[0], v.highEnergy[0]);
-  assertEqual(red.r, 255, 'red column pure');
-  assertEqual(red.g + red.b, 0, 'no invented components');
+  same(red.r, 255, 'red column pure');
+  same(red.g + red.b, 0, 'no invented components');
   const green = rgbColumnColor(v.lowEnergy[1], v.midEnergy[1], v.highEnergy[1]);
-  assertEqual(green.g, 255, 'green column pure');
+  same(green.g, 255, 'green column pure');
   const blue = rgbColumnColor(v.lowEnergy[2], v.midEnergy[2], v.highEnergy[2]);
-  assertEqual(blue.b, 255, 'blue column pure');
-  assertEqual(v.peaks[0], 1, 'stored height decoded');
-  assertEqual(v.whiteness, undefined, 'no whiteness invented for PWV5');
+  same(blue.b, 255, 'blue column pure');
+  same(v.peaks[0], 1, 'stored height decoded');
+  same(v.whiteness, undefined, 'no whiteness invented for PWV5');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
 
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  const reset = '\x1b[0m';
-  console.log(`${status}[${icon}]${reset} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-
-if (failedCount > 0) {
-  process.exit(1);
-} else {
-  process.exit(0);
-}
+report('RENDER LOOK / DOCUMENTED VISUALIZATION TEST SUITE (R1–R6)');

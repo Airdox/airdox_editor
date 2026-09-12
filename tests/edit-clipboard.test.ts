@@ -26,31 +26,7 @@ import { ColumnSource, type RangeAnalyzer } from '../src/edit/editWaveform';
 import { projectTrackEdits } from '../src/edit/editModel';
 import { miniPeaksFromStoredColumns, clipPreviewProfile } from '../src/waveform/preview';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  try {
-    testFn();
-    results.push({ suite, name, passed: true });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err) });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(a: number, b: number, message: string, tol = 1e-6) {
-  if (!(Math.abs(a - b) <= tol)) throw new Error(`Assertion Failed: ${message} (got ${a}, want ${b})`);
-}
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
 
 const SR = 1000;
 const DURATION = 1; // seconds of the source track
@@ -444,13 +420,4 @@ runTest('preview', 'V4 profile labels its origin, and falls back only when nothi
   assert(fallback.peaks[0] === 0.5, 'and then the caller supplies the measured profile');
 });
 
-const failed = results.filter((r) => !r.passed);
-console.log('\n' + '═'.repeat(74));
-console.log('  CLIPBOARD / PROVENANCE SUITE');
-console.log('═'.repeat(74));
-for (const r of results) {
-  console.log(`  ${r.passed ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} [${r.suite}] ${r.name}${r.error ? `\n      ${r.error}` : ''}`);
-}
-console.log(`\n  ${results.length - failed.length}/${results.length} Tests bestanden`);
-console.log('─'.repeat(74) + '\n');
-if (failed.length) process.exit(1);
+report('EDIT-CLIPBOARD SUITE (COPY/PASTE/CLONE, Quelle, Vorschau)');

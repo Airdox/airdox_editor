@@ -13,38 +13,18 @@
  */
 
 import { DataOrigin, EditSegment, PaletteClip, TrackModel, WaveformAnalysisData } from '../src/types/rekordbox';
-import { projectTrackEdits, waveformOriginAfterEdit, describeProjection, withEditBase } from '../src/edit/editModel';
+import {
+  createSegment,
+  describeProjection,
+  projectTrackEdits,
+  waveformOriginAfterEdit,
+  withEditBase,
+} from '../src/edit/editModel';
 import type { RangeAnalyzer } from '../src/edit/editWaveform';
 import { ColumnSource } from '../src/edit/editWaveform';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err), durationMs: 0 });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(a: number, b: number, message: string, tol = 1e-6) {
-  if (!(Math.abs(a - b) <= tol)) throw new Error(`Assertion Failed: ${message} (got ${a}, want ${b})`);
-}
-
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
+import { nextId } from '../src/utils/ids';
 const SR = 1000;
 
 /** AudioBuffer stand-in whose sample VALUE is its index in the source channel. */
@@ -402,22 +382,27 @@ runTest('model', 'M9 withEditBase freezes the pristine analysis exactly once', (
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-const RESET = '\x1b[0m';
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  console.log(`${status}[${icon}]${RESET} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
+
+runTest('model', 'M10 createSegment: eine Id-Quelle für Id und abgeleitete Felder', () => {
+  const a = createSegment({ type: 'CUT', trackId: 'deck', projectStart: 2, projectDuration: 1.5 });
+  const b = createSegment({ type: 'CUT', trackId: 'deck', projectStart: 2, projectDuration: 1.5, sourceStart: 4 });
+  assert(a.id !== b.id, 'zwei Segmente müssen verschiedene Ids tragen — ein Date.now()-Tick zwischen zwei Feldern war die alte Fehlerquelle');
+  assert(/^edit-\d+$/.test(a.id), `Id kommt aus dem Zähler in utils/ids, erhalten: ${a.id}`);
+  // ohne Quellfenster ist Quelle = Projektanfang: sourceEnd ist die schiere Dauer
+  near(a.sourceEnd, 1.5, 'ohne vorgegebenes Quellfenster folgt sourceEnd der Projektdauer');
+  near(b.sourceEnd, 5.5, 'bei vorgegebenem Quellfenster endet es nach genau derselben Dauer');
+  near(a.gain, 1, 'Unity-Gain ist der Default');
+  near(a.tempoRatio ?? 0, 1, 'ohne Zeittransformation ist der Faktor 1');
+  near(a.pitchShift ?? 0, 0, 'ohne Pitchverschiebung ist sie 0');
 });
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-if (failedCount > 0) process.exit(1);
+
+runTest('model', 'M11 Ids sind monoton und pro Präfix getrennt', () => {
+  const first = nextId('m11a');
+  const second = nextId('m11a');
+  const other = nextId('m11b');
+  assert(first !== second && second !== other, 'keine Doppel-Id, auch nicht in derselben Millisekunde');
+  near(Number(second.split('-')[1]), Number(first.split('-')[1]) + 1, 'der Zähler schritt genau um eins');
+  assert(other.startsWith('m11b-'), 'ein anderes Präfix führt den eigenen Zähler');
+});
+
+report('EDIT-MODEL SUITE');

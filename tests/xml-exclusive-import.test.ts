@@ -23,45 +23,7 @@ import {
 } from '../src/rekordbox/databaseExtractor';
 import { DataOrigin } from '../src/types/rekordbox';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({
-      suite,
-      name,
-      passed: false,
-      error: err?.message || String(err),
-      durationMs: Math.round((performance.now() - t0) * 100) / 100,
-    });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string) {
-  if (actual !== expected) {
-    throw new Error(`Assertion Failed [${message}]: expected ${expected}, got ${actual}`);
-  }
-}
-
-console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  XML-EXCLUSIVE WORKFLOW GUARANTEE TEST SUITE                   ');
-console.log('═══════════════════════════════════════════════════════════════════\n');
+import { runTest, assert, same, report } from './helpers/microTest.mjs';
 
 const DAT_BPM = 128.0;
 
@@ -75,13 +37,13 @@ runTest('PQTZ preservation', 'DAT beat nodes are adopted verbatim (time/bar/beat
   const sourceBeats = extraction.beatGrid!.beats;
   const mergedBeats = merged.beatGrid.beats;
 
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
   assert(mergedBeats.length >= sourceBeats.length, 'All ANLZ beats adopted');
   for (let i = 0; i < sourceBeats.length; i++) {
-    assertEqual(mergedBeats[i].time, sourceBeats[i].time, `Beat ${i} time`);
-    assertEqual(mergedBeats[i].barNumber, sourceBeats[i].barNumber, `Beat ${i} bar`);
-    assertEqual(mergedBeats[i].beatInBar, sourceBeats[i].beatInBar, `Beat ${i} beat-in-bar`);
-    assertEqual(mergedBeats[i].isBarStart, sourceBeats[i].isBarStart, `Beat ${i} bar start`);
+    same(mergedBeats[i].time, sourceBeats[i].time, `Beat ${i} time`);
+    same(mergedBeats[i].barNumber, sourceBeats[i].barNumber, `Beat ${i} bar`);
+    same(mergedBeats[i].beatInBar, sourceBeats[i].beatInBar, `Beat ${i} beat-in-bar`);
+    same(mergedBeats[i].isBarStart, sourceBeats[i].isBarStart, `Beat ${i} bar start`);
   }
 });
 
@@ -92,11 +54,11 @@ runTest('PQTZ preservation', 'A short source grid remains short and unmodified',
 
   const sourceBeats = extraction.beatGrid!.beats;
   const beats = merged.beatGrid.beats;
-  assertEqual(beats.length, sourceBeats.length, 'No uniform tail appended');
+  same(beats.length, sourceBeats.length, 'No uniform tail appended');
   assert(beats[beats.length - 1].time < track.duration, 'Source coverage is reported honestly');
   for (let i = 0; i < beats.length; i++) {
-    assertEqual(beats[i].time, sourceBeats[i].time, `Beat ${i} time`);
-    assertEqual(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} tempo`);
+    same(beats[i].time, sourceBeats[i].time, `Beat ${i} time`);
+    same(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} tempo`);
   }
 });
 
@@ -106,24 +68,24 @@ runTest('PQTZ preservation', 'EXT PQTZ (128 beats) adopted verbatim', () => {
   const merged = applyAnlzExtractionToTrack(track, extraction);
 
   const sourceBeats = extraction.beatGrid!.beats;
-  assertEqual(sourceBeats.length, 128, 'Fixture beat count');
+  same(sourceBeats.length, 128, 'Fixture beat count');
   for (let i = 0; i < sourceBeats.length; i++) {
-    assertEqual(merged.beatGrid.beats[i].time, sourceBeats[i].time, `Beat ${i} time`);
+    same(merged.beatGrid.beats[i].time, sourceBeats[i].time, `Beat ${i} time`);
   }
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
 });
 
 // ─── SUITE 2: Legacy / partial extractions ──────────────────────────────────
 runTest('Partial ANLZ', 'Legacy bpm-only extraction keeps the XML grid (no rebuild)', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const extraction = parseAnlzBinary(generateSyntheticAnlzBuffer(DAT_BPM));
-  assertEqual(extraction.beatGrid, undefined, 'Legacy layout carries no beat nodes');
+  same(extraction.beatGrid, undefined, 'Legacy layout carries no beat nodes');
 
   const merged = applyAnlzExtractionToTrack(track, extraction);
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
-  assertEqual(merged.beatGrid.bpm, track.bpm, 'XML bpm retained');
-  assertEqual(merged.beatGrid.beats.length, 0, 'No beats invented from legacy scalars');
-  assertEqual(track.beatGrid.beats.length, 0, 'XML TEMPO remains scalar metadata');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
+  same(merged.beatGrid.bpm, track.bpm, 'XML bpm retained');
+  same(merged.beatGrid.beats.length, 0, 'No beats invented from legacy scalars');
+  same(track.beatGrid.beats.length, 0, 'XML TEMPO remains scalar metadata');
   assert(
     (merged.databaseRecord!.anlzWarnings ?? []).some((w) => w.includes('PQTZ')),
     'PQTZ gap is reported, not silent'
@@ -139,12 +101,12 @@ runTest('No synthesis', 'Empty ANLZ invents no waveform and keeps the XML grid',
   const extraction = parseAnlzBinary(new ArrayBuffer(0));
   const merged = applyAnlzExtractionToTrack(track, extraction);
 
-  assertEqual(merged.analysis, null, 'No waveform invented');
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid untouched');
-  assertEqual(merged.beatGrid.firstBeat, track.beatGrid.firstBeat, 'First beat untouched');
-  assertEqual(merged.cues.length, xmlCueCount, 'XML cues untouched');
-  assertEqual(merged.title, track.title, 'XML title retained');
-  assertEqual(merged.artist, track.artist, 'XML artist retained');
+  same(merged.analysis, null, 'No waveform invented');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid untouched');
+  same(merged.beatGrid.firstBeat, track.beatGrid.firstBeat, 'First beat untouched');
+  same(merged.cues.length, xmlCueCount, 'XML cues untouched');
+  same(merged.title, track.title, 'XML title retained');
+  same(merged.artist, track.artist, 'XML artist retained');
 });
 
 runTest('No synthesis', 'ANLZ waveform + cues take priority without touching metadata', () => {
@@ -154,10 +116,10 @@ runTest('No synthesis', 'ANLZ waveform + cues take priority without touching met
   const merged = applyAnlzExtractionToTrack(track, extraction);
 
   assert(merged.analysis !== null, 'ANLZ waveform adopted');
-  assertEqual(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'Waveform origin');
+  same(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'Waveform origin');
   assert(merged.cues.every((cue) => cue.origin === DataOrigin.REKORDBOX_ANLZ), 'ANLZ cues adopted');
-  assertEqual(merged.title, track.title, 'XML title retained');
-  assertEqual(merged.originalMedia, track.originalMedia, 'Original-media reference retained');
+  same(merged.title, track.title, 'XML title retained');
+  same(merged.originalMedia, track.originalMedia, 'Original-media reference retained');
 });
 
 // ─── Cue-parser guard (robust parser must not over-detect) ─────────────────
@@ -177,10 +139,10 @@ const FOREIGN_EXPORT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 runTest('Cue guard', 'POSITION_MARK without a position attribute is ignored', () => {
   const { track } = extractTrackFromRekordboxXml(FOREIGN_EXPORT_XML, 0);
-  assertEqual(track.cues.length, 1, 'only the mark with Start becomes a cue');
-  assertEqual(track.loops.length, 0, 'loop mark without Start ignored');
-  assertEqual(track.cues[0]?.name, 'Real Memory Cue', 'surviving cue is the genuine one');
-  assertEqual(track.cues[0]?.position, 10.0, 'position taken verbatim');
+  same(track.cues.length, 1, 'only the mark with Start becomes a cue');
+  same(track.loops.length, 0, 'loop mark without Start ignored');
+  same(track.cues[0]?.name, 'Real Memory Cue', 'surviving cue is the genuine one');
+  same(track.cues[0]?.position, 10.0, 'position taken verbatim');
 });
 
 const FOREIGN_EXPORT_ALT_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -198,35 +160,11 @@ const FOREIGN_EXPORT_ALT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 runTest('Cue guard', 'Alt-tag exporters: Position attribute counts, junk is skipped', () => {
   const { track } = extractTrackFromRekordboxXml(FOREIGN_EXPORT_ALT_XML, 0);
-  assertEqual(track.cues.length, 1, 'only the alt-tag mark with Position becomes a cue');
-  assertEqual(track.cues[0]?.name, 'Alt Position Cue', 'surviving cue is the genuine one');
-  assertEqual(track.cues[0]?.position, 20.5, 'Position attribute adopted');
+  same(track.cues.length, 1, 'only the alt-tag mark with Position becomes a cue');
+  same(track.cues[0]?.name, 'Alt Position Cue', 'surviving cue is the genuine one');
+  same(track.cues[0]?.position, 20.5, 'Position attribute adopted');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
 
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  const reset = '\x1b[0m';
-  console.log(`${status}[${icon}]${reset} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-
-if (failedCount > 0) {
-  process.exit(1);
-} else {
-  process.exit(0);
-}
+report('XML-EXCLUSIVE WORKFLOW GUARANTEE TEST SUITE');

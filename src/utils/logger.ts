@@ -6,6 +6,8 @@
  * subscriber notifications, and complete incident telemetry for maximum transparency.
  */
 
+import { nextId } from './ids';
+
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
 
 export type LogCategory =
@@ -107,7 +109,10 @@ class LoggerService {
     }
 
     const entry: LogEntry = {
-      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      // Kein Date.now() als Identität: zwei Einträge im selben Millisekunden-tick
+      // bekämen dieselbe Id, und die Liste verliert ihre React-keys. Der Zähler aus
+      // utils/ids ist pro Prozess monoton und damit eindeutig.
+      id: nextId('log'),
       timestamp: now.getTime(),
       timeString,
       level,

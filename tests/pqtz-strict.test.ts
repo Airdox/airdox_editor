@@ -24,45 +24,7 @@ import {
 } from '../src/rekordbox/databaseExtractor';
 import { DataOrigin } from '../src/types/rekordbox';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({
-      suite,
-      name,
-      passed: false,
-      error: err?.message || String(err),
-      durationMs: Math.round((performance.now() - t0) * 100) / 100,
-    });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string) {
-  if (actual !== expected) {
-    throw new Error(`Assertion Failed [${message}]: expected ${expected}, got ${actual}`);
-  }
-}
-
-console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  STRICT-PQTZ CONTRACT TEST SUITE (T3–T4)                      ');
-console.log('═══════════════════════════════════════════════════════════════════\n');
+import { runTest, assert, same, report } from './helpers/microTest.mjs';
 
 interface PqtzEntry {
   beatInBar: number;
@@ -105,25 +67,25 @@ const VARIABLE_ENTRIES: PqtzEntry[] = [
 runTest('T3 verbatim', 'Variable-tempo PQTZ beats reach the model with exact times', () => {
   const extraction = parseAnlzBinary(buildPqtzBuffer('PQTZ', VARIABLE_ENTRIES));
   assert(extraction.beatGrid !== undefined, 'PQTZ beat grid decoded');
-  assertEqual(extraction.beatGrid!.beats.length, VARIABLE_ENTRIES.length, 'All entries decoded');
-  assertEqual(extraction.bpm, 128.0, 'BPM from first PQTZ tempo');
-  assertEqual(extraction.firstBeat, 0, 'First beat from PQTZ');
+  same(extraction.beatGrid!.beats.length, VARIABLE_ENTRIES.length, 'All entries decoded');
+  same(extraction.bpm, 128.0, 'BPM from first PQTZ tempo');
+  same(extraction.firstBeat, 0, 'First beat from PQTZ');
 
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const merged = applyAnlzExtractionToTrack(track, extraction);
 
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
-  assertEqual(merged.beatGrid.bpm, 128.0, 'ANLZ bpm');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
+  same(merged.beatGrid.bpm, 128.0, 'ANLZ bpm');
   for (let i = 0; i < VARIABLE_ENTRIES.length; i++) {
     const expected = VARIABLE_ENTRIES[i];
     const node = merged.beatGrid.beats[i];
-    assertEqual(node.time, expected.timeMs / 1000, `Beat ${i} time verbatim`);
-    assertEqual(node.beatInBar, expected.beatInBar, `Beat ${i} beat-in-bar`);
-    assertEqual(node.isBarStart, expected.beatInBar === 1, `Beat ${i} bar start`);
-    assertEqual(node.tailExtended, undefined, `Beat ${i} carries no tail flag`);
+    same(node.time, expected.timeMs / 1000, `Beat ${i} time verbatim`);
+    same(node.beatInBar, expected.beatInBar, `Beat ${i} beat-in-bar`);
+    same(node.isBarStart, expected.beatInBar === 1, `Beat ${i} bar start`);
+    same(node.tailExtended, undefined, `Beat ${i} carries no tail flag`);
   }
-  assertEqual(merged.beatGrid.beats[0].barNumber, 1, 'First bar');
-  assertEqual(merged.beatGrid.beats[4].barNumber, 2, 'Second bar after tempo change');
+  same(merged.beatGrid.beats[0].barNumber, 1, 'First bar');
+  same(merged.beatGrid.beats[4].barNumber, 2, 'Second bar after tempo change');
 });
 
 runTest('T3 verbatim', 'A short PQTZ grid is never extended with invented beats', () => {
@@ -134,12 +96,12 @@ runTest('T3 verbatim', 'A short PQTZ grid is never extended with invented beats'
 
   const merged = applyAnlzExtractionToTrack(track, extraction);
   const beats = merged.beatGrid.beats;
-  assertEqual(beats.length, sourceBeats.length, 'No beat is appended');
+  same(beats.length, sourceBeats.length, 'No beat is appended');
 
   for (let i = 0; i < sourceBeats.length; i++) {
-    assertEqual(beats[i].time, sourceBeats[i].time, `Verbatim beat ${i} untouched`);
-    assertEqual(beats[i].beatInBar, sourceBeats[i].beatInBar, `Beat ${i} position untouched`);
-    assertEqual(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} PQTZ tempo untouched`);
+    same(beats[i].time, sourceBeats[i].time, `Verbatim beat ${i} untouched`);
+    same(beats[i].beatInBar, sourceBeats[i].beatInBar, `Beat ${i} position untouched`);
+    same(beats[i].bpm, sourceBeats[i].bpm, `Beat ${i} PQTZ tempo untouched`);
     assert(!beats[i].tailExtended, `Verbatim beat ${i} unflagged`);
   }
   assert(beats[beats.length - 1].time < track.duration, 'A short source remains honestly short');
@@ -151,9 +113,9 @@ runTest('T3 verbatim', 'PQT2 beat entries follow the same verbatim rule', () => 
 
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const merged = applyAnlzExtractionToTrack(track, extraction);
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ grid origin');
   for (let i = 0; i < VARIABLE_ENTRIES.length; i++) {
-    assertEqual(merged.beatGrid.beats[i].time, VARIABLE_ENTRIES[i].timeMs / 1000, `Beat ${i} time`);
+    same(merged.beatGrid.beats[i].time, VARIABLE_ENTRIES[i].timeMs / 1000, `Beat ${i} time`);
   }
 });
 
@@ -163,15 +125,15 @@ runTest('T4 no-rebuild', 'Corrupt PQTZ entry keeps the XML grid and warns', () =
     i === 3 ? { ...entry, beatInBar: 0 } : entry
   );
   const extraction = parseAnlzBinary(buildPqtzBuffer('PQTZ', corrupt));
-  assertEqual(extraction.beatGrid, undefined, 'Corrupt grid rejected, not repaired');
+  same(extraction.beatGrid, undefined, 'Corrupt grid rejected, not repaired');
   assert(extraction.tagsFound.includes('PQTZ'), 'PQTZ tag seen');
   assert(extraction.warnings.length > 0, 'Parser reports the failure');
 
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const merged = applyAnlzExtractionToTrack(track, extraction);
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
-  assertEqual(merged.beatGrid.beats.length, track.beatGrid.beats.length, 'No beats invented');
-  assertEqual(merged.bpm, track.bpm, 'XML bpm retained');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
+  same(merged.beatGrid.beats.length, track.beatGrid.beats.length, 'No beats invented');
+  same(merged.bpm, track.bpm, 'XML bpm retained');
   assert(
     (merged.databaseRecord!.anlzWarnings ?? []).some((w) => w.includes('PQTZ')),
     'Merge reports the PQTZ gap'
@@ -181,30 +143,30 @@ runTest('T4 no-rebuild', 'Corrupt PQTZ entry keeps the XML grid and warns', () =
 runTest('T4 no-rebuild', 'Legacy bpm-only PQTZ keeps XML grid and ignores scalars', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const extraction = parseAnlzBinary(generateSyntheticAnlzBuffer(128.0));
-  assertEqual(extraction.beatGrid, undefined, 'Legacy layout carries no beat nodes');
-  assertEqual(extraction.bpm, 128.0, 'Legacy scalar still decoded');
+  same(extraction.beatGrid, undefined, 'Legacy layout carries no beat nodes');
+  same(extraction.bpm, 128.0, 'Legacy scalar still decoded');
 
   const merged = applyAnlzExtractionToTrack(track, extraction);
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
-  assertEqual(merged.beatGrid.beats.length, track.beatGrid.beats.length, 'No beats invented');
-  assertEqual(merged.bpm, track.bpm, 'ANLZ scalar bpm not adopted without beats');
+  same(merged.beatGrid.origin, DataOrigin.REKORDBOX_XML, 'XML grid retained');
+  same(merged.beatGrid.beats.length, track.beatGrid.beats.length, 'No beats invented');
+  same(merged.bpm, track.bpm, 'ANLZ scalar bpm not adopted without beats');
   assert(
     (merged.databaseRecord!.anlzWarnings ?? []).some((w) => w.includes('PQTZ')),
     'PQTZ gap is reported, not silent'
   );
   // Data the legacy container genuinely carries still takes priority.
-  assertEqual(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ waveform kept');
+  same(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ waveform kept');
 });
 
 runTest('T4 no-rebuild', 'Missing PQTZ tag leaves grid and bpm untouched', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
   const extraction = parseAnlzBinary(new ArrayBuffer(0));
-  assertEqual(extraction.tagsFound.length, 0, 'No tags decoded');
+  same(extraction.tagsFound.length, 0, 'No tags decoded');
 
   const merged = applyAnlzExtractionToTrack(track, extraction);
   assert(merged.beatGrid === track.beatGrid, 'Grid reference untouched');
-  assertEqual(merged.bpm, track.bpm, 'BPM untouched');
-  assertEqual(
+  same(merged.bpm, track.bpm, 'BPM untouched');
+  same(
     (merged.databaseRecord!.anlzWarnings ?? []).filter((w) => w.includes('PQTZ')).length,
     0,
     'No spurious PQTZ warning without a PQTZ tag'
@@ -212,29 +174,5 @@ runTest('T4 no-rebuild', 'Missing PQTZ tag leaves grid and bpm untouched', () =>
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
 
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  const reset = '\x1b[0m';
-  console.log(`${status}[${icon}]${reset} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-
-if (failedCount > 0) {
-  process.exit(1);
-} else {
-  process.exit(0);
-}
+report('STRICT-PQTZ CONTRACT TEST SUITE (T3–T4)');

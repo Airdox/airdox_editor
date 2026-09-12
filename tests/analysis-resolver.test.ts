@@ -21,45 +21,7 @@ import {
   resolveVerifiedDbIdentity,
 } from '../src/rekordbox/analysisResolver';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({
-      suite,
-      name,
-      passed: false,
-      error: err?.message || String(err),
-      durationMs: Math.round((performance.now() - t0) * 100) / 100,
-    });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function assertEqual<T>(actual: T, expected: T, message: string) {
-  if (actual !== expected) {
-    throw new Error(`Assertion Failed [${message}]: expected ${expected}, got ${actual}`);
-  }
-}
-
-console.log('═══════════════════════════════════════════════════════════════════');
-console.log('  ANALYSISDATAPATH RESOLVER & XML↔DB LINK TEST SUITE            ');
-console.log('═══════════════════════════════════════════════════════════════════\n');
+import { runTest, assert, same, report } from './helpers/microTest.mjs';
 
 const WIN_DB_DIR = 'C:\\Users\\dj\\AppData\\Roaming\\Pioneer\\rekordbox7';
 const POSIX_DB_DIR = '/media/usb-device';
@@ -71,7 +33,7 @@ runTest('share resolution', 'Leading-slash PIONEER form resolves under Windows d
     WIN_DB_DIR,
     `/PIONEER/USBANLZ/0e8/${UUID}/ANLZ0000.DAT`
   );
-  assertEqual(
+  same(
     resolved,
     `${WIN_DB_DIR}\\share\\PIONEER\\USBANLZ\\0e8\\${UUID}\\ANLZ0000.DAT`,
     'Windows share path'
@@ -80,12 +42,12 @@ runTest('share resolution', 'Leading-slash PIONEER form resolves under Windows d
 
 runTest('share resolution', 'Slash-less PIONEER form resolves under POSIX dbDir', () => {
   const resolved = resolveAnalysisFilePath(POSIX_DB_DIR, `PIONEER/USBANLZ/0e8/${UUID}/ANLZ0000.DAT`);
-  assertEqual(resolved, `${POSIX_DB_DIR}/share/PIONEER/USBANLZ/0e8/${UUID}/ANLZ0000.DAT`, 'POSIX share path');
+  same(resolved, `${POSIX_DB_DIR}/share/PIONEER/USBANLZ/0e8/${UUID}/ANLZ0000.DAT`, 'POSIX share path');
 });
 
 runTest('share resolution', 'Explicit share/ prefix is not duplicated', () => {
   const resolved = resolveAnalysisFilePath(WIN_DB_DIR, `share/PIONEER/USBANLZ/0e8/${UUID}/ANLZ0000.DAT`);
-  assertEqual(
+  same(
     resolved,
     `${WIN_DB_DIR}\\share\\PIONEER\\USBANLZ\\0e8\\${UUID}\\ANLZ0000.DAT`,
     'No doubled share segment'
@@ -94,48 +56,48 @@ runTest('share resolution', 'Explicit share/ prefix is not duplicated', () => {
 
 runTest('share resolution', 'Tag casing is preserved, matching is case-insensitive', () => {
   const resolved = resolveAnalysisFilePath(POSIX_DB_DIR, '/pioneer/usbanlz/0e8/abc/ANLZ0000.DAT');
-  assertEqual(resolved, `${POSIX_DB_DIR}/share/pioneer/usbanlz/0e8/abc/ANLZ0000.DAT`, 'Tail case preserved');
+  same(resolved, `${POSIX_DB_DIR}/share/pioneer/usbanlz/0e8/abc/ANLZ0000.DAT`, 'Tail case preserved');
 });
 
 // ─── SUITE 2: Absolute paths pass through verbatim ──────────────────────────
 runTest('absolute paths', 'Windows drive path is used verbatim', () => {
   const abs = 'E:\\PIONEER\\USBANLZ\\0e8\\abc\\ANLZ0000.DAT';
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, abs), abs, 'Verbatim drive path');
-  assertEqual(resolveAnalysisFilePath(undefined, abs), abs, 'No dbDir needed');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, abs), abs, 'Verbatim drive path');
+  same(resolveAnalysisFilePath(undefined, abs), abs, 'No dbDir needed');
 });
 
 runTest('absolute paths', 'UNC path is used verbatim', () => {
   const unc = '\\\\NAS\\rekordbox\\PIONEER\\USBANLZ\\ANLZ0000.DAT';
-  assertEqual(resolveAnalysisFilePath(undefined, unc), unc, 'Verbatim UNC path');
+  same(resolveAnalysisFilePath(undefined, unc), unc, 'Verbatim UNC path');
 });
 
 // ─── SUITE 3: No guessing ───────────────────────────────────────────────────
 runTest('no guessing', 'Unknown relative forms resolve to null', () => {
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, 'Music/track.dat'), null, 'Bare relative path');
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, 'ANLZ0000.DAT'), null, 'Bare file name');
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/tmp/ANLZ0000.DAT'), null, 'Foreign absolute path');
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, ''), null, 'Empty value');
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, null), null, 'Null value');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, 'Music/track.dat'), null, 'Bare relative path');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, 'ANLZ0000.DAT'), null, 'Bare file name');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, '/tmp/ANLZ0000.DAT'), null, 'Foreign absolute path');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, ''), null, 'Empty value');
+  same(resolveAnalysisFilePath(WIN_DB_DIR, null), null, 'Null value');
 });
 
 runTest('no guessing', 'Relative PIONEER form without dbDir resolves to null', () => {
-  assertEqual(resolveAnalysisFilePath(undefined, '/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'), null, 'No anchor');
-  assertEqual(resolveAnalysisFilePath('', '/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'), null, 'Empty anchor');
+  same(resolveAnalysisFilePath(undefined, '/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'), null, 'No anchor');
+  same(resolveAnalysisFilePath('', '/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'), null, 'Empty anchor');
 });
 
 // ─── SUITE 4: dirOfPath ─────────────────────────────────────────────────────
 runTest('dirOfPath', 'Extracts parent directories on both separator styles', () => {
-  assertEqual(dirOfPath('C:\\Users\\dj\\master.db'), 'C:\\Users\\dj', 'Windows parent');
-  assertEqual(dirOfPath('/media/usb/exportLibrary.db'), '/media/usb', 'POSIX parent');
-  assertEqual(dirOfPath('C:\\Users\\dj\\'), 'C:\\Users', 'dirname semantics on trailing separator');
+  same(dirOfPath('C:\\Users\\dj\\master.db'), 'C:\\Users\\dj', 'Windows parent');
+  same(dirOfPath('/media/usb/exportLibrary.db'), '/media/usb', 'POSIX parent');
+  same(dirOfPath('C:\\Users\\dj\\'), 'C:\\Users', 'dirname semantics on trailing separator');
 });
 
 // ─── SUITE 5: XML↔DB exact audio-path link ──────────────────────────────────
 runTest('audio key', 'XML file:// LOCATION and DB Windows path produce equal keys', () => {
   const xmlLocation = 'file://localhost/C:/Music/Ref%20Mix.wav';
   const dbLocation = 'C:\\Music\\Ref Mix.wav';
-  assertEqual(normalizeAudioKey(xmlLocation), normalizeAudioKey(dbLocation), 'Key equality');
-  assertEqual(normalizeAudioKey(dbLocation), 'c:/music/ref mix.wav', 'Canonical key form');
+  same(normalizeAudioKey(xmlLocation), normalizeAudioKey(dbLocation), 'Key equality');
+  same(normalizeAudioKey(dbLocation), 'c:/music/ref mix.wav', 'Canonical key form');
 });
 
 runTest('audio key', 'Different files never collide', () => {
@@ -143,8 +105,8 @@ runTest('audio key', 'Different files never collide', () => {
     normalizeAudioKey('C:\\Music\\A.wav') !== normalizeAudioKey('C:\\Music\\B.wav'),
     'Distinct keys'
   );
-  assertEqual(normalizeAudioKey(''), '', 'Empty input');
-  assertEqual(normalizeAudioKey(null), '', 'Null input');
+  same(normalizeAudioKey(''), '', 'Empty input');
+  same(normalizeAudioKey(null), '', 'Null input');
 });
 
 runTest('db index', 'Index links exact matches and skips incomplete rows', () => {
@@ -164,13 +126,13 @@ runTest('db index', 'Index links exact matches and skips incomplete rows', () =>
     ],
     WIN_DB_DIR
   );
-  assertEqual(index.size, 1, 'Only complete rows indexed');
+  same(index.size, 1, 'Only complete rows indexed');
   const hit = index.get(normalizeAudioKey('file://localhost/C:/Music/Ref%20Mix.wav'));
   assert(hit !== undefined, 'Exact XML location hits');
-  assertEqual(hit!.trackId, 'db-1', 'Linked DB track');
-  assertEqual(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
-  assertEqual(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
-  assertEqual(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
+  same(hit!.trackId, 'db-1', 'Linked DB track');
+  same(hit!.analysisDataPath, '/PIONEER/USBANLZ/0e8/u1/ANLZ0000.DAT', 'Linked AnalysisDataPath');
+  same(hit!.sourceDbDir, WIN_DB_DIR, 'Linked source dir');
+  same(index.get(normalizeAudioKey('C:\\Music\\Other.wav')), undefined, 'No fuzzy match');
 });
 
 runTest('guarded identity', 'Rekordbox 7.2.16 requires matching ID and exact Location', () => {
@@ -184,9 +146,9 @@ runTest('guarded identity', 'Rekordbox 7.2.16 requires matching ID and exact Loc
   );
   assert(resolveVerifiedDbIdentity(idIndex, '4711', 'file://localhost/C:/Music/Exact.wav') !== null,
     'same XML TrackID/djmdContent.ID and path accepted');
-  assertEqual(resolveVerifiedDbIdentity(idIndex, '9999', 'file://localhost/C:/Music/Exact.wav'), null,
+  same(resolveVerifiedDbIdentity(idIndex, '9999', 'file://localhost/C:/Music/Exact.wav'), null,
     'path-only match rejected');
-  assertEqual(resolveVerifiedDbIdentity(idIndex, '4711', 'file://localhost/C:/Music/Other.wav'), null,
+  same(resolveVerifiedDbIdentity(idIndex, '4711', 'file://localhost/C:/Music/Other.wav'), null,
     'ID-only match with wrong path rejected');
 });
 
@@ -196,26 +158,26 @@ runTest('guarded identity', 'Separate DB rows sharing one audio file retain thei
     { id: '100', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/a/u1/ANLZ0000.DAT' } },
     { id: '101', originalMedia: { location: shared }, rawXmlAttributes: { analysisDataPath: '/PIONEER/USBANLZ/b/u2/ANLZ0000.DAT' } },
   ], WIN_DB_DIR);
-  assertEqual(idIndex.size, 2, 'both content identities retained');
-  assertEqual(resolveVerifiedDbIdentity(idIndex, '100', shared)?.trackId, '100', 'first exact row');
-  assertEqual(resolveVerifiedDbIdentity(idIndex, '101', shared)?.trackId, '101', 'second exact row');
+  same(idIndex.size, 2, 'both content identities retained');
+  same(resolveVerifiedDbIdentity(idIndex, '100', shared)?.trackId, '100', 'first exact row');
+  same(resolveVerifiedDbIdentity(idIndex, '101', shared)?.trackId, '101', 'second exact row');
 });
 
 runTest('path safety', 'Traversal and non-USBANLZ paths are rejected', () => {
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/USBANLZ/../secret/ANLZ0000.DAT'), null,
+  same(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/USBANLZ/../secret/ANLZ0000.DAT'), null,
     'parent traversal rejected');
-  assertEqual(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/ARTWORK/x/ANLZ0000.DAT'), null,
+  same(resolveAnalysisFilePath(WIN_DB_DIR, '/PIONEER/ARTWORK/x/ANLZ0000.DAT'), null,
     'non-USBANLZ path rejected');
 });
 
 // ─── SUITE 6: exact Rekordbox 7 address forms ───────────────────────────────
 runTest('DB media address', 'FolderPath already containing FileNameL is not duplicated', () => {
-  assertEqual(
+  same(
     joinAudioPath('G:\\Music\\Artist\\track.mp3', 'track.mp3'),
     'G:\\Music\\Artist\\track.mp3',
     'Full FolderPath remains the exact DB address'
   );
-  assertEqual(
+  same(
     joinAudioPath('G:\\Music\\Artist\\', 'track.mp3'),
     'G:\\Music\\Artist\\track.mp3',
     'Directory FolderPath receives the filename once'
@@ -238,8 +200,8 @@ runTest('DB media address', 'XML contents_ path resolves to the same exact DB ro
   const xmlLocation = 'file://localhost//contents_4136090260/artist/album/track.mp3';
   const hit = index.get(normalizeAudioKey(xmlLocation));
   assert(hit !== undefined, 'Relative XML address hits the exact absolute DB row');
-  assertEqual(hit!.analysisDataPath, analysisDataPath, 'The DB AnalysisDataPath is retained verbatim');
-  assertEqual(
+  same(hit!.analysisDataPath, analysisDataPath, 'The DB AnalysisDataPath is retained verbatim');
+  same(
     resolveAnalysisFilePath(hit!.sourceDbDir, hit!.analysisDataPath),
     'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\0e8\\u9\\ANLZ0000.DAT',
     'The final ANLZ address is derived directly from master.db'
@@ -247,29 +209,5 @@ runTest('DB media address', 'XML contents_ path resolves to the same exact DB ro
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
 
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  const reset = '\x1b[0m';
-  console.log(`${status}[${icon}]${reset} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-
-if (failedCount > 0) {
-  process.exit(1);
-} else {
-  process.exit(0);
-}
+report('ANALYSISDATAPATH RESOLVER & XML↔DB LINK TEST SUITE');

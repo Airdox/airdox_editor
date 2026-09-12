@@ -29,35 +29,7 @@ import {
   spanAllowsVerbatimClipColumns,
 } from '../src/edit/editTimeline';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err), durationMs: 0 });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(actual: number, expected: number, message: string, tol = 1e-6) {
-  if (!(Math.abs(actual - expected) <= tol)) {
-    throw new Error(`Assertion Failed: ${message} (got ${actual}, want ${expected})`);
-  }
-}
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
 
 function seg(partial: Partial<EditSegment> & { id: string; type: EditSegment['type'] }): EditSegment {
   return {
@@ -422,21 +394,5 @@ runTest('retime', 'R6 locateSpan resolves project time to the owning material', 
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
 const RESET = '\x1b[0m';
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  console.log(`${status}[${icon}]${RESET} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-if (failedCount > 0) process.exit(1);
+
+report('EDIT-TIMELINE SUITE');

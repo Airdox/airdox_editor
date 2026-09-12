@@ -23,34 +23,7 @@ import {
 } from '../src/edit/editWaveform';
 import { analyzeRangeBuckets } from '../src/waveform/analyzer';
 
-interface TestResult {
-  suite: string;
-  name: string;
-  passed: boolean;
-  error?: string;
-  durationMs: number;
-}
-
-const results: TestResult[] = [];
-
-function runTest(suite: string, name: string, testFn: () => void) {
-  const t0 = performance.now();
-  try {
-    testFn();
-    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
-  } catch (err: any) {
-    results.push({ suite, name, passed: false, error: err?.message || String(err), durationMs: 0 });
-  }
-}
-
-function assert(condition: boolean, message: string) {
-  if (!condition) throw new Error(`Assertion Failed: ${message}`);
-}
-
-function near(a: number, b: number, message: string, tol = 1e-6) {
-  if (!(Math.abs(a - b) <= tol)) throw new Error(`Assertion Failed: ${message} (got ${a}, want ${b})`);
-}
-
+import { runTest, assert, near, report } from './helpers/microTest.mjs';
 /** Uniform, fully deterministic "ANLZ" variant: every column has its own value. */
 function makeVariant(columns: number, durationSec: number, sourceTag: string): WaveformAnalysisData {
   const peaks = new Float32Array(columns);
@@ -420,22 +393,5 @@ runTest('analyzer', 'A2 analyzer clamps to available audio and never wraps aroun
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
-const RESET = '\x1b[0m';
-console.log('Test Results:\n');
-let passedCount = 0;
-let failedCount = 0;
-results.forEach((r, idx) => {
-  const icon = r.passed ? ' PASS ' : ' FAIL ';
-  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
-  console.log(`${status}[${icon}]${RESET} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
-  if (!r.passed) {
-    console.error(`       Error: ${r.error}`);
-    failedCount++;
-  } else {
-    passedCount++;
-  }
-});
-console.log('\n───────────────────────────────────────────────────────────────────');
-console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
-console.log('═══════════════════════════════════════════════════════════════════\n');
-if (failedCount > 0) process.exit(1);
+
+report('EDIT-WAVEFORM SUITE');
