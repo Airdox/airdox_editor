@@ -9,6 +9,7 @@ import { X, Download, FileAudio, FileCode, CheckCircle2, Layers } from 'lucide-r
 import { TrackModel, PaletteClip } from '../../types/rekordbox';
 import { audioEngine } from '../../audio/audioEngine';
 import { exportToRekordboxXml } from '../../rekordbox/xmlParser';
+import { logger } from '../../utils/logger';
 import { OperationTelemetry } from './OperationFeedbackModal';
 import { MultiLayerRenderInspector } from './MultiLayerRenderInspector';
 
@@ -130,7 +131,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error(err);
+      logger.error('SYSTEM', 'Export fehlgeschlagen', {
+        format,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
       alert(`Fehler beim Exportieren: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsExporting(false);

@@ -216,7 +216,6 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
     const expected = track.originalMedia?.resolvedPath || track.originalMedia?.location || '';
     const ppthNote = ppthMismatchNote(extraction.analysisPath, expected);
     if (ppthNote) {
-      console.warn(`[ANLZ Auto] ${ppthNote}`);
       logger.warn('DATABASE', `[ANLZ Auto] ${ppthNote}`, { analysisPath: extraction.analysisPath, expected });
       if (merged.databaseRecord) {
         merged.databaseRecord.anlzWarnings = [...(merged.databaseRecord.anlzWarnings ?? []), ppthNote];
@@ -239,7 +238,7 @@ async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
         `Gefundene Tags: ${extraction.tagsFound.join(', ') || '(keine)'}.`
       );
     }
-    console.info(`[ANLZ Auto] ${resolved} → ${extraction.tagsFound.join(', ')}`);
+    logger.info('DATABASE', `[ANLZ Auto] ${resolved} → ${extraction.tagsFound.join(', ')}`);
     return merged;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -440,8 +439,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!candidates || candidates.length === 0) {
         diag.found = 0;
         diag.reasons = ['Keine lokale master.db/exportLibrary.db gefunden.'];
-        console.error('[DB Auto] Pipelinefehler: Keine lokale master.db/exportLibrary.db gefunden; ein XML-Track kann nicht geladen werden.');
-        logger.warn('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db)', {
+        logger.error('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db) — ein XML-Track kann nicht geladen werden', {
           hint: 'Rekordbox-Version und Bibliotheksort prüfen (Standard: %APPDATA%/Pioneer, verschoben: rekordboxAgent/options.json)',
         });
         return dbAnalysisIndexRef.current;
@@ -452,7 +450,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
           if (!result.available || !result.rows) {
             diag.reasons.push(`${cand.label || cand.path}: ${result.reason || 'nicht lesbar'}`);
-            console.warn(`[DB Auto] ${cand.path}: ${result.reason || 'nicht lesbar'}`);
             logger.warn('DATABASE', `[DB Auto] ${cand.path}: nicht lesbar`, {
               reason: result.reason || 'nicht lesbar',
               label: cand.label ?? null,
@@ -496,17 +493,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           for (const [id, ref] of builtIds) {
             if (!dbAnalysisIdIndexRef.current.has(id)) dbAnalysisIdIndexRef.current.set(id, ref);
           }
-          console.info(`[DB Auto] ${cand.label || cand.path}: ${mapped.stats.tracks} Tracks, ${added} neue ANLZ-Links (gesamt ${dbAnalysisIndexRef.current.size})`);
           logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType, appVer: cand.appVer ?? null });
           if (mapped.warnings?.length || result.warnings?.length) {
-            console.warn('[DB Auto] Hinweise:', [...(mapped.warnings || []), ...(result.warnings || [])]);
+            logger.warn('DATABASE', '[DB Auto] Hinweise aus der Datenbank-Einlesung', {
+              mapping: [...(mapped.warnings || [])],
+              datei: [...(result.warnings || [])],
+            });
           }
           // One exact desktop library owns the XML identity namespace. Never
           // merge rows from another discovered master.db into this index.
           break;
         } catch (e) {
           diag.reasons.push(`${cand.path}: ${e instanceof Error ? e.message : String(e)}`);
-          console.warn(`[DB Auto] Fehler bei ${cand.path}:`, e);
           logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, {
             error: e instanceof Error ? e.message : String(e),
           });
@@ -514,7 +512,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
     } catch (e) {
       diag.reasons.push(`locateRekordboxDatabases: ${e instanceof Error ? e.message : String(e)}`);
-      console.warn('[DB Auto] locateRekordboxDatabases fehlgeschlagen:', e);
       logger.warn('DATABASE', '[DB Auto] Datenbank-Suche fehlgeschlagen', {
         error: e instanceof Error ? e.message : String(e),
       });
@@ -1595,7 +1592,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }, 1200);
 
     } catch (err: any) {
-      console.error('Fehler beim Einlesen der Rekordbox XML-Datei:', err);
+      logger.error('XML_IMPORT', 'Fehler beim Einlesen der Rekordbox XML-Datei', {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
       setImportProgress({
         phase: 'ERROR',
         phaseText: `Fehler beim Import: ${err?.message || err}`,
@@ -1683,10 +1683,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
-        console.warn('[Rekordbox DB] Hinweise:', warnings);
+        logger.warn('DATABASE', '[Rekordbox DB] Hinweise beim Datenbank-Import', { warnings });
       }
     } catch (error) {
-      console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
+      logger.error('DATABASE', '[Rekordbox DB] Import fehlgeschlagen', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -1701,7 +1703,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!chosen) return;
       await handleLoadRekordboxDatabase(chosen.path);
     } catch (error) {
-      console.error('[Rekordbox DB] Dateiauswahl fehlgeschlagen:', error);
+      logger.error('DATABASE', '[Rekordbox DB] Dateiauswahl fehlgeschlagen', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -1710,7 +1714,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       return await window.rekordboxDesktop.locateRekordboxDatabases();
     } catch (error) {
-      console.warn('[Rekordbox DB] Automatische Suche fehlgeschlagen:', error);
+      logger.warn('DATABASE', '[Rekordbox DB] Automatische Suche fehlgeschlagen', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return [];
     }
   };
@@ -1747,7 +1753,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             status: 'AVAILABLE',
           };
         } catch (error) {
-          console.warn('[XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio).', error);
+          logger.warn('DATABASE', '[XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio).', {
+            error: error instanceof Error ? error.message : String(error),
+          });
           originalMedia = { ...originalMedia, status: 'MISSING' };
         }
       }
@@ -1814,7 +1822,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             sourceDbDir: linkRef.sourceDbDir,
           };
           anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0, db: dbDiag };
-          console.info(`[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
+          logger.info('DATABASE', `[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
         } else {
           const reasons = dbDiag.reasons.length > 0 ? dbDiag.reasons.join(' | ') : 'kein technischer Grund protokolliert';
           const message =
@@ -1964,7 +1972,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('Fehler beim Laden des Tracks in das Deck:', err);
+      logger.error('AUDIO_ENGINE', 'Fehler beim Laden des Tracks in das Deck', { error: message });
       alert(message);
     }
   };
@@ -2022,7 +2030,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error('[Projekt] Speichern fehlgeschlagen:', err);
+      logger.error('SYSTEM', '[Projekt] Speichern fehlgeschlagen', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
@@ -2092,7 +2102,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             originalAudio = await audioCtx.decodeAudioData(ensureArrayBuffer(source.data as ArrayBuffer | Uint8Array));
             originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
           } catch (error) {
-            console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);
+            logger.warn('SYSTEM', '[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', {
+              error: error instanceof Error ? error.message : String(error),
+            });
             originalMedia = { ...originalMedia, status: 'MISSING' as const };
           }
         }
@@ -2149,7 +2161,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error('[Projekt] Öffnen fehlgeschlagen:', err);
+      logger.error('SYSTEM', '[Projekt] Öffnen fehlgeschlagen', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       alert(`Projekt konnte nicht geöffnet werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [showOperationFeedback]);
@@ -2232,7 +2246,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error('Fehler beim Decodieren der Audiodatei:', err);
+      logger.error('AUDIO_ENGINE', 'Fehler beim Decodieren der Audiodatei', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       alert('Konnte Audiodatei nicht decodieren. Bitte überprüfe das Dateiformat (WAV, MP3, AIFF, FLAC).');
     }
   };

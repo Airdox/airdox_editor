@@ -103,6 +103,19 @@ runTest('H4: Dateienden mit Newline (Git diff --check und Concatenation bleiben 
   assert(offenders.length === 0, `fehlender Zeilenumbruch am Dateiende: ${offenders.slice(0, 8).join(', ')}${offenders.length > 8 ? ` … (${offenders.length})` : ''}`);
 });
 
+runTest('H5: src/ logt ausschließlich über utils/logger (eine Senke für Konsole, Datei-Log und System-Protokoll)', () => {
+  const offenders = files
+    .filter((file) => file.startsWith('src/') && !file.endsWith('utils/logger.ts'))
+    .filter((file) => {
+      const text = readFileSync(join(root, file), 'utf8');
+      return /\bconsole\.(log|info|warn|error|debug)\s*\(/.test(text);
+    });
+  assert(
+    offenders.length === 0,
+    `direkte console-Aufrufe umgehen Logger, Datei-Log und System-Protokoll — Nutzerberichte verlieren genau die Zeilen, die den Fehler erklären: ${offenders.join(', ')}. Stattdessen logger.info/warn/error('KATEGORIE', …) verwenden.`
+  );
+});
+
 const failed = results.filter((r) => !r.passed);
 console.log('\n' + '═'.repeat(70));
 console.log('  SOURCE HYGIENE GUARD');

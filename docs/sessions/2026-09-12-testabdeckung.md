@@ -147,7 +147,20 @@ Zusätzlich dokumentiert, bewusst **nicht** geändert:
   `4acc0dc` zurückholen) in [`../PROJEKTANALYSE_2026-09-12.md`](../PROJEKTANALYSE_2026-09-12.md),
   Abschnitt G.
 
-## 8. Hinweise für die nächste Session
+## 8. Zweiter Nachtrag: aus der Analyse umgesetzte Sofortmaßnahmen
+
+* `src/` logt jetzt ausschließlich über `utils/logger` — die 21 Roh-`console.*`-Aufrufe sind
+  entfernt (6 Duplikate neben bestehenden `logger`-Zeilen) bzw. umgehängt (15, mit Kategorie und
+  strukturierten `details`). Damit stehen diese Meldungen im Datei-Log und im System-Protokoll.
+* `tests/source-hygiene.test.ts` hat eine fünfte Prüfung bekommen (H5: kein `console.*` in `src/**`
+  außer `utils/logger.ts`) — 5/5 grün über 94 Dateien.
+* electron-builder-`files` schließen `dist/**/*.map` aus (2,0 MB weniger Paket, keine Quellen im
+  installierten Programm; Maps bleiben in `dist/` für die lokale Fehlersuche).
+* Offene Vorschläge ( bewusst nicht angefasst): `React.memo` erst zusammen mit stabilen
+  Props/`useCallback`, Worker für Analyse/WAV-Export, `App.tsx`-Zerlegung, Dithering/24-Bit,
+  Abhängigkeits-Purge, Tag/Release-Politik.
+
+## 9. Hinweise für die nächste Session
 
 - `node_modules` wird **nicht** mit dem Workspace gesichert: vor allem `npm install -D vitest jsdom @testing-library/react @testing-library/user-event c8 tsx` (Dev-Dependencies stehen in `package.json`, Installation dauert ~1 min).
 - Der Workspace-Reset hat in dieser Session einen Commit (`63c6284`) entfernt, Dateiinhalte aber behalten → vor Verlassen auf `git log` prüfen und **am Ende jeder Session committen**.
