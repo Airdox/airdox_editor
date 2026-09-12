@@ -17,6 +17,7 @@ export type LogCategory =
   | 'BEATGRID'
   | 'EDITING'
   | 'DATABASE'
+  | 'COPILOT'
   | 'UI';
 
 export interface LogEntry {

@@ -1,12 +1,12 @@
 {
-  "name": "react-example",
+  "name": "airdox-smart-editor",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.4.21",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=dist/server.mjs",
+    "start": "node dist/server.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
@@ -16,7 +16,11 @@
     "test:ui": "node tests/run-all.mjs --only=vitest",
     "test:script": "node tests/run-all.mjs --only=script",
     "coverage": "node tests/coverage-summary.mjs",
-    "coverage:ui": "vitest run --coverage"
+    "coverage:ui": "vitest run --coverage",
+    "desktop": "npm run build && electron .",
+    "package:win": "npm run build && electron-builder --win",
+    "package:win:nsis": "npm run build && electron-builder --win nsis",
+    "package:win:portable": "npm run build && electron-builder --win portable"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -90,5 +94,8 @@
       "artifactName": "${productName}-${version}-portable.exe"
     },
     "artifactName": "${productName}-${version}-setup.${ext}"
-  }
+  },
+  "description": "airdox_SMART_Editor – professioneller, nicht-destruktiver Rekordbox-Audio-Editor mit Smart Copilot.",
+  "author": "Airdox",
+  "main": "electron/main.cjs"
 }

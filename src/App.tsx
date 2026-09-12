@@ -86,6 +86,8 @@ import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
+import { ChatbotPalette } from './components/ChatbotPalette';
+import type { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
 import { ExportModal } from './components/Modals/ExportModal';
 import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
@@ -299,6 +301,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Browser bar
   const [browserOpen, setBrowserOpen] = useState<boolean>(false);
+
+  // Workspace visibility and the optional Smart Copilot. Both panels are kept
+  // separate from the clip palette so a user can reclaim waveform space without
+  // losing the current edit state.
+  const [bottomControlOpen, setBottomControlOpen] = useState<boolean>(true);
+  const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
@@ -2276,10 +2284,179 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     };
   }, []);
 
+  /**
+   * Apply an explicit Smart-Copilot proposal to the editor. The copilot never
+   * mutates Rekordbox source data: all edits are routed through the same
+   * project-state handlers and retain their USER_EDIT / undo behaviour.
+   */
+  const handleChatbotAction = (action: ChatbotAction) => {
+    if (!activeTrack) {
+      logger.warn('COPILOT', 'Copilot action ignored because no deck track is loaded', {
+        type: action.type,
+      });
+      return;
+    }
+
+    const params = action.params || {};
+    const numeric = (value: unknown, fallback: number) =>
+      typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    const clampTime = (value: unknown, fallback = currentTime) =>
+      Math.max(0, Math.min(activeTrack.duration, numeric(value, fallback)));
+    const secondsPerBeat = 60 / activeTrack.beatGrid.bpm;
+    const secondsPerBar = secondsPerBeat * activeTrack.beatGrid.meter;
+
+    const selectRange = (startValue: unknown, endValue: unknown) => {
+      const start = clampTime(startValue);
+      const end = clampTime(endValue, start);
+      if (end <= start) return;
+      const beatsCount = (end - start) / secondsPerBeat;
+      setSelection({
+        start,
+        end,
+        startBeat: (start - activeTrack.beatGrid.firstBeat) / secondsPerBeat,
+        endBeat: (end - activeTrack.beatGrid.firstBeat) / secondsPerBeat,
+        beatsCount,
+        barsCount: beatsCount / activeTrack.beatGrid.meter,
+        duration: end - start,
+      });
+    };
+
+    const setZoom = (presetValue: unknown, focusTime = currentTime) => {
+      const preset = typeof presetValue === 'string' ? presetValue : '16_BARS';
+      const barsByPreset: Record<string, number> = {
+        '2_BARS': 2,
+        '4_BARS': 4,
+        '8_BARS': 8,
+        '16_BARS': 16,
+        '32_BARS': 32,
+        '64_BARS': 64,
+      };
+      const requestedDuration =
+        preset === 'FULL_TRACK'
+          ? activeTrack.duration
+          : (barsByPreset[preset] || 16) * secondsPerBar;
+      const duration = Math.max(0.1, Math.min(activeTrack.duration, requestedDuration));
+      const focus = clampTime(focusTime);
+      setViewDuration(duration);
+      setViewOffset(Math.max(0, Math.min(activeTrack.duration - duration, focus - duration * 0.25)));
+    };
+
+    const addCue = (positionValue: unknown, typeValue: unknown, nameValue: unknown, letterValue: unknown) => {
+      const type = typeValue === 'HOT_CUE' ? 'HOT_CUE' : 'MEMORY';
+      const position = clampTime(positionValue);
+      const letter = typeof letterValue === 'string' && /^[A-H]$/i.test(letterValue)
+        ? letterValue.toUpperCase()
+        : undefined;
+      const cuesOfType = activeTrack.cues.filter((cue) => cue.type === type);
+      const defaultName = type === 'HOT_CUE'
+        ? `Hot Cue ${letter || cuesOfType.length + 1}`
+        : `MEM ${cuesOfType.length + 1}`;
+      const name = typeof nameValue === 'string' && nameValue.trim() ? nameValue.trim() : defaultName;
+
+      pushHistorySnapshot('Copilot Cue');
+      setTracks((previous) =>
+        previous.map((track) =>
+          track.id === activeTrack.id
+            ? {
+                ...track,
+                cues: [
+                  ...track.cues,
+                  {
+                    id: nextId('copilot-cue'),
+                    name,
+                    type,
+                    position,
+                    inMsec: Math.round(position * 1000),
+                    hotCueNum: type === 'HOT_CUE' && letter ? letter.charCodeAt(0) - 65 : undefined,
+                    letter,
+                    color: type === 'HOT_CUE' ? '#00a2ff' : '#ff2a2a',
+                    origin: DataOrigin.USER_EDIT,
+                  },
+                ],
+                isModified: true,
+              }
+            : track
+        )
+      );
+    };
+
+    switch (action.type) {
+      case 'SET_ZOOM':
+        setZoom(params.preset);
+        break;
+      case 'SEEK_TO':
+        handleSeek(clampTime(params.time));
+        break;
+      case 'SELECT_RANGE': {
+        const start = clampTime(params.start);
+        const beats = Math.max(0.25, Math.min(512, numeric(params.beats, 16)));
+        selectRange(start, params.end === undefined ? start + beats * secondsPerBeat : params.end);
+        break;
+      }
+      case 'ADD_CUE':
+        addCue(params.time, params.type, params.name, params.letter);
+        break;
+      case 'ADD_MEMORY_CUE':
+        handleAddMemoryCue();
+        break;
+      case 'SHIFT_BEATGRID':
+        handleShiftBeatgrid(Math.max(-2, Math.min(2, numeric(params.deltaSeconds, 0))));
+        break;
+      case 'PERFORM_EDIT': {
+        switch (params.operation) {
+          case 'CUT': handleCut(); break;
+          case 'PASTE': handlePaste(); break;
+          case 'DELETE': handleDelete(); break;
+          case 'CLEAR': handleClear(); break;
+          case 'OVERDUB': handleOverdub(); break;
+          case 'REPLACE': handleReplace(); break;
+          case 'COPY':
+          default: handleCopy(); break;
+        }
+        break;
+      }
+      case 'SET_QUANTIZE':
+        setQuantize(Boolean(params.enabled));
+        break;
+      case 'SET_WAVEFORM_MODE':
+        if (params.mode === 'BLUE' || params.mode === 'RGB' || params.mode === '3BAND') {
+          setWaveformMode(params.mode);
+        }
+        break;
+      case 'ADD_TO_PALETTE':
+        if (selection) handleAddSelectionToPalette();
+        break;
+      case 'AUTO_ALIGN_GRID':
+        handleAutoAlignBeatgrid();
+        break;
+      case 'SET_MIX_IN_POINT': {
+        const time = clampTime(params.time);
+        const bars = Math.max(1, Math.min(64, Math.floor(numeric(params.selectBars, 16))));
+        handleSeek(time);
+        addCue(time, 'HOT_CUE', params.cueName, params.cueSlot);
+        selectRange(time, time + bars * secondsPerBar);
+        setZoom(params.zoomPreset, time);
+        break;
+      }
+      default:
+        break;
+    }
+
+    logger.info('COPILOT', 'Copilot action applied', {
+      type: action.type,
+      label: action.label,
+    });
+  };
+
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
+      ) {
         return;
       }
       if (e.code === 'Space') {
@@ -2308,6 +2485,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           e.preventDefault();
           handleDelete();
         }
+      } else if (e.code === 'KeyE' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setBottomControlOpen((open) => !open);
       } else if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         stableToggleBrowser();
@@ -2345,6 +2525,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   });
   const stableTogglePalette = useStableCallback(() => setPaletteOpen((prev) => !prev));
   const stableToggleBrowser = useStableCallback(() => setBrowserOpen((prev) => !prev));
+  const stableToggleBottomControl = useStableCallback(() => setBottomControlOpen((prev) => !prev));
+  const stableToggleChatbot = useStableCallback(() => setChatbotOpen((prev) => !prev));
   const stableExpandPalette = useStableCallback(() => setPaletteViewMode('FULL_DECK'));
   const stableCloseDeckView = useStableCallback(() => setPaletteViewMode('SIDEBAR'));
   const stableDropWindow = useStableCallback((startSec: number, endSec: number) => {
@@ -2359,6 +2541,38 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const stablePickXmlFile = useStableCallback(() => xmlFileInputRef.current?.click());
   const stablePickAudioFile = useStableCallback(() => audioFileInputRef.current?.click());
   const stableOpenXmlCollection = useStableCallback(() => setXmlCollectionModalOpen(true));
+
+  // The context is display metadata and current project state only. It is passed
+  // to the optional remote assistant and is also sufficient for the deterministic
+  // local fallback shipped with the Electron package.
+  const chatbotContext: TrackEditorContext = {
+    title: activeTrack?.title,
+    artist: activeTrack?.artist,
+    bpm: activeTrack?.bpm,
+    key: activeTrack?.key,
+    duration: activeTrack?.duration,
+    currentTime,
+    currentBar: activeTrack
+      ? Math.max(
+          1,
+          Math.floor(
+            Math.max(0, currentTime - activeTrack.beatGrid.firstBeat) /
+              ((60 / activeTrack.beatGrid.bpm) * activeTrack.beatGrid.meter)
+          ) + 1
+        )
+      : undefined,
+    hasSelection: Boolean(selection && selection.duration > 0),
+    selectionStart: selection?.start,
+    selectionEnd: selection?.end,
+    selectionBeats: selection?.beatsCount,
+    selectionBars: selection?.barsCount,
+    hasClipboard: clipboardBuffer !== null,
+    quantize,
+    waveformMode,
+    paletteClipsCount: paletteClips.length,
+    undoCount: undoStack.length,
+    redoCount: redoStack.length,
+  };
 
   return (
     <div className="w-screen h-screen bg-[#0a0b0d] flex flex-col overflow-hidden select-none text-neutral-200">
@@ -2403,6 +2617,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onTogglePalette={() => setPaletteOpen(!paletteOpen)}
         browserOpen={browserOpen}
         onToggleBrowser={() => setBrowserOpen(!browserOpen)}
+        chatbotOpen={chatbotOpen}
+        onToggleChatbot={stableToggleChatbot}
         onShowInfo={() => setInfoModalOpen(true)}
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
@@ -2428,6 +2644,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onMasterVolumeChange={handleMasterVolumeChange}
         meterL={meterL}
         meterR={meterR}
+        bottomControlOpen={bottomControlOpen}
+        onToggleBottomControl={stableToggleBottomControl}
+        paletteOpen={paletteOpen}
+        onTogglePalette={stableTogglePalette}
         paletteViewMode={paletteViewMode}
         onTogglePaletteViewMode={() =>
           setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
@@ -2512,6 +2732,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             targetKey={activeTrack?.key}
           />
         )}
+
+        <ChatbotPalette
+          isOpen={chatbotOpen}
+          onClose={() => setChatbotOpen(false)}
+          trackContext={chatbotContext}
+          onExecuteAction={handleChatbotAction}
+        />
       </div>
 
       {/* Full Deck View (Expanded Clip Library Deck B) */}
@@ -2546,6 +2773,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onCancelSelection={handleCancelSelection}
         onClone={handleAddSelectionToPalette}
         onCopy={handleCopy}
+        onCut={handleCut}
         onPaste={handlePaste}
         onInsert={handleInsert}
         onReplace={handleReplace}
@@ -2560,6 +2788,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         matchPitch={matchPitchOnInsert}
         onToggleMatchPitch={setMatchPitchOnInsert}
         targetKey={activeTrack?.key}
+        isOpen={bottomControlOpen}
+        onToggle={stableToggleBottomControl}
       />
 
       {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
