@@ -1,0 +1,44 @@
+# Zeilenenden einheitlich halten — ohne diese Datei schreibt ein Windows-Checkout
+# (dort ist core.autocrlf=true die Installationsempfehlung) CRLF in den Quelltext,
+# und jede Datei zeigt im Diff als komplett verändert. tests/source-hygiene.test.ts
+# (H3: nur LF) läuft in CI auf ubuntu UND windows und hätte diesen Fall als einziger
+# Test der Welt gemerkt.
+* text=auto eol=lf
+
+# Echte Binärdaten nie umwandeln
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.node binary
+*.exe binary
+*.dll binary
+*.db3 binary
+*.sqlite binary
+*.zip binary
+*.7z binary
+
+# Ausdrücklich Text (liegen sonst gern unter dem Rad)
+*.json text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.svg text eol=lf
+
+# Exportierte Berichtdateien sollen beim Ansehen keinen Diff-Rauschen erzeugen
+coverage/** -diff linguist-generated
+dist/** -diff linguist-generated
+release/** -diff linguist-generated
+package-lock.json -diff linguist-generated

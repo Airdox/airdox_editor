@@ -1,0 +1,643 @@
+/**
+ * @license
+ * Rekordbox XML Importer & Exporter
+ * Handles official Pioneer Rekordbox XML schema (<DJ_PLAYLISTS>, <COLLECTION>, <TRACK>, <TEMPO>, <POSITION_MARK>)
+ * preserving Beatgrids, Hot Cues, Memory Cues, and Loops.
+ */
+
+import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
+
+export function buildBeatGridFromTempo(
+  firstBeatSec: number,
+  bpm: number,
+  totalDurationSec: number,
+  meter: number = 4,
+  origin: DataOrigin = DataOrigin.REKORDBOX_XML
+): BeatGrid {
+  const secondsPerBeat = 60.0 / bpm;
+  const totalBeats = Math.max(1, Math.ceil((totalDurationSec - firstBeatSec) / secondsPerBeat) + 4);
+  const beats: BeatNode[] = [];
+
+  for (let i = 0; i < totalBeats; i++) {
+    const time = firstBeatSec + i * secondsPerBeat;
+    const isBarStart = i % meter === 0;
+    const barNumber = Math.floor(i / meter) + 1;
+    const beatInBar = (i % meter) + 1;
+
+    beats.push({
+      index: i,
+      time,
+      isBarStart,
+      barNumber,
+      beatInBar,
+    });
+  }
+
+  return {
+    firstBeat: firstBeatSec,
+    bpm,
+    meter,
+    beats,
+    origin,
+  };
+}
+
+// Helper to unescape XML entities
+export function unescapeXml(str: string): string {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+interface SimpleXmlElement {
+  tagName: string;
+  attributes: Record<string, string>;
+  children: SimpleXmlElement[];
+  getAttribute(name: string): string | null;
+  querySelector(tag: string): SimpleXmlElement | null;
+  querySelectorAll(tag: string): SimpleXmlElement[];
+}
+
+function parseXmlFallback(xmlString: string): SimpleXmlElement {
+  // Regex to match XML tags and self-closing tags
+  const tagRegex = /<([a-zA-Z0-9_]+)([^>]*?)(\/?)>|([a-zA-Z0-9_]+)/g;
+  const attrRegex = /([a-zA-Z0-9_]+)=["']([^"']*)["']/g;
+
+  const root: SimpleXmlElement = {
+    tagName: '__ROOT__',
+    attributes: {},
+    children: [],
+    getAttribute: () => null,
+    querySelector(tag: string) {
+      return this.children.find((c) => c.tagName === tag) || null;
+    },
+    querySelectorAll(tag: string) {
+      const results: SimpleXmlElement[] = [];
+      const traverse = (node: SimpleXmlElement) => {
+        for (const ch of node.children) {
+          if (ch.tagName === tag) results.push(ch);
+          traverse(ch);
+        }
+      };
+      traverse(this);
+      return results;
+    },
+  };
+
+  // Stack of open elements
+  const stack: SimpleXmlElement[] = [root];
+
+  // Tokenize XML
+  const tokens = xmlString.match(/<[^>]+>/g) || [];
+  for (const token of tokens) {
+    if (token.startsWith('<?') || token.startsWith('<!')) {
+      continue; // Skip declaration or comments
+    }
+
+    if (token.startsWith('</')) {
+      // Closing tag
+      if (stack.length > 1) {
+        stack.pop();
+      }
+      continue;
+    }
+
+    // Opening or self-closing tag
+    const isSelfClosing = token.endsWith('/>');
+    const tagContent = token.slice(1, isSelfClosing ? -2 : -1).trim();
+    const spaceIdx = tagContent.indexOf(' ');
+    const tagName = spaceIdx > 0 ? tagContent.slice(0, spaceIdx) : tagContent;
+    const attrString = spaceIdx > 0 ? tagContent.slice(spaceIdx) : '';
+
+    const attrs: Record<string, string> = {};
+    let attrMatch;
+    const localAttrRegex = /([a-zA-Z0-9_]+)=["']([^"']*)["']/g;
+    while ((attrMatch = localAttrRegex.exec(attrString)) !== null) {
+      attrs[attrMatch[1]] = unescapeXml(attrMatch[2]);
+    }
+
+    const elem: SimpleXmlElement = {
+      tagName,
+      attributes: attrs,
+      children: [],
+      getAttribute(name: string) {
+        return this.attributes[name] !== undefined ? this.attributes[name] : null;
+      },
+      querySelector(tag: string) {
+        return this.children.find((c) => c.tagName === tag) || null;
+      },
+      querySelectorAll(tag: string) {
+        const results: SimpleXmlElement[] = [];
+        const traverse = (node: SimpleXmlElement) => {
+          for (const ch of node.children) {
+            if (ch.tagName === tag) results.push(ch);
+            traverse(ch);
+          }
+        };
+        traverse(this);
+        return results;
+      },
+    };
+
+    const parent = stack[stack.length - 1];
+    parent.children.push(elem);
+
+    if (!isSelfClosing) {
+      stack.push(elem);
+    }
+  }
+
+  return root;
+}
+
+export interface XmlImportProgress {
+  phase: 'READING' | 'PARSING_XML' | 'EXTRACTING_TRACKS' | 'BUILDING_GRIDS' | 'VALIDATING' | 'COMPLETE' | 'ERROR';
+  phaseText: string;
+  processedTracks: number;
+  totalTracks: number;
+  percent: number;
+  currentTrackName?: string;
+  memoryCuesFound: number;
+  hotCuesFound: number;
+  loopsFound: number;
+  logMessages: string[];
+}
+
+function parseSingleTrackNode(
+  el: {
+    getAttribute: (name: string) => string | null;
+    attributes?: Record<string, string> | NamedNodeMap | any;
+    querySelector: (tag: string) => any;
+    querySelectorAll: (tag: string) => any;
+  },
+  index: number
+): Partial<TrackModel> {
+  const id = el.getAttribute('TrackID') || `rb-track-${index + 1}`;
+  const title = el.getAttribute('Name') || 'Untitled Track';
+  const artist = el.getAttribute('Artist') || 'Unknown Artist';
+  const album = el.getAttribute('Album') || '';
+  const genre = el.getAttribute('Genre') || 'Electronic';
+  const bpm = parseFloat(el.getAttribute('AverageBpm') || '130.00');
+  const key = el.getAttribute('Tonality') || '2A';
+  const duration = parseFloat(el.getAttribute('TotalTime') || '300.0');
+  const comments = el.getAttribute('Comments') || '';
+  const year = el.getAttribute('Year') || '';
+  const dateAdded = el.getAttribute('DateAdded') || '';
+  const remixer = el.getAttribute('Remixer') || '';
+  const location = el.getAttribute('Location') || '';
+
+  // Rekordbox Rating: 0..255 or 0..5
+  let rating = 0;
+  const rawRatingStr = el.getAttribute('Rating');
+  if (rawRatingStr) {
+    const rawNum = parseInt(rawRatingStr, 10);
+    if (!isNaN(rawNum)) {
+      if (rawNum > 5) {
+        rating = Math.min(5, Math.max(0, Math.round((rawNum / 255) * 5)));
+      } else {
+        rating = Math.min(5, Math.max(0, rawNum));
+      }
+    }
+  }
+
+  const playCountStr = el.getAttribute('PlayCount');
+  const playCount = playCountStr ? Math.max(0, parseInt(playCountStr, 10) || 0) : 0;
+
+  // Collect raw attributes to prevent data loss
+  const rawAttrs: Record<string, string> = {};
+  if (el.attributes) {
+    if (typeof el.attributes.length === 'number') {
+      for (let i = 0; i < el.attributes.length; i++) {
+        const attr = el.attributes[i];
+        if (attr && attr.name) {
+          rawAttrs[attr.name] = attr.value;
+        }
+      }
+    } else {
+      Object.assign(rawAttrs, el.attributes);
+    }
+  }
+
+  // Parse TEMPO (Beatgrid)
+  // Rekordbox tracks may have multiple <TEMPO> nodes (dynamic grid / markers)
+  const tempoElements = el.querySelectorAll ? el.querySelectorAll('TEMPO') : [];
+  let firstBeat = 0.0;
+  let tempoBpm = bpm;
+  let meter = 4;
+
+  if (tempoElements && tempoElements.length > 0) {
+    let chosenTempoEl = tempoElements[0];
+    for (let t = 0; t < tempoElements.length; t++) {
+      const tEl = tempoElements[t];
+      const ini = parseFloat(tEl.getAttribute('Inizio') || '0.0');
+      const bpmVal = parseFloat(tEl.getAttribute('Bpm') || '0.0');
+      if (bpmVal > 0) {
+        if (ini > 0 && parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0') === 0.0) {
+          chosenTempoEl = tEl;
+        }
+      }
+    }
+
+    const inizio = parseFloat(chosenTempoEl.getAttribute('Inizio') || '0.0');
+    tempoBpm = parseFloat(chosenTempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
+    const battitoStr = chosenTempoEl.getAttribute('Battito') || '1';
+    const battito = parseInt(battitoStr, 10) || 1;
+    const metroStr = chosenTempoEl.getAttribute('Metro') || '4/4';
+    if (metroStr.startsWith('3/')) meter = 3;
+    else meter = 4;
+
+    const spb = 60.0 / tempoBpm;
+    let rawFirstBeat = inizio - (battito - 1) * spb;
+    while (rawFirstBeat < 0) rawFirstBeat += spb;
+    firstBeat = rawFirstBeat;
+  } else {
+    const tempoEl = el.querySelector('TEMPO');
+    if (tempoEl) {
+      const inizio = parseFloat(tempoEl.getAttribute('Inizio') || '0.0');
+      tempoBpm = parseFloat(tempoEl.getAttribute('Bpm') || bpm.toString()) || bpm;
+      const battito = parseInt(tempoEl.getAttribute('Battito') || '1', 10) || 1;
+      const spb = 60.0 / tempoBpm;
+      let rawFirstBeat = inizio - (battito - 1) * spb;
+      while (rawFirstBeat < 0) rawFirstBeat += spb;
+      firstBeat = rawFirstBeat;
+    }
+  }
+
+  // Parse POSITION_MARK — robust: supports POSITION_MARK, CUE, HOT_CUE, MEMORY_CUE, MARK etc.
+  const cues: CuePoint[] = [];
+  const loops: LoopPoint[] = [];
+
+  let markElements: any[] = el.querySelectorAll ? el.querySelectorAll('POSITION_MARK') : [];
+  // Fallback: some exporters use different tags or casing
+  if (!markElements || markElements.length === 0) {
+    const altTags = ['CUE', 'HOT_CUE', 'MEMORY_CUE', 'MARK', 'Cue', 'HotCue', 'MemoryCue'];
+    const collected: any[] = [];
+    for (const t of altTags) {
+      const found = el.querySelectorAll ? el.querySelectorAll(t) : [];
+      if (found && found.length) collected.push(...Array.from(found));
+    }
+    // also case-insensitive scan of children if still empty
+    if (collected.length === 0 && (el as any).children) {
+      const children = (el as any).children as any[];
+      for (const ch of children) {
+        const tn = (ch.tagName || '').toUpperCase();
+        if (tn.includes('CUE') || tn.includes('MARK') || tn === 'POSITION') {
+          collected.push(ch);
+        }
+      }
+    }
+    if (collected.length > 0) markElements = collected as any;
+  }
+  // A mark without a position attribute is not a genuine cue/anchor (guards
+  // against false positives on foreign exports). DOM-less environments keep
+  // the previous behavior.
+  const POSITION_ATTRS = ['Start', 'start', 'Position', 'position', 'Time', 'time', 'Inizio'];
+  const hasPositionAttribute = (mEl: any): boolean => {
+    // getAttribute returns null for missing attributes in both the browser
+    // DOM and the Node fallback parser.
+    if (typeof mEl?.getAttribute !== 'function') return false;
+    return POSITION_ATTRS.some((a) => mEl.getAttribute(a) !== null);
+  };
+
+  let firstBeatCueAnchor: number | null = null;
+  markElements.forEach((mEl: any) => {
+    if (!hasPositionAttribute(mEl)) return;
+    const name = (mEl.getAttribute('Name') || '').toLowerCase();
+    const start = parseFloat(mEl.getAttribute('Start') || mEl.getAttribute('Position') || mEl.getAttribute('Time') || '0.0');
+    if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
+      firstBeatCueAnchor = start;
+    }
+  });
+
+  if (firstBeatCueAnchor !== null && (firstBeat === 0.0 || Math.abs(firstBeatCueAnchor - firstBeat) > 0.05)) {
+    const spb = 60.0 / tempoBpm;
+    let rawFirstBeat = firstBeatCueAnchor;
+    while (rawFirstBeat >= spb) rawFirstBeat -= spb;
+    firstBeat = rawFirstBeat;
+  }
+
+  // XML TEMPO contains grid-marker metadata, not the analyzed per-beat list.
+  // Detailed beat nodes are supplied exclusively by ANLZ PQTZ.
+  const beatGrid = {
+    firstBeat,
+    bpm: tempoBpm,
+    meter,
+    beats: [],
+    origin: DataOrigin.REKORDBOX_XML,
+  };
+  markElements.forEach((mEl: any, mIdx: number) => {
+    if (!hasPositionAttribute(mEl)) return;
+    // Flexible attribute resolution: supports Rekordbox (Type/Start/Name/Num) and generic (type/position/time etc.)
+    const typeRaw = mEl.getAttribute('Type') ?? mEl.getAttribute('type') ?? mEl.getAttribute('Kind') ?? '0';
+    const type = String(typeRaw);
+    const startRaw = mEl.getAttribute('Start') ?? mEl.getAttribute('start') ?? mEl.getAttribute('Position') ?? mEl.getAttribute('position') ?? mEl.getAttribute('Time') ?? mEl.getAttribute('time') ?? mEl.getAttribute('Inizio') ?? '0.0';
+    const start = parseFloat(startRaw || '0.0');
+    const name = mEl.getAttribute('Name') ?? mEl.getAttribute('name') ?? mEl.getAttribute('Comment') ?? mEl.getAttribute('comment') ?? `Cue ${mIdx + 1}`;
+    const numStr = mEl.getAttribute('Num') ?? mEl.getAttribute('num') ?? mEl.getAttribute('Number') ?? mEl.getAttribute('number') ?? mEl.getAttribute('HotCueNumber') ?? '-1';
+    const num = parseInt(String(numStr), 10);
+    const r = mEl.getAttribute('Red') ?? mEl.getAttribute('red') ?? '255';
+    const g = mEl.getAttribute('Green') ?? mEl.getAttribute('green') ?? '120';
+    const b = mEl.getAttribute('Blue') ?? mEl.getAttribute('blue') ?? '0';
+    const color = `rgb(${r}, ${g}, ${b})`;
+
+    // Determine if this is a loop: Type 4 in Rekordbox, or explicit Loop tag, or End attribute present with type loop
+    const endRaw = mEl.getAttribute('End') ?? mEl.getAttribute('end') ?? null;
+    const isLoop = type === '4' || (endRaw !== null && !isNaN(parseFloat(endRaw)) && (mEl.tagName?.toUpperCase().includes('LOOP') || type.toLowerCase().includes('loop')));
+
+    if (isLoop) {
+      const end = parseFloat(endRaw || `${start + 4}`);
+      loops.push({
+        id: `loop-${mIdx}`,
+        name: name || 'Loop',
+        start,
+        end,
+        length: Math.max(0.1, end - start),
+        color: '#ff9500',
+        origin: DataOrigin.REKORDBOX_XML,
+      });
+    } else {
+      // Default to point cue: distinguish HOT vs MEMORY by Num >=0 or explicit hot cue tag / type
+      const isHotTag = mEl.tagName?.toUpperCase().includes('HOT');
+      const inMsec = Math.round(start * 1000);
+      const spb = 60.0 / tempoBpm;
+      const beatIndex = Math.round((start - firstBeat) / spb);
+      const barNumber = Math.floor(beatIndex / 4) + 1;
+      const beatNumber = (beatIndex % 4) + 1;
+
+      if ((num >= 0 && !isNaN(num)) || isHotTag || type === 'HOT' || type === '1') {
+        const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+        const hotNum = !isNaN(num) && num >= 0 ? num : mIdx;
+        cues.push({
+          id: `hot-cue-${hotNum}`,
+          name,
+          type: 'HOT_CUE',
+          hotCueNum: hotNum,
+          letter: letters[hotNum] || `${hotNum}`,
+          position: start,
+          inMsec,
+          cueIndex: mIdx + 1,
+          barNumber,
+          beatNumber,
+          color: color || '#00a2ff',
+          origin: DataOrigin.REKORDBOX_XML,
+        });
+      } else {
+        cues.push({
+          id: `mem-cue-${mIdx}`,
+          name,
+          type: 'MEMORY',
+          position: start,
+          inMsec,
+          cueIndex: mIdx + 1,
+          barNumber,
+          beatNumber,
+          color: '#ff3b30',
+          origin: DataOrigin.REKORDBOX_XML,
+        });
+      }
+    }
+  });
+
+  return {
+    id,
+    title,
+    artist,
+    album,
+    genre,
+    bpm: tempoBpm,
+    key,
+    duration,
+    rating,
+    playCount,
+    comments,
+    year,
+    dateAdded,
+    remixer,
+    ...(location
+      ? {
+          originalMedia: {
+            location,
+            accessMode: 'READ_ONLY' as const,
+            status: 'UNVERIFIED' as const,
+          },
+        }
+      : {}),
+    beatGrid,
+    cues,
+    loops,
+    origin: DataOrigin.REKORDBOX_XML,
+    rawXmlAttributes: rawAttrs,
+  };
+}
+
+export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackModel>[]; rawVersion: string } {
+  let djPlaylists: any = null;
+  let trackElements: any[] = [];
+
+  if (typeof DOMParser !== 'undefined') {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
+
+    const parserError = xmlDoc.querySelector('parsererror');
+    if (parserError) {
+      throw new Error('Invalid Rekordbox XML structure: ' + parserError.textContent);
+    }
+
+    djPlaylists = xmlDoc.querySelector('DJ_PLAYLISTS');
+    trackElements = Array.from(xmlDoc.querySelectorAll('COLLECTION > TRACK'));
+  } else {
+    // Node.js fallback
+    const root = parseXmlFallback(xmlString);
+    djPlaylists = root.querySelector('DJ_PLAYLISTS');
+    const collection = djPlaylists ? djPlaylists.querySelector('COLLECTION') : root.querySelector('COLLECTION');
+    trackElements = collection ? collection.querySelectorAll('TRACK') : root.querySelectorAll('TRACK');
+  }
+
+  const rawVersion = djPlaylists?.getAttribute('Version') || '1.0.0';
+  const tracks: Partial<TrackModel>[] = trackElements.map((el, idx) => parseSingleTrackNode(el, idx));
+
+  return { tracks, rawVersion };
+}
+
+/**
+ * Asynchronous, non-blocking chunked Rekordbox XML parser.
+ * Yields control to the event loop every 30 tracks so the UI never hangs,
+ * while streaming real-time status and telemetry for maximum transparency.
+ */
+export async function parseRekordboxXmlAsync(
+  xmlString: string,
+  onProgress?: (progress: XmlImportProgress) => void
+): Promise<{ tracks: Partial<TrackModel>[]; rawVersion: string }> {
+  const logs: string[] = ['[Start] Starte Rekordbox XML-Verarbeitung...'];
+  
+  onProgress?.({
+    phase: 'READING',
+    phaseText: 'Lese XML-Dokument ein & prüfe Wurzelelemente...',
+    processedTracks: 0,
+    totalTracks: 0,
+    percent: 10,
+    memoryCuesFound: 0,
+    hotCuesFound: 0,
+    loopsFound: 0,
+    logMessages: [...logs],
+  });
+
+  // Yield to render progress modal
+  await new Promise((r) => setTimeout(r, 20));
+
+  let djPlaylists: any = null;
+  let trackElements: any[] = [];
+
+  if (typeof DOMParser !== 'undefined') {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
+    const parserError = xmlDoc.querySelector('parsererror');
+    if (parserError) {
+      throw new Error('Ungültige Rekordbox-XML-Struktur: ' + parserError.textContent);
+    }
+    djPlaylists = xmlDoc.querySelector('DJ_PLAYLISTS');
+    trackElements = Array.from(xmlDoc.querySelectorAll('COLLECTION > TRACK'));
+  } else {
+    const root = parseXmlFallback(xmlString);
+    djPlaylists = root.querySelector('DJ_PLAYLISTS');
+    const collection = djPlaylists ? djPlaylists.querySelector('COLLECTION') : root.querySelector('COLLECTION');
+    trackElements = collection ? collection.querySelectorAll('TRACK') : root.querySelectorAll('TRACK');
+  }
+
+  const rawVersion = djPlaylists?.getAttribute('Version') || '1.0.0';
+  const total = trackElements.length;
+  logs.push(`[Schema] Rekordbox Version ${rawVersion} erkannt.`);
+  logs.push(`[Collection] ${total} Tracks in der Bibliothek gefunden.`);
+
+  onProgress?.({
+    phase: 'PARSING_XML',
+    phaseText: `Verarbeite ${total} Tracks mit phasenstarrer Rekordbox-Analyse...`,
+    processedTracks: 0,
+    totalTracks: total,
+    percent: 20,
+    memoryCuesFound: 0,
+    hotCuesFound: 0,
+    loopsFound: 0,
+    logMessages: [...logs],
+  });
+
+  await new Promise((r) => setTimeout(r, 20));
+
+  const tracks: Partial<TrackModel>[] = [];
+  let totalMemoryCues = 0;
+  let totalHotCues = 0;
+  let totalLoops = 0;
+
+  // A larger chunk limits React progress updates for multi-thousand-track
+  // libraries, while still yielding regularly to keep the interface usable.
+  const chunkSize = 100;
+  for (let i = 0; i < total; i += chunkSize) {
+    const end = Math.min(i + chunkSize, total);
+    for (let j = i; j < end; j++) {
+      const parsed = parseSingleTrackNode(trackElements[j], j);
+      tracks.push(parsed);
+
+      const memCount = (parsed.cues || []).filter((c) => c.type === 'MEMORY').length;
+      const hotCount = (parsed.cues || []).filter((c) => c.type === 'HOT_CUE').length;
+      const loopCount = (parsed.loops || []).length;
+      totalMemoryCues += memCount;
+      totalHotCues += hotCount;
+      totalLoops += loopCount;
+    }
+
+    const currentTrackName = tracks[tracks.length - 1]?.title;
+    const progressPercent = Math.min(95, 20 + Math.round((end / total) * 75));
+
+    if (end % 50 === 0 || end === total) {
+      logs.push(`[Progress] Track ${end}/${total} analysiert: "${currentTrackName}" (${totalMemoryCues} Memory Cues, ${totalHotCues} Hot Cues)`);
+    }
+
+    onProgress?.({
+      phase: 'EXTRACTING_TRACKS',
+      phaseText: `Extrahiere Beatgrids & Cues: ${end} von ${total} Tracks (${progressPercent}%)`,
+      processedTracks: end,
+      totalTracks: total,
+      percent: progressPercent,
+      currentTrackName,
+      memoryCuesFound: totalMemoryCues,
+      hotCuesFound: totalHotCues,
+      loopsFound: totalLoops,
+      logMessages: [...logs.slice(-15)],
+    });
+
+    // Yield control to UI thread so render loop stays fluid
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  logs.push(`[Erfolg] ${tracks.length} Tracks vollständig importiert.`);
+  logs.push(`[Garantie] Originaldateien bleiben 100% unverändert (Read-Only).`);
+
+  onProgress?.({
+    phase: 'COMPLETE',
+    phaseText: `Import erfolgreich abgeschlossen (${tracks.length} Tracks)`,
+    processedTracks: total,
+    totalTracks: total,
+    percent: 100,
+    memoryCuesFound: totalMemoryCues,
+    hotCuesFound: totalHotCues,
+    loopsFound: totalLoops,
+    logMessages: [...logs.slice(-15)],
+  });
+
+  return { tracks, rawVersion };
+}
+
+/**
+ * Serializes Track Model and edits to Pioneer Rekordbox XML format
+ */
+export function exportToRekordboxXml(track: TrackModel): string {
+  // `beatGrid`, `loops`, `cues`, `album` and `key` are all optional on a
+  // TrackModel (e.g. a metadata-only Rekordbox record). The export must state
+  // what it has instead of crashing on a valid, sparse model.
+  const bg = track.beatGrid;
+  const firstBeat = bg?.firstBeat ?? 0;
+  const exportBpm = bg?.bpm ?? track.bpm ?? 120;
+  const cues = track.cues ?? [];
+  const loops = track.loops ?? [];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/>
+  <COLLECTION Entries="1">
+    <TRACK TrackID="${escapeXml(track.id)}" Name="${escapeXml(track.title)}" Artist="${escapeXml(track.artist)}" Album="${escapeXml(track.album)}" TotalTime="${Math.round(track.duration ?? 0)}" AverageBpm="${exportBpm.toFixed(2)}" Tonality="${escapeXml(track.key ?? '')}">
+      <TEMPO Inizio="${firstBeat.toFixed(3)}" Bpm="${exportBpm.toFixed(2)}" Metro="4/4" Battito="1"/>
+${cues
+  .map((c) => {
+    const isHotCue = c.type === 'HOT_CUE';
+    const num = isHotCue ? (c.hotCueNum ?? 0) : -1;
+    return `      <POSITION_MARK Name="${escapeXml(c.name)}" Type="0" Start="${c.position.toFixed(3)}" Num="${num}" Red="0" Green="162" Blue="255"/>`;
+  })
+  .join('\n')}
+${loops
+  .map(
+    (l) =>
+      `      <POSITION_MARK Name="${escapeXml(l.name)}" Type="4" Start="${l.start.toFixed(3)}" End="${l.end.toFixed(3)}" Num="-1"/>`
+  )
+  .join('\n')}
+    </TRACK>
+  </COLLECTION>
+</DJ_PLAYLISTS>`;
+  return xml;
+}
+
+function escapeXml(unsafe: string | null | undefined): string {
+  if (unsafe === null || unsafe === undefined) return '';
+  return String(unsafe).replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '&': return '&amp;';
+      case '\'': return '&apos;';
+      case '"': return '&quot;';
+      default: return c;
+    }
+  });
+
+}

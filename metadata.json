@@ -1,7 +1,6 @@
 {
-  "name": "Airdox DJ Library & Controller Hub",
-  "description": "State-of-the-art DJ library management system with Rekordbox-style harmonic track linking, non-destructive workflows, DDJ-FLX4 and DDJ-1000 MIDI mapping with learn mode, and AI DJ assistant.",
-  "requestFramePermissions": [],
+  "name": "airdox_SMART_Editor",
+  "description": "Professioneller DJ-Audio-Editor mit Rekordbox-Import, Wellenform-Analyse, Beatgrid-Synchronisation und Audio-Aufnahme.",
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
-
