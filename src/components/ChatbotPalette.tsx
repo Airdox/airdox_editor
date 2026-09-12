@@ -33,6 +33,7 @@ import {
   ChatbotModel,
   TrackEditorContext,
 } from '../types/chatbot';
+import { createLocalCopilotReply } from '../copilot/localCopilot';
 import { nextId } from '../utils/ids';
 import { logger } from '../utils/logger';
 
@@ -103,7 +104,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
   // Auto-scroll to bottom of thread
   useEffect(() => {
     if (isOpen) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
     }
   }, [messages, isOpen]);
 
@@ -211,13 +212,27 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
         triggerAction(firstAct);
       }
     } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: nextId('chat-err'),
-        role: 'system',
-        text: `Kommunikationsfehler: ${err.message || 'Verbindung fehlgeschlagen'}`,
+      // The packaged Electron app intentionally has no HTTP development server.
+      // If `/api/chat` is unreachable (or resolves to the renderer document via
+      // the app protocol), retain a useful assistant instead of showing a dead
+      // communication error. It returns the same explicit editor actions and
+      // never performs an operation until the user confirms it.
+      logger.warn('COPILOT', 'Remote chat unavailable; using local Smart Copilot', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const fallback = createLocalCopilotReply(query, trackContext);
+      const assistantMsg: ChatMessage = {
+        id: nextId('chat-local'),
+        role: 'assistant',
+        text: fallback.text,
         timestamp: Date.now(),
+        actions: fallback.actions,
+        model: fallback.model,
       };
-      setMessages((prev) => [...prev, errorMsg]);
+      setMessages((prev) => [...prev, assistantMsg]);
+      if (autoExecute && fallback.actions.length > 0) {
+        triggerAction(fallback.actions[0]);
+      }
     } finally {
       setIsLoading(false);
     }
