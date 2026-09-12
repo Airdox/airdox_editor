@@ -111,15 +111,21 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
   (Semver, package.json als einzige Quelle)` liegt auf der 0.5-Linie und fehlt `main` — wieder
   aufgreifen und *vor* dem nächsten Taggen anwenden, sonst heißen Artefakte `…-0.4.20-…` während
   das Release v0.5.11 heißt.
-* Linien-Zustand (mit `gh api repos/Airdox/airdox_editor/compare/main...v0.5.10` prüfbar): `main`
-  ist 5 voraus / 26 zurück gegenüber `v0.5.10`. Auf der Tag-Linie liegen Fixe, die `main` nicht
-  hat: `query_only`/`busy_timeout` für den `master.db`-Zugriff, Suche ausschließlich auf Partition
-  `D:` (Nutzer-Vorgabe, `274c89e`), Single-Flight-DB-Load, asynchroner ANLZ-PPTH-Scan mit Cache
-  und Fortschritt, „Mix Lab"-Mischvorschau (Stage 2), Gatekeeper-JSON-Bericht mit
-  `scripts/waveform-gates.mjs`, drei Planungsdocs. Empfehlung: diese Punkte einzeln cherry-picken
-  (`git cherry-pick -x <sha>` je Fix, jeweils mit eigenem Testlauf) statt die Linien zu mergen —
-  ein Merge der 26 Commits würde `src/App.tsx` (+769 Zeilen Abweichung) und
-  `electron/dbReader.cjs` (+655) gegeneinander auflösen müssen.
+* Linien-Zustand (am 2026-09-12 nachgemessen; Grundlage und Gewichtungen in
+  `ENTSCHIEDUNGEN_2026-09-12.md`): `origin/main` ist genau ein Commit und selbst ein Merge. Gegen
+  den Tag `v0.5.10` stehen 81 Commits aus (71 davon keine Merges), umgekehrt fehlen dort 10
+  Commits, die hier sind. `git merge-base origin/main v0.5.10` liefert nichts — die Historien sind
+  verwandtschaftlich getrennt, `git merge-tree` verweigert die Verbindung („refusing to merge
+  unrelated histories“), und der Pull-Request dieser Linie (#12) steht auf `CONFLICTING`
+  (36 Dateien, +6448/−269). Gemergt wird daher nichts; übernommen wird pro Funktion.
+  Echte Lücken mit geringem Risiko: `query_only`/`busy_timeout`/Fehlerklassifikation im
+  `master.db`-Zugriff (`dbf5548`), `queryDbForExactPaths`/`seedAnlzIndexFromDb` für die
+  Rekordbox-7-Bibliotheksform (`2e6a186`, `348aafa`, `66d6d81`, `1b60b8e`), die IPC-Anbindung des
+  bei uns vorhandenen PPTH-Scans (`9ea9dad`), Versionsdoku samt Schema-Wächter (`4acc0dc`).
+  Ausdrücklich nicht übernommen: die hartkodierte Suche auf Partition `D:` (`274c89e` — unser Weg
+  sucht gar nicht im Dateisystem), der `waveform-gates`-Prüfstand (`e20ffeb`, `005a4f3` — unsre
+  Regeln sind strenger), `npmRebuild: false` (hier schon gesetzt), der warnende CI-Fall
+  (`6f5cf65` — unsrer bricht absichtlich rot ab) und das Mix Lab (`af16487` — eigenes Vorhaben).
 
 ## Vorgeschlagene Reihenfolge (Roadmap)
 

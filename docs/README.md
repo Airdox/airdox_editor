@@ -8,6 +8,7 @@
 | [`../VORHABEN.md`](../VORHABEN.md) | Planungsstand, offene Vorhaben, dokumentierte Abweichungen | bei Scope-Fragen |
 | [`../BUILD_WINDOWS.md`](../BUILD_WINDOWS.md) | Windows-Paket bauen (lokal + GitHub Actions), SQLCipher-Modul, Artefakte | vor jedem Release |
 | `PROJEKTANALYSE_2026-09-12.md` | Analyse: Refactoring, Performance, Ausgabequalität, Funktionsumfang — priorisiert, mit Belegen | bei der nächsten Planungsrunde |
+| `ENTSCHIEDUNGEN_2026-09-12.md` | Geprüfte Vorlage für die offenen Grundsatzentscheidungen (Merge, Version/Tag, Übernahme aus `v0.5.10`) — jede Zeile vermessen | vor der nächsten Merge- oder Versionsentscheidung |
 | `sessions/` | Session-Protokolle (Auftrag, Umsetzung, Erfüllungsgrad, Nacharbeiten) | Übergabe von Session zu Session |
 
 ## Testdoku
