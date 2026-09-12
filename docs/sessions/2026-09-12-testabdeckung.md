@@ -25,8 +25,8 @@ Branch `arena/01a0933a-airdox-editor` (Arbeitszweig dieser Session), Stand nach 
 | Funktionen | 72,0 % | 72,1 % |
 | Dateien unter 90 % Lines | ~40 | **7** |
 | Vitest-Tests (Komponente/Workflow/Unit) | 0 | **204** in 8 Dateien |
-| Skript-Suiten (`tests/*.test.ts`, unverändert) | 25 | 25 (alle grün) |
-| `node tests/run-all.mjs` | — | 26/26 Suiten grün |
+| Skript-Suiten (`tests/*.test.ts`) | 25 | 27 (25 unverändert + Kombinationsmatrix-Runner + Hygiene-Guard) |
+| `node tests/run-all.mjs` | — | 27/27 Suiten grün + vitest |
 
 Kommandozeile (alles läuft über npm):
 
