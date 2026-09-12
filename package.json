@@ -17,7 +17,12 @@
     "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/xml-exclusive-import.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs && node tests/log-writer.test.mjs && tsx tests/analysis-resolver.test.ts && tsx tests/pqtz-strict.test.ts && tsx tests/waveform-variants.test.ts && tsx tests/render-look.test.ts && tsx tests/track-guards.test.ts && tsx tests/anlz-ext-merge.test.ts&& node tests/anlz-ppth-scan.test.mjs && node tests/options-json.test.mjs && node tests/db-read-pipeline.test.mjs"
+    "test": "node tests/run-all.mjs",
+    "test:all": "node tests/run-all.mjs --only=all",
+    "test:ui": "node tests/run-all.mjs --only=vitest",
+    "test:script": "node tests/run-all.mjs --only=script",
+    "coverage": "node tests/coverage-summary.mjs",
+    "coverage:ui": "vitest run --coverage"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

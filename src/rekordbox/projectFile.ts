@@ -155,6 +155,15 @@ export interface SerializedSegment {
   gain: number;
   /** Inserted/replaced/overdubbed clip material, embedded as base64 WAV. */
   clipWavBase64?: string;
+  /**
+   * Clip provenance, needed to reuse stored ANLZ columns after re-opening
+   * instead of re-analysing audio: which track the material came from, where
+   * inside it, and which time/pitch adaptation was applied.
+   */
+  sourceTrackId?: string;
+  sourceClipStart?: number;
+  tempoRatio?: number;
+  pitchShift?: number;
 }
 
 export interface SerializedTrack {
@@ -239,6 +248,10 @@ function serializeSegment(segment: EditSegment): SerializedSegment {
     projectDuration: segment.projectDuration,
     clipId: segment.clipId,
     gain: segment.gain ?? 1.0,
+    ...(segment.sourceTrackId ? { sourceTrackId: segment.sourceTrackId } : {}),
+    ...(segment.sourceClipStart !== undefined ? { sourceClipStart: segment.sourceClipStart } : {}),
+    ...(segment.tempoRatio !== undefined ? { tempoRatio: segment.tempoRatio } : {}),
+    ...(segment.pitchShift !== undefined ? { pitchShift: segment.pitchShift } : {}),
   };
   if (segment.clipBuffer) {
     out.clipWavBase64 = audioBufferToWavBase64(segment.clipBuffer);

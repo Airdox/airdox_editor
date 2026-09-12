@@ -1,6 +1,6 @@
 # Vorhaben: Rekordbox-Desktop-Importpfad
 
-**Stand: 09.09.2026**
+**Stand: 12.09.2026**
 
 Die Anwendung wird schrittweise zu einer Windows-Desktop-App ausgebaut. Rekordbox-XML liefert Bibliothek, Metadaten und Dateipfade. Rekordbox-Datenbank- und ANLZ-Daten haben Vorrang für Waveform, Beatgrid, Cues und Songstruktur. Eigene Berechnungen sind ausschließlich gekennzeichnete Fallbacks.
 
@@ -89,3 +89,67 @@ Die ANLZ-Daten werden unverändert übernommen; sämtliche Abweichung zum Origin
 - **DB-Pfad-Diagnose sichtbar**: Der Status-Chip meldet bei fehlender ANLZ jetzt zusätzlich den Zustand des DB-Pfads (`DB x/y LESBAR • n LINKS` inkl. Grund, z. B. fehlendes SQLCipher-Modul oder keine DB gefunden); ein fehlgeschlagener DB-Erstversuch bekommt genau einen Retry (`dbIndexDiagRef` in `src/App.tsx`).
 
 Tests: `tests/render-look.test.ts` (R1–R7: PWV5-Farb-Pass-through, Blau-Rampe, PWV4-Zweiton-Formeln, 3-Band-Farben/-Reihenfolge, Kamm-Geometrie, Takt-Schattierung, PWV5-End-to-End-Pass-through, ehrlich leeres Pane ohne ANLZ, Peak-Hold statt Mittelung).
+
+## Phase 6 – Drag & Drop im Editor + projizierte Folgezustände ✅
+
+Ziel: Überall dort, wo es einen Sinn ergibt, wird gezogen und fallengelassen — und danach zeigt
+die Deckansicht **die** Wellenform der bearbeiteten Timeline, nicht mehr die des Originals.
+
+**Drag & Drop-Quellen und -Ziele** (ein gemeinsamer Protokollvertrag in `src/dnd/dragPayload.ts`):
+
+| Ziehen von | Ablegen auf | Wirkung |
+|---|---|---|
+| Clip in der Schnipselpalette (Sidebar) | Timeline in Deck A | Einfügen an der Drop-Position; Shift/Ctrl = Bereich ersetzen, Alt = überlagern |
+| Clip in der Schnipselpalette (Sidebar) | Papierkorb-Button | Clip löschen |
+| Auswahl-Chip im Detail-Wellenform-Footer | Schnipselpalette | Auswahl wird neuer Clip (Timeline bleibt unverändert) |
+| Clip-Karte in der Palette-/Deckansicht | „In Deck A einfügen“ / „Auswahl ersetzen“ / „Überlagern“ | dieselbe Wirkung wie der Button-Klick |
+| Clip-Karte in der Deckansicht (FULL_DECK) | Clip-Vorschaufläche | Einfügen an Playhead |
+| Insert-Block in der Edit-Spur unter der Wellenform | Timeline | Block verschieben (kein Löschen/Neu-Einfügen, Marker im Block wandern mit) |
+| Titel in der Browser-/Sammlungsleiste | Deck A | Track wird ins Deck geladen (Timeline-Reset auf dieses Deck) |
+| Audiodatei / Rekordbox XML aus dem Windows-Explorer | überall im Fenster | Import (Overlay meldet es; interne Drags werden nie als Dateidrop fehlgedeutet) |
+
+Modifier, Drop-Fenster und Clip-Länge werden nicht im UI berechnet, sondern von einem reinen
+Planer (`src/edit/editDrop.ts → planClipDrop`) abgeleitet; die Drop-Vorschau (Geist + Modus-Text)
+nutzt exakt dieselbe Geometrie, die anschließend projiziert wird.
+
+**Folgezustände: eine Ableitung für Audio, Wellenform, Dauer und Marker.** Nach jedem Edit (und
+nach Undo/Redo sowie nach dem Öffnen eines Projekts) leitet `projectTrackEdits()`
+(`src/edit/editModel.ts`) aus der Segmentliste alles neu ab: Timeline und Spans
+(`src/edit/editTimeline.ts`), Working-Audio (`src/edit/projectedAudio.ts`), Waveform-Varianten mit
+Spalten-Herkunft (`src/edit/editWaveform.ts`), Projekt-Dauer und die Edit-Spur unter der Wellenform.
+Es gibt damit keinen Zustand, in dem Wellenform und Audio unterschiedliche LAYOUTS zeigen — das
+war der Fehler, den alte Edit-Handler hinterließen (Audio wurde neu gerendert, die Wellenform blieb
+die des Originals, Delete/Clear löschten die Rekordbox-Analyse stattdessen komplett).
+
+**Antwort auf „muss dafür neu analysiert werden?“: Nein.** Wo bereits ANLZ-Spalten existieren, wird
+der bearbeitete Bereich **aufgerechnet** — reines Index-Umschreiben der gespeicherten Spalten, ohne
+Interpolation, Mittelung oder Glättung:
+
+- Spalte `i = floor(t / secPerBucket)` des Ursprungs → Ausgabespalte `j = floor(t′ / secPerBucket)`;
+  unveränderte Originale bleiben `ANLZ`, nach einem Shift `ANLZ_RETIMED` (Werte identisch, Position neu).
+- Ein reingezogener Clip kopiert die Spalten seiner Quell-Datei (`CLIP_ANLZ`) — aber nur, wenn
+  `spanAllowsVerbatimClipColumns()` sie erlaubt: Tempo­faktor 1, kein Pitch-Shift, Neutral-Gain,
+  Quelle mit bekannter Track-ID und Quellenfenster. Zeitgedehntes Material darf niemals so tun, als
+  hätte es Originaldaten.
+- Clear schreibt echte Nullen (`SILENCE`), Overdub mischt pro Spalte das Maximum (`MIX`), und wo
+  keinerlei Vorfahr existiert, bleibt die Spalte `MISSING` (leeres Pane + Hinweis) oder wird aus dem
+  Edit-Audio gemessen und ist dann als `COMPUTED` / `USER_EDIT` gekennzeichnet.
+- Originale bleiben unverändert: `baseAnalysis`/`baseAnalysisVariants` sind eingefroren, die
+  Komposition ist nie Eingabe für die nächste Komposition und wird nie persistiert (`.airdox`-Dateien
+  speichern Segmente und Marker, keine Waveform-Arrays).
+
+Kürzungs-/Verschiebeeffekte auf Cues, Loops, Phrasen und Beat-Knoten laufen inkrementell über
+dasselbe Delta (`retimeCues`/`retimeLoops`/`retimePhrases`/`retimeBeatNodes`); Füll-Beats über eine
+Lücke entstehen nur, wenn das Deck bereits importierte Knoten hatte, und werden mit `insertGrid`
+markiert (Herkunft dann `USER_EDIT` — die veränderte Rekordbox-Grid-Zeile bleibt sichtbar).
+
+**Warum „nicht wissbare Analysedaten“ eben doch teilweise wissbar sind:** Die Wellenform ist eine
+Peak-/Band-Indikator-Darstellung pro Zeitfenster. Ein reiner Schnitt verschiebt nur die Fenster —
+die gespeicherten Werte gelten weiter. Neu gemessen werden muss ausschließlich Material, dessen
+Samples erst durch den Edit entstehen (Clipboard ohne Quellenfenster, zeitgedehnte Clips, Overdub-Summe).
+
+Tests (in `npm test` aufgenommen): `tests/edit-timeline.test.ts` (17), `tests/edit-waveform.test.ts` (10),
+`tests/edit-model.test.ts` (9), `tests/edit-audio.test.ts` (6), `tests/edit-dnd.test.ts` (21: Payload-
+Protokoll inkl. Foreign-Drag-Ablehnung, Modifier-Semantik, Drop-Geometrie, Folgezustand eines echten
+Drops durch die echte Projektion — inkl. Nachweis, dass ein Drop mit ANLZ-Vorfahr **null** eigene
+Analysen auslöst). Audit-Ergänzung: `REKORDBOX_PIPELINE_IMPLEMENTATION_AUDIT.md` → „Edit projection audit“.

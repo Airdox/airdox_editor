@@ -37,6 +37,7 @@ import {
   Sliders,
 } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
+import { beginDrag, endDrag, resolveDragPayload } from '../dnd/dragPayload';
 import { calculateHarmonicPitchShift } from '../audio/pitchTempoEngine';
 
 interface ClipDeckViewProps {
@@ -54,6 +55,8 @@ interface ClipDeckViewProps {
   onOverdubDeckAWithClip: (clip: PaletteClip) => void;
   onCloseDeckView: () => void;
   waveformMode: WaveformMode;
+  /** Drag & drop: a clip card dropped on the preview inserts it into Deck A. */
+  onDropClipIntoDeckA?: (clipId: string) => void;
 }
 
 export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
@@ -71,8 +74,52 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
   onOverdubDeckAWithClip,
   onCloseDeckView,
   waveformMode,
+  onDropClipIntoDeckA,
 }) => {
   const activeClip = clips.find((c) => c.id === activeClipId) || clips[0] || null;
+
+  // Drag & drop: a clip being dragged inside this view, plus the hovered target.
+  const [dragClipId, setDragClipId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<'deck' | 'insert' | 'replace' | 'overdub' | null>(null);
+  const clipDragProps = (clip: PaletteClip) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      setDragClipId(clip.id);
+      e.dataTransfer.effectAllowed = 'copyLink';
+      beginDrag(e.dataTransfer, { kind: 'clip', clipId: clip.id, label: clip.name });
+    },
+    onDragEnd: () => {
+      endDrag();
+      setDragClipId(null);
+      setDropTarget(null);
+    },
+  });
+  const targetHandlers = (
+    target: 'deck' | 'insert' | 'replace' | 'overdub',
+    run: (clipId: string) => void
+  ) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (resolveDragPayload(e.dataTransfer)?.kind !== 'clip') return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (dropTarget !== target) setDropTarget(target);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+      setDropTarget((prev) => (prev === target ? null : prev));
+    },
+    onDrop: (e: React.DragEvent) => {
+      const payload = resolveDragPayload(e.dataTransfer);
+      if (payload?.kind !== 'clip') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDropTarget(null);
+      setDragClipId(null);
+      run(payload.clipId);
+    },
+  });
+  const clipById = (id: string) => clips.find((c) => c.id === id) ?? null;
 
   // Deck playback & navigation state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -442,8 +489,16 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
           <button
             onClick={() => activeClip && onInsertClipToDeckA(activeClip)}
             disabled={!activeClip || !activeTrack}
-            className="flex items-center space-x-1 bg-[#0088ff] hover:bg-[#0099ff] text-white disabled:opacity-30 px-2.5 py-1 rounded text-[11px] font-bold shadow-sm transition-all"
-            title="Clip mit Tempo- & Tonhöhenanpassung an Playhead einfügen"
+            {...targetHandlers('insert', (id) => {
+              const clip = clipById(id);
+              if (clip) onInsertClipToDeckA(clip);
+            })}
+            className={`flex items-center space-x-1 text-white disabled:opacity-30 px-2.5 py-1 rounded text-[11px] font-bold shadow-sm transition-all ${
+              dropTarget === 'insert'
+                ? 'bg-[#4db2ff] ring-2 ring-white'
+                : 'bg-[#0088ff] hover:bg-[#0099ff]'
+            }`}
+            title="Clip mit Tempo- & Tonhöhenanpassung an Playhead einfügen – Clip auch hierher ziehen"
           >
             <ArrowRightLeft size={12} />
             <span>In Deck A einfügen</span>
@@ -453,8 +508,14 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
           <button
             onClick={() => activeClip && onReplaceDeckAWithClip(activeClip)}
             disabled={!activeClip || !activeTrack || !hasSelectionInDeckA}
-            className="flex items-center space-x-1 bg-[#ff9500] hover:bg-[#ffaa22] text-black disabled:opacity-30 px-2.5 py-1 rounded text-[11px] font-bold shadow-sm transition-all"
-            title={hasSelectionInDeckA ? "Auswahl in Deck A durch diesen Clip ersetzen" : "Zuerst Bereich in Deck A auswählen"}
+            {...targetHandlers('replace', (id) => {
+              const clip = clipById(id);
+              if (clip) onReplaceDeckAWithClip(clip);
+            })}
+            className={`flex items-center space-x-1 text-black disabled:opacity-30 px-2.5 py-1 rounded text-[11px] font-bold shadow-sm transition-all ${
+              dropTarget === 'replace' ? 'bg-[#ffc061] ring-2 ring-white' : 'bg-[#ff9500] hover:bg-[#ffaa22]'
+            }`}
+            title={hasSelectionInDeckA ? "Auswahl in Deck A durch diesen Clip ersetzen – Clip auch hierher ziehen" : "Zuerst Bereich in Deck A auswählen"}
           >
             <Repeat size={12} />
             <span>Auswahl ersetzen</span>
@@ -464,8 +525,16 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
           <button
             onClick={() => activeClip && onOverdubDeckAWithClip(activeClip)}
             disabled={!activeClip || !activeTrack || !hasSelectionInDeckA}
-            className="flex items-center space-x-1 bg-[#1b2230] hover:bg-[#252f44] border border-[#36425a] text-[#00c853] hover:text-white disabled:opacity-30 px-2 py-1 rounded text-[11px] font-bold transition-all"
-            title="Clip über Deck A Auswahl mischen"
+            {...targetHandlers('overdub', (id) => {
+              const clip = clipById(id);
+              if (clip) onOverdubDeckAWithClip(clip);
+            })}
+            className={`flex items-center space-x-1 disabled:opacity-30 px-2 py-1 rounded text-[11px] font-bold transition-all border ${
+              dropTarget === 'overdub'
+                ? 'bg-[#00c853] border-[#00c853] text-black ring-2 ring-white'
+                : 'bg-[#1b2230] hover:bg-[#252f44] border-[#36425a] text-[#00c853] hover:text-white'
+            }`}
+            title="Clip über Deck A Auswahl mischen – Clip auch hierher ziehen"
           >
             <Layers size={12} />
             <span>Überlagern</span>
@@ -528,7 +597,26 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
         </div>
 
         {/* Center: Waveform Canvas */}
-        <div ref={containerRef} className="flex-1 relative bg-[#090a0d] flex flex-col">
+        <div
+          ref={containerRef}
+          {...targetHandlers('deck', (id) => {
+            if (onDropClipIntoDeckA) onDropClipIntoDeckA(id);
+            else {
+              const clip = clipById(id);
+              if (clip) onInsertClipToDeckA(clip);
+            }
+          })}
+          className={`flex-1 relative bg-[#090a0d] flex flex-col transition-all ${
+            dropTarget === 'deck' ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
+          }`}
+        >
+          {dropTarget === 'deck' && (
+            <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center">
+              <span className="text-[12px] font-mono font-bold text-white bg-[#0088ff]/85 border border-[#4db2ff] px-3 py-1.5 rounded shadow-lg">
+                Clip hier ablegen → an Playhead in Deck A einfügen
+              </span>
+            </div>
+          )}
           <canvas
             ref={canvasRef}
             width={900}
@@ -585,6 +673,8 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
             {clips.length === 0 ? (
               <div className="h-24 flex items-center justify-center text-center text-neutral-500 text-[11px] px-2">
                 Keine Clips gespeichert.
+                <br />
+                Auswahl in Deck A markieren und „Neu“ – oder Auswahl aus der Timeline hierher ziehen.
               </div>
             ) : (
               clips.map((clip) => {
@@ -592,12 +682,14 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
                 return (
                   <div
                     key={clip.id}
+                    {...clipDragProps(clip)}
                     onClick={() => onSelectClip(clip)}
-                    className={`p-1.5 rounded-xs border cursor-pointer transition-all flex items-center justify-between ${
+                    title="In die Timeline von Deck A ziehen (an der Drop-Position einfügen) · Klick = auswählen"
+                    className={`p-1.5 rounded-xs border cursor-grab active:cursor-grabbing transition-all flex items-center justify-between ${
                       isSelected
                         ? 'bg-[#181d29] border-[#0088ff] shadow-sm'
                         : 'bg-[#12141a] border-[#22242f] hover:border-[#313545]'
-                    }`}
+                    } ${dragClipId === clip.id ? 'opacity-40 border-dashed border-[#00a2ff]' : ''}`}
                   >
                     <div className="flex flex-col truncate pr-1">
                       <span className="text-white text-[11px] font-medium truncate">

@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { beginDrag, endDrag } from '../dnd/dragPayload';
 import { TrackModel } from '../types/rekordbox';
 import {
   ChevronUp,
@@ -283,9 +284,20 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                       return (
                         <tr
                           key={t.id}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = 'copyLink';
+                            beginDrag(e.dataTransfer, {
+                              kind: 'track',
+                              trackId: t.id,
+                              label: `${t.artist ? `${t.artist} – ` : ''}${t.title}`,
+                            });
+                          }}
+                          onDragEnd={() => endDrag()}
                           onClick={() => onSelectTrack(t.id)}
                           onDoubleClick={() => onSelectTrack(t.id)}
-                          className={`cursor-pointer transition-colors group text-xs ${
+                          title="In die Deck-Ansicht ziehen (lädt den Track in Deck A) · Klick = auswählen"
+                          className={`cursor-grab active:cursor-grabbing transition-colors group text-xs ${
                             isActive
                               ? 'bg-[#0088ff]/15 border-l-2 border-[#0088ff]'
                               : 'hover:bg-[#141622]'

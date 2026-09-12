@@ -11,8 +11,9 @@
 
 import React, { useState } from 'react';
 import { PaletteClip } from '../types/rekordbox';
-import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, CheckSquare } from 'lucide-react';
+import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, GripVertical } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
+import { beginDrag, endDrag, readDragPayload, resolveDragPayload } from '../dnd/dragPayload';
 
 interface PalettePanelProps {
   isOpen: boolean;
@@ -24,6 +25,8 @@ interface PalettePanelProps {
   selectedClipId: string | null;
   hasSelection: boolean;
   onExpandToDeckView?: () => void;
+  /** Drop a dragged deck selection here to turn it into a clip (Drag & Drop). */
+  onDropSelection?: (startSec: number, endSec: number) => void;
   matchPitch?: boolean;
   onToggleMatchPitch?: (match: boolean) => void;
   targetBpm?: number;
@@ -40,12 +43,23 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   selectedClipId,
   hasSelection,
   onExpandToDeckView,
+  onDropSelection,
   matchPitch = true,
   onToggleMatchPitch,
   targetBpm,
   targetKey,
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  // Drag & drop feedback: which clip is being dragged, and what may be dropped here.
+  const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
+  const [overTrash, setOverTrash] = useState<boolean>(false);
+  const [overPanel, setOverPanel] = useState<boolean>(false);
+
+  const handleClipDragStart = (clip: PaletteClip, e: React.DragEvent) => {
+    setDraggingClipId(clip.id);
+    e.dataTransfer.effectAllowed = 'copyMove';
+    beginDrag(e.dataTransfer, { kind: 'clip', clipId: clip.id, label: clip.name });
+  };
 
   const handlePreviewClip = (clip: PaletteClip, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -108,14 +122,35 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
           )}
         </div>
 
-        {/* Trash button */}
+        {/* Trash button — also a drop target: clip hineinziehen löscht ihn */}
         <button
           onClick={() => {
             if (selectedClipId) onDeleteClip(selectedClipId);
           }}
           disabled={!selectedClipId}
-          className="p-1 text-neutral-400 hover:text-white disabled:opacity-30 transition-colors"
-          title="Ausgewählten Clip löschen"
+          onDragOver={(e) => {
+            const payload = resolveDragPayload(e.dataTransfer);
+            if (payload?.kind !== 'clip') return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            if (!overTrash) setOverTrash(true);
+          }}
+          onDragLeave={() => setOverTrash(false)}
+          onDrop={(e) => {
+            const payload = resolveDragPayload(e.dataTransfer);
+            if (payload?.kind !== 'clip') return;
+            e.preventDefault();
+            e.stopPropagation();
+            setOverTrash(false);
+            onDeleteClip(payload.clipId);
+          }}
+          className={`p-1 transition-colors rounded-xs ${
+            overTrash
+              ? 'bg-[#ff3b30] text-white ring-1 ring-[#ff453a]'
+              : 'text-neutral-400 hover:text-white disabled:opacity-30'
+          }`}
+          title={overTrash ? 'Clip hier ablegen – löschen' : 'Ausgewählten Clip löschen (Clip auch hierher ziehen)'}
         >
           <Trash2 size={13} />
         </button>
@@ -153,13 +188,40 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
         </div>
       </div>
 
-      {/* Clips List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      {/* Clips List — accepts a selection dragged out of the waveform */}
+      <div
+        className={`flex-1 overflow-y-auto p-2 space-y-2 transition-colors ${
+          overPanel ? 'bg-[#0f1a2a] ring-1 ring-inset ring-[#0088ff]/60' : ''
+        }`}
+        onDragOver={(e) => {
+          const payload = resolveDragPayload(e.dataTransfer);
+          if (payload?.kind !== 'selection') return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!overPanel) setOverPanel(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setOverPanel(false);
+        }}
+        onDrop={(e) => {
+          const payload = resolveDragPayload(e.dataTransfer);
+          if (payload?.kind !== 'selection') return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOverPanel(false);
+          onDropSelection?.(payload.start, payload.end);
+        }}
+      >
         {clips.length === 0 ? (
           <div className="h-32 flex flex-col items-center justify-center text-center text-neutral-500 text-xs px-4">
             <span>Keine Clips in der Palette</span>
             <span className="text-[10px] mt-1 text-neutral-600">
               Bereich in der Waveform markieren und unten auf CLONE oder + klicken
+            </span>
+            <span className="text-[10px] mt-1 text-[#00a2ff]/80">
+              Alternativ: den Auswahl-Chip unten rechts in der Timeline hierher ziehen
             </span>
           </div>
         ) : (
@@ -170,12 +232,19 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
             return (
               <div
                 key={clip.id}
+                draggable
+                onDragStart={(e) => handleClipDragStart(clip, e)}
+                onDragEnd={() => {
+                  endDrag();
+                  setDraggingClipId(null);
+                }}
                 onClick={() => onSelectClip(clip)}
-                className={`p-1.5 rounded-xs border transition-all cursor-pointer ${
+                title="In die Deck-Ansicht ziehen (Drop = Einfügen) · Klick = auswählen · Auf Papierkorb ziehen = löschen"
+                className={`p-1.5 rounded-xs border transition-all cursor-grab active:cursor-grabbing ${
                   isSelected
                     ? 'bg-[#181a24] border-[#0088ff] shadow-sm'
                     : 'bg-[#14151a] border-[#22242d] hover:border-[#323543]'
-                }`}
+                } ${draggingClipId === clip.id ? 'opacity-40 border-dashed border-[#00a2ff]' : ''}`}
               >
                 {/* Mini Waveform Display */}
                 <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
@@ -248,6 +317,12 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
               </div>
             );
           })
+        )}
+
+        {overPanel && (
+          <div className="mb-2 text-[10px] text-center text-[#00a2ff] font-semibold border border-dashed border-[#0088ff]/60 rounded-xs py-1.5 bg-[#0088ff]/10">
+            Auswahl hier ablegen → neuer Clip
+          </div>
         )}
 
         {/* Bottom "+" Button to add clip */}

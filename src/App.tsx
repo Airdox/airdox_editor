@@ -15,6 +15,7 @@ import {
   DataOrigin,
   EditHistoryEntry,
   CuePoint,
+  BeatGrid,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import {
@@ -27,6 +28,28 @@ import {
   DbAnalysisRef,
 } from './rekordbox/analysisResolver';
 import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
+import {
+  describeProjection,
+  projectTrackEdits,
+  rebaseTrackAnalysis,
+  toSpanViews,
+  waveformOriginAfterEdit,
+  type ProjectedSpanView,
+  type TrackProjection,
+} from './edit/editModel';
+import {
+  extendGridAcrossGap,
+  locateSpan,
+  projectEditTimeline,
+  retimeBeatNodes,
+  retimeCues,
+  retimeLoops,
+  retimePhrases,
+  type StructuralEditDelta,
+} from './edit/editTimeline';
+import { describeEditWaveform } from './edit/editWaveform';
+import { isFileDrag, isInternalDrag } from './dnd/dragPayload';
+import { planClipDrop } from './edit/editDrop';
 import { audioEngine } from './audio/audioEngine';
 import {
   parseRekordboxXmlAsync,
@@ -259,6 +282,10 @@ async function rebuildTrackFromSerialized(
       clipId: seg.clipId,
       clipBuffer,
       gain: seg.gain,
+      ...(seg.sourceTrackId ? { sourceTrackId: seg.sourceTrackId } : {}),
+      ...(seg.sourceClipStart !== undefined ? { sourceClipStart: seg.sourceClipStart } : {}),
+      ...(seg.tempoRatio !== undefined ? { tempoRatio: seg.tempoRatio } : {}),
+      ...(seg.pitchShift !== undefined ? { pitchShift: seg.pitchShift } : {}),
     });
   }
 
@@ -508,8 +535,118 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [loadDbAnalysisIndex]);
 
+  /** Activates a loaded track in Deck A and (re)builds its project projection. */
+  const loadTrackIntoDeck = (track: TrackModel) => {
+    setActiveTrackId(track.id);
+    resetEditProjection();
+    syncEditProjection(track);
+    setCurrentTime(0);
+    setViewOffset(0);
+    setSelection(null);
+    setIsPlaying(false);
+    audioEngine.stop();
+  };
+
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+
+  // ── Follow-up state of an edit: one derivation for audio + waveform ──────
+  // The edit list on the track is the single source of truth. After every edit
+  // (and after Undo/Redo or a re-opened project) the SAME derivation produces the
+  // working audio, the projected waveform and the project duration, so no view
+  // can contradict the audio. Untouched material keeps its stored ANLZ columns;
+  // only genuinely new material is analysed (and is labelled as such).
+  const tracksRef = useRef<TrackModel[]>(tracks);
+  tracksRef.current = tracks;
+  const paletteClipsRef = useRef<PaletteClip[]>(paletteClips);
+  paletteClipsRef.current = paletteClips;
+  const projectionRef = useRef<TrackProjection | null>(null);
+  const [spanViews, setSpanViews] = useState<ProjectedSpanView[]>([]);
+  /** Copied material keeps its source window, so it can reuse stored columns. */
+  const [clipboardSource, setClipboardSource] = useState<{ trackId: string; sourceStart: number } | null>(null);
+
+  /**
+   * Re-derives the deck's project state from its edit list and publishes it to
+   * every view (audio, waveform, duration, provenance telemetry, edit blocks).
+   */
+  const syncEditProjection = useCallback((track: TrackModel | null): TrackProjection | null => {
+    if (!track) return null;
+    const projection = projectTrackEdits(track, paletteClipsRef.current, tracksRef.current, {
+      createBuffer: (numberOfChannels, length, sampleRate) =>
+        audioEngine.getContext().createBuffer(numberOfChannels, length, sampleRate),
+    });
+    const derived = projection.track;
+    track.duration = derived.duration;
+    track.analysis = derived.analysis;
+    track.analysisVariants = derived.analysisVariants;
+    track.sourceDuration = derived.sourceDuration;
+    track.baseAnalysis = derived.baseAnalysis;
+    track.baseAnalysisVariants = derived.baseAnalysisVariants;
+    track.editInfo = derived.editInfo;
+    projectionRef.current = projection;
+    setSpanViews(toSpanViews(projection.timeline, paletteClipsRef.current));
+    // Decisive follow-up parameters, durably logged (see the log-file contract):
+    // what the projection contains and where the rendered columns came from.
+    logger.info('EDITING', `[Edit-Projektion] „${track.title}“ neu abgeleitet`, {
+      segments: track.workingSegments?.length ?? 0,
+      spans: projection.timeline.spans.length,
+      structuralEdits: projection.timeline.structuralEdits,
+      overlays: projection.timeline.overdubs.length,
+      identity: projection.identity,
+      mediaDurationSec: Number((track.sourceDuration ?? track.duration).toFixed(3)),
+      projectDurationSec: Number(projection.timeline.duration.toFixed(3)),
+      waveformOrigin: waveformOriginAfterEdit(projection),
+      waveformVariants: projection.variants.length,
+      columnsStored: projection.stats
+        ? projection.stats.verbatimColumns + projection.stats.retimedColumns + projection.stats.clipColumns
+        : track.analysis?.length ?? 0,
+      columnsComputed: projection.stats?.computedColumns ?? 0,
+      columnsMissing: projection.stats?.missingColumns ?? 0,
+      columnsSilence: projection.stats?.silenceColumns ?? 0,
+      cues: track.cues.length,
+      loops: track.loops.length,
+      phrases: track.phrases?.length ?? 0,
+      beatNodes: track.beatGrid?.beats?.length ?? 0,
+      audioRendered: !!projection.workingBuffer && projection.workingBuffer !== track.audioBuffer,
+    });
+    if (projection.workingBuffer) {
+      const wasPlaying = audioEngine.getIsPlaying();
+      setWorkingAudioBuffer(projection.workingBuffer);
+      setCurrentTime((prev) => Math.max(0, Math.min(prev, projection.timeline.duration)));
+      if (wasPlaying) {
+        setIsPlaying(false);
+        audioEngine.stop();
+      }
+    }
+    setTracks((prev) => [...prev]);
+    return projection;
+  }, []);
+
+  /** Resets the derived state after a fresh (un-edited) deck load. */
+  const resetEditProjection = useCallback(() => {
+    projectionRef.current = null;
+    setSpanViews([]);
+  }, []);
+
+  /**
+   * Maps a project-time window back onto the pristine source material. It only
+   * returns a source window when the whole selection lives inside one original
+   * span — that is the exact condition under which stored ANLZ columns may be
+   * reused instead of being recomputed from audio.
+   */
+  const mapWindowToSource = (
+    track: TrackModel | null,
+    startSec: number,
+    endSec: number
+  ): { trackId: string; sourceStart: number } | null => {
+    const timeline = projectionRef.current?.timeline;
+    if (!track || !timeline) return null;
+    const head = locateSpan(timeline, startSec);
+    const tail = locateSpan(timeline, Math.max(startSec, endSec - 1e-6));
+    if (!head || !tail) return null;
+    if (head.span.kind !== 'original' || tail.span !== head.span) return null;
+    return { trackId: track.id, sourceStart: head.span.sourceStart + head.offset };
+  };
 
   // Stringent empty project: no demo bootstrap. The deck starts empty and
   // only genuine Rekordbox/local data loads it (XML-exclusive guarantee:
@@ -771,35 +908,78 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
+    // Fresh analysis data for a deck that may already carry a composite: drop the
+    // frozen base so the projection re-freezes from the newly applied ANLZ arrays
+    // instead of projecting on top of the previous composite.
+    const rebased = rebaseTrackAnalysis(extractedTrack);
     setTracks((prev) => {
-      const idx = prev.findIndex((t) => t.id === extractedTrack.id);
+      const idx = prev.findIndex((t) => t.id === rebased.id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = extractedTrack;
+        next[idx] = rebased;
         return next;
       }
-      return [extractedTrack, ...prev];
+      return [rebased, ...prev];
     });
-    setActiveTrackId(extractedTrack.id);
-    if (extractedTrack.audioBuffer) {
-      setWorkingAudioBuffer(extractedTrack.audioBuffer);
+    setActiveTrackId(rebased.id);
+    if (rebased.audioBuffer) {
+      setWorkingAudioBuffer(rebased.audioBuffer);
     }
+    syncEditProjection(rebased);
   };
 
   // Snapshot current state for Undo (the beat grid is included so manual
   // grid edits stay reversible and the original grid stays traceable).
-  const pushHistorySnapshot = (desc: string) => {
-    if (!activeTrack) return;
-    const snapshot: EditHistoryEntry = {
-      description: desc,
+  /**
+   * Shallow snapshot of the edit list. Segment `clipBuffer`s are shared, never
+   * deep-copied: a `JSON.parse(JSON.stringify(...))` turned every AudioBuffer
+   * into `{}`, so Undo silently destroyed inserted clip material.
+   */
+  const snapshotSegments = (list: EditSegment[]): EditSegment[] => (list ?? []).map((s) => ({ ...s }));
+  const snapshotGrid = (grid: BeatGrid): BeatGrid => ({
+    ...grid,
+    beats: (grid?.beats ?? []).map((node) => ({ ...node })),
+  });
+
+  /**
+   * One snapshot shape for Undo, Redo and the undo-stack push: the edit list plus
+   * every marker the edit moved. The beat grid is included so manual grid edits
+   * stay reversible and the original grid stays traceable. Audio and waveform are
+   * NOT snapshotted — they are re-derived from the restored edit list.
+   */
+  const makeHistorySnapshot = (description: string): EditHistoryEntry | null => {
+    if (!activeTrack) return null;
+    return {
+      description,
       timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      segments: snapshotSegments(activeTrack.workingSegments),
       selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
+      cues: (activeTrack.cues ?? []).map((c) => ({ ...c })),
+      loops: (activeTrack.loops ?? []).map((l) => ({ ...l })),
+      phrases: (activeTrack.phrases ?? []).map((p) => ({ ...p })),
+      beatGrid: snapshotGrid(activeTrack.beatGrid),
     };
+  };
+
+  // Snapshot current state for Undo.
+  const pushHistorySnapshot = (desc: string) => {
+    const snapshot = makeHistorySnapshot(desc);
+    if (!snapshot) return;
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
     setRedoStack([]);
+  };
+
+  /** Restores one snapshot and re-derives every follow-up state from it. */
+  const restoreHistorySnapshot = (snapshot: EditHistoryEntry, track: TrackModel) => {
+    track.workingSegments = snapshotSegments(snapshot.segments);
+    track.cues = (snapshot.cues ?? []).map((c) => ({ ...c }));
+    if (snapshot.loops) track.loops = snapshot.loops.map((l) => ({ ...l }));
+    if (snapshot.phrases) track.phrases = snapshot.phrases.map((p) => ({ ...p }));
+    if (snapshot.beatGrid) track.beatGrid = snapshotGrid(snapshot.beatGrid);
+    setSelection(snapshot.selection);
+    // Audio + waveform are never restored from a stale copy: they are projected
+    // from the restored edit list, which keeps Undo exactly reversible.
+    syncEditProjection(track);
   };
 
   // Undo / Redo
@@ -809,30 +989,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setUndoStack((prev) => prev.slice(0, -1));
 
     // Push current to redo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Undo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
-    };
-    setRedoStack((prev) => [...prev, currentSnapshot]);
-
-    // Restore
-    activeTrack.workingSegments = previous.segments;
-    activeTrack.cues = previous.cues;
-    if (previous.beatGrid) activeTrack.beatGrid = previous.beatGrid;
-    setSelection(previous.selection);
-
-    // Audio re-render only when audio exists; metadata-only tracks (e.g.
-    // grid edits without readable originals) still undo their model state.
-    if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
-      setWorkingAudioBuffer(reRendered);
-    } else {
-      setTracks((prev) => [...prev]);
-    }
+    const currentSnapshot = makeHistorySnapshot('Before Undo');
+    if (currentSnapshot) setRedoStack((prev) => [...prev, currentSnapshot]);
+    restoreHistorySnapshot(previous, activeTrack);
   };
 
   const handleRedo = () => {
@@ -841,27 +1000,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setRedoStack((prev) => prev.slice(0, -1));
 
     // Push current to undo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Redo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      beatGrid: JSON.parse(JSON.stringify(activeTrack.beatGrid)),
-    };
-    setUndoStack((prev) => [...prev, currentSnapshot]);
-
-    activeTrack.workingSegments = next.segments;
-    activeTrack.cues = next.cues;
-    if (next.beatGrid) activeTrack.beatGrid = next.beatGrid;
-    setSelection(next.selection);
-
-    if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
-      setWorkingAudioBuffer(reRendered);
-    } else {
-      setTracks((prev) => [...prev]);
-    }
+    const currentSnapshot = makeHistorySnapshot('Before Redo');
+    if (currentSnapshot) setUndoStack((prev) => [...prev, currentSnapshot]);
+    restoreHistorySnapshot(next, activeTrack);
   };
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
@@ -931,21 +1072,149 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setSelection(null);
   };
 
+  /**
+   * Builds one structural edit segment. `source` carries the provenance that
+   * lets the waveform compositor decide between copying stored ANLZ columns and
+   * computing new ones (tempoRatio/pitchShift ≠ untouched ⇒ must compute).
+   */
+  type ClipSourceInfo = {
+    clipId?: string;
+    sourceTrackId?: string;
+    sourceClipStart?: number;
+    sourceStart?: number;
+    tempoRatio?: number;
+    pitchShift?: number;
+  };
+
+  const makeSegment = (
+    type: EditSegment['type'],
+    projectStart: number,
+    projectDuration: number,
+    buffer: AudioBuffer | null,
+    source: ClipSourceInfo = {}
+  ): EditSegment => ({
+    id: `${type.toLowerCase()}-${Date.now()}-${Math.round(projectStart * 1000)}`,
+    type,
+    trackId: activeTrack?.id ?? '',
+    sourceStart: source.sourceStart ?? 0,
+    sourceEnd: (source.sourceStart ?? 0) + projectDuration,
+    projectStart,
+    projectDuration,
+    clipId: source.clipId,
+    clipBuffer: buffer ?? undefined,
+    gain: 1.0,
+    sourceTrackId: source.sourceTrackId,
+    sourceClipStart: source.sourceClipStart,
+    tempoRatio: source.tempoRatio ?? 1.0,
+    pitchShift: source.pitchShift ?? 0,
+  });
+
+  /**
+   * The single path every edit takes: append the segment, re-time the follow-up
+   * state (cues, loops, phrases, beatgrid) and re-derive audio + waveform.
+   */
+  const commitSegmentEdit = (
+    track: TrackModel,
+    segment: EditSegment,
+    edit: StructuralEditDelta | null,
+    insertWindow: { start: number; end: number } | null
+  ): { projection: TrackProjection | null; retimed: { cues: number; dropped: number; loops: number; phrases: number; beats: number; gridFilled: number } } => {
+    track.workingSegments = [...(track.workingSegments ?? []), segment];
+
+    const retimed = { cues: 0, dropped: 0, loops: 0, phrases: 0, beats: 0, gridFilled: 0 };
+    if (edit) {
+      const cueRes = retimeCues(track.cues ?? [], edit);
+      track.cues = cueRes.cues;
+      const loopRes = retimeLoops(track.loops ?? [], edit);
+      track.loops = loopRes.loops;
+      const meter = track.beatGrid?.meter ?? 4;
+      const spb = 60.0 / (track.beatGrid?.bpm || track.bpm || 120);
+      const phraseRes = retimePhrases(track.phrases ?? [], edit, spb * meter);
+      track.phrases = phraseRes.phrases;
+
+      const hadNodes = (track.beatGrid?.beats?.length ?? 0) > 0;
+      const beatRes = retimeBeatNodes(track.beatGrid?.beats ?? [], edit);
+      let beats = beatRes.beats;
+      if (hadNodes && insertWindow) {
+        // Only a deck with an imported grid gets the inserted window covered —
+        // a missing PQTZ stays visibly missing and is never manufactured.
+        const ext = extendGridAcrossGap(
+          beats,
+          insertWindow.start,
+          insertWindow.end,
+          track.beatGrid?.bpm || track.bpm || 120,
+          meter,
+          track.beatGrid?.firstBeat ?? 0
+        );
+        beats = ext.beats;
+        retimed.gridFilled = ext.generated;
+      }
+      const baseGrid = track.beatGrid ?? { firstBeat: 0, bpm: track.bpm, meter, beats: [], origin: track.origin };
+      track.beatGrid = {
+        ...baseGrid,
+        beats,
+        origin:
+          edit.mode === 'insert' || edit.mode === 'remove' ? DataOrigin.USER_EDIT : baseGrid.origin,
+      };
+
+      retimed.cues = cueRes.moved;
+      retimed.dropped = cueRes.dropped + loopRes.dropped + phraseRes.dropped;
+      retimed.loops = loopRes.loops.length;
+      retimed.phrases = phraseRes.phrases.length;
+      retimed.beats = beatRes.beats.length;
+    }
+
+    const projection = syncEditProjection(track);
+    return { projection, retimed };
+  };
+
+  /** Feedback text: what the projected waveform is actually made of. */
+  const waveformFollowUpNote = (projection: TrackProjection | null): string => {
+    if (!projection) return '';
+    if (projection.identity) {
+      return 'Wellenform: unbedarft – Projekt entspricht dem Original (keine Neu-Berechnung nötig).';
+    }
+    return `Wellenform-Neuberechnung: ${describeEditWaveform(
+      projection.stats!,
+      projection.timeline.duration
+    )}.`;
+  };
+
   // Add selection to Palette (CLONE or '+' button)
-  const handleAddSelectionToPalette = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
+  /**
+   * The palette button in the bottom bar is wired straight to onClick, so this
+   * handler can receive the click event where a time is expected. A non-numeric
+   * argument therefore means "use the current selection" — otherwise the guard
+   * `!(to > from)` trips on a MouseEvent and CLONE silently does nothing.
+   */
+  const handleAddSelectionToPalette = (
+    startSec?: number | { type?: string },
+    endSec?: number | { type?: string }
+  ) => {
+    const from = typeof startSec === 'number' ? startSec : selection?.start;
+    const to = typeof endSec === 'number' ? endSec : selection?.end;
+    if (from === undefined || to === undefined || !activeTrack || !workingAudioBuffer) return;
+    if (!(to > from)) return;
+    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, from, to);
     const newClipId = `clip-${Date.now()}`;
+    // Keep the source window when the copied range is genuine original material:
+    // a clip inserted from it can then reuse the stored ANLZ columns verbatim.
+    const sourceWindow = mapWindowToSource(activeTrack, from, to);
+    // A bar is FOUR beats: secondsPerBeat * 4. The previous formula divided by
+    // the beat length instead of multiplying, which labelled a 2 s clip as
+    // 17.3 Bars and even persisted that wrong number into saved projects.
+    const secondsPerBeat = 60 / (activeTrack.beatGrid?.bpm || activeTrack.bpm || 120);
+    const barsOfWindow = (to - from) / (secondsPerBeat * 4);
     const newClip: PaletteClip = {
       id: newClipId,
-      name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
-      sourceTrackId: activeTrack.id,
+      name: `${activeTrack.title} (${barsOfWindow.toFixed(1)} Bars)`,
+      sourceTrackId: sourceWindow?.trackId ?? activeTrack.id,
       sourceTrackName: activeTrack.title,
-      sourceStart: selection.start,
-      sourceEnd: selection.end,
-      duration: selection.duration,
-      beats: Math.round(selection.beatsCount),
-      bars: selection.barsCount,
+      sourceStart: sourceWindow ? sourceWindow.sourceStart : from,
+      sourceEnd: sourceWindow ? sourceWindow.sourceStart + (to - from) : to,
+      duration: to - from,
+      beats: Math.round((to - from) / secondsPerBeat),
+      bars: barsOfWindow,
       bpm: activeTrack.bpm,
       key: activeTrack.key,
       color: '#00a2ff',
@@ -954,16 +1223,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       origin: DataOrigin.PROJECT,
     };
 
-    setPaletteClips((prev) => [...prev, newClip]);
+    setPaletteClips((prev) => {
+      const next = [...prev, newClip];
+      paletteClipsRef.current = next;
+      return next;
+    });
     setSelectedClipId(newClipId);
     if (!paletteOpen) setPaletteOpen(true);
   };
 
-  // Copy selection
+  // Copy selection (with its source window, for verbatim column reuse on paste)
   const handleCopy = () => {
-    if (!selection || !workingAudioBuffer) return;
+    if (!selection || !workingAudioBuffer || !activeTrack) return;
     const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
     setClipboardBuffer(sliced);
+    setClipboardSource(mapWindowToSource(activeTrack, selection.start, selection.end));
   };
 
   // Cut selection
@@ -973,71 +1247,177 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     handleDelete();
   };
 
-  // Paste at playhead
-  const handlePaste = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
+  /** Inserts the clipboard at the playhead (paste == insert on the timeline). */
+  const pasteClipboardAt = (projectStart: number) => {
+    if (!clipboardBuffer || !activeTrack) return;
     pushHistorySnapshot('Paste');
-
-    const pasteDuration = clipboardBuffer.duration;
-    const newSeg: EditSegment = {
-      id: `paste-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: pasteDuration,
-      projectStart: currentTime,
-      projectDuration: pasteDuration,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
+    const dur = clipboardBuffer.duration;
+    const seg = makeSegment('INSERT', projectStart, dur, clipboardBuffer, {
+      sourceTrackId: clipboardSource?.trackId,
+      sourceClipStart: clipboardSource?.sourceStart,
+      tempoRatio: 1.0,
+      pitchShift: 0,
+    });
+    const { projection, retimed } = commitSegmentEdit(
+      activeTrack,
+      seg,
+      { mode: 'insert', start: projectStart, end: projectStart + dur, delta: dur },
+      { start: projectStart, end: projectStart + dur }
+    );
+    showOperationFeedback({
+      title: 'Zwischenablage eingefügt (Insert)',
+      operationType: 'INSERT',
+      description:
+        `${dur.toFixed(3)}s an Position ${projectStart.toFixed(3)}s eingefügt; folgendes Material rückt um +${dur.toFixed(3)}s. ` +
+        (clipboardSource
+          ? 'Quelle: Originalmaterial – gespeicherte Wellenform-Spalten werden übernommen.'
+          : 'Quelle: gemischtes Material – Spalten werden aus dem Edit-Audio berechnet.') +
+        ` ${waveformFollowUpNote(projection)}` +
+        ` Verschoben: ${retimed.cues} Cues, ${retimed.beats} Beat-Knoten${retimed.gridFilled ? `, ${retimed.gridFilled} Grid-Füllbeats im neuen Bereich` : ''}.`,
+      timeRangeSec: { start: projectStart, end: projectStart + dur, duration: dur },
+      shiftedCuesCount: retimed.cues,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
   };
 
-  // Insert (shifts timeline and subsequent markers)
-  const handleInsert = () => {
-    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Insert');
+  const handlePaste = () => pasteClipboardAt(currentTime);
+  const handleInsert = () => pasteClipboardAt(currentTime);
 
-    const shiftAmount = clipboardBuffer.duration;
-    const insertPos = currentTime;
-
-    // Mathematically shift cues occurring after insert position
-    activeTrack.cues = activeTrack.cues.map((c) => {
-      if (c.position >= insertPos) {
-        return { ...c, position: c.position + shiftAmount };
-      }
-      return c;
-    });
-
-    const newSeg: EditSegment = {
-      id: `insert-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: shiftAmount,
-      projectStart: insertPos,
-      projectDuration: shiftAmount,
-      clipBuffer: clipboardBuffer,
-      gain: 1.0,
+  /**
+   * Drag & drop from the clip palette onto the deck timeline. The drop position
+   * decides where the material lands; the modifiers decide what happens to the
+   * material that was there before (insert / replace / overdub). Every mode runs
+   * through the same projection, so audio, waveform, cues and grid stay aligned.
+   */
+  const handleDropClipOnDeck = (
+    clipId: string,
+    projectStart: number,
+    mode: 'insert' | 'replace' | 'overdub',
+    windowEnd?: number
+  ) => {
+    const clip = paletteClips.find((c) => c.id === clipId);
+    if (!clip || !activeTrack) {
+      alert('Kein Deck-Track geladen – Clip kann nicht eingefügt werden.');
+      return;
+    }
+    if (!clip.audioBuffer) {
+      alert('Der Clip enthält keine Audiodaten (Originaldatei nicht lesbar?).');
+      return;
+    }
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const tempoRatio = adapted.tempoRatio;
+    const pitchShift = adapted.semitonesShifted;
+    const source = {
+      clipId: clip.id,
+      sourceTrackId: clip.sourceTrackId,
+      sourceClipStart: clip.sourceStart,
+      tempoRatio,
+      pitchShift,
     };
+    // The drop's geometry (window, length change, segment type) is derived by one
+    // pure planner, so the pointer handling and the projection agree exactly.
+    const plan = planClipDrop({
+      mode,
+      dropTime: projectStart,
+      clipDuration: adapted.newDuration,
+      timelineDuration: projectionRef.current?.timeline.duration ?? activeTrack.duration,
+      windowEnd,
+    });
+    const position = plan.projectStart;
+    const dur = plan.projectDuration;
+    pushHistorySnapshot(mode === 'insert' ? 'Drop: Insert Clip' : mode === 'replace' ? 'Drop: Replace mit Clip' : 'Drop: Overdub');
 
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
+    if (mode === 'insert') {
+      const seg = makeSegment('INSERT', position, dur, adapted.adaptedBuffer, source);
+      const { projection, retimed } = commitSegmentEdit(activeTrack, seg, plan.delta, plan.window);
+      showOperationFeedback({
+        title: 'Clip per Drag & Drop eingefügt',
+        operationType: 'INSERT',
+        description:
+          `Clip „${clip.name}" an ${position.toFixed(3)}s eingefügt (Drop auf der Timeline). ${plan.note} ` +
+          `Tempo ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${tempoRatio.toFixed(3)}×). ` +
+          `${waveformFollowUpNote(projection)} ` +
+          `Verschoben: ${retimed.cues} Cues, ${retimed.beats} Beat-Knoten${retimed.gridFilled ? `, ${retimed.gridFilled} Füllbeats` : ''}.` +
+          (adapted.semitonesShifted !== 0 ? ` Tonhöhe ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} ST (${adapted.harmonicRelation}).` : ''),
+        timeRangeSec: { start: position, end: position + dur, duration: dur },
+        shiftedCuesCount: retimed.cues,
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
+    if (mode === 'replace') {
+      const seg = makeSegment('REPLACE', position, dur, adapted.adaptedBuffer, source);
+      const { projection } = commitSegmentEdit(activeTrack, seg, plan.delta, null);
+      showOperationFeedback({
+        title: 'Clip per Drag & Drop: Bereich ersetzt',
+        operationType: 'REPLACE',
+        description:
+          `Bereich durch Clip „${clip.name}" ersetzt (Drop auf der Timeline). ${plan.note} ` +
+          `${waveformFollowUpNote(projection)}`,
+        timeRangeSec: plan.window ? { start: plan.window.start, end: plan.window.end, duration: dur } : undefined,
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
+    const seg = makeSegment('OVERDUB', position, dur, adapted.adaptedBuffer, source);
+    const { projection } = commitSegmentEdit(activeTrack, seg, plan.delta, null);
     showOperationFeedback({
-      title: 'Audio Segment eingefügt (Insert)',
+      title: 'Clip per Drag & Drop überlagert (Overdub)',
+      operationType: 'OVERDUB',
+      description:
+        `Clip „${clip.name}" über der Timeline gemischt (Drop). ${plan.note} ` +
+        `${waveformFollowUpNote(projection)}`,
+      timeRangeSec: plan.window ? { start: plan.window.start, end: plan.window.end, duration: dur } : undefined,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  /** Drag & drop of a collection/browser row onto the deck: loads it into Deck A. */
+  const handleDropTrackOnDeck = (trackId: string) => {
+    const loaded = tracks.find((t) => t.id === trackId);
+    if (loaded) {
+      loadTrackIntoDeck(loaded);
+      return;
+    }
+    const def = xmlImportedTracks.find((t) => t.id === trackId);
+    if (def) {
+      void handleSelectTrackFromXml(def);
+      return;
+    }
+    alert('Das gezogene Element gehört zu keiner geladenen Sammlung.');
+  };
+
+  /** Dragging an inserted clip block along the timeline (move, not re-insert). */
+  const handleMoveClipSegment = (segmentId: string, newProjectStart: number) => {
+    if (!activeTrack) return;
+    const seg = (activeTrack.workingSegments ?? []).find((s) => s.id === segmentId);
+    if (!seg || seg.type !== 'INSERT') return;
+    const oldStart = seg.projectStart;
+    const length = seg.projectDuration;
+    const target = Math.max(0, Math.min(newProjectStart, Math.max(0, (projectionRef.current?.timeline.duration ?? activeTrack.duration) - length)));
+    if (Math.abs(target - oldStart) < 1e-4) return;
+    pushHistorySnapshot('Clip verschoben');
+    const delta = target - oldStart;
+    activeTrack.workingSegments = (activeTrack.workingSegments ?? []).map((s) =>
+      s.id === segmentId ? { ...s, projectStart: target } : s
+    );
+    // Markers that belong to the moved clip follow it; the rest of the project
+    // keeps its positions (a move changes no lengths).
+    activeTrack.cues = retimeCues(activeTrack.cues ?? [], { mode: 'move', start: oldStart, end: oldStart + length, delta }).cues;
+    const projection = syncEditProjection(activeTrack);
+    showOperationFeedback({
+      title: 'Clip verschoben',
       operationType: 'INSERT',
-      description: `Audio-Material (${shiftAmount.toFixed(3)}s) an Playhead-Position ${insertPos.toFixed(3)}s eingefügt. Nachfolgende Cues und Wellenform wurden um +${shiftAmount.toFixed(3)}s verschoben.`,
-      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
-      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
+      description:
+        `Clip von ${oldStart.toFixed(3)}s nach ${target.toFixed(3)}s verschoben (${delta > 0 ? '+' : ''}${delta.toFixed(3)}s). ` +
+        `Wellenform und Audio wurden aus den Segmenten neu projiziert. ${waveformFollowUpNote(projection)}`,
+      timeRangeSec: { start: target, end: target + length, duration: length },
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
@@ -1053,154 +1433,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       alert('Der Clip enthält keine Audiodaten.');
       return;
     }
-
-    pushHistorySnapshot('Insert Clip');
-
-    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const shiftAmount = adapted.newDuration;
-    const insertPos = currentTime;
-
-    // Shift cues occurring after insert position
-    activeTrack.cues = activeTrack.cues.map((c) => {
-      if (c.position >= insertPos) {
-        return { ...c, position: c.position + shiftAmount };
-      }
-      return c;
-    });
-
-    const newSeg: EditSegment = {
-      id: `insert-clip-${Date.now()}`,
-      type: 'INSERT',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: shiftAmount,
-      projectStart: insertPos,
-      projectDuration: shiftAmount,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, newSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Clip in Deck A eingefügt (Insert)',
-      operationType: 'INSERT',
-      description: `Clip "${clip.name}" an Position ${insertPos.toFixed(3)}s eingefügt. Tempo: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
-          : matchPitchOnInsert
-          ? 'Tonhöhe: Harmonisch synchronisiert.'
-          : 'Tonhöhe: Original beibehalten (Key Sync aus).'
-      }`,
-      timeRangeSec: { start: insertPos, end: insertPos + shiftAmount, duration: shiftAmount },
-      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
+    handleDropClipOnDeck(clip.id, currentTime, 'insert');
   };
 
   // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
   const handleReplaceDeckAWithClip = (clip: PaletteClip) => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
-    if (!clip.audioBuffer) {
-      alert('Der ausgewählte Clip enthält keine Audiodaten.');
-      return;
-    }
-
-    pushHistorySnapshot('Replace with Clip');
-
-    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const replaceSeg: EditSegment = {
-      id: `replace-${Date.now()}`,
-      type: 'REPLACE',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: Math.min(adapted.newDuration, selection.duration),
-      projectStart: selection.start,
-      projectDuration: selection.duration,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, replaceSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
-      operationType: 'REPLACE',
-      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${clip.name}" ersetzt. Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe angepasst: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne (${adapted.harmonicRelation}).`
-          : matchPitchOnInsert
-          ? 'Tonhöhe: Harmonisch kompatibel.'
-          : 'Tonhöhe: Original beibehalten.'
-      }`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
+    handleDropClipOnDeck(clip.id, selection.start, 'replace', selection.end);
   };
 
   // Overdub selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
   const handleOverdubDeckAWithClip = (clip: PaletteClip) => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
-    if (!clip.audioBuffer) {
-      alert('Der ausgewählte Clip enthält keine Audiodaten.');
-      return;
-    }
-
-    pushHistorySnapshot('Overdub with Clip');
-
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-
-    const overdubSeg: EditSegment = {
-      id: `overdub-${Date.now()}`,
-      type: 'OVERDUB',
-      trackId: activeTrack.id,
-      sourceStart: 0,
-      sourceEnd: Math.min(adapted.newDuration, selection.duration),
-      projectStart: selection.start,
-      projectDuration: selection.duration,
-      clipId: clip.id,
-      clipBuffer: adapted.adaptedBuffer,
-      gain: 1.0,
-    };
-
-    const updatedSegments = [...activeTrack.workingSegments, overdubSeg];
-    activeTrack.workingSegments = updatedSegments;
-
-    const rendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer!, updatedSegments);
-    setWorkingAudioBuffer(rendered);
-
-    showOperationFeedback({
-      title: 'Deck A überlagert (Overdub mit Clip)',
-      operationType: 'OVERDUB',
-      description: `Clip "${clip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte). Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
-        adapted.semitonesShifted !== 0
-          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
-          : 'Tonhöhe: Harmonisch kompatibel.'
-      }`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
+    handleDropClipOnDeck(clip.id, selection.start, 'overdub', selection.end);
   };
 
   // Replace selection with active Palette clip
@@ -1232,52 +1477,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     const delDuration = selection.duration;
     const delStart = selection.start;
-
-    // Shift cues occurring after delete
-    activeTrack.cues = activeTrack.cues
-      .filter((c) => c.position < delStart || c.position > selection.end)
-      .map((c) => {
-        if (c.position > selection.end) {
-          return { ...c, position: Math.max(0, c.position - delDuration) };
-        }
-        return c;
-      });
-
-    // Create a new buffer with that duration removed
-    const audioCtx = audioEngine.getContext();
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(delStart * rate);
-    const endIdx = Math.floor(selection.end * rate);
-    const delSamples = endIdx - startIdx;
-    const newLength = Math.max(1, workingAudioBuffer.length - delSamples);
-
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      newLength,
-      rate
+    const seg = makeSegment('CUT', delStart, delDuration, null);
+    const { projection, retimed } = commitSegmentEdit(
+      activeTrack,
+      seg,
+      { mode: 'remove', start: delStart, end: selection.end, delta: -delDuration },
+      null
     );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src.subarray(0, startIdx), 0);
-      dest.set(src.subarray(endIdx), startIdx);
-    }
-
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.duration = newBuffer.duration;
-    activeTrack.analysis = isRekordboxOrigin(activeTrack.origin)
-      ? null
-      : analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
-    if (isRekordboxOrigin(activeTrack.origin)) activeTrack.analysisVariants = [];
 
     showOperationFeedback({
       title: 'Auswahl gelöscht (Delete)',
       operationType: 'DELETE',
-      description: `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${delDuration.toFixed(3)}s nach vorne gerückt.`,
+      description:
+        `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht; nachfolgendes Material rückt um -${delDuration.toFixed(3)}s nach vorne. ` +
+        `Nicht-destruktiv: Das Original bleibt unverändert, der Schnitt sitzt in der Edit-Liste und ist per Undo zurücknehmbar. ` +
+        `Marker: ${retimed.cues} verschoben, ${retimed.dropped} verworfen. ` +
+        `${waveformFollowUpNote(projection)}`,
       timeRangeSec: { start: delStart, end: selection.end, duration: delDuration },
       barsCount: selection.barsCount,
       beatsCount: selection.beatsCount,
+      shiftedCuesCount: retimed.cues,
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
@@ -1290,37 +1509,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!selection || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Clear');
 
-    const rate = workingAudioBuffer.sampleRate;
-    const startIdx = Math.floor(selection.start * rate);
-    const endIdx = Math.floor(selection.end * rate);
-
-    const audioCtx = audioEngine.getContext();
-    const newBuffer = audioCtx.createBuffer(
-      workingAudioBuffer.numberOfChannels,
-      workingAudioBuffer.length,
-      rate
+    const seg = makeSegment('CLEAR', selection.start, selection.duration, null);
+    const { projection } = commitSegmentEdit(
+      activeTrack,
+      seg,
+      { mode: 'clear', start: selection.start, end: selection.end, delta: 0 },
+      null
     );
-
-    for (let ch = 0; ch < workingAudioBuffer.numberOfChannels; ch++) {
-      const src = workingAudioBuffer.getChannelData(ch);
-      const dest = newBuffer.getChannelData(ch);
-      dest.set(src);
-      // Zero out range
-      for (let i = startIdx; i < endIdx && i < dest.length; i++) {
-        dest[i] = 0;
-      }
-    }
-
-    setWorkingAudioBuffer(newBuffer);
-    activeTrack.analysis = isRekordboxOrigin(activeTrack.origin)
-      ? null
-      : analyzeAudioBuffer(newBuffer, DataOrigin.PROJECT);
-    if (isRekordboxOrigin(activeTrack.origin)) activeTrack.analysisVariants = [];
 
     showOperationFeedback({
       title: 'Bereich stummgeschaltet (Clear / Mute)',
       operationType: 'CLEAR',
-      description: `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet. Timeline-Dauer und Beatgrid-Synchronisation unverändert erhalten.`,
+      description:
+        `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet – als Edit-Segment, nicht durch Überschreiben des Arbeits-Audios. ` +
+        `Timeline-Dauer und Beatgrid-Synchronisation bleiben erhalten. ` +
+        `Die Wellenform zeigt in diesem Bereich echte Stille statt der gespeicherten Peaks. ${waveformFollowUpNote(projection)}`,
       timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
       barsCount: selection.barsCount,
       beatsCount: selection.beatsCount,
@@ -1738,6 +1941,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
+      // Freeze the pristine ANLZ/audio state as the projection base of this deck
+      // and start from an empty edit list (project === original).
+      resetEditProjection();
+      syncEditProjection(loadedTrack);
 
       if (!originalAudio) {
         const missingAudio = true;
@@ -1908,20 +2115,36 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           if (isRekordboxOrigin(activeTrack.origin)) {
             withAudio = await tryAutoLoadAnlz(withAudio);
           }
-          const working = audioEngine.renderWorkingAudio(originalAudio, withAudio.workingSegments);
-          setWorkingAudioBuffer(working);
+          // The restored edit list is re-projected (audio AND waveform) from the
+          // freshly loaded ANLZ arrays — never re-analysed from audio, and never
+          // taken over from the previous session's composite.
           setTracks((prev) => prev.map((t) => (t.id === withAudio.id ? withAudio : t)));
+          resetEditProjection();
+          const projection = syncEditProjection(withAudio);
+          setWorkingAudioBuffer(projection?.workingBuffer ?? originalAudio);
+          logger.info('EDITING', '[Projekt] Edit-Projektion nach dem Laden neu abgeleitet', {
+            track: withAudio.title,
+            segments: withAudio.workingSegments?.length ?? 0,
+            projectDurationSec: Number((projection?.timeline.duration ?? withAudio.duration).toFixed(3)),
+            identity: projection?.identity ?? true,
+            waveformOrigin: projection ? waveformOriginAfterEdit(projection) : withAudio.origin,
+            computedColumns: projection?.stats?.computedColumns ?? 0,
+            storedColumns:
+              (projection?.stats?.verbatimColumns ?? 0) +
+              (projection?.stats?.retimedColumns ?? 0) +
+              (projection?.stats?.clipColumns ?? 0),
+          });
         } else if (activeTrack.audioBuffer) {
-          setWorkingAudioBuffer(
-            audioEngine.renderWorkingAudio(activeTrack.audioBuffer, activeTrack.workingSegments)
-          );
+          resetEditProjection();
+          const projection = syncEditProjection(activeTrack);
+          setWorkingAudioBuffer(projection?.workingBuffer ?? activeTrack.audioBuffer);
         }
       }
 
       showOperationFeedback({
         title: 'Projekt geladen',
         operationType: 'EXPORT',
-        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet.`,
+        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet; Audio und Wellenform wurden aus den gespeicherten Edit-Segmenten neu projiziert.`,
         originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
         timestamp: Date.now(),
       });
@@ -1940,8 +2163,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
       const sha256 = audioEngine.computeBufferChecksum(decoded);
 
+      // One id for the track AND its original segment: they must agree, so the
+      // timestamp is sampled once (two Date.now() calls could straddle a tick).
+      const newTrackId = `track-${Date.now()}`;
       const newTrack: TrackModel = {
-        id: `track-${Date.now()}`,
+        id: newTrackId,
         title: file.name.replace(/\.[^/.]+$/, ''),
         artist: 'User Import',
         album: 'Single',
@@ -1977,7 +2203,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           {
             id: `seg-${Date.now()}`,
             type: 'ORIGINAL',
-            trackId: `track-${Date.now()}`,
+            trackId: newTrackId,
             sourceStart: 0,
             sourceEnd: decoded.duration,
             projectStart: 0,
@@ -1990,6 +2216,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setTracks((prev) => [newTrack, ...prev]);
       setActiveTrackId(newTrack.id);
       setWorkingAudioBuffer(decoded);
+      resetEditProjection();
+      syncEditProjection(newTrack);
       setCurrentTime(0);
       setViewOffset(0);
       setIsPlaying(false);
@@ -2036,6 +2264,56 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte Rekordbox XML (.xml) oder Audio (.wav, .mp3, .flac) verwenden. ANLZ wird automatisch über master.db geladen.`);
     }
   };
+
+  /**
+   * Window-level file drop: an external file (XML / audio) may be dropped
+   * anywhere in the app, not only on the waveform. Internal drags (clips,
+   * tracks, selections) are ignored here — their own targets handle them and
+   * stop propagation, so this overlay never steals an edit drop.
+   */
+  const handleDropFileRef = useRef(handleDropFile);
+  handleDropFileRef.current = handleDropFile;
+  const [externalFileDrag, setExternalFileDrag] = useState(false);
+  const dragDepthRef = useRef(0);
+  useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      if (!isFileDrag(e.dataTransfer)) return;
+      if (isInternalDrag()) return;
+      dragDepthRef.current += 1;
+      setExternalFileDrag(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!isFileDrag(e.dataTransfer)) return;
+      if (isInternalDrag()) return;
+      // Prevent the browser default (which would navigate to the file).
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      setExternalFileDrag(true);
+    };
+    const onDragLeave = () => {
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setExternalFileDrag(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      dragDepthRef.current = 0;
+      setExternalFileDrag(false);
+      if (!isFileDrag(e.dataTransfer)) return;
+      if (isInternalDrag()) return;
+      e.preventDefault();
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleDropFileRef.current(file);
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
   useEffect(() => {
@@ -2195,6 +2473,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
+          spans={spanViews}
+          clipInfo={(clipId) => {
+            const clip = paletteClips.find((c) => c.id === clipId);
+            return clip ? { name: clip.name, duration: clip.duration } : null;
+          }}
+          onDropClip={(clipId, projectStart, mode, windowEnd) =>
+            handleDropClipOnDeck(clipId, projectStart, mode, windowEnd)
+          }
+          onDropTrack={handleDropTrackOnDeck}
+          onMoveSpan={handleMoveClipSegment}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
@@ -2212,6 +2500,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             selectedClipId={selectedClipId}
             hasSelection={selection !== null && selection.duration > 0}
             onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
+            onDropSelection={(startSec, endSec) => {
+              // The dropped window is authoritative — it is what the user dragged,
+              // even if the visible selection changed in the meantime.
+              if (endSec - startSec > 0.02) handleAddSelectionToPalette(startSec, endSec);
+            }}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
             targetBpm={activeTrack?.bpm}
@@ -2239,6 +2532,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onInsertClipToDeckA={handleInsertClipToDeckA}
             onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
             onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
+            onDropClipIntoDeckA={(clipId) => {
+              const clip = paletteClips.find((c) => c.id === clipId);
+              if (clip) handleInsertClipToDeckA(clip);
+            }}
             onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
             waveformMode={waveformMode}
           />
@@ -2277,15 +2574,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         tracks={tracks}
         activeTrackId={activeTrackId}
         onSelectTrack={(id) => {
-          setActiveTrackId(id);
           const t = tracks.find((tr) => tr.id === id);
-          if (t && t.audioBuffer) {
-            setWorkingAudioBuffer(t.audioBuffer);
-            setCurrentTime(0);
-            setViewOffset(0);
-            setIsPlaying(false);
-            audioEngine.stop();
-          }
+          if (t) loadTrackIntoDeck(t);
         }}
         onImportXml={() => xmlFileInputRef.current?.click()}
         onImportAudio={() => audioFileInputRef.current?.click()}
@@ -2356,6 +2646,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isOpen={systemLogModalOpen}
         onClose={() => setSystemLogModalOpen(false)}
       />
+
+      {/* Externes File-Drop: eine Datei darf überall im Fenster abgelegt werden */}
+      {externalFileDrag && (
+        <div className="fixed inset-0 z-[90] pointer-events-none flex items-center justify-center bg-[#0088ff]/10">
+          <div className="border-2 border-dashed border-[#00a2ff] rounded-lg bg-[#0b0c0f]/92 px-8 py-6 text-center shadow-2xl">
+            <p className="text-sm font-bold text-white uppercase tracking-wide font-mono">
+              Datei hier ablegen
+            </p>
+            <p className="text-[11px] text-neutral-400 mt-1 font-mono">
+              Rekordbox XML · Audio (WAV / MP3 / FLAC / AIFF / M4A / OGG)
+            </p>
+            <p className="text-[10px] text-[#00a2ff] mt-2 font-mono">
+              Clips und Tracks liegen auf ihren eigenen Zielen: Timeline, Palette, Papierkorb
+            </p>
+            <p className="text-[10px] text-emerald-400 mt-1 font-mono">
+              ORIGINALSCHUTZ: Quellendateien werden nur lesend geöffnet
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

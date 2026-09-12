@@ -18,6 +18,17 @@ import {
   CuePoint,
   DataOrigin,
 } from '../types/rekordbox';
+import type { ProjectedSpanView } from '../edit/editModel';
+import {
+  beginDrag,
+  endDrag,
+  isFileDrag,
+  isInternalDrag,
+  readDragPayload,
+  dropEffectFor,
+  resolveDragPayload,
+  structuralDropMode,
+} from '../dnd/dragPayload';
 import {
   BAR_SHADE_FILL,
   beatIndexAtOrAfter,
@@ -43,7 +54,15 @@ import {
   FolderOpen,
   FileAudio,
   ShieldCheck,
+  MousePointerClick,
 } from 'lucide-react';
+
+/** Colour of the pending drop footprint, keyed by structural drop mode. */
+const DROP_COLORS: Record<'insert' | 'replace' | 'overdub', string> = {
+  insert: '#00a2ff',
+  replace: '#ffb340',
+  overdub: '#d24dff',
+};
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -80,6 +99,21 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
+  /** Drag & drop: a palette clip dropped on the timeline (insert/replace/overdub). */
+  onDropClip?: (
+    clipId: string,
+    projectStart: number,
+    mode: 'insert' | 'replace' | 'overdub',
+    windowEnd?: number
+  ) => void;
+  /** Drag & drop: a collection/browser row dropped on the deck loads it. */
+  onDropTrack?: (trackId: string) => void;
+  /** Duration/name of a clip, needed to preview the drop footprint. */
+  clipInfo?: (clipId: string) => { name: string; duration: number } | null;
+  /** Projected edit spans (audio blocks) drawn under the waveform. */
+  spans?: ProjectedSpanView[];
+  /** Dragging an inserted clip block re-positions it on the timeline. */
+  onMoveSpan?: (segmentId: string, newProjectStart: number) => void;
 }
 
 interface ContextMenuState {
@@ -135,6 +169,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
+  onDropClip,
+  onDropTrack,
+  clipInfo,
+  spans,
+  onMoveSpan,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -144,6 +183,32 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
   const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
+
+  // ── Drag & drop state ────────────────────────────────────────────────────
+  // Kept in refs because the waveform is drawn in a requestAnimationFrame loop:
+  // the ghost follows the pointer without re-creating the render effect.
+  const dropHintRef = useRef<{
+    clipId: string;
+    start: number;
+    end: number;
+    mode: 'insert' | 'replace' | 'overdub';
+    label: string;
+  } | null>(null);
+  const [dropModeLabel, setDropModeLabel] = useState<string | null>(null);
+  const [isClipDragOver, setIsClipDragOver] = useState(false);
+  const [isTrackDragOver, setIsTrackDragOver] = useState(false);
+  const moveDragRef = useRef<{
+    segmentId: string;
+    label: string;
+    grabOffset: number;
+    duration: number;
+    /** Where the block was before this drag — a move to the same spot is a no-op. */
+    sourceStart: number;
+    target: number;
+  } | null>(null);
+  const [movingSegmentId, setMovingSegmentId] = useState<string | null>(null);
+  /** Height of the edit-span strip drawn at the bottom of the waveform. */
+  const SPAN_STRIP_H = 16;
 
   // Crisp canvas: back the CSS box with devicePixelRatio-scaled pixels so the
   // visual lock stays sharp on HiDPI displays instead of a stretched bitmap.
@@ -710,7 +775,90 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 8. Draw Playhead (White vertical hairline)
+      // 8. Edit-Spuren (projizierte Blöcke) + Drop-Vorschau
+      // Die Projektion ist das, was nach einem Drop gilt: Originalblöcke,
+      // Clip-Einschübe, Ersetzungen, Überlagerungen und Stillefenster. Der
+      // Drop-Geist zeigt vorab, welches Fenster ein Drop erzeugt.
+      const stripTop = height - SPAN_STRIP_H;
+      if (spans && spans.length > 0) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(5,6,10,0.72)';
+        ctx.fillRect(0, stripTop, width, SPAN_STRIP_H);
+        for (const span of spans) {
+          const x1 = timeToPixel(span.start, width);
+          const x2 = timeToPixel(span.start + span.duration, width);
+          const w = x2 - x1;
+          if (x2 <= 0 || x1 >= width) continue;
+          const color = span.color;
+          const isMoving = moveDragRef.current?.segmentId === span.segmentId;
+          const isGrabbed = span.segmentId === movingSegmentId;
+          ctx.fillStyle = color + '4d';
+          ctx.fillRect(x1, stripTop + 2, Math.max(1, w), SPAN_STRIP_H - 4);
+          if (span.kind === 'silence') {
+            // Diagonal hatching keeps a muted window visually distinct from audio.
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x1, stripTop + 2, Math.max(1, w), SPAN_STRIP_H - 4);
+            ctx.clip();
+            ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+            ctx.lineWidth = 1;
+            for (let hx = x1 - SPAN_STRIP_H; hx < x2 + SPAN_STRIP_H; hx += 6) {
+              ctx.beginPath();
+              ctx.moveTo(hx, stripTop + SPAN_STRIP_H);
+              ctx.lineTo(hx + SPAN_STRIP_H, stripTop);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+          ctx.strokeStyle = isMoving || isGrabbed ? '#ffffff' : color + 'aa';
+          ctx.lineWidth = isMoving || isGrabbed ? 1.6 : 1;
+          ctx.strokeRect(x1 + 0.5, stripTop + 2.5, Math.max(1, w - 1), SPAN_STRIP_H - 5);
+          if (w > 52) {
+            ctx.fillStyle = color;
+            ctx.font = 'bold 9px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(span.label, x1 + 6, stripTop + SPAN_STRIP_H / 2);
+          }
+          if (span.movable && w > 96) {
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.font = '8px sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText('ziehen = verschieben', x2 - 6, stripTop + SPAN_STRIP_H / 2);
+          }
+        }
+        ctx.restore();
+      }
+      const dropHint = dropHintRef.current;
+      if (dropHint) {
+        ctx.save();
+        const x1 = timeToPixel(dropHint.start, width);
+        const x2 = timeToPixel(dropHint.end, width);
+        const w = Math.max(3, x2 - x1);
+        const color = DROP_COLORS[dropHint.mode] ?? '#00a2ff';
+        ctx.fillStyle = color + '33';
+        ctx.fillRect(x1, 18, w, Math.max(2, stripTop - 18));
+        ctx.strokeStyle = color;
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x1 + 0.5, 18.5, w, Math.max(2, stripTop - 19));
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.fillRect(x1 - 3, stripTop, 6, SPAN_STRIP_H);
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const label = `${dropHint.label} · ${dropHint.mode.toUpperCase()}`;
+        const labelW = ctx.measureText(label).width;
+        const textX = x1 + 8 + labelW > width ? Math.max(4, x1 - 8 - labelW) : x1 + 8;
+        ctx.fillStyle = '#0b0c0f';
+        ctx.fillRect(textX - 4, 22, labelW + 8, 16);
+        ctx.fillStyle = color;
+        ctx.fillText(label, textX, 25);
+        ctx.restore();
+      }
+
+      // 9. Draw Playhead (White vertical hairline)
       const playX = timeToPixel(currentTime, width);
       if (playX >= 0 && playX <= width) {
         ctx.strokeStyle = '#ffffff';
@@ -745,6 +893,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     hoveredTime,
     snapTime,
     timeToPixel,
+    spans,
+    movingSegmentId,
   ]);
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
@@ -772,6 +922,24 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
     }
 
+    // Grab an inserted clip block in the edit strip to move it on the timeline.
+    if (!e.shiftKey && spans && spans.length > 0 && onMoveSpan) {
+      const hit = spanAtPoint(e.clientX, clickY);
+      if (hit && hit.movable) {
+        moveDragRef.current = {
+          segmentId: hit.segmentId,
+          label: hit.label,
+          duration: hit.duration,
+          sourceStart: hit.start,
+          grabOffset: timeAtClientX(e.clientX) - hit.start,
+          target: hit.start,
+        };
+        setMovingSegmentId(hit.segmentId);
+        setContextMenu(null);
+        return;
+      }
+    }
+
     const rawTime = pixelToTime(clickX, rect.width);
     const clickedTime = snapTime(rawTime);
 
@@ -788,6 +956,49 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     }
   };
 
+  // Time under an arbitrary client X coordinate (canvas box, CSS pixels).
+  const timeAtClientX = useCallback(
+    (clientX: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return 0;
+      const rect = canvas.getBoundingClientRect();
+      const px = Math.max(0, Math.min(clientX - rect.left, rect.width));
+      return pixelToTime(px, rect.width);
+    },
+    [pixelToTime]
+  );
+
+  // Which projected edit block sits under the pointer (only the bottom strip).
+  const spanAtPoint = useCallback(
+    (clientX: number, clientY: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !spans || spans.length === 0) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (clientY < rect.height - SPAN_STRIP_H || clientY > rect.height) return null;
+      const t = timeAtClientX(clientX);
+      for (const span of spans) {
+        if (t >= span.start && t <= span.start + span.duration) return span;
+      }
+      return null;
+    },
+    [spans, timeAtClientX]
+  );
+
+  // A span-move drag can end outside the canvas: listen on the window.
+  useEffect(() => {
+    if (!movingSegmentId) return;
+    const finish = () => {
+      const move = moveDragRef.current;
+      moveDragRef.current = null;
+      setMovingSegmentId(null);
+      if (move && onMoveSpan && Math.abs(move.target - move.sourceStart) > 1e-6) {
+        onMoveSpan(move.segmentId, move.target);
+      }
+    };
+    window.addEventListener('mouseup', finish);
+    return () => window.removeEventListener('mouseup', finish);
+  }, [movingSegmentId, onMoveSpan]);
+
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!track) return;
     const canvas = canvasRef.current;
@@ -796,6 +1007,16 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     const currX = e.clientX - rect.left;
     const currY = e.clientY - rect.top;
     const rawTime = pixelToTime(currX, rect.width);
+
+    // A block being dragged in the edit strip: only move it, no selection.
+    const move = moveDragRef.current;
+    if (move) {
+      const target = Math.max(0, snapTime(rawTime - move.grabOffset));
+      if (Math.abs(target - move.target) > 1e-9) {
+        moveDragRef.current = { ...move, target };
+      }
+      return;
+    }
 
     // Track hover position for snap-to-beat guide
     setHoveredTime(rawTime);
@@ -877,25 +1098,121 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       ref={containerRef}
       onWheel={handleWheel}
       onDragOver={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!isDraggingOver) setIsDraggingOver(true);
+        const payload = resolveDragPayload(e.dataTransfer);
+        if (payload?.kind === 'clip') {
+          const usable = !!track && !!onDropClip;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = usable
+            ? dropEffectFor(structuralDropMode(e).mode)
+            : 'none';
+          if (!usable) {
+            // No deck track (or no handler): say why the drop is refused instead of
+            // swallowing it — an unexplained no-op looks like a broken app.
+            dropHintRef.current = null;
+            const why = !onDropClip
+              ? 'Clip-Drop ist hier nicht vorgesehen'
+              : 'Clip-Drop braucht einen geladenen Deck-Track';
+            if (dropModeLabel !== why) setDropModeLabel(why);
+            return;
+          }
+          const mode = structuralDropMode(e).mode;
+          const info = clipInfo?.(payload.clipId) ?? null;
+          const snapped = snapTime(timeAtClientX(e.clientX));
+          const clipDuration = info?.duration ?? 0;
+          const end =
+            mode === 'overdub' && selection && selection.end > snapped
+              ? selection.end
+              : snapped + clipDuration;
+          dropHintRef.current = {
+            clipId: payload.clipId,
+            start: snapped,
+            end,
+            mode,
+            label: info?.name ?? payload.label ?? 'Clip',
+          };
+          const label =
+            mode === 'insert'
+              ? `BEI ${snapped.toFixed(2)} s EINFÜGEN (Alles danach rückt nach rechts)`
+              : mode === 'replace'
+              ? `FENSTER ${snapped.toFixed(2)}–${end.toFixed(2)} s ERSETZEN`
+              : `ÜBER ${snapped.toFixed(2)}–${end.toFixed(2)} s ÜBERLAGERN (Mix)`;
+          if (dropModeLabel !== label) setDropModeLabel(label);
+          if (!isClipDragOver) setIsClipDragOver(true);
+          return;
+        }
+        if (payload?.kind === 'track') {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'link';
+          if (!isTrackDragOver) setIsTrackDragOver(true);
+          return;
+        }
+        if (payload?.kind === 'selection') {
+          // A selection dragged out of the deck: accepted only by the palette.
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          return;
+        }
+        if (onDropFile && isFileDrag(e.dataTransfer)) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!isDraggingOver) setIsDraggingOver(true);
+        }
       }}
       onDragLeave={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingOver(false);
+        if (isDraggingOver) setIsDraggingOver(false);
+        if (isClipDragOver) setIsClipDragOver(false);
+        if (isTrackDragOver) setIsTrackDragOver(false);
       }}
       onDrop={(e) => {
+        const payload = readDragPayload(e.dataTransfer);
+        const hint = dropHintRef.current;
+        dropHintRef.current = null;
         e.preventDefault();
         e.stopPropagation();
+        setDropModeLabel(null);
+        setIsClipDragOver(false);
+        setIsTrackDragOver(false);
         setIsDraggingOver(false);
+        if (payload?.kind === 'clip') {
+          if (track && onDropClip) {
+            const mode = structuralDropMode(e).mode;
+            const info = clipInfo?.(payload.clipId) ?? null;
+            const snapped = snapTime(timeAtClientX(e.clientX));
+            const start = hint && hint.clipId === payload.clipId ? hint.start : snapped;
+            const windowEnd =
+              mode === 'overdub'
+                ? (hint && hint.clipId === payload.clipId
+                    ? hint.end
+                    : selection && selection.end > snapped
+                    ? selection.end
+                    : snapped + (info?.duration ?? 0))
+                : undefined;
+            onDropClip(payload.clipId, start, mode, windowEnd);
+          }
+          return;
+        }
+        if (payload?.kind === 'track') {
+          onDropTrack?.(payload.trackId);
+          return;
+        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }
       }}
       className={`relative flex-1 bg-[#0b0c0f] flex overflow-hidden select-none transition-all ${
-        isDraggingOver ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
+        isClipDragOver
+          ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]'
+          : isTrackDragOver
+          ? 'ring-2 ring-[#10b981] ring-inset bg-[#0b1a16]'
+          : isDraggingOver
+          ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]'
+          : ''
       }`}
     >
       {/* Left side column: BPM display, Memory Cue controls & Zoom controls */}
@@ -1067,12 +1384,57 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
         />
 
+        {/* Pending drop: what this drop would do, and the modifier alternatives */}
+        {dropModeLabel && (
+          <div className="absolute top-1 left-1/2 -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center gap-0.5">
+            <span className="text-[10.5px] font-mono font-semibold text-white bg-[#0088ff]/85 border border-[#4db2ff] px-2 py-0.5 rounded-xs shadow-lg whitespace-nowrap">
+              {dropModeLabel}
+            </span>
+            <span className="text-[9px] font-mono text-neutral-300 bg-[#0b0c0f]/85 border border-[#2d3142] px-1.5 py-0.5 rounded-xs whitespace-nowrap">
+              ohne Modifier = einfügen · Shift/Strg = ersetzen · Alt = überlagern · SchnappRaster: {quantize ? 'Beat' : 'aus'}
+            </span>
+          </div>
+        )}
+
+        {movingSegmentId && (
+          <div className="absolute top-1 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+            <span className="text-[10.5px] font-mono font-semibold text-black bg-[#ffb340] px-2 py-0.5 rounded-xs shadow-lg whitespace-nowrap">
+              Clip-Block verschieben · loslassen zum Umsetzen
+            </span>
+          </div>
+        )}
+
         {/* Top-Left Authentic Rekordbox BPM Badge */}
         {track && (
           <div className="absolute top-1 left-2 z-10 select-none pointer-events-none flex items-center">
             <span className="text-[12px] font-mono font-bold text-white/95 bg-[#12141a]/85 border border-[#2d3142]/80 px-1.5 py-0.5 rounded-xs tracking-wider shadow-sm">
               {track.bpm.toFixed(2)}
             </span>
+          </div>
+        )}
+
+        {/* Selection → palette: drag this chip into the Schnipselpalette */}
+        {track && selection && selection.end - selection.start > 0.02 && (
+          <div
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'copy';
+              beginDrag(e.dataTransfer, {
+                kind: 'selection',
+                start: selection.start,
+                end: selection.end,
+                label: `Auswahl ${selection.start.toFixed(2)}–${selection.end.toFixed(2)} s`,
+              });
+            }}
+            onDragEnd={() => endDrag()}
+            onClick={() => {
+              onAddToPalette(selection.start, selection.end);
+            }}
+            title="Auswahl in die Schnipselpalette ziehen (oder klicken) – Zeitfenster auf der Timeline wird dabei nicht verändert"
+            className="absolute bottom-1.5 right-2 z-20 flex items-center gap-1.5 text-[9.5px] font-mono font-semibold text-[#00a2ff] bg-[#0088ff]/15 border border-[#0088ff]/50 px-1.5 py-0.5 rounded-xs cursor-grab active:cursor-grabbing hover:bg-[#0088ff]/25 select-none"
+          >
+            <MousePointerClick size={10} />
+            AUSWAHL {selection.duration.toFixed(2)} s → PALETTE (ziehen)
           </div>
         )}
 
@@ -1087,7 +1449,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                 Kein Track geladen (Bereit für Import)
               </h3>
               <p className="text-xs text-neutral-400 mb-4 max-w-xs">
-                Ziehe eine <span className="text-[#00a2ff] font-mono font-medium">Rekordbox XML</span> oder <span className="text-white font-mono font-medium">Audiodatei</span> direkt hierher:
+                Ziehe eine <span className="text-[#00a2ff] font-mono font-medium">Rekordbox XML</span>, eine <span className="text-white font-mono font-medium">Audiodatei</span> oder einen <span className="text-emerald-400 font-mono font-medium">Track</span> aus Sammlung/Browser direkt hierher:
               </p>
 
               <div className="flex flex-wrap gap-2 justify-center mb-4">
@@ -1135,6 +1497,21 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               {track.cues.length} CUES
             </span>
             <span className="text-neutral-600">•</span>
+            {track.editInfo && !track.editInfo.isIdentity && (
+              <span className="text-neutral-600">•</span>
+            )}
+            {track.editInfo && !track.editInfo.isIdentity && (
+              <span
+                className="text-[#ffb340] font-semibold"
+                title={`Wellenform der Edit-Timeline: ${track.editInfo.verbatimColumns} Spalten unverändert aus ANLZ, ${track.editInfo.retimedColumns} Spalten neu positioniert (aus gespeicherten ANLZ-Werten aufgerechnet), ${track.editInfo.clipColumns} Spalten aus Clip-ANLZ, ${track.editInfo.computedColumns} Spalten aus Edit-Audio berechnet, ${track.editInfo.silenceColumns} stummgeschaltet, ${track.editInfo.missingColumns} ohne Daten.
+Originale bleiben unverändert; die Projektion wird bei jedem Edit/Undo neu abgeleitet.`}
+              >
+                EDIT-WAVEFORM {track.editInfo.verbatimColumns + track.editInfo.retimedColumns + track.editInfo.clipColumns}/{track.editInfo.columns} AUS ANLZ
+                {track.editInfo.computedColumns > 0
+                  ? ` · ${track.editInfo.computedColumns} BERECHNET`
+                  : ' · KEINE NEUANALYSE'}
+              </span>
+            )}
             {(() => {
               const anl = anlzLookupParts(track);
               return (

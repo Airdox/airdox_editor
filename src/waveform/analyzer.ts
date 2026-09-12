@@ -95,6 +95,110 @@ export function analyzeAudioBuffer(
 }
 
 /**
+ * Peak/band columns of an arbitrary time range at an EXACT column duration.
+ *
+ * This is the analysis primitive of the edit path: after a structural edit only
+ * the material that has no stored columns (a time-stretched clip, a locally
+ * imported file, ...) needs numbers at all, and it needs them on the project's
+ * column grid so they can be spliced into the ANLZ projection without touching a
+ * single imported value. It therefore never replaces, averages or smooths ANLZ
+ * data - the caller marks these columns `COMPUTED` (USER_EDIT) explicitly.
+ *
+ * Pure (Float32Array in/out) so it is unit-testable without WebAudio.
+ */
+export interface RangePeakColumns {
+  length: number;
+  peaks: Float32Array;
+  peaksL: Float32Array;
+  peaksR: Float32Array;
+  lowEnergy: Float32Array;
+  midEnergy: Float32Array;
+  highEnergy: Float32Array;
+  secPerBucket: number;
+  samplesPerBucket: number;
+}
+
+export function analyzeRangeBuckets(
+  channels: { left: Float32Array; right?: Float32Array; sampleRate: number },
+  startSec: number,
+  endSec: number,
+  bucketSeconds: number
+): RangePeakColumns {
+  const left = channels.left;
+  const right = channels.right ?? channels.left;
+  const sampleRate = channels.sampleRate > 0 ? channels.sampleRate : 44100;
+  const bd = bucketSeconds > 0 ? bucketSeconds : 0.005;
+  const safeStart = Math.max(0, Math.min(startSec, endSec));
+  const safeEnd = Math.max(safeStart, Math.min(endSec, left.length / sampleRate));
+  const total = Math.max(1, Math.ceil((safeEnd - safeStart) / bd - 1e-9));
+
+  const peaks = new Float32Array(total);
+  const peaksL = new Float32Array(total);
+  const peaksR = new Float32Array(total);
+  const lowEnergy = new Float32Array(total);
+  const midEnergy = new Float32Array(total);
+  const highEnergy = new Float32Array(total);
+
+  const baseSample = Math.floor(safeStart * sampleRate);
+  const bucketSamples = bd * sampleRate;
+  let prevSL = baseSample > 0 ? left[baseSample - 1] : 0;
+
+  for (let b = 0; b < total; b++) {
+    const from = baseSample + Math.floor(b * bucketSamples);
+    const to = Math.min(left.length, baseSample + Math.floor((b + 1) * bucketSamples));
+    let maxL = 0;
+    let maxR = 0;
+    let lowSum = 0;
+    let midSum = 0;
+    let highSum = 0;
+    let count = 0;
+
+    for (let i = from; i < to; i++) {
+      const sL = left[i];
+      const sR = right[i];
+      const absL = Math.abs(sL);
+      const absR = Math.abs(sR);
+      if (absL > maxL) maxL = absL;
+      if (absR > maxR) maxR = absR;
+
+      // Same zero-phase spectral separation as analyzeAudioBuffer: approximate
+      // band energies of OWN analysis, never presented as Rekordbox values.
+      const diff = Math.abs(sL - prevSL);
+      prevSL = sL;
+      const mag = Math.max(absL, absR);
+      const highVal = Math.min(1.0, diff * 2.8);
+      const lowVal = Math.max(0, mag - diff * 1.5);
+      const midVal = Math.max(0, mag * 0.9 - lowVal * 0.6 - highVal * 0.4);
+      lowSum += lowVal;
+      midSum += midVal;
+      highSum += highVal;
+      count += 1;
+    }
+
+    peaksL[b] = Math.min(1.0, maxL);
+    peaksR[b] = Math.min(1.0, maxR);
+    peaks[b] = Math.min(1.0, Math.max(maxL, maxR));
+    if (count > 0) {
+      lowEnergy[b] = Math.min(1.0, (lowSum / count) * 2.8);
+      midEnergy[b] = Math.min(1.0, (midSum / count) * 3.0);
+      highEnergy[b] = Math.min(1.0, (highSum / count) * 3.8);
+    }
+  }
+
+  return {
+    length: total,
+    peaks,
+    peaksL,
+    peaksR,
+    lowEnergy,
+    midEnergy,
+    highEnergy,
+    secPerBucket: bd,
+    samplesPerBucket: Math.max(1, Math.round(bucketSamples)),
+  };
+}
+
+/**
  * Extracts mini peak profile (e.g. 64 buckets) for Palette clips
  */
 export function extractMiniPeaks(buffer: AudioBuffer, numBuckets: number = 64): number[] {

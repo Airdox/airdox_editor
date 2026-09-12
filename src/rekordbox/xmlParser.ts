@@ -594,21 +594,28 @@ export async function parseRekordboxXmlAsync(
  * Serializes Track Model and edits to Pioneer Rekordbox XML format
  */
 export function exportToRekordboxXml(track: TrackModel): string {
+  // `beatGrid`, `loops`, `cues`, `album` and `key` are all optional on a
+  // TrackModel (e.g. a metadata-only Rekordbox record). The export must state
+  // what it has instead of crashing on a valid, sparse model.
   const bg = track.beatGrid;
+  const firstBeat = bg?.firstBeat ?? 0;
+  const exportBpm = bg?.bpm ?? track.bpm ?? 120;
+  const cues = track.cues ?? [];
+  const loops = track.loops ?? [];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <DJ_PLAYLISTS Version="1.0.0">
   <PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/>
   <COLLECTION Entries="1">
-    <TRACK TrackID="${escapeXml(track.id)}" Name="${escapeXml(track.title)}" Artist="${escapeXml(track.artist)}" Album="${escapeXml(track.album)}" TotalTime="${Math.round(track.duration)}" AverageBpm="${track.bpm.toFixed(2)}" Tonality="${escapeXml(track.key)}">
-      <TEMPO Inizio="${bg.firstBeat.toFixed(3)}" Bpm="${bg.bpm.toFixed(2)}" Metro="4/4" Battito="1"/>
-${track.cues
+    <TRACK TrackID="${escapeXml(track.id)}" Name="${escapeXml(track.title)}" Artist="${escapeXml(track.artist)}" Album="${escapeXml(track.album)}" TotalTime="${Math.round(track.duration ?? 0)}" AverageBpm="${exportBpm.toFixed(2)}" Tonality="${escapeXml(track.key ?? '')}">
+      <TEMPO Inizio="${firstBeat.toFixed(3)}" Bpm="${exportBpm.toFixed(2)}" Metro="4/4" Battito="1"/>
+${cues
   .map((c) => {
     const isHotCue = c.type === 'HOT_CUE';
     const num = isHotCue ? (c.hotCueNum ?? 0) : -1;
     return `      <POSITION_MARK Name="${escapeXml(c.name)}" Type="0" Start="${c.position.toFixed(3)}" Num="${num}" Red="0" Green="162" Blue="255"/>`;
   })
   .join('\n')}
-${track.loops
+${loops
   .map(
     (l) =>
       `      <POSITION_MARK Name="${escapeXml(l.name)}" Type="4" Start="${l.start.toFixed(3)}" End="${l.end.toFixed(3)}" Num="-1"/>`
@@ -620,8 +627,9 @@ ${track.loops
   return xml;
 }
 
-function escapeXml(unsafe: string): string {
-  return unsafe.replace(/[<>&'"]/g, (c) => {
+function escapeXml(unsafe: string | null | undefined): string {
+  if (unsafe === null || unsafe === undefined) return '';
+  return String(unsafe).replace(/[<>&'"]/g, (c) => {
     switch (c) {
       case '<': return '&lt;';
       case '>': return '&gt;';
