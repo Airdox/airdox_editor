@@ -7,6 +7,8 @@
 
 import { TrackModel, PhraseSection, DataOrigin, CuePoint } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
+import { logger } from '../utils/logger';
+import { nextId } from '../utils/ids';
 
 export type MixInType =
   | 'PRIMARY_BLEND'      // Optimal standard 16-32 bar mix-in (kicks lock in, low clash)
@@ -158,7 +160,7 @@ export function analyzeTrackForMixIn(track: TrackModel): MixInAnalysisReport {
     try {
       analysis = analyzeAudioBuffer(track.audioBuffer);
     } catch (err) {
-      console.warn('[MixAnalysis] AudioBuffer analysis failed:', err);
+      logger.warn('AUDIO_ENGINE', `[MixAnalysis] AudioBuffer analysis failed: ${err instanceof Error ? err.message : String(err)}`, { error: err });
     }
   }
 
@@ -512,7 +514,7 @@ export function createCueForMixIn(
   const hotCueMap: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
 
   return {
-    id: `cue-mixin-${Date.now()}-${candidate.barNumber}`,
+    id: nextId('cue-mixin'),
     name: `MIX-IN ${candidate.barNumber}.${candidate.beatNumber}`,
     type,
     hotCueNum: type === 'HOT_CUE' ? hotCueMap[slotLetter] ?? 0 : undefined,

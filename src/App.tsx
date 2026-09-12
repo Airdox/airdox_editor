@@ -2308,6 +2308,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           e.preventDefault();
           handleDelete();
         }
+      } else if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        stableToggleBrowser();
       }
     };
 

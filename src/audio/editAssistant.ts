@@ -49,7 +49,7 @@ export class EditAssistantStateManager {
       try {
         l(currentState);
       } catch (err) {
-        console.error('Error in EditAssistant listener:', err);
+        logger.error('EDITING', `Error in EditAssistant listener: ${err instanceof Error ? err.message : String(err)}`, { error: err });
       }
     });
   }

@@ -33,6 +33,8 @@ import {
   ChatbotModel,
   TrackEditorContext,
 } from '../types/chatbot';
+import { nextId } from '../utils/ids';
+import { logger } from '../utils/logger';
 
 interface ChatbotPaletteProps {
   isOpen: boolean;
@@ -154,7 +156,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
         speechRecognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        console.warn('SpeechRecognition start failed', e);
+        logger.warn('UI', 'SpeechRecognition start failed', { error: e });
         setIsListening(false);
       }
     }
@@ -165,7 +167,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
     if (!query || isLoading) return;
 
     const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: nextId('chat-user'),
       role: 'user',
       text: query,
       timestamp: Date.now(),
@@ -193,7 +195,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
       const data = await response.json();
 
       const assistantMsg: ChatMessage = {
-        id: `asst-${Date.now()}`,
+        id: nextId('chat-asst'),
         role: 'assistant',
         text: data.text || 'Anfrage verarbeitet.',
         timestamp: Date.now(),
@@ -210,7 +212,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
       }
     } catch (err: any) {
       const errorMsg: ChatMessage = {
-        id: `err-${Date.now()}`,
+        id: nextId('chat-err'),
         role: 'system',
         text: `Kommunikationsfehler: ${err.message || 'Verbindung fehlgeschlagen'}`,
         timestamp: Date.now(),

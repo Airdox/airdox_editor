@@ -128,7 +128,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCopy}
             disabled={!hasSelection}
             className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
-            title="Kopieren (Ctrl+C)"
+            title="Auswahl in die Zwischenablage (Strg+C)"
           >
             <Copy size={11} />
             <span>Copy</span>
@@ -138,7 +138,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               onClick={onCut}
               disabled={!hasSelection}
               className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
-              title="Ausschneiden (Ctrl+X)"
+              title="Ausschneiden (Strg+X)"
             >
               <Scissors size={11} />
               <span>Cut</span>
@@ -148,7 +148,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onPaste}
             disabled={!hasClipboard}
             className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-[#00a2ff] hover:text-white disabled:text-neutral-500 flex items-center space-x-1"
-            title="Einfügen (Ctrl+V)"
+            title="Einfügen (Strg+V)"
           >
             <ClipboardPaste size={11} />
             <span>Paste</span>
@@ -385,7 +385,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCopy}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Kopieren (Ctrl+C)"
+            title="Auswahl in die Zwischenablage (Strg+C)"
           >
             <Copy size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -397,7 +397,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onPaste}
             disabled={!hasClipboard}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen (Ctrl+V)"
+            title="Einfügen (Strg+V)"
           >
             <ClipboardPaste size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
