@@ -7,7 +7,7 @@ Grundlage sind Messungen im Repo (keine Vermutungen); jede Zahl ist mit dem Komm
 find src -name '*.ts*' | xargs wc -l | tail -1     # 17 777 Zeilen in 45 Dateien
 find tests -name '*.test.*' | xargs wc -l | tail -1  # 9 148 Zeilen in 33 Suiten
 find electron -name '*.cjs' | xargs wc -l | tail -1  # 1 500 Zeilen
-npm run coverage                                    # 89,5 % Lines, 89,5 % Stmts, 67,8 % Branch, 72,1 % Funkt.
+npm run coverage                                    # 90,4 % Lines, 90,4 % Stmts, 68,9 % Branch, 75,5 % Funkt.
 npx tsc --noEmit                                    # fehlerfrei (prüft auch tests/)
 ```
 
@@ -40,9 +40,9 @@ Warum das sicher ist: die 32 App-Szenario-Tests in `tests/ui/app-workflows.test.
 
 **B2 — Zeichenschleifen dreimal parallel.** `DetailWaveform.tsx` (23 × `fillRect`, 3 rAF-Schleifen), `ClipDeckView.tsx` (2 × `fillRect`, 2 rAF), `TrackOverview.tsx` (10 × `fillRect`). Die Datenseite ist bereits sauber ausgelagert (`src/waveform/renderModel.ts`, 99,0 % gedeckt, malt selbst nichts) — die Pixel-Seite nicht. Vorschlag: `src/waveform/painter.ts` mit `paintBands(ctx, model, geometry, style)` / `paintGrid` / `paintSelection`, die drei Komponenten rufen nur noch Geometrie + Stil auf. *Nutzen:* identische Darstellung an allen drei Orten (heute: unterschiedliche Randbehandlung beim Zoom), halb so viel Canvas-Code, Deckungsproblem der drei Komponenten löst sich mit. *Aufwand:* 1 Session. *Risiko:*gering — visuell, deshalb vor/nach mit den Referenz-Screenshots in `reference/` abgleichen.
 
-**B3 — Zwei `Date.now()`-Quellen für dieselbe Identität.** In dieser Session für den LOCAL-IMPORT-Pfad gefixt (Track-Id vs. Segment-`trackId`), der Mustertyp existiert aber weiter: überall dort, wo `id: Date.now().toString()` und ein zweites `Date.now()` in einem Objekt stehen, kann bei Tick-Übergang eine inkonsistente ID entstehen. Vorschlag: `nextEditId()`-Hilfsfunktion (Monotonzähler, in `src/edit/editModel.ts`) und eine `createSegment(...)`-Fabrik, die Track-/Segment-ID aus derselben Quelle speist; danach per grep ausschließen (`grep -n "Date.now()" src/**/*.tsx` soll nur noch in Timecode-/Stats-Kontexten stehen).
+**B3 — Zwei `Date.now()`-Quellen für dieselbe Identität.** ✅ *umgesetzt (2026-09-12):* `src/utils/ids.ts` (`nextId(prefix)`, `nextEditId()`, `adoptIds()` für geladene Projekte) + `createSegment(...)` in `src/edit/editModel.ts`; alle Id-Felder in `src/` umgestellt, `Date.now()` nur noch, wo eine Zeit gemeint ist. Guards H6 (keine Uhr-Id) und H7 (keine Präfix-Kollision mit den Ids der Importer, deshalb `seg-edit`) in `tests/source-hygiene.test.ts`; Verhalten getestet in M10/M11 (`tests/edit-model.test.ts`) und der Adoptionsfall in `tests/project-file.test.ts`. In dieser Session für den LOCAL-IMPORT-Pfad gefixt (Track-Id vs. Segment-`trackId`), der Mustertyp existiert aber weiter: überall dort, wo `id: Date.now().toString()` und ein zweites `Date.now()` in einem Objekt stehen, kann bei Tick-Übergang eine inkonsistente ID entstehen. Vorschlag: `nextEditId()`-Hilfsfunktion (Monotonzähler, in `src/edit/editModel.ts`) und eine `createSegment(...)`-Fabrik, die Track-/Segment-ID aus derselben Quelle speist; danach per grep ausschließen (`grep -n "Date.now()" src/**/*.tsx` soll nur noch in Timecode-/Stats-Kontexten stehen).
 
-**B4 — `tests/*.test.ts` (25 Skript-Suiten) haben fünf verschiedene Mini-Testframeworks.** Jede Suite definiert ihre eigene `runTest/assert`-Schleife (~15 Zeilen Boilerplate × 25). Vereinfachung, die den Vertragscharakter erhält: ein winziges `tests/helpers/microTest.ts` (same 20 Zeilen, ein Ausgang) und die Suiten importieren es; vitest bleibt für Komponenten/Workflows. Alternative (mehr Nutzen, mehr Aufwand): die datenlastigen Skript-Suiten als `it()`-Fälle nach `tests/unit/` migrieren — dann gibt es **einen** Runner und die Coverage-Pipeline braucht keine Merge-Mechanik mehr (`tests/coverage-summary.mjs` könnte entfallen). Empfehlung: Zwischenschritt — erst Helpers auslagern, Migration nur für die 6 Suiten, die ohnehin keine Node-APIs brauchen.
+**B4 — `tests/*.test.ts` (25 Skript-Suiten) hatten fünf verschiedene Mini-Testframeworks.** ✅ *umgesetzt (2026-09-12):* `tests/helpers/microTest.mjs` ist der eine Ausgang (runTest/assert/same/near/eq/throws/report), 21 Skript-Suiten sind umgestellt — zusammen mit ihren ~15-Zeilen-Blöcken fielen ~800 Zeilen Gerüst weg. Die `.mjs`-Electron-Suiten dürfen direkt mit `node:assert` bleiben (sie bauen keinen eigenen Ring); **T5** in `tests/test-registry.test.ts` verbietet beides neu: eigener `TestResult`-Ring, oder `.ts`-Suite ohne `microTest.mjs`/`report()`. Jede Suite definiert ihre eigene `runTest/assert`-Schleife (~15 Zeilen Boilerplate × 25). Vereinfachung, die den Vertragscharakter erhält: ein winziges `tests/helpers/microTest.ts` (same 20 Zeilen, ein Ausgang) und die Suiten importieren es; vitest bleibt für Komponenten/Workflows. Alternative (mehr Nutzen, mehr Aufwand): die datenlastigen Skript-Suiten als `it()`-Fälle nach `tests/unit/` migrieren — dann gibt es **einen** Runner und die Coverage-Pipeline braucht keine Merge-Mechanik mehr (`tests/coverage-summary.mjs` könnte entfallen). Empfehlung: Zwischenschritt — erst Helpers auslagern, Migration nur für die 6 Suiten, die ohnehin keine Node-APIs brauchen.
 *Diese Session hat bereits vereinheitlicht:* `npm test` ist jetzt ein einziger discovering Runner (`node tests/run-all.mjs`) statt einer von Hand gepflegten 26-Glieder-Kette; der Registry-Guard prüft die Entdeckungslücke direkt (`--list`).
 
 ## C. Performance
@@ -135,7 +135,7 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
 
 ## Was in dieser Session zusätzlich schon erledigt ist
 
-* Testbasis: 204 vitest-Tests + 25 Skript-Suiten, `npm run coverage` mit **best-of-pipelines**-Merge (89,5 % Lines in `src/**`), Registry-Guard gegen „Suite läuft nie", `tests/helpers/appHarness.tsx` als gemeinsamer UI-Treiber (Beschriftungen nur noch ein Pflegeort).
+* Testbasis: 226 vitest-Tests + 27 Skript-Suiten, `npm run coverage` mit **best-of-pipelines**-Merge (90,4 % Lines in `src/**`), Registry-Guard gegen „Suite läuft nie", `tests/helpers/appHarness.tsx` als gemeinsamer UI-Treiber (Beschriftungen nur noch ein Pflegeort).
 * Sechs Produktfehler aus den Szenario-Tests behoben (Ablehnungs-Hinweis Drop, doppelte `Date.now()`-ID, CLONE-Knopf ohne Wirkung, Bars-Beschriftung 16× falsch, XML-Export-Crash bei leerem Modell, 1-ms-Timeline-Schrumpfung beim Fenster-Drop ans Ende) — Details und Belege: [`sessions/2026-09-12-testabdeckung.md`](sessions/2026-09-12-testabdeckung.md).
 * Ordnung: `docs/` mit Lesereihenfolge und Session-Protokollen, echtes `README.md`, versionsfreie Build-Doku, `npm test` als ein entdeckender Runner statt 26-Glieder-Kette.
 
@@ -149,3 +149,33 @@ PASTE ignorierte die Zielselektion. Alles korrigiert und durch Kombinations-Test
 (`tests/edit-clipboard.test.ts`, `tests/ui/app-clipboard.test.tsx`); Details in
 `docs/sessions/2026-09-12-testabdeckung.md` §10. Lehre für die Roadmap: E-Punkte müssen die
 *Identität des Inhalts* prüfen (welche Spalte landet wo), nicht nur Strukturtext.
+
+## Nachtrag 2026-09-12 (B1/B2/C1/C2 aus der Roadmap, zweiter Block)
+
+**C2 — memo statt Taktlast: teilweise — die Bedingung dafür ist der eigentliche Befund.**
+`src/utils/useStableCallback.ts` (Latest-Ref-Muster) ersetzt alle Inline-Pfeilchen der
+heißen Baugruppen: die Callback-Identität ist konstant, der aufgerufene Code ist der des
+aktuellen Renders (kein stale closure, keine Abhängigkeitslisten). `PalettePanel` ist
+memoisiert und rendert bei einem 60-fps-Playhead-Takt nicht mehr mit.
+
+`ClipDeckView`, `TrackHeader` und `BrowserMultiTrackBar` sind **bewusst nicht** memoisiert:
+sie bekommen `activeTrack`/`tracks`, und die Edit-Pipeline mutiert diese Objekte unterwegs
+(`duration`, `analysis`, `editInfo`). Mit Memo blieb die Anzeige nach Edit/Cut/Paste auf dem
+alten Stand — **11 UI-Tests** (W4, W6, W7, T5, T6 und C1–C3, C6, C7) sind genau daran
+rot geworden, statt dass ein „Performance-Gewinn" durchgerutscht wäre. Freigeschaltet wird
+das Memo, sobald `syncEditProjection` den Track unmutabel ersetzt (Teil von B1); die
+Bedingung steht als Kommentar am Baustein.
+
+**B1 — App.tsx in Schichten: Erster Schnitt gesetzt.** `src/project/restore.ts` enthält
+jetzt die Restore-Regeln (Rebuild aus serialisiertem Projekt, strenge `sourceMapped`-
+Übernahme, Read-only-Reopen), including die davor zweimal kopierte Reopen-Logik; App.tsx
+schrumpft um 78 Zeilen und die Regeln sind ohne DOM testbar (R1–R8). Weiter nach dieser
+Reihenfolge: `useSourceLoader` → `useDeckTransport` → `useEditProjector` → erst dann die
+`useReducer`-Pro-Domäne (und damit C2 vollständig). Stand: App.tsx 2 656 Zeilen, 48 Handler.
+
+**B2/C1 — nicht angefasst** (Zeichenpfad-Bündelung bzw. Worker/OffscreenCanvas): beide
+brauchen die stabile Modell-/Render-Trennung aus B1, sonst wird dreifach gemergt.
+Messlatte für C1 bleibt: `performance.mark()` von „Drop im Container" bis „Waveform sichtbar".
+
+Nach diesem Block: `tsc` sauber · 28/28 Runner-Einträge grün · 226 vitest-Tests · Build
+sauber · `git diff --check` leer · **Deckung 90,4 % Lines** (Ziel 90 % erreicht).

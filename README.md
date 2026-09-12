@@ -9,7 +9,7 @@ als WAV oder Rekordbox-XML wieder ausgeben. Plattform: Electron (Windows) und Br
 npm install
 npm run dev          # Vite-Dev-Server, http://localhost:3000
 npm run desktop      # gebaut + Electron starten
-npm test             # alle Suiten: 25 Skript-Suiten (tsx) + vitest (jsdom)
+npm test             # alle Suiten: 27 Skript-Suiten (tsx/node) + vitest (jsdom, 226 Tests)
 npm run lint         # tsc --noEmit (prüft auch tests/)
 npm run coverage     # Abdeckung beider Messebenen, zusammengeführt: coverage/coverage-merged.json
 npm run package:win  # Windows-Setup + portable .exe (siehe BUILD_WINDOWS.md)

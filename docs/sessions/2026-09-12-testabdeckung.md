@@ -252,3 +252,46 @@ verschiedenen Kombinationen die Funktionalität überprüft.“
 wird weiter aus dem Edit-Audio berechnet — jetzt aber sichtbar als `BERECHNET`/`EDIT-MATERIAL`
 gekennzeichnet, statt als Original ausgegeben. Der Weg „Originalanalyse fehlt → nichts erfinden“
 gilt unverändert für das Fehlen von PWAV/PWV2–7 (`MISSING_REKORDBOX_ANALYSIS`).
+
+## 11. Dritter Nachtrag: Roadmap-Block B1/B3/B4/C2 (O-Ton-Auftrag per Diktat)
+
+**Aufgabe:** die in `docs/PROJEKTANALYSE_2026-09-12.md` vorgeschlagenen Punkte B1
+(App.tsx in Schichten), B2 (Zeichenschleifen bündeln), B3 (zwei `Date.now()`-Id-Quellen),
+B4 (fünf Mini-Testframeworks), C1 (Worker/OffscreenCanvas), C2 (`React.memo` an den heißen
+Kindern) — „Kein Verhalten, keine Saiten ändern; Reihung: erst `useProjectIO`, dann
+`useSourceLoader`\", each step with its own gate run.
+
+**Erledigt (jeweils mit Gate-Lauf):**
+
+| Punkt | Ergebnis | Messlatte |
+| --- | --- | --- |
+| B3 | `src/utils/ids.ts` + `createSegment(...)`; alle Id-Felder in `src/` ohne Uhr; `adoptIds` beim Projekt laden; Guards H6/H7 | M10/M11, Adoptionsfall in `tests/project-file.test.ts` |
+| B4 | `tests/helpers/microTest.mjs` als ein Ausgang; 21 Skript-Suiten umgestellt (~800 Zeilen Gerüst weg); T5 als Ratchet | T5 verbietet privaten Ring *und* fehlendes `report()` |
+| C2 (Teil) | `useStableCallback` (Latest-Ref) + `React.memo` auf `PalettePanel` | `tests/unit/use-stable-callback.test.ts` (3 Fälle) |
+| B1 (Erster Schnitt) | `src/project/restore.ts`: Rebuild, strenge `sourceMapped`-Übernahme, Read-only-Reopen (vorher zweimal kopiert); App.tsx −78 Zeilen | `tests/unit/project-restore.test.ts` R1–R8 |
+
+**Nicht gemacht (bewusst, mit Grund):** B2 und C1 — beide ändern Zeichen- bzw.
+Thread-Pfade und brauchen die Modell-/Render-Trennung aus B1, sonst müssen drei
+Canvas-Pfade doppelt gemergt werden. C2 vollständig (Memo für ClipDeckView,
+TrackHeader, BrowserMultiTrackBar) ist gesperrt, solange `syncEditProjection`
+TrackModel-Objekte mutiert: mit Memo zeigten diese drei nach Edit/Cut/Paste die alte
+Länge — **11 UI-Tests haben das angezeigt**, das Memo wurde zurückgenommen und die
+Bedingung im Baustein dokumentiert. Eine „Performance-Verbesserung\", die der UI
+einen falschen Stand lässt, ist kein Gewinn.
+
+**Erfüllung der Punkte, die der Auftrag als Sicherheit genannt hat:** kein Verhalten,
+keine Saiten geändert — 226 vitest-Tests und 205 Skript-Fälle laufen unverändert grün
+(die sechs `.mjs`-Electron-Suiten melden ohne Total-Zeile, zählen aber zu den 28
+grünen Runner-Einträgen); UI-Assertions gehen weiter über sichtbare Titel/Labels,
+und die Suite `tests/ui/app-clipboard.test.tsx` (C1–C7) blieb während des gesamten
+Refactors grün, obwohl App.tsx dabei angefasst wurde — das ist der im Vorschlag
+angekündigte Sicherheitsgurt, und er hat einmal wirklich gebissen (C2-Memo).
+
+**Zahlen nach diesem Block:** `tsc` sauber · `npm test` 28/28 Runner-Einträge (27
+Skript-Suiten + vitest) · 226 vitest-Tests · `vite build` sauber · `git diff --check` leer ·
+**Abdeckung `src/**` 90,4 % Lines** (damit ist das 90-%-Ziel aus §1 erreicht; App.tsx
+68,5 → 73,3 %). Unter 90 % bleiben: audioEngine 81,5 · pitchTempoEngine 80,4 ·
+ClipDeckView 86,0 · ErrorBoundary 88,4 · editModel 87,7 · xmlParser 74,8 — Begründungen
+wie in §2 (Web-Audio-/Datei-Pfade ohne echte Bridge nicht erreichbar).
+
+**Commits dieses Blocks:** `8e91b13` (B3+B4) · `65332c7` (C2) · `d0a6c10` (B1-Schnitt).
