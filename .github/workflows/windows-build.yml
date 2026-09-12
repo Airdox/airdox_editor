@@ -14,6 +14,34 @@ permissions:
   contents: write         # wird für das Erstellen von GitHub-Releases benötigt
 
 jobs:
+  # Getrennter Job: ein grüner Windows-Build allein beweist noch nicht, dass die
+  # Suiten laufen (genau dieser Fall ist 2026-09-12 aufgetreten: devDependencies
+  # fehlten im Manifest, `npm ci` ließ sie weg, `tsc` fand vitest nicht). Der Job
+  # blockiert das Artefakt bewusst nicht, zeigt aber beide Ampeln am PR.
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js aufsetzen
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Abhängigkeiten installieren
+        run: npm ci
+      - name: TypeScript-Prüfung (prüft auch tests/)
+        run: npm run lint
+      - name: Alle Suiten (Skript-Suiten + vitest)
+        run: npm test
+      - name: Abdeckung messen (best-of-pipelines)
+        run: npm run coverage
+
   build:
     name: Windows Installer + Portable
     runs-on: windows-latest

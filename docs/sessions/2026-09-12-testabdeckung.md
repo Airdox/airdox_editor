@@ -112,6 +112,9 @@ Zusätzlich dokumentiert, bewusst **nicht** geändert:
 
 ## 6. Nacharbeiten (realistische Liste, Reihenfolge nach Nutzen)
 
+> Ergänzend: die breiteren Verbesserungs- und Refactoring-Vorschläge (Performance,
+> Ausgabequalität, Funktionsumfang) stehen in [`../PROJEKTANALYSE_2026-09-12.md`](../PROJEKTANALYSE_2026-09-12.md).
+
 1. `App.tsx` (68,4 % → ≥85 %): weitere App-Szenarien für (a) Pitch-/Tempo-Panel inkl. Auto-Sync, (b) Wiederherstellen eines Projekts mit eingebettetem Clip-Audio (`window.rekordboxDesktop`-Stub liefert `.airdox.json`), (c) `MISSING_REKORDBOX_ANALYSIS`-Pfad mit ANLZ-Stub über den Bridge-Stub statt über den XML-Schnellpfad, (d) Mehrspur-Browser-Drop auf Deck B.
 2. `xmlParser.ts` (74,8 % → ≥90 %): Fixture-XML mit `<PLAYLISTS>` (verschachtelte FOLDER/TRACKLIST), zwei `<TEMPO>`-Punkten, `Tonality` missing, `TotalTime="0"`, kaputtem XML (Fehlerzweig des Async-Parsers).
 3. `audioEngine.ts` + `pitchTempoEngine.ts` (81,5 % / 80,4 % → ≥90 %): ein `OfflineAudioContext`-Stub in `tests/helpers/fakeAudioContext.ts` (render-Buffer vorbefüllen, `startRendering()` auflösen) — das allein macht die Render-/Stretch-Pfade messbar.
@@ -120,7 +123,25 @@ Zusätzlich dokumentiert, bewusst **nicht** geändert:
 6. `ExportModal`: JSON-Zweig entweder mit eigener Schaltfläche sichtbar machen oder entfernen (toter UI-Pfad).
 7. CI: ein Schritt, der `npm run test:all` + `npm run coverage` ausführt und die 90-%-Schwelle als Weckruf nutzt (aktuell prüft die Workflow-Datei beides nicht).
 
-## 7. Hinweise für die nächste Session
+## 7. Nachtrag aus dem Windows-Build (PR #14)
+
+* Der erste CI-Lauf scheiterte an einem **eigenen Fehler dieser Session**: beim Glätten der
+  package.json-Skripte war die Datei aus `git show HEAD:package.json` neu aufgebaut worden — dabei
+  fielen die während der Session installierten `devDependencies` (vitest, jsdom,
+  @testing-library/*, c8) wieder heraus. `npm ci` installierte sie daraufhin nicht, `tsc` fand
+  „vitest" nicht in `tests/`. Wieder eingetragen, Lock neu synchronisiert, lokal mit
+  `npm ci --dry-run` geprüft (Manifest ↔ Lock).
+* Damit das nicht wieder ungeprüft durchrutscht, hat
+  `.github/workflows/windows-build.yml` jetzt einen **zweiten Job `tests`**
+  (ubuntu-latest + windows-latest: `npm ci` → `npm run lint` → `npm test` → `npm run coverage`),
+  der den Artefakt-Build nicht blockiert, aber die Ampel am PR zieht.
+* **Fund zur Linien-Ordnung:** `main` ist 5 voraus / 26 zurück gegenüber `v0.5.10`
+  (`gh api repos/Airdox/airdox_editor/compare/main...v0.5.10`), `package.json` = 0.4.20 bei
+  Releases bis v0.5.10. Details und Empfehlung (cherry-picken statt mergen, Versionschema von
+  `4acc0dc` zurückholen) in [`../PROJEKTANALYSE_2026-09-12.md`](../PROJEKTANALYSE_2026-09-12.md),
+  Abschnitt G.
+
+## 8. Hinweise für die nächste Session
 
 - `node_modules` wird **nicht** mit dem Workspace gesichert: vor allem `npm install -D vitest jsdom @testing-library/react @testing-library/user-event c8 tsx` (Dev-Dependencies stehen in `package.json`, Installation dauert ~1 min).
 - Der Workspace-Reset hat in dieser Session einen Commit (`63c6284`) entfernt, Dateiinhalte aber behalten → vor Verlassen auf `git log` prüfen und **am Ende jeder Session committen**.

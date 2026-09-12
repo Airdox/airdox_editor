@@ -79,14 +79,38 @@ Vorschlag: TPDF-Dithering (1,5 LSB Dreieckssumme zweier LSB-großer Zufallswerte
 
 ## F. Abhängigkeiten / Hygiene
 
-* Unbenutzt (0 Referenzen in `src/`, `electron/`, `vite.config.ts`, `index.html`): `@google/genai`, `express`, `motion`, `dotenv`, `autoprefixer` (Prefixing übernimmt `@tailwindcss/vite`). `vite` steht doppelt in `dependencies` **und** `devDependencies`. Vorschlag: `npm rm @google/genai express motion dotenv autoprefixer` und `vite` nur als devDependency behalten — kleinere Installation, kleinere Supply-Chain, `npm ci` wird schneller. Absichtlich **nicht** in dieser Session ausgeführt, weil `package-lock.json` und damit der CI-Beweggrund geändert würden (erst nach Freigabe).
+* **Unbenutzt** (0 Referenzen in `src/`, `electron/`, `vite.config.ts`, `index.html`): `@google/genai`, `express`, `motion`, `dotenv`, `autoprefixer` (Prefixing übernimmt `@tailwindcss/vite`). `vite` steht doppelt in `dependencies` **und** `devDependencies`. Vorschlag: `npm rm @google/genai express motion dotenv autoprefixer` und `vite` nur als devDependency behalten — kleinere Installation, kleinere Supply-Chain, `npm ci` wird schneller. Absichtlich **nicht** in dieser Session ausgeführt, weil `package-lock.json` und damit der CI-Beweggrund geändert würden (erst nach Freigabe).
 * Größte Lasten, die wirklich gebraucht werden: `lucide-react` (Import in 3+ Komponenten), `react`/`react-dom`, `tailwindcss` 4.
 * `better-sqlite3-multiple-ciphers` ist `optionalDependencies` und wird in `electron/dbReader.cjs:100` lazily in `try/catch` geladen → ohne Modul startet die App sauber und meldet den fehlenden DB-Import auf Deutsch (Zeile 143). Genau deshalb funktioniert der Basis-Windows-Build ohne C++-Toolchain (siehe `BUILD_WINDOWS.md`); CI kompiliert ihn trotzdem (`rebuild:electron`), damit `master.db`/`exportLibrary.db` mit ANLZ-Auflösung pro Track funktionieren.
 
 ## G. CI / Release
 
-* `.github/workflows/windows-build.yml` baut NSIS + Portable auf `windows-latest`, bei Push auf `main`/`release/**`, bei PRs nach `main`, manuell (`workflow_dispatch`) und täglich 03:00 UTC; Artefakte bleiben 30 Tage, ein Tag `v*` erzeugt ein GitHub-Release mit den `.exe`-Dateien. Es fehlt: **ein Test-Schritt**. Vorschlag: `npm test` + `npm run coverage` als Job vor dem Build (TypeScript-Prüfung ist schon da) und die 90-%-Messlatte als Schritt, der bei < 89 % rot wird (Schwellwert explizit, damit die Zahl nicht heimlich sinkt).
-* zweiter, kleiner Job `quality` nur mit `tsc --noEmit` + `npm test` auf `ubuntu-latest` (schnelles Feedback für feature branches, die kein Release bauen).
+* **Neu in dieser Session:** der Workflow hat jetzt einen vom Build **getrennten** `tests`-Job
+  (ubuntu-latest **und** windows-latest: `npm ci` → `npm run lint` → `npm test` → `npm run coverage`).
+  Er blockiert das Artefakt bewusst nicht, zeigt aber beide Ampeln am PR.
+* **Warum das nötig war:** der erste PR-Build (12.09.) lief rot, *nachdem* `npm ci` erfolgreich durchgelaufen war — im
+  `package.json` fehlten die neuen `devDependencies` (vitest, jsdom, @testing-library/*, c8), obwohl
+  `package-lock.json` sie enthielt. `npm ci` installierte daraufhin genau diese Pakete nicht, und
+  `tsc --noEmit` meldete „Cannot find module 'vitest'" nur in `tests/`. Lehre: **Manifest und Lock
+  sind zwei Quellen, die mitgeführt werden müssen** — `npm ci --dry-run` im Pre-Push-Hook oder der
+  `tests`-Job fängt das jetzt ab. (Die Dev-Dependencies sind wieder eingetragen, der Lock neu
+  synchronisiert.)
+* `npm run coverage` ist weiterhin kein Gate. Vorschlag: Schwellwert im Coverage-Skript
+  (`--fail-under=89` mit begründeter Ausnahme-Liste), damit die Zahl nicht heimlich sinkt.
+* **Versionspolitik ist invertiert:** `main` hat `package.json` 0.4.20, die letzten Releases sind
+  v0.5.10 (auf dem Tag stand 0.5.10). Der Commit `4acc0dc Versioning: einheitliches Schema
+  (Semver, package.json als einzige Quelle)` liegt auf der 0.5-Linie und fehlt `main` — wieder
+  aufgreifen und *vor* dem nächsten Taggen anwenden, sonst heißen Artefakte `…-0.4.20-…` während
+  das Release v0.5.11 heißt.
+* Linien-Zustand (mit `gh api repos/Airdox/airdox_editor/compare/main...v0.5.10` prüfbar): `main`
+  ist 5 voraus / 26 zurück gegenüber `v0.5.10`. Auf der Tag-Linie liegen Fixe, die `main` nicht
+  hat: `query_only`/`busy_timeout` für den `master.db`-Zugriff, Suche ausschließlich auf Partition
+  `D:` (Nutzer-Vorgabe, `274c89e`), Single-Flight-DB-Load, asynchroner ANLZ-PPTH-Scan mit Cache
+  und Fortschritt, „Mix Lab"-Mischvorschau (Stage 2), Gatekeeper-JSON-Bericht mit
+  `scripts/waveform-gates.mjs`, drei Planungsdocs. Empfehlung: diese Punkte einzeln cherry-picken
+  (`git cherry-pick -x <sha>` je Fix, jeweils mit eigenem Testlauf) statt die Linien zu mergen —
+  ein Merge der 26 Commits würde `src/App.tsx` (+769 Zeilen Abweichung) und
+  `electron/dbReader.cjs` (+655) gegeneinander auflösen müssen.
 
 ## Vorgeschlagene Reihenfolge (Roadmap)
 
