@@ -21,6 +21,10 @@ Leerzeichen** und ohne C++-Toolchain durchläuft.
 
 ## Bauen (PowerShell – Windows)
 
+`.gitattributes` erzwingt LF-Zeilenenden auch bei `core.autocrlf=true`
+(Windows-Standard): ohne diese Einstellung gelten nach dem Clone alle Dateien als
+verändert und `git status` verrauscht.
+
 ```powershell
 git clone https://github.com/Airdox/airdox_editor.git
 cd airdox_editor

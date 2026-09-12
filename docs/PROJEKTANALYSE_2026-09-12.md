@@ -27,6 +27,8 @@ Größenordnung der Hotspots: `src/App.tsx` 2 671 Zeilen (39 × `useState`, 48 H
 
 **A4 — `electron/dbReader.cjs` war für GitHub eine Binärdatei.** In Zeile 589 stand ein **rohes NUL-Byte** in einem Regex-Zeichenfeld (`/[\s<00>]+$/` statt `/[\s\x00]+$/`). Semantisch identisch, praktisch: `grep` („binary file matches“, `git diff` („Binary files differ“ und die PR-Ansicht konnten 960 Zeilen der meistgeänderten Datei im Electron-Teil nicht mehr anzeigen — Reviews dort waren blind. Behoben (Escape-Folge) und durch `tests/source-hygiene.test.ts` dauerhaft gesichert: kein rohes Steuerzeichen, kein BOM, nur LF, Newline am Dateiende — 94 Quelldateien, 4 Prüfungen.
 
+**A5 — Windows-Checkout schrieb CRLF in den Quelltext (jetzt `.gitattributes`).** Der neue `tests`-Job läuft auf ubuntu **und** windows: beim zweiten Lauf (12.09.) war `H3: Zeilenenden einheitlich LF` auf `windows-latest` rot, auf `ubuntu-latest` grün. Ursache: `actions/checkout` setzt auf Windows-Runnern `core.autocrlf=true`, und ohne `.gitattributes` werden Textdateien beim Auschecken auf CRLF umgestellt — im Index bleibt LF, im Workspace nicht. Für die Arbeit an diesem Repo auf Windows heißt das: jeder Build „ändert" scheinbar alle Dateien, `git status` verrauscht, und `npm run package:win` kopiert CRLF-Quellen in `dist/`. Behoben mit `.gitattributes` (`* text=auto eol=lf` + Binärlisten); `git add --renormalize .` bestätigt, dass der Bestand bereits LF-frei ist, die Datei also nur die Zukunft schützt.
+
 ## B. Refactoring / Vereinfachung
 
 **B1 — `src/App.tsx` in drei Schichten zerlegen (größter Hebel).**
