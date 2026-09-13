@@ -305,108 +305,72 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         });
       }
 
-      // 3. Render Waveform (BLUE / RGB / 3BAND)
+      // 3. Render the source waveform as a continuous silhouette.
+      // Never use edit-operation bars or a synthetic beat pattern here: inserted,
+      // replaced and overdubbed audio must be rendered by the same renderer as
+      // the untouched source so the waveform has one consistent visual language.
       const analysis = track.analysis;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
         const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
         const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
-
         const maxHalfH = height * 0.42;
 
-        for (let b = startBucket; b <= endBucket; b++) {
-          const t = b * secPerBucket;
-          const centerT = t + secPerBucket * 0.5;
-          const x = timeToPixel(centerT, width);
-          const nextX = timeToPixel(centerT + secPerBucket, width);
-          const colW = Math.max(1.2, nextX - x);
-
-          const peak = analysis.peaks[b];
-          const low = analysis.lowEnergy[b];
-          const mid = analysis.midEnergy[b];
-          const high = analysis.highEnergy[b];
-
-          if (waveformMode === 'BLUE') {
-            // High-contrast electric blue waveform
-            const barH = Math.max(2, peak * maxHalfH);
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
-            const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 270 + mid * 35));
-            const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-            const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
-
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
-            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
-          } else {
-            // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.85);
-            const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.55);
-
-            // Lows (Red)
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
-            // Mids (Cyan/Green)
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
-          }
+        // A filled upper/lower envelope is visually continuous at every zoom
+        // level. It deliberately uses the measured peak profile, not rectangles.
+        const upper: Array<{ x: number; y: number; b: number }> = [];
+        const lower: Array<{ x: number; y: number; b: number }> = [];
+        for (let bucket = startBucket; bucket <= endBucket; bucket++) {
+          const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
+          const peak = Math.max(0, Math.min(1, analysis.peaks[bucket] || 0));
+          upper.push({ x, y: centerY - Math.max(1, peak * maxHalfH), b: bucket });
+          lower.push({ x, y: centerY + Math.max(1, peak * maxHalfH), b: bucket });
         }
-      } else {
-        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
-        const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
-          const isBreak = (barIndex >= 96 && barIndex < 112);
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
 
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            // 3BAND
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
+        const drawEnvelope = (colour: string | CanvasGradient, alpha = 1) => {
+          if (upper.length < 2) return;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.moveTo(upper[0].x, centerY);
+          upper.forEach((point) => ctx.lineTo(point.x, point.y));
+          for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
+          ctx.closePath();
+          ctx.fillStyle = colour;
+          ctx.fill();
+          ctx.restore();
+        };
+
+        if (waveformMode === 'BLUE') {
+          drawEnvelope('#159fe8');
+          drawEnvelope('#b8e9ff', 0.34);
+        } else if (waveformMode === '3BAND') {
+          // Bands share the same continuous silhouette; only their colour is layered.
+          drawEnvelope('#ff3b45', 0.72);
+          drawEnvelope('#18d8df', 0.48);
+          drawEnvelope('#effcff', 0.30);
+        } else {
+          // RGB remains the default source-like waveform, with a restrained
+          // frequency-colour gradient rather than one bar per analysis bucket.
+          const gradient = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
+          gradient.addColorStop(0, '#86d8ff');
+          gradient.addColorStop(0.48, '#21a8e8');
+          gradient.addColorStop(0.52, '#21a8e8');
+          gradient.addColorStop(1, '#ff4655');
+          drawEnvelope(gradient);
         }
+
+        // Fine centre trace restores the characteristic original waveform detail
+        // without exposing the boundaries of edited regions.
+        ctx.strokeStyle = waveformMode === 'RGB' ? 'rgba(255,255,255,.42)' : 'rgba(220,245,255,.38)';
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+        ctx.stroke();
+        ctx.beginPath();
+        lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+        ctx.stroke();
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
