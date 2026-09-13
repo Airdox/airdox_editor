@@ -8,9 +8,16 @@ interface WorkspaceSettingsModalProps {
   onShowInfo: () => void;
   onOpenDatabaseInspector?: () => void;
   onOpenSystemLogs?: () => void;
+  onAutoCue?: () => void;
   onClearHistory?: () => void;
   waveformMode: WaveformMode;
   onSetWaveformMode: (mode: WaveformMode) => void;
+  snapToBeatgrid: boolean;
+  onSetSnapToBeatgrid: (val: boolean) => void;
+  autoScroll: boolean;
+  onSetAutoScroll: (val: boolean) => void;
+  highQualityRendering: boolean;
+  onSetHighQualityRendering: (val: boolean) => void;
 }
 
 export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
@@ -19,9 +26,16 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onShowInfo,
   onOpenDatabaseInspector,
   onOpenSystemLogs,
+  onAutoCue,
   onClearHistory,
   waveformMode,
   onSetWaveformMode,
+  snapToBeatgrid,
+  onSetSnapToBeatgrid,
+  autoScroll,
+  onSetAutoScroll,
+  highQualityRendering,
+  onSetHighQualityRendering,
 }) => {
   if (!isOpen) return null;
 
@@ -76,6 +90,41 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                 ))}
               </div>
             </div>
+
+            <div className="bg-[#161820] border border-[#22242d] rounded-xs p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-white">Snap to Beatgrid</div>
+                  <div className="text-[10px] text-neutral-500">Align selection and playhead perfectly to the beatgrid.</div>
+                </div>
+                <label className="flex items-center cursor-pointer">
+                  <input type="checkbox" className="sr-only peer" checked={snapToBeatgrid} onChange={(e) => onSetSnapToBeatgrid(e.target.checked)} />
+                  <div className="w-8 h-4 bg-[#0f1015] border border-[#22242d] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-400 peer-checked:after:bg-[#0088ff] after:border-neutral-500 after:border after:rounded-full after:h-3 after:w-3 after:transition-all"></div>
+                </label>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-white">Auto-Scroll Waveform</div>
+                  <div className="text-[10px] text-neutral-500">Center the playhead automatically during playback.</div>
+                </div>
+                <label className="flex items-center cursor-pointer">
+                  <input type="checkbox" className="sr-only peer" checked={autoScroll} onChange={(e) => onSetAutoScroll(e.target.checked)} />
+                  <div className="w-8 h-4 bg-[#0f1015] border border-[#22242d] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-400 peer-checked:after:bg-[#00c853] after:border-neutral-500 after:border after:rounded-full after:h-3 after:w-3 after:transition-all"></div>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-semibold text-white">High Quality Rendering</div>
+                  <div className="text-[10px] text-neutral-500">Use 32-bit float internal mixing and anti-aliasing.</div>
+                </div>
+                <label className="flex items-center cursor-pointer">
+                  <input type="checkbox" className="sr-only peer" checked={highQualityRendering} onChange={(e) => onSetHighQualityRendering(e.target.checked)} />
+                  <div className="w-8 h-4 bg-[#0f1015] border border-[#22242d] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-400 peer-checked:after:bg-[#8b5cf6] after:border-neutral-500 after:border after:rounded-full after:h-3 after:w-3 after:transition-all"></div>
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Section: Advanced Utilities */}
@@ -122,6 +171,19 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                 <div>
                   <div className="text-[11.5px] font-semibold text-neutral-200 group-hover:text-white">Project Info</div>
                   <div className="text-[10px] text-neutral-500">License & Data Origin</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => { onClose(); onAutoCue?.(); }}
+                className="flex items-center space-x-2 bg-[#161820] border border-[#22242d] hover:border-[#383d4e] p-3 rounded-xs text-left transition-colors group"
+              >
+                <div className="p-1.5 bg-[#1c1f2b] rounded text-[#8b5cf6] group-hover:bg-[#8b5cf6] group-hover:text-white transition-colors">
+                  <Waves size={14} />
+                </div>
+                <div>
+                  <div className="text-[11.5px] font-semibold text-neutral-200 group-hover:text-white">Auto-Cue</div>
+                  <div className="text-[10px] text-neutral-500">Find Drops & Breaks</div>
                 </div>
               </button>
 

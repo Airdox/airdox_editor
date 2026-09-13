@@ -60,7 +60,7 @@ import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
-import { analyzeTrackForMixIn } from './audio/mixAnalysis';
+import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
 import {
   cloneAudioBuffer,
   executeCopy,
@@ -275,6 +275,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
+  const [autoScroll, setAutoScroll] = useState<boolean>(true);
+  const [highQualityRendering, setHighQualityRendering] = useState<boolean>(true);
+  const [snapToBeatgrid, setSnapToBeatgrid] = useState<boolean>(true);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
@@ -855,6 +858,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
+  const handleAutoCue = useCallback(() => {
+    if (!activeTrack) return;
+    try {
+      const newCues = generateAutoCuesForTrack(activeTrack);
+      
+      if (newCues.length > 0) {
+        setTracks(prev => prev.map(t => {
+          if (t.id === activeTrack.id) {
+            return {
+              ...t,
+              cues: [...t.cues, ...newCues].sort((a, b) => a.position - b.position)
+            };
+          }
+          return t;
+        }));
+        
+        logger.info(`Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
+      }
+    } catch (err: any) {
+      logger.error(`Fehler bei Auto-Cue Generierung: ${err.message}`);
+    }
+  }, [activeTrack]);
+
   const handleBeatSelect = (beats: number) => {
     if (!activeTrack) return;
     const bg = activeTrack.beatGrid;
@@ -2542,8 +2568,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
+        onAutoCue={() => {
+          handleAutoCue();
+          setSettingsModalOpen(false);
+        }}
         waveformMode={waveformMode}
         onSetWaveformMode={setWaveformMode}
+        snapToBeatgrid={snapToBeatgrid}
+        onSetSnapToBeatgrid={setSnapToBeatgrid}
+        autoScroll={autoScroll}
+        onSetAutoScroll={setAutoScroll}
+        highQualityRendering={highQualityRendering}
+        onSetHighQualityRendering={setHighQualityRendering}
       />
       {activeTrack && (
         <>

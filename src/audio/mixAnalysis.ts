@@ -526,3 +526,64 @@ export function createCueForMixIn(
     origin: DataOrigin.USER_EDIT,
   };
 }
+
+/**
+ * Generates Cue Points at prominent track locations (Drops, Breakdowns) 
+ * using the phrase structure and energy analysis.
+ */
+export function generateAutoCuesForTrack(track: TrackModel): CuePoint[] {
+  const phrases = resolveTrackPhrases(track);
+  const newCues: CuePoint[] = [];
+  let hotCueIndex = 0; // A, B, C, D...
+  const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const colors = {
+    DROP: '#ef4444', // Red
+    CHORUS: '#f59e0b', // Amber
+    BREAKDOWN: '#8b5cf6', // Purple
+    UP: '#10b981', // Green
+  };
+
+  phrases.forEach((phrase) => {
+    // Only target Drops, Breakdowns, Chorus, or Build-ups
+    if (['DROP', 'BREAKDOWN', 'CHORUS', 'UP'].includes(phrase.name)) {
+      if (hotCueIndex < 8) {
+        const slotLetter = letters[hotCueIndex];
+        const color = colors[phrase.name as keyof typeof colors] || '#0088ff';
+        const label = phrase.name === 'BREAKDOWN' ? 'BREAK' : phrase.name;
+        
+        newCues.push({
+          id: `auto-cue-${Date.now()}-${phrase.startBar}-${Math.random()}`,
+          name: `${label} (Bar ${phrase.startBar})`,
+          type: 'HOT_CUE',
+          hotCueNum: hotCueIndex,
+          letter: slotLetter,
+          position: phrase.startTime,
+          inMsec: Math.round(phrase.startTime * 1000),
+          barNumber: phrase.startBar,
+          beatNumber: 1,
+          comment: `Auto-generierter Cue-Punkt: ${phrase.name}`,
+          color,
+          origin: DataOrigin.ANALYSIS_CACHE,
+        });
+        
+        // Also add a Memory Cue at the exact same location for CDJs
+        newCues.push({
+          id: `auto-cue-mem-${Date.now()}-${phrase.startBar}-${Math.random()}`,
+          name: `${label} (Bar ${phrase.startBar})`,
+          type: 'MEMORY',
+          position: phrase.startTime,
+          inMsec: Math.round(phrase.startTime * 1000),
+          barNumber: phrase.startBar,
+          beatNumber: 1,
+          comment: `Auto-generierter Memory-Cue: ${phrase.name}`,
+          color,
+          origin: DataOrigin.ANALYSIS_CACHE,
+        });
+
+        hotCueIndex++;
+      }
+    }
+  });
+
+  return newCues;
+}
