@@ -73,7 +73,12 @@ interface DetailWaveformProps {
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
   onDropPaletteClip?: (clipId: string, time: number) => void;
+  /** Startet die Track-Part-Analyse (Intro/Build/Drop/Break) mit Auto-Cues. */
+  onAnalyzeParts?: () => void;
 }
+
+/** Höhe der farbigen Part-Leiste (Intro/Drop/Break …) unter der Wellenform. */
+const PHRASE_LANE_HEIGHT = 18;
 
 interface ContextMenuState {
   visible: boolean;
@@ -119,6 +124,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onLoadAudioClick,
   onDropFile,
   onDropPaletteClip,
+  onAnalyzeParts,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -288,31 +294,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 2b. Rekordbox Phrase Blocks (PSSI Song Structure)
-      if (track.phrases && track.phrases.length > 0) {
-        track.phrases.forEach((p) => {
-          const px1 = timeToPixel(p.startTime, width);
-          const px2 = timeToPixel(p.endTime, width);
-          if (px2 < 0 || px1 > width) return;
-          const left = Math.max(0, px1);
-          const right = Math.min(width, px2);
-          const pw = right - left;
-          if (pw > 2) {
-            ctx.fillStyle = p.color + '33';
-            ctx.fillRect(left, 18, pw, 9);
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = 1;
-            ctx.strokeRect(left, 18, pw, 9);
-
-            if (pw > 35) {
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 8px sans-serif';
-              ctx.fillText(p.name, left + 3, 25);
-            }
-          }
-        });
-      }
-
       // 3. Render the source waveform as a continuous silhouette.
       // Never use edit-operation bars or a synthetic beat pattern here: inserted,
       // replaced and overdubbed audio must be rendered by the same renderer as
@@ -478,6 +459,96 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.lineTo(x, height);
           ctx.stroke();
         }
+      }
+
+      // 3c. Track-Part-Leiste (Intro / Build / Drop / Break / Outro) unter der
+      // Wellenform. Jede erkannte Sektion wird als farbiger Block gerendert;
+      // die Startgrenzen sitzen auf den Taktstrichen des Beatgrids.
+      const laneTop = height - PHRASE_LANE_HEIGHT;
+      if (track.phrases && track.phrases.length > 0) {
+        // Dunkler Leisten-Hintergrund überdeckt Beatgrid-Linien im Lane-Bereich
+        ctx.fillStyle = '#0e1015';
+        ctx.fillRect(0, laneTop, width, PHRASE_LANE_HEIGHT);
+        ctx.strokeStyle = '#232635';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, laneTop);
+        ctx.lineTo(width, laneTop);
+        ctx.stroke();
+
+        track.phrases.forEach((p) => {
+          const px1 = timeToPixel(p.startTime, width);
+          const px2 = timeToPixel(p.endTime, width);
+          if (px2 < 0 || px1 > width) return;
+          const left = Math.max(0, px1);
+          const right = Math.min(width, px2);
+          const pw = right - left;
+          if (pw <= 1) return;
+
+          // Farbiger Part-Block mit leichtem vertikalen Verlauf
+          const grad = ctx.createLinearGradient(0, laneTop, 0, height);
+          grad.addColorStop(0, p.color + 'e6');
+          grad.addColorStop(1, p.color + '99');
+          ctx.fillStyle = grad;
+          ctx.fillRect(left, laneTop + 1.5, pw, PHRASE_LANE_HEIGHT - 2.5);
+
+          // Part-Startgrenze: kräftige Linie in Part-Farbe hoch bis zur Wellenform
+          if (px1 >= 0 && px1 <= width) {
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(px1, 18);
+            ctx.lineTo(px1, laneTop);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Kleiner Pfeil an der Part-Grenze oberhalb der Leiste
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.moveTo(px1 - 4, laneTop - 5);
+            ctx.lineTo(px1 + 4, laneTop - 5);
+            ctx.lineTo(px1, laneTop);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // Label (BREAKDOWN wird als BREAK angezeigt)
+          if (pw > 30) {
+            const label = p.name === 'BREAKDOWN' ? 'BREAK' : p.name;
+            ctx.font = 'bold 9px sans-serif';
+            const labelW = ctx.measureText(label).width;
+            if (labelW + 8 <= pw) {
+              ctx.fillStyle = 'rgba(0,0,0,0.55)';
+              ctx.fillRect(left + 3, laneTop + 3.5, labelW + 6, 11);
+              ctx.fillStyle = '#ffffff';
+              ctx.fillText(label, left + 6, laneTop + 12.5);
+            }
+          }
+
+          // Takt-Angabe rechtsbündig, wenn Platz vorhanden
+          if (pw > 110) {
+            const barsLabel = `${p.endBar - p.startBar} BARS`;
+            ctx.font = '8px monospace';
+            ctx.fillStyle = 'rgba(255,255,255,0.75)';
+            ctx.textAlign = 'right';
+            ctx.fillText(barsLabel, right - 4, laneTop + 12.5);
+            ctx.textAlign = 'left';
+          }
+        });
+      } else {
+        // Leere, dezent markierte Leiste als Hinweis auf die Part-Analyse
+        ctx.fillStyle = '#0d0f14';
+        ctx.fillRect(0, laneTop, width, PHRASE_LANE_HEIGHT);
+        ctx.strokeStyle = '#1c1f2b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, laneTop);
+        ctx.lineTo(width, laneTop);
+        ctx.stroke();
+        ctx.fillStyle = '#495066';
+        ctx.font = '9px sans-serif';
+        ctx.fillText('Keine Track-Parts analysiert — „PARTS“ klicken für Intro/Build/Drop/Break-Erkennung', 8, laneTop + 12.5);
       }
 
       // 4. Draw Cues and Markers
@@ -908,6 +979,22 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               DATA
             </button>
           )}
+
+          {/* Track-Part-Analyse (Intro/Build/Drop/Break) mit Auto-Cues */}
+          {onAnalyzeParts && (
+            <button
+              onClick={onAnalyzeParts}
+              disabled={!track || !track.analysis}
+              className={`w-full py-0.5 rounded-xs text-[7.5px] font-bold tracking-tight transition-colors text-center ${
+                track && track.analysis
+                  ? 'bg-[#f59e0b]/15 hover:bg-[#f59e0b] text-[#f59e0b] hover:text-black border border-[#f59e0b]/30'
+                  : 'bg-[#15161c] text-neutral-600 border border-neutral-800 cursor-not-allowed'
+              }`}
+              title="Track-Parts analysieren (Intro, Build-Up, Drop, Break, Outro) und Cue-Punkte an prägnanten Stellen setzen"
+            >
+              PARTS
+            </button>
+          )}
         </div>
 
         {/* Middle: Pioneer Memory Cue Navigation (MEM <, +MEM, MEM >) */}
@@ -1265,6 +1352,19 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               <span>Auto-Align Beatgrid</span>
               <span className="text-[10px] font-mono text-[#34d399]">AUTO</span>
             </button>
+
+            {onAnalyzeParts && (
+              <button
+                onClick={() => {
+                  onAnalyzeParts();
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#b45309] text-[#fbbf24] hover:text-white flex items-center justify-between"
+              >
+                <span>Track-Parts analysieren + Auto-Cues</span>
+                <span className="text-[10px] font-mono text-[#f59e0b]">PARTS</span>
+              </button>
+            )}
 
             <div className="h-px bg-[#262832] my-1" />
 

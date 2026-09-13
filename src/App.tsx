@@ -81,6 +81,7 @@ import { logger } from './utils/logger';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
+import { detectTrackParts } from './audio/phraseDetection';
 import {
   cloneAudioBuffer,
   executeCopy,
@@ -1386,6 +1387,57 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       timestamp: Date.now(),
     });
   };
+
+  // Track-Part-Analyse: erkennt Intro/Build/Drop/Break aus der realen
+  // Wellenform-Energie, zeigt die Parts farbig unter der Wellenform und setzt
+  // an den prägnanten Part-Grenzen (Drop, Break, Build) Cue-Punkte.
+  const handleAnalyzeParts = useCallback(() => {
+    if (!activeTrack) return;
+    try {
+      const detectedParts = detectTrackParts(activeTrack);
+      if (!detectedParts || detectedParts.length === 0) {
+        logger.warn(
+          'BEATGRID',
+          `Part-Analyse: Keine Wellenform-Analyse für "${activeTrack.title}" vorhanden — Parts können nicht erkannt werden.`
+        );
+        return;
+      }
+
+      const trackWithParts: TrackModel = { ...activeTrack, phrases: detectedParts };
+      const newCues = generateAutoCuesForTrack(trackWithParts);
+
+      setTracks((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeTrack.id) return t;
+          // Alte Auto-Cues (ANALYSIS_CACHE) entfernen, damit eine erneute
+          // Analyse keine doppelten Marker anhäuft. User-Cues bleiben erhalten.
+          const keptCues = t.cues.filter((c) => c.origin !== DataOrigin.ANALYSIS_CACHE);
+          return {
+            ...t,
+            phrases: detectedParts,
+            cues: [...keptCues, ...newCues].sort((a, b) => a.position - b.position),
+          };
+        })
+      );
+
+      const partSummary = detectedParts
+        .map((p) => `${p.name === 'BREAKDOWN' ? 'BREAK' : p.name} (Takt ${p.startBar})`)
+        .join(', ');
+      logger.info(
+        'BEATGRID',
+        `Part-Analyse: ${detectedParts.length} Parts erkannt [${partSummary}] und ${newCues.length} Cue-Punkte an prägnanten Stellen gesetzt für "${activeTrack.title}".`
+      );
+      showOperationFeedback({
+        title: 'Track-Parts analysiert',
+        operationType: 'CUE',
+        description: `${detectedParts.length} Parts aus der Wellenform-Energie erkannt: ${partSummary}. ${newCues.length} Cue-Punkte wurden an den prägnanten Part-Grenzen (Drop, Break, Build-Up) gesetzt. Die Parts werden farblich unter der Wellenform angezeigt.`,
+        originalSha256: activeTrack.originalSha256 || 'N/A',
+        timestamp: Date.now(),
+      });
+    } catch (err: any) {
+      logger.error('BEATGRID', `Fehler bei der Track-Part-Analyse: ${err.message}`, err);
+    }
+  }, [activeTrack, showOperationFeedback]);
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
   const handleAutoCue = useCallback(() => {
@@ -3309,6 +3361,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
           onDropPaletteClip={handleDropPaletteClip}
+          onAnalyzeParts={handleAnalyzeParts}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
