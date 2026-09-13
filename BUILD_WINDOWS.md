@@ -32,11 +32,23 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 
 ## Automatischer Build (GitHub Actions)
 
-Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
-`main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
-beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.1 && git push --tags`) wird automatisch ein GitHub
-Release mit den `.exe`-Dateien erzeugt.
+Der Workflow `.github/workflows/windows-build.yml` baut **auf jedem Push
+(alle Branches), auf jedem Pull Request, auf Tags `v*` und einmal täglich
+um 03:00 UTC (05:00 DE)** automatisch beide Windows-Artefakte und lädt sie
+als Artifact (30 Tage) hoch:
+
+- **Jeder Commit-Push** → frischer Build unter *Actions → Windows-Build →
+  Artifacts* (`airdox-smart-editor-windows`), herunterladbar als ZIP mit
+  Installer + Portable-`.exe`.
+- **Jeder Push auf `main`** → aktualisiert zusätzlich das Rolling-Prerelease
+  [`latest`](https://github.com/Airdox/airdox_editor/releases/tag/latest)
+  unter *Releases*, sodass es dort immer die neueste WIN-App gibt – ganz
+  ohne Tag.
+- **Tag** (z. B. `git tag v0.4.2 && git push --tags`) → offizielles GitHub
+  Release mit den `.exe`-Dateien und generierten Release-Notes.
+
+Laufen bei schnellen Push-Folgen mehrere Builds, wird der ältere automatisch
+abgebrochen – es gewinnt immer der neueste Commit.
 
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 

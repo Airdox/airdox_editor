@@ -1,17 +1,25 @@
 name: Windows-Build
 
+# Baut auf JEDEM Push (alle Branches + Tags) automatisch die Windows-App
+# (NSIS-Installer + Portable). So entsteht zu jedem Commit ein frisches,
+# herunterladbares Build-Artefakt.
 on:
   push:
-    branches: ['main', 'release/**']
-    tags: ['v*']
-  pull_request:
-    branches: ['main']
-  workflow_dispatch:      # manuell auf Knopfdruck
+    branches: ['**']   # jeder Push auf irgendeinen Branch baut die WIN-App
+    tags: ['v*']       # zusätzlich: Release-Build bei Versionstag (z. B. v0.4.2)
+  pull_request:        # jeder PR (alle Ziel-Branches) wird ebenfalls gebaut
+  workflow_dispatch:   # manuell auf Knopfdruck
   schedule:
-    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
+    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE (Nightly)
 
 permissions:
-  contents: write         # wird für das Erstellen von GitHub-Releases benötigt
+  contents: write         # wird für das Erstellen/Aktualisieren von GitHub-Releases benötigt
+
+# Bei schnellen Push-Folgen wird der noch laufende alte Build desselben
+# Refs abgebrochen – es gewinnt immer der neueste Commit.
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -43,14 +51,23 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build-Ausgabe prüfen
+        if: always()
+        shell: bash
+        run: ls -la release/ || echo "kein release-Ordner vorhanden"
+
       - name: Artefakte anhängen (immer)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
           path: release/*.exe
+          if-no-files-found: warn
+          compression-level: 0  # .exe sind bereits komprimiert – spart Upload-Zeit
           retention-days: 30
 
+      # Offizielles Release bei Versionstag, z. B.:
+      #   git tag v0.4.2 && git push --tags
       - name: GitHub-Release bei Tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -58,3 +75,21 @@ jobs:
           name: airdox_SMART_Editor ${{ github.ref_name }}
           files: release/*.exe
           generate_release_notes: true
+
+      # Laufender Dev-Build: Jeder Push auf main aktualisiert das
+      # "latest"-Prerelease, sodass es unter Releases immer die neueste
+      # WIN-App als Download gibt – ganz ohne Tag.
+      - name: Rolling Prerelease „latest" aktualisieren (main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest dev build (main)
+          prerelease: true
+          files: release/*.exe
+          body: |
+            Automatischer Dev-Build vom `main`-Branch – immer die neueste WIN-App.
+            Offizielle Versionen stehen unter den getaggten Releases (v*).
+
+            - Commit: ${{ github.sha }}
+            - Build: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
