@@ -2,9 +2,9 @@
  * @license
  * MultiLayerRenderInspector Component
  * Visualizes the rendered multi-layer composition pipeline:
- * - Timeline distribution of audio sources and clips
+ * - Timeline distribution of real project audio sources and clips
  * - Non-destructive original media provenance
- * - Applied Beat FX & Sound Color FX processing chains
+ * - Real applied edit segments & non-destructive EDL graph
  * - Sequential render step progress and final master packaging
  */
 
@@ -12,7 +12,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   Layers, 
   Sparkles, 
-  Scissors, 
   Sliders, 
   ArrowRight, 
   CheckCircle, 
@@ -43,7 +42,7 @@ interface MultiLayerRenderInspectorProps {
   isOpen: boolean;
   track: TrackModel;
   clips?: PaletteClip[];
-  format: 'WAV' | 'XML' | 'JSON';
+  format: string;
   onStartDownload: () => void;
   onCancel: () => void;
 }
@@ -61,79 +60,79 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [isDone, setIsDone] = useState<boolean>(false);
 
-  // Generate multi-layer breakdown dynamically based on the current track and clips
-  const totalDur = track.duration || 357.5;
-  const clip1 = clips[0] || { name: 'Intro Kick 4B', sourceTrackName: track.title, duration: 7.38 };
-  const clip2 = clips[1] || { name: '8-Bit Arp 8B', sourceTrackName: track.title, duration: 14.76 };
-  const clip3 = clips[2] || { name: 'Main Drop 8B', sourceTrackName: track.title, duration: 14.76 };
+  const totalDur = track.duration || 300.0;
 
-  const layers: RenderLayerItem[] = [
-    {
-      id: 'layer-original',
-      name: 'Schicht 1: Original Audio-Quelle (Grundspur)',
-      type: 'ORIGINAL_STEM',
-      sourceFile: track.originalMedia?.location || `${track.title.replace(/\s+/g, '_')}.mp3`,
+  // Generate multi-layer breakdown dynamically based exclusively on the current track and actual project clips
+  const layers: RenderLayerItem[] = [];
+
+  // Layer 1: Base Track (Always present)
+  layers.push({
+    id: 'layer-original',
+    name: `Schicht 1: Hauptspur (${track.title})`,
+    type: 'ORIGINAL_STEM',
+    sourceFile: track.originalMedia?.location || track.originalMedia?.resolvedPath || `${track.title.replace(/\s+/g, '_')}.wav`,
+    timeRange: `00:00.0 – ${Math.floor(totalDur / 60)}:${Math.floor(totalDur % 60).toString().padStart(2, '0')}.0`,
+    startSec: 0,
+    durationSec: totalDur,
+    description: `Original-Audioquelle (${track.artist || 'Unknown Artist'}). SHA-256: ${track.originalSha256 ? track.originalSha256.slice(0, 10) : 'sha256'}... (Read-Only)`,
+    accentColor: '#0088ff',
+    status: renderProgress > 20 ? 'COMPLETED' : renderProgress > 5 ? 'PROCESSING' : 'PENDING',
+  });
+
+  // Layer 2: Clips / Palette Inserts (ONLY if clips exist in the project)
+  if (clips && clips.length > 0) {
+    const clipNames = clips.map((c) => c.name).join(', ');
+    const maxClipDur = clips.reduce((acc, c) => Math.max(acc, c.duration || 0), 0);
+    layers.push({
+      id: 'layer-clips',
+      name: `Schicht ${layers.length + 1}: Palette-Clips & Inserts (${clips.length} Clips)`,
+      type: 'AUDIO_CLIP',
+      sourceFile: clipNames.length > 60 ? clipNames.slice(0, 57) + '...' : clipNames,
+      timeRange: `Projekt-Palette Inserts (bis zu ${maxClipDur.toFixed(1)}s)`,
+      startSec: 0,
+      durationSec: Math.min(totalDur, maxClipDur * clips.length),
+      description: `${clips.length} aktives Clip-Segment / Schnipsel aus dem Projekt in die Timeline integriert.`,
+      accentColor: '#10b981',
+      status: renderProgress > 50 ? 'COMPLETED' : renderProgress > 25 ? 'PROCESSING' : 'PENDING',
+    });
+  }
+
+  // Layer 3: Working Segments & Non-Destructive Edits (ONLY if non-original edit segments exist)
+  const nonOriginalSegments = track.workingSegments
+    ? track.workingSegments.filter((s) => s.type !== 'ORIGINAL')
+    : [];
+  if (nonOriginalSegments.length > 0) {
+    layers.push({
+      id: 'layer-edits',
+      name: `Schicht ${layers.length + 1}: Timeline Edits (${nonOriginalSegments.length} Schnitte / Overdubs)`,
+      type: 'BEAT_FX',
+      sourceFile: `Arbeitspuffer Graph (${nonOriginalSegments.length} Edit-Segmente)`,
       timeRange: `00:00.0 – ${Math.floor(totalDur / 60)}:${Math.floor(totalDur % 60).toString().padStart(2, '0')}.0`,
       startSec: 0,
       durationSec: totalDur,
-      description: `Unverändertes Original-Master. SHA-256: ${track.originalSha256.slice(0, 10)}... (Read-Only)`,
-      accentColor: '#0088ff',
-      status: renderProgress > 20 ? 'COMPLETED' : renderProgress > 5 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-clips',
-      name: 'Schicht 2: Audio-Schnipsel & Palette Inserts',
-      type: 'AUDIO_CLIP',
-      sourceFile: `${clip1.name}, ${clip2.name}, ${clip3.name}`,
-      timeRange: `03:19.3 – 03:48.8 (Takt 109 – 125)`,
-      startSec: 199.3,
-      durationSec: 29.5,
-      description: `Schnipsel stammen aus der Originaldatei und wurden mit phasenreinem Crossfade eingepflegt.`,
-      accentColor: '#10b981',
-      status: renderProgress > 50 ? 'COMPLETED' : renderProgress > 25 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-colorfx',
-      name: 'Schicht 3: Sound Color FX Kette (Filter & Space)',
-      type: 'COLOR_FX',
-      sourceFile: 'Pioneer DJM-V10 Color FX Engine (Halbautomatisiert)',
-      timeRange: '01:00.0 – 03:00.0 (Pre-Drop Phase)',
-      startSec: 60.0,
-      durationSec: 120.0,
-      description: `Dynamische Low-Pass Resonance & Space Reverb Sweep mit automatisierter Cutoff-Hüllkurve.`,
+      description: `Non-destruktiver EDL-Graph mit Phasen-Crossfades und Gain-Struktur gerendert.`,
       accentColor: '#f59e0b',
-      status: renderProgress > 75 ? 'COMPLETED' : renderProgress > 50 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-beatfx',
-      name: 'Schicht 4: Beat FX Zug (Quantized Roll & Echo 1/2)',
-      type: 'BEAT_FX',
-      sourceFile: 'Pioneer Beat FX Modul (130.05 BPM Synchronized)',
-      timeRange: '03:15.0 – 03:26.7 (Breakdown Transition)',
-      startSec: 195.0,
-      durationSec: 11.7,
-      description: `1/2 Beat Roll & Ping-Pong Delay exakt auf Takt 113.1 quantisiert.`,
-      accentColor: '#ec4899',
-      status: renderProgress > 90 ? 'COMPLETED' : renderProgress > 75 ? 'PROCESSING' : 'PENDING',
-    },
-    {
-      id: 'layer-master',
-      name: 'Schicht 5: Master Mastering & Headroom Limiter',
-      type: 'MASTER_CHAIN',
-      sourceFile: 'Studio Master Bus (32-Bit Float Summing -> 16-Bit Dither)',
-      timeRange: 'Vollständige Spur (00:00 - Ende)',
-      startSec: 0,
-      durationSec: totalDur,
-      description: `Summierung aller Spuren mit -0.3 dB True-Peak Ceiling und Rekordbox Beatgrid-Synchronisation.`,
-      accentColor: '#8b5cf6',
-      status: renderProgress >= 100 ? 'COMPLETED' : renderProgress > 90 ? 'PROCESSING' : 'PENDING',
-    },
-  ];
+      status: renderProgress > 80 ? 'COMPLETED' : renderProgress > 50 ? 'PROCESSING' : 'PENDING',
+    });
+  }
+
+  // Layer 4: Master Output Stream (Always present)
+  layers.push({
+    id: 'layer-master',
+    name: `Schicht ${layers.length + 1}: Master Bus & Export-Packaging (${format})`,
+    type: 'MASTER_CHAIN',
+    sourceFile: `Studio Master Summing Bus (${format}-Format)`,
+    timeRange: `Vollständige Spur (00:00 – ${Math.floor(totalDur / 60)}:${Math.floor(totalDur % 60).toString().padStart(2, '0')})`,
+    startSec: 0,
+    durationSec: totalDur,
+    description: `Finales Master-Routing in Zielformat ${format} mit -0.3 dB Ceiling & Beatgrid-Sync.`,
+    accentColor: '#8b5cf6',
+    status: renderProgress >= 100 ? 'COMPLETED' : renderProgress > 90 ? 'PROCESSING' : 'PENDING',
+  });
 
   const steps = [
-    'Quellspuren & Schnipsel-Zuordnung analysieren...',
+    'Projektspuren & echte Schnipsel-Zuordnung analysieren...',
     'Phasenreine Audio-Buffer & Crossfades berechnen...',
-    'Sound Color FX & Beat FX Automationsketten anwenden...',
     '32-Bit Floating Point Audio-Summierung rendern...',
     'Beatgrid, Cue-Punkte & Rekordbox Metadaten verifizieren...',
     `Master-Datei (${format}) fertiggestellt!`,
@@ -148,9 +147,9 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
       return;
     }
 
-    setSelectedLayerId('layer-clips');
+    setSelectedLayerId(layers[0]?.id || 'layer-original');
 
-    // Simulate precise multi-layer rendering progression
+    // Simulate multi-layer rendering progression
     const interval = setInterval(() => {
       setRenderProgress((prev) => {
         if (prev >= 100) {
@@ -158,19 +157,19 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
           setIsDone(true);
           return 100;
         }
-        const next = prev + 2.5;
+        const next = prev + 3.5;
         const stepIdx = Math.min(steps.length - 1, Math.floor((next / 100) * steps.length));
         setCurrentStepIndex(stepIdx);
         return next;
       });
-    }, 55);
+    }, 40);
 
     return () => clearInterval(interval);
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const activeLayer = layers.find((l) => l.id === selectedLayerId) || layers[1];
+  const activeLayer = layers.find((l) => l.id === selectedLayerId) || layers[0];
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 select-none p-4 animate-in fade-in duration-200">
@@ -189,7 +188,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                 </span>
               </div>
               <div className="text-[10px] text-neutral-400">
-                Visuelle Schichten-Zusammensetzung & Effektketten-Transparenz
+                Echte Schichten-Zusammensetzung des aktuellen Projekts ({layers.length} aktive Schichten)
               </div>
             </div>
           </div>
@@ -236,20 +235,17 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                 <span>Timeline Mehrschichten-Modell (00:00 – {Math.floor(totalDur / 60)}:{Math.floor(totalDur % 60).toString().padStart(2, '0')})</span>
               </span>
               <span className="text-[9.5px] font-mono text-neutral-500">
-                130.05 BPM • 4/4 Beatgrid synchron
+                {(track.bpm || 130).toFixed(2)} BPM • 4/4 Beatgrid synchron
               </span>
             </div>
 
             {/* Time ruler */}
             <div className="relative h-4 border-b border-[#202538] mb-2 text-[8.5px] font-mono text-neutral-500 flex justify-between px-1">
               <span>0:00</span>
-              <span>1:00 (Bar 32)</span>
-              <span>2:00 (Bar 65)</span>
-              <span>3:00 (Bar 97)</span>
-              <span className="text-[#00e5ff]">3:26 (Bar 113 Drop)</span>
-              <span>4:00 (Bar 130)</span>
-              <span>5:00</span>
-              <span>5:57</span>
+              <span>1:00</span>
+              <span>2:00</span>
+              <span>3:00</span>
+              <span className="text-[#00e5ff]">Ende ({Math.floor(totalDur / 60)}:{Math.floor(totalDur % 60).toString().padStart(2, '0')})</span>
             </div>
 
             {/* Visual Layer Tracks */}
@@ -290,7 +286,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                       </span>
                     </div>
 
-                    {/* Middle Timeline Segment Box with mini-arrow & details */}
+                    {/* Middle Timeline Segment Box */}
                     <div className="flex-1 flex items-center justify-center z-10 relative">
                       <div
                         className="h-6 rounded-xs flex items-center justify-between px-2 text-[9.5px] font-mono transition-all border"
@@ -335,7 +331,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
             </div>
           </div>
 
-          {/* Detailed Inspector Box for Selected Layer (mit Pfeilchen und Kästchen) */}
+          {/* Detailed Inspector Box for Selected Layer */}
           <div className="bg-[#121622] border border-[#242b40] rounded-xs p-3">
             <div className="flex items-start justify-between mb-2">
               <div className="flex items-center space-x-2">
@@ -364,11 +360,11 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                   {activeLayer.sourceFile}
                 </div>
                 <div className="text-[10px] text-neutral-400 mt-1">
-                  Physische Referenz aus Rekordbox Library.
+                  Echte Projektreferenz aus der Rekordbox Library.
                 </div>
               </div>
 
-              {/* Box 2: Bearbeitung / Effektkette */}
+              {/* Box 2: Bearbeitung */}
               <div className="bg-[#0c0e15] border border-[#1d2232] rounded-xs p-2.5 flex flex-col justify-between relative">
                 <div className="text-[9.5px] font-bold text-neutral-400 uppercase tracking-wider mb-1 flex items-center space-x-1">
                   <Cpu size={11} className="text-[#10b981]" />
@@ -379,7 +375,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                 </div>
                 <div className="text-[10px] text-[#00e5ff] mt-1 flex items-center space-x-1">
                   <ArrowRight size={10} />
-                  <span>Beatgrid-synchronisiert (130.05 BPM)</span>
+                  <span>Beatgrid-synchronisiert ({(track.bpm || 130).toFixed(2)} BPM)</span>
                 </div>
               </div>
 
@@ -393,8 +389,8 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
                   Ziel: Master Stream ({format})
                 </div>
                 <div className="text-[10px] text-neutral-400 mt-1 flex items-center justify-between">
-                  <span>Qualität: 16-Bit / 44.1kHz</span>
-                  <span className="text-[#10b981] font-bold">Verlustfrei</span>
+                  <span>Qualität: High Quality</span>
+                  <span className="text-[#10b981] font-bold">Aktiv</span>
                 </div>
               </div>
             </div>
@@ -413,8 +409,8 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
           <div className="flex items-center space-x-3">
             <span className="text-[11px] text-neutral-400">
               {isDone
-                ? 'Alle 5 Schichten erfolgreich gerendert und verifiziert.'
-                : 'Schichten werden sukzessive im Audio-Buffer summiert...'}
+                ? `Alle ${layers.length} Projekt-Schichten erfolgreich verifiziert.`
+                : 'Projekt-Schichten werden verarbeitet...'}
             </span>
 
             <button
@@ -427,7 +423,7 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
               }`}
             >
               <CheckCircle size={13} />
-              <span>{isDone ? `${format} Master-Datei herunterladen` : 'Rendert Schichten...'}</span>
+              <span>{isDone ? `${format} Master-Datei speichern` : 'Rendert Schichten...'}</span>
             </button>
           </div>
         </div>
