@@ -6,6 +6,7 @@
  */
 
 import { DataOrigin, WaveformAnalysisData } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export function analyzeAudioBuffer(
   buffer: AudioBuffer,
@@ -79,6 +80,14 @@ export function analyzeAudioBuffer(
       highEnergy[b] = Math.min(1.0, (highSum / count) * 3.8);
     }
   }
+
+  logger.debug('WAVEFORM', `Wellenform analysiert: ${(length / sampleRate).toFixed(2)}s @ ${sampleRate} Hz → ${totalBuckets} Buckets (${origin})`, {
+    duration: length / sampleRate,
+    sampleRate,
+    buckets: totalBuckets,
+    channels: buffer.numberOfChannels,
+    origin,
+  });
 
   return {
     length: totalBuckets,
@@ -263,5 +272,7 @@ export function estimateBpm(buffer: AudioBuffer): number {
     }
   }
 
-  return Math.round(bestBpm * 10) / 10;
+  const estimated = Math.round(bestBpm * 10) / 10;
+  logger.debug('BEATGRID', `BPM geschätzt: ${estimated} (Korrelation ${maxCorr.toExponential(2)})`);
+  return estimated;
 }

@@ -6,6 +6,7 @@
  */
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
@@ -404,6 +405,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur: ${parserError.textContent}`);
       throw new Error('Invalid Rekordbox XML structure: ' + parserError.textContent);
     }
 
@@ -419,6 +421,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
   const rawVersion = djPlaylists?.getAttribute('Version') || '1.0.0';
   const tracks: Partial<TrackModel>[] = trackElements.map((el, idx) => parseSingleTrackNode(el, idx));
+  logger.debug('XML_IMPORT', `XML synchron geparst: ${tracks.length} Track(s), Schema ${rawVersion}`);
 
   return { tracks, rawVersion };
 }
@@ -457,6 +460,7 @@ export async function parseRekordboxXmlAsync(
     const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur (async): ${parserError.textContent}`);
       throw new Error('Ungültige Rekordbox-XML-Struktur: ' + parserError.textContent);
     }
     djPlaylists = xmlDoc.querySelector('DJ_PLAYLISTS');
@@ -548,6 +552,14 @@ export async function parseRekordboxXmlAsync(
     logMessages: [...logs.slice(-15)],
   });
 
+  logger.info('XML_IMPORT', `XML-Async-Import abgeschlossen: ${tracks.length} Tracks`, {
+    schemaVersion: rawVersion,
+    tracks: tracks.length,
+    memoryCues: totalMemoryCues,
+    hotCues: totalHotCues,
+    loops: totalLoops,
+  });
+
   return { tracks, rawVersion };
 }
 
@@ -578,6 +590,7 @@ ${track.loops
     </TRACK>
   </COLLECTION>
 </DJ_PLAYLISTS>`;
+  logger.debug('XML_IMPORT', `Track "${track.title}" nach Rekordbox-XML serialisiert (${xml.length} Zeichen, ${track.cues.length} Cues, ${track.loops.length} Loops).`);
   return xml;
 }
 

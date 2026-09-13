@@ -13,6 +13,7 @@ import {
   getPioneerPadLedMessage,
 } from './pioneerMappings';
 import { StemType, StemsMixerState, STEM_TYPES } from '../audio/stemEngine';
+import { logger } from '../utils/logger';
 
 /**
  * Minimal structural Web MIDI typings. They keep this module compilable in
@@ -84,7 +85,7 @@ class MidiManager {
   public async init(): Promise<boolean> {
     if (this.isInitialized) return true;
     if (!this.isSupported) {
-      console.warn('[MIDI] Web MIDI API wird in diesem Browser/Environment nicht unterstützt.');
+      logger.warn('MIDI', 'Web MIDI API wird in diesem Browser/Environment nicht unterstützt.');
       return false;
     }
 
@@ -98,17 +99,24 @@ class MidiManager {
       this.scanDevices();
 
       // Listen for connection changes (plug / unplug)
-      this.midiAccess.onstatechange = () => {
+      this.midiAccess.onstatechange = (event) => {
+        const port = (event as unknown as { port?: { name?: string; state?: string; type?: string } }).port;
+        logger.info('MIDI', `MIDI-Geräteänderung: ${port?.name || 'unbekannt'} (${port?.type || '?'}, ${port?.state || '?'})`);
         this.scanDevices();
         this.notifyStateChange();
       };
 
-      console.info(
-        `[MIDI] Initialisiert. Gefundene Eingänge: ${this.connectedInputs.size}, Ausgänge: ${this.connectedOutputs.size}`
+      logger.info(
+        'MIDI',
+        `MIDI initialisiert. Eingänge: ${this.connectedInputs.size}, Ausgänge: ${this.connectedOutputs.size}`,
+        {
+          inputs: Array.from(this.connectedInputs.values()).map((i) => i.name),
+          outputs: Array.from(this.connectedOutputs.values()).map((o) => o.name),
+        }
       );
       return true;
     } catch (err) {
-      console.warn('[MIDI] Zugriff verweigert oder Fehler bei Initialisierung:', err);
+      logger.warn('MIDI', `[MIDI] Zugriff verweigert oder Fehler bei Initialisierung: ${err instanceof Error ? err.message : String(err)}`, err);
       return false;
     }
   }
@@ -140,6 +148,14 @@ class MidiManager {
         this.connectedOutputs.set(output.id, output);
       }
     }
+
+    const detected = Array.from(this.deviceProfiles.entries()).map(([id, profile]) => {
+      const input = this.connectedInputs.get(id);
+      return { name: input?.name || id, profile: profile.id };
+    });
+    logger.debug('MIDI', `MIDI-Scan: ${this.connectedInputs.size} Eingang/Eingänge, ${this.connectedOutputs.size} Ausgang/Ausgänge`, {
+      devices: detected,
+    });
   }
 
   /**
@@ -174,11 +190,16 @@ class MidiManager {
     });
 
     if (action && action.type !== 'UNKNOWN') {
+      logger.debug('MIDI', `MIDI-Aktion empfangen: ${actionSummary} von ${deviceName}`, {
+        deviceName,
+        hex,
+        action,
+      });
       for (const handler of this.actionHandlers) {
         try {
           handler(action);
         } catch (e) {
-          console.error('[MIDI] Fehler im Action-Handler:', e);
+          logger.error('MIDI', `[MIDI] Fehler im Action-Handler (${action.type}): ${e instanceof Error ? e.message : String(e)}`, e);
         }
       }
     }
@@ -211,8 +232,9 @@ class MidiManager {
       for (const output of this.connectedOutputs.values()) {
         try {
           output.send(msg);
-        } catch {
+        } catch (e) {
           // Output might be closed
+          logger.warn('MIDI', `LED-Feedback an ${output.name || 'Ausgang'} konnte nicht gesendet werden: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
@@ -280,7 +302,7 @@ class MidiManager {
       try {
         listener();
       } catch (e) {
-        console.error('[MIDI] Fehler im StateChange-Listener:', e);
+        logger.error('MIDI', `[MIDI] Fehler im StateChange-Listener: ${e instanceof Error ? e.message : String(e)}`, e);
       }
     }
   }
