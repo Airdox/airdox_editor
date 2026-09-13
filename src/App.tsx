@@ -1417,7 +1417,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime = currentTime) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -1431,7 +1431,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // path is a lossless copy; no WSOLA/pitch processing is allowed to invent a
     // tail of silence.
     const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-    const insertPos = currentTime;
+    const insertPos = Math.max(0, Math.min(workingAudioBuffer.duration, requestedInsertTime));
     const isExactSameSourceSlot = isExactSameSourceSlotRoundTrip({
       targetBuffer: workingAudioBuffer,
       clipBuffer: adapted.adaptedBuffer,
@@ -1502,6 +1502,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
+  };
+
+  const handleDropPaletteClip = (clipId: string, dropTime: number) => {
+    const clip = paletteClips.find((candidate) => candidate.id === clipId);
+    if (!clip) {
+      logger.warn('EDITING', `Drag-and-Drop-Clip nicht mehr in der Palette vorhanden: ${clipId}`);
+      return;
+    }
+    setSelectedClipId(clip.id);
+    setCurrentTime(dropTime);
+    handleInsertClipToDeckA(clip, dropTime);
   };
 
   // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
@@ -2952,6 +2963,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
+          onDropPaletteClip={handleDropPaletteClip}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}

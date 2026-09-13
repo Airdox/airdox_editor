@@ -29,6 +29,11 @@ import {
   ShieldCheck,
   ZoomIn,
 } from 'lucide-react';
+import {
+  hasPaletteClipDrag,
+  paletteDropTime,
+  readPaletteClipDrag,
+} from '../utils/paletteDrag';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -66,6 +71,7 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
+  onDropPaletteClip?: (clipId: string, time: number) => void;
 }
 
 interface ContextMenuState {
@@ -111,6 +117,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
+  onDropPaletteClip,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -791,17 +798,39 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!isDraggingOver) setIsDraggingOver(true);
+        const supported = hasPaletteClipDrag(e.dataTransfer) || Array.from(e.dataTransfer.types).includes('Files');
+        e.dataTransfer.dropEffect = supported ? 'copy' : 'none';
+        if (supported && !isDraggingOver) setIsDraggingOver(true);
+        if (!supported && isDraggingOver) setIsDraggingOver(false);
       }}
       onDragLeave={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingOver(false);
+        // Ignore transitions into child controls/canvas; only clear when the
+        // pointer actually leaves the complete waveform drop zone.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setIsDraggingOver(false);
+        }
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
+
+        const clipId = readPaletteClipDrag(e.dataTransfer);
+        if (clipId && track && canvasRef.current) {
+          const rect = canvasRef.current.getBoundingClientRect();
+          const rawDropTime = paletteDropTime(
+            e.clientX,
+            rect.left,
+            rect.width,
+            viewOffset,
+            viewDuration,
+            track.duration
+          );
+          onDropPaletteClip?.(clipId, snapTime(rawDropTime));
+          return;
+        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }

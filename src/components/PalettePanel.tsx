@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import { PaletteClip } from '../types/rekordbox';
 import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, CheckSquare } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
+import { writePaletteClipDrag } from '../utils/paletteDrag';
 
 interface PalettePanelProps {
   isOpen: boolean;
@@ -170,8 +171,18 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
             return (
               <div
                 key={clip.id}
+                draggable={Boolean(clip.audioBuffer)}
+                onDragStart={(event) => {
+                  if (!clip.audioBuffer) {
+                    event.preventDefault();
+                    return;
+                  }
+                  onSelectClip(clip);
+                  writePaletteClipDrag(event.dataTransfer, clip.id);
+                }}
                 onClick={() => onSelectClip(clip)}
-                className={`p-1.5 rounded-xs border transition-all cursor-pointer ${
+                title={clip.audioBuffer ? 'Clip auf die Wellenform ziehen, um ihn dort einzufügen' : 'Clip besitzt keine Audiodaten'}
+                className={`p-1.5 rounded-xs border transition-all ${clip.audioBuffer ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed opacity-60'} ${
                   isSelected
                     ? 'bg-[#181a24] border-[#0088ff] shadow-sm'
                     : 'bg-[#14151a] border-[#22242d] hover:border-[#323543]'
