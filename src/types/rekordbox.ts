@@ -11,9 +11,8 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
-  /** Explicitly generated test/demo material; never Rekordbox data. */
-  GENERATED_TEST = 'GENERATED_TEST',
-  /** @deprecated Kept only to read old project files; never create. */
+  /** Own calculation used as a clearly labeled fallback when no Rekordbox
+   * source (ANLZ/DB/audio) provides the data. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
 }
 
@@ -33,16 +32,6 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
-  /** Exact tempo stored on this PQTZ beat (tempo_x100 / 100). */
-  bpm?: number;
-  /**
-   * True for beats that only exist because a structural edit opened a gap
-   * (inserted material): the interval continues the deck grid and is a
-   * USER_EDIT consequence, never imported PQTZ data.
-   */
-  insertGrid?: boolean;
-  /** @deprecated Read-only compatibility for old project files; never generate. */
-  tailExtended?: boolean;
 }
 
 export interface BeatGrid {
@@ -123,24 +112,10 @@ export interface PaletteClip {
   color: string;
   audioBuffer?: AudioBuffer;
   miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
-  /**
-   * Provenance of the preview profile: 'ANLZ' = columns selected from the stored
-   * analysis of the source window (nothing re-analyzed), 'EDIT' = measured from
-   * this clip's own edit audio because no stored columns describe it.
-   */
-  previewOrigin?: 'ANLZ' | 'EDIT';
-  /** Human-readable explanation of `previewOrigin` (tooltip). */
-  previewNote?: string;
-  /**
-   * True only when `sourceStart`/`sourceEnd` are a verified window inside the
-   * ORIGINAL source material. False/undefined means the numbers describe the EDIT
-   * timeline and must never be reinterpreted as a position in the original file.
-   */
-  sourceMapped?: boolean;
   origin: DataOrigin;
 }
 
-export type EditOperationType = 'ORIGINAL' | 'INSERT' | 'REPLACE' | 'OVERDUB' | 'CUT' | 'CLEAR';
+export type EditOperationType = 'ORIGINAL' | 'INSERT' | 'REPLACE' | 'OVERDUB' | 'CUT';
 
 export interface EditSegment {
   id: string;
@@ -153,64 +128,20 @@ export interface EditSegment {
   clipId?: string;
   clipBuffer?: AudioBuffer;
   gain: number;
-  /**
-   * Provenance of the clip material, needed to re-use already stored analysis
-   * columns instead of re-analysing audio: which track the clip was cut from
-   * and where inside that track it starts.
-   */
-  sourceTrackId?: string;
-  sourceClipStart?: number;
-  /** Applied tempo factor (destination BPM / clip BPM); 1.0 = timing untouched. */
-  tempoRatio?: number;
-  /** Applied pitch shift in semitones; 0 = harmonic content untouched. */
-  pitchShift?: number;
 }
 
 export interface WaveformAnalysisData {
   length: number;
-  peaks: Float32Array; // stored column height per bucket (0..1)
+  peaks: Float32Array; // max amplitude per bucket
   peaksL: Float32Array;
   peaksR: Float32Array;
-  /**
-   * Per-bucket color/band components exactly as stored in the ANLZ source
-   * (0..1): for PWV5/PWV4 these are the red/green/blue components of the
-   * column color, for PWV6/PWV7 the low/mid/high band heights. They are
-   * visualized verbatim, never recombined.
-   */
-  lowEnergy: Float32Array; // red (PWV5/PWV4) / low band (PWV6/PWV7)
-  midEnergy: Float32Array; // green / mid band
-  highEnergy: Float32Array; // blue / high band
-  /**
-   * PWAV/PWV3 (MONO_5BIT): the three high-order bits, 0 = darkest blue …
-   * 7 = near white (documented whiteness of the blue waveform).
-   */
-  whiteness?: Float32Array;
-  /** PWV4 byte 1: luminance boost of the color columns (/127). */
-  luminance?: Float32Array;
-  /** PWV4: back column height = max(d2, red, green) (/127). */
-  backPeaks?: Float32Array;
-  /** PWV4: front column height = blue component d5 (/127). */
-  frontPeaks?: Float32Array;
+  // Spectral energies for RGB and 3BAND modes
+  lowEnergy: Float32Array; // 20 - 250 Hz (bass/kicks - RED)
+  midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
+  highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
-  /**
-   * Column-wise provenance of an EDIT composite (`ColumnSource` codes from
-   * src/edit/editWaveform.ts). Absent on pristine imported variants: only the
-   * projected waveform of an edited deck carries per-column origins, so the
-   * renderer can show which columns are verbatim Rekordbox data and which were
-   * computed from user material. Never used to invent amplitudes.
-   */
-  provenance?: Uint8Array;
-  /** True for a composite derived from the edit timeline, never for pure ANLZ. */
-  isEditComposite?: boolean;
-  /** Display label of the rendered variant (e.g. `PWV5 → EDIT`). */
-  label?: string;
-  /**
-   * ANLZ source tag this variant was decoded from (e.g. 'PWAV', 'PWV2' …'PWV7').
-   * Set only for genuine ANLZ variants; never for computed analysis.
-   */
-  sourceTag?: string;
 }
 
 /**
@@ -252,67 +183,16 @@ export interface TrackModel {
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
-  /**
-   * All genuine ANLZ waveform variants decoded from the container (different
-   * PWV tags / resolutions). `analysis` remains the best variant; renderers
-   * pick the variant that matches the current zoom. Never synthesized.
-   */
-  analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];
   rawXmlAttributes?: Record<string, string>;
   originalMedia?: OriginalMediaReference;
   workingSegments: EditSegment[];
-  /**
-   * Duration of the PRISTINE source media (seconds). `duration` is the *project*
-   * duration and moves with every insert/delete; this value never does, so the
-   * ANLZ column → time mapping of the untouched material stays exact across any
-   * number of edits. Defaults to `duration` while unedited.
-   */
-  sourceDuration?: number;
-  /**
-   * Pristine imported analysis, frozen at deck load and never mutated by edits.
-   * Every edit composite is re-derived from these arrays (verbatim column copy),
-   * never from the previously displayed composite — repeated edits therefore
-   * cannot degrade or drift the Rekordbox waveform.
-   */
-  baseAnalysis?: WaveformAnalysisData | null;
-  baseAnalysisVariants?: WaveformAnalysisData[];
-  /** Telemetry of the current edit projection (shown in the UI, never faked). */
-  editInfo?: TrackEditInfo;
-}
-
-/** Per-column provenance summary of the projected (edited) waveform. */
-export interface TrackEditInfo {
-  /** Number of layout spans on the project timeline. */
-  spans: number;
-  /** Structural (length-changing) edits applied. */
-  structuralEdits: number;
-  /** Overdub overlays applied. */
-  overlays: number;
-  /** Total columns of the best rendered variant. */
-  columns: number;
-  /** Columns copied verbatim from ANLZ (identity position). */
-  verbatimColumns: number;
-  /** Columns copied verbatim from ANLZ but re-timed by an edit. */
-  retimedColumns: number;
-  /** Columns taken verbatim from another loaded track's ANLZ (clip source). */
-  clipColumns: number;
-  /** Columns computed from edited user material (peaks only, marked as such). */
-  computedColumns: number;
-  /** Columns mixed from an overdub overlay. */
-  mixColumns: number;
-  /** Columns silenced by Clear. */
-  silenceColumns: number;
-  /** Columns without any source data (never invented, drawn empty). */
-  missingColumns: number;
-  /** Bucket duration (seconds per column) of the projected variants. */
-  bucketSeconds: number;
-  /** True when nothing is edited (project === original). */
-  isIdentity: boolean;
-  /** Tags of the ANLZ variants the composite was projected from. */
-  sourceTags: string[];
+  /** Rekordbox 2-Track Matching / Verknüpfungen (Related Tracks feature) */
+  matchingTrackIds?: string[];
+  /** Optional DJ mixing notes for paired tracks (keyed by paired track ID) */
+  matchingNotes?: Record<string, string>;
 }
 
 /**
@@ -327,8 +207,8 @@ export type PartialTrackModel = Partial<TrackModel> & {
 export interface SelectionRange {
   start: number; // seconds
   end: number; // seconds
-  startBeat: number;
-  endBeat: number;
+  startBeat?: number;
+  endBeat?: number;
   beatsCount: number;
   barsCount: number;
   duration: number;
@@ -337,18 +217,12 @@ export interface SelectionRange {
 export interface EditHistoryEntry {
   description: string;
   timestamp: number;
-  /**
-   * Shallow copy of the edit list: `clipBuffer` references are shared on purpose
-   * (a JSON deep copy would silently drop the audio and make Undo destructive).
-   */
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
-  /** Loops/phrases re-timed by the edit (restored together with the cues). */
-  loops?: LoopPoint[];
-  phrases?: PhraseSection[];
-  /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
-  beatGrid?: BeatGrid;
+  audioBuffer?: AudioBuffer;
+  duration?: number;
+  analysis?: WaveformAnalysisData;
 }
 
 export interface MultiTrackLayer {
@@ -361,3 +235,5 @@ export interface MultiTrackLayer {
   pan: number; // -1..1
   color: string;
 }
+
+export * from './editAssistant';

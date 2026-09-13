@@ -22,8 +22,6 @@ import {
   PROJECT_VERSION,
 } from '../src/rekordbox/projectFile';
 import { DataOrigin, TrackModel } from '../src/types/rekordbox';
-import { runTest, report } from './helpers/microTest.mjs';
-import { nextEditId } from '../src/edit/editModel';
 
 interface FakeAudioBuffer {
   sampleRate: number;
@@ -49,7 +47,8 @@ function ok(cond: unknown, msg: string) {
   passed++;
 }
 
-runTest('project-file', 'base64 WAV encoding is a valid RIFF/WAVE with exact PCM', () => {
+// ---- Test 1: base64 WAV encoding is a valid RIFF/WAVE with exact PCM ----
+{
   const samples = new Float32Array([0, 0.5, -0.5, 1, -1]);
   const b64 = audioBufferToWavBase64(fakeBuffer(44100, samples));
   const bytes = base64ToBytes(b64);
@@ -67,9 +66,10 @@ runTest('project-file', 'base64 WAV encoding is a valid RIFF/WAVE with exact PCM
   assert.strictEqual(view.getInt16(48, true), Math.trunc(0.5 * 0x7fff), 'sample 1 = +0.5');
   assert.strictEqual(view.getInt16(52, true), Math.trunc(-0.5 * 0x8000), 'sample 2 = -0.5');
   passed++;
-});
+}
 
-runTest('project-file', 'full serialize/deserialize round-trip', () => {
+// ---- Test 2: full serialize/deserialize round-trip ----
+{
   const clipBuffer = asBuffer(fakeBuffer(44100, new Float32Array([0.25, -0.25])));
   const origBuffer = asBuffer(fakeBuffer(44100, new Float32Array([0.1, 0.2])));
 
@@ -153,9 +153,10 @@ runTest('project-file', 'full serialize/deserialize round-trip', () => {
     paletteClips: [],
   }));
   assert.strictEqual(again.tracks[0].title, 'Test Track');
-});
+}
 
-runTest('project-file', 'source-path tracks are referenced, not duplicated', () => {
+// ---- Test 3: source-path tracks are referenced, not duplicated ----
+{
   const track: TrackModel = {
     id: 't2',
     title: 'Rekordbox Track',
@@ -192,9 +193,10 @@ runTest('project-file', 'source-path tracks are referenced, not duplicated', () 
 
   assert.strictEqual(doc.tracks[0].originalMedia?.location, 'C:\\Music\\Track.wav');
   ok(!doc.tracks[0].originalAudioBase64, 'Rekordbox-sourced track is not duplicated (no embedded audio)');
-});
+}
 
-runTest('project-file', 'validation rejects foreign formats and future versions', () => {
+// ---- Test 4: validation rejects foreign formats and future versions ----
+{
   assert.throws(() => deserializeProject('{"format":"other"}'), /kein Airdox-Projekt/);
   assert.throws(() => deserializeProject('not json'), /kein gültiges JSON/);
   assert.throws(
@@ -202,35 +204,6 @@ runTest('project-file', 'validation rejects foreign formats and future versions'
     /nicht unterstützte Version/
   );
   passed++;
-});
+}
 
 console.log(`project-file persistence: ${passed} checks OK`);
-
-runTest('project-file', 'adopted ids: ein geladenes Projekt verschiebt den Id-Zähler', () => {
-  const json = JSON.stringify({
-    format: 'airdox-project',
-    version: 1,
-    savedAt: new Date(0).toISOString(),
-    projectName: 'P',
-    activeTrackId: 't1',
-    selection: null,
-    tracks: [
-      {
-        id: 't1',
-        title: 'T',
-        segments: [{ id: 'edit-17', type: 'CUT' }],
-        cues: [{ id: 'edit-4' }],
-      },
-    ],
-    paletteClips: [{ id: 'edit-25' }],
-  });
-  deserializeProject(json);
-  const created = nextEditId();
-  ok(/^edit-\d+$/.test(created), `Format bleibt edit-<n>, erhalten: ${created}`);
-  ok(
-    Number(created.split('-')[1]) > 25,
-    `neu erzeugte Id muss hinter den geladenen liegen (sonst verliert segById das falsche Edit): ${created}`
-  );
-});
-
-report('PROJECT-FILE SUITE (Serialisieren, Prüfen, Wiederladen)');

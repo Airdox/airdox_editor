@@ -173,7 +173,8 @@ function parseSingleTrackNode(
     querySelector: (tag: string) => any;
     querySelectorAll: (tag: string) => any;
   },
-  index: number
+  index: number,
+  buildDenseBeatGrid: boolean = true
 ): Partial<TrackModel> {
   const id = el.getAttribute('TrackID') || `rb-track-${index + 1}`;
   const title = el.getAttribute('Name') || 'Untitled Track';
@@ -266,47 +267,15 @@ function parseSingleTrackNode(
     }
   }
 
-  // Parse POSITION_MARK — robust: supports POSITION_MARK, CUE, HOT_CUE, MEMORY_CUE, MARK etc.
+  // Parse POSITION_MARK
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
 
-  let markElements: any[] = el.querySelectorAll ? el.querySelectorAll('POSITION_MARK') : [];
-  // Fallback: some exporters use different tags or casing
-  if (!markElements || markElements.length === 0) {
-    const altTags = ['CUE', 'HOT_CUE', 'MEMORY_CUE', 'MARK', 'Cue', 'HotCue', 'MemoryCue'];
-    const collected: any[] = [];
-    for (const t of altTags) {
-      const found = el.querySelectorAll ? el.querySelectorAll(t) : [];
-      if (found && found.length) collected.push(...Array.from(found));
-    }
-    // also case-insensitive scan of children if still empty
-    if (collected.length === 0 && (el as any).children) {
-      const children = (el as any).children as any[];
-      for (const ch of children) {
-        const tn = (ch.tagName || '').toUpperCase();
-        if (tn.includes('CUE') || tn.includes('MARK') || tn === 'POSITION') {
-          collected.push(ch);
-        }
-      }
-    }
-    if (collected.length > 0) markElements = collected as any;
-  }
-  // A mark without a position attribute is not a genuine cue/anchor (guards
-  // against false positives on foreign exports). DOM-less environments keep
-  // the previous behavior.
-  const POSITION_ATTRS = ['Start', 'start', 'Position', 'position', 'Time', 'time', 'Inizio'];
-  const hasPositionAttribute = (mEl: any): boolean => {
-    // getAttribute returns null for missing attributes in both the browser
-    // DOM and the Node fallback parser.
-    if (typeof mEl?.getAttribute !== 'function') return false;
-    return POSITION_ATTRS.some((a) => mEl.getAttribute(a) !== null);
-  };
-
+  const markElements = el.querySelectorAll('POSITION_MARK');
   let firstBeatCueAnchor: number | null = null;
   markElements.forEach((mEl: any) => {
-    if (!hasPositionAttribute(mEl)) return;
     const name = (mEl.getAttribute('Name') || '').toLowerCase();
-    const start = parseFloat(mEl.getAttribute('Start') || mEl.getAttribute('Position') || mEl.getAttribute('Time') || '0.0');
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
     if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
       firstBeatCueAnchor = start;
     }
@@ -319,63 +288,44 @@ function parseSingleTrackNode(
     firstBeat = rawFirstBeat;
   }
 
-  // XML TEMPO contains grid-marker metadata, not the analyzed per-beat list.
-  // Detailed beat nodes are supplied exclusively by ANLZ PQTZ.
-  const beatGrid = {
-    firstBeat,
-    bpm: tempoBpm,
-    meter,
-    beats: [],
-    origin: DataOrigin.REKORDBOX_XML,
-  };
+  // A complete grid contains hundreds of objects per song.  Keep collection
+  // imports compact; the full grid is reconstructed only for the track loaded
+  // into a deck.
+  const beatGrid = buildDenseBeatGrid
+    ? buildBeatGridFromTempo(firstBeat, tempoBpm, duration, meter, DataOrigin.REKORDBOX_XML)
+    : {
+        firstBeat,
+        bpm: tempoBpm,
+        meter,
+        beats: [],
+        origin: DataOrigin.REKORDBOX_XML,
+      };
   markElements.forEach((mEl: any, mIdx: number) => {
-    if (!hasPositionAttribute(mEl)) return;
-    // Flexible attribute resolution: supports Rekordbox (Type/Start/Name/Num) and generic (type/position/time etc.)
-    const typeRaw = mEl.getAttribute('Type') ?? mEl.getAttribute('type') ?? mEl.getAttribute('Kind') ?? '0';
-    const type = String(typeRaw);
-    const startRaw = mEl.getAttribute('Start') ?? mEl.getAttribute('start') ?? mEl.getAttribute('Position') ?? mEl.getAttribute('position') ?? mEl.getAttribute('Time') ?? mEl.getAttribute('time') ?? mEl.getAttribute('Inizio') ?? '0.0';
-    const start = parseFloat(startRaw || '0.0');
-    const name = mEl.getAttribute('Name') ?? mEl.getAttribute('name') ?? mEl.getAttribute('Comment') ?? mEl.getAttribute('comment') ?? `Cue ${mIdx + 1}`;
-    const numStr = mEl.getAttribute('Num') ?? mEl.getAttribute('num') ?? mEl.getAttribute('Number') ?? mEl.getAttribute('number') ?? mEl.getAttribute('HotCueNumber') ?? '-1';
-    const num = parseInt(String(numStr), 10);
-    const r = mEl.getAttribute('Red') ?? mEl.getAttribute('red') ?? '255';
-    const g = mEl.getAttribute('Green') ?? mEl.getAttribute('green') ?? '120';
-    const b = mEl.getAttribute('Blue') ?? mEl.getAttribute('blue') ?? '0';
+    const type = mEl.getAttribute('Type') || '0';
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
+    const name = mEl.getAttribute('Name') || `Cue ${mIdx + 1}`;
+    const numStr = mEl.getAttribute('Num') || '-1';
+    const num = parseInt(numStr, 10);
+    const r = mEl.getAttribute('Red') || '255';
+    const g = mEl.getAttribute('Green') || '120';
+    const b = mEl.getAttribute('Blue') || '0';
     const color = `rgb(${r}, ${g}, ${b})`;
 
-    // Determine if this is a loop: Type 4 in Rekordbox, or explicit Loop tag, or End attribute present with type loop
-    const endRaw = mEl.getAttribute('End') ?? mEl.getAttribute('end') ?? null;
-    const isLoop = type === '4' || (endRaw !== null && !isNaN(parseFloat(endRaw)) && (mEl.tagName?.toUpperCase().includes('LOOP') || type.toLowerCase().includes('loop')));
-
-    if (isLoop) {
-      const end = parseFloat(endRaw || `${start + 4}`);
-      loops.push({
-        id: `loop-${mIdx}`,
-        name: name || 'Loop',
-        start,
-        end,
-        length: Math.max(0.1, end - start),
-        color: '#ff9500',
-        origin: DataOrigin.REKORDBOX_XML,
-      });
-    } else {
-      // Default to point cue: distinguish HOT vs MEMORY by Num >=0 or explicit hot cue tag / type
-      const isHotTag = mEl.tagName?.toUpperCase().includes('HOT');
+    if (type === '0') {
       const inMsec = Math.round(start * 1000);
       const spb = 60.0 / tempoBpm;
       const beatIndex = Math.round((start - firstBeat) / spb);
       const barNumber = Math.floor(beatIndex / 4) + 1;
       const beatNumber = (beatIndex % 4) + 1;
 
-      if ((num >= 0 && !isNaN(num)) || isHotTag || type === 'HOT' || type === '1') {
+      if (num >= 0) {
         const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-        const hotNum = !isNaN(num) && num >= 0 ? num : mIdx;
         cues.push({
-          id: `hot-cue-${hotNum}`,
+          id: `hot-cue-${num}`,
           name,
           type: 'HOT_CUE',
-          hotCueNum: hotNum,
-          letter: letters[hotNum] || `${hotNum}`,
+          hotCueNum: num,
+          letter: letters[num] || `${num}`,
           position: start,
           inMsec,
           cueIndex: mIdx + 1,
@@ -398,6 +348,17 @@ function parseSingleTrackNode(
           origin: DataOrigin.REKORDBOX_XML,
         });
       }
+    } else if (type === '4') {
+      const end = parseFloat(mEl.getAttribute('End') || `${start + 4}`);
+      loops.push({
+        id: `loop-${mIdx}`,
+        name: name || 'Loop',
+        start,
+        end,
+        length: Math.max(0.1, end - start),
+        color: '#ff9500',
+        origin: DataOrigin.REKORDBOX_XML,
+      });
     }
   });
 
@@ -537,7 +498,7 @@ export async function parseRekordboxXmlAsync(
   for (let i = 0; i < total; i += chunkSize) {
     const end = Math.min(i + chunkSize, total);
     for (let j = i; j < end; j++) {
-      const parsed = parseSingleTrackNode(trackElements[j], j);
+      const parsed = parseSingleTrackNode(trackElements[j], j, false);
       tracks.push(parsed);
 
       const memCount = (parsed.cues || []).filter((c) => c.type === 'MEMORY').length;
@@ -594,28 +555,21 @@ export async function parseRekordboxXmlAsync(
  * Serializes Track Model and edits to Pioneer Rekordbox XML format
  */
 export function exportToRekordboxXml(track: TrackModel): string {
-  // `beatGrid`, `loops`, `cues`, `album` and `key` are all optional on a
-  // TrackModel (e.g. a metadata-only Rekordbox record). The export must state
-  // what it has instead of crashing on a valid, sparse model.
   const bg = track.beatGrid;
-  const firstBeat = bg?.firstBeat ?? 0;
-  const exportBpm = bg?.bpm ?? track.bpm ?? 120;
-  const cues = track.cues ?? [];
-  const loops = track.loops ?? [];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <DJ_PLAYLISTS Version="1.0.0">
   <PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/>
   <COLLECTION Entries="1">
-    <TRACK TrackID="${escapeXml(track.id)}" Name="${escapeXml(track.title)}" Artist="${escapeXml(track.artist)}" Album="${escapeXml(track.album)}" TotalTime="${Math.round(track.duration ?? 0)}" AverageBpm="${exportBpm.toFixed(2)}" Tonality="${escapeXml(track.key ?? '')}">
-      <TEMPO Inizio="${firstBeat.toFixed(3)}" Bpm="${exportBpm.toFixed(2)}" Metro="4/4" Battito="1"/>
-${cues
+    <TRACK TrackID="${escapeXml(track.id)}" Name="${escapeXml(track.title)}" Artist="${escapeXml(track.artist)}" Album="${escapeXml(track.album)}" TotalTime="${Math.round(track.duration)}" AverageBpm="${track.bpm.toFixed(2)}" Tonality="${escapeXml(track.key)}">
+      <TEMPO Inizio="${bg.firstBeat.toFixed(3)}" Bpm="${bg.bpm.toFixed(2)}" Metro="4/4" Battito="1"/>
+${track.cues
   .map((c) => {
     const isHotCue = c.type === 'HOT_CUE';
     const num = isHotCue ? (c.hotCueNum ?? 0) : -1;
     return `      <POSITION_MARK Name="${escapeXml(c.name)}" Type="0" Start="${c.position.toFixed(3)}" Num="${num}" Red="0" Green="162" Blue="255"/>`;
   })
   .join('\n')}
-${loops
+${track.loops
   .map(
     (l) =>
       `      <POSITION_MARK Name="${escapeXml(l.name)}" Type="4" Start="${l.start.toFixed(3)}" End="${l.end.toFixed(3)}" Num="-1"/>`
@@ -627,9 +581,8 @@ ${loops
   return xml;
 }
 
-function escapeXml(unsafe: string | null | undefined): string {
-  if (unsafe === null || unsafe === undefined) return '';
-  return String(unsafe).replace(/[<>&'"]/g, (c) => {
+function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
     switch (c) {
       case '<': return '&lt;';
       case '>': return '&gt;';
@@ -639,5 +592,30 @@ function escapeXml(unsafe: string | null | undefined): string {
       default: return c;
     }
   });
-
 }
+
+/**
+ * Bundled default Rekordbox XML dataset representing "La Roux - Quicksand (Boy 8 Bit mix)"
+ * exactly as presented in the authoritative Rekordbox EDIT mode reference.
+ */
+export const DEFAULT_REKORDBOX_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/>
+  <COLLECTION Entries="2">
+    <TRACK TrackID="1" Name="Quicksand (Boy 8 Bit mix)" Artist="La Roux" Album="Quicksand" TotalTime="357.5" AverageBpm="130.05" Tonality="3A" BitRate="320" SampleRate="44100" Comments="Visual Locked Reference Track" DateAdded="2026-09-05">
+      <TEMPO Inizio="0.000" Bpm="130.05" Metro="4/4" Battito="1"/>
+      <POSITION_MARK Name="E" Type="0" Start="0.000" Num="-1" Red="255" Green="120" Blue="0"/>
+      <POSITION_MARK Name="Intro" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255"/>
+      <POSITION_MARK Name="Verse 1" Type="0" Start="59.054" Num="1" Red="0" Green="230" Blue="100"/>
+      <POSITION_MARK Name="Breakdown" Type="0" Start="177.162" Num="-1" Red="255" Green="200" Blue="0"/>
+      <POSITION_MARK Name="Main Drop" Type="0" Start="206.690" Num="2" Red="255" Green="50" Blue="50"/>
+      <POSITION_MARK Name="Loop 8 Bars" Type="4" Start="206.690" End="221.453" Num="-1"/>
+    </TRACK>
+    <TRACK TrackID="2" Name="Terminator (Original Mix)" Artist="Sound Beats" Album="Terminator EP" TotalTime="326.0" AverageBpm="130.00" Tonality="2A" BitRate="320" SampleRate="44100" Comments="Club remix" DateAdded="2026-09-04">
+      <TEMPO Inizio="0.000" Bpm="130.00" Metro="4/4" Battito="1"/>
+      <POSITION_MARK Name="Intro Kick" Type="0" Start="0.000" Num="0" Red="0" Green="162" Blue="255"/>
+      <POSITION_MARK Name="Synth Hook" Type="0" Start="15.000" Num="1" Red="255" Green="200" Blue="0"/>
+      <POSITION_MARK Name="Vocal Outro" Type="0" Start="60.000" Num="-1" Red="255" Green="50" Blue="50"/>
+    </TRACK>
+  </COLLECTION>
+</DJ_PLAYLISTS>`;

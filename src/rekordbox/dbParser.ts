@@ -19,8 +19,7 @@ import {
   PartialTrackModel,
   TrackModel,
 } from '../types/rekordbox';
-import { nextId } from '../utils/ids';
-import { joinAudioPath } from './analysisResolver';
+import { buildBeatGridFromTempo } from './xmlParser';
 
 export type RekordboxDbType = 'MASTER_DB' | 'ONE_LIBRARY';
 
@@ -76,7 +75,10 @@ function normalizeRating(raw: unknown): number {
 }
 
 function joinWindowsPath(folder: string | undefined, fileName: string | undefined): string | undefined {
-  return joinAudioPath(folder, fileName) || undefined;
+  if (!fileName) return folder || undefined;
+  if (!folder) return fileName;
+  const sep = folder.includes('\\') ? '\\' : '/';
+  return folder.replace(/[\\/]+$/, '') + sep + fileName;
 }
 
 interface CueRowNormalized {
@@ -293,7 +295,7 @@ export function buildDeckTrackFromDatabase(
   const duration = durationOverride && durationOverride > 0 ? durationOverride : partial.duration || 300;
   const bpm = partial.bpm || 130;
   return {
-    id: partial.id || nextId('rb-db'),
+    id: partial.id || `rb-db-${Date.now()}`,
     title: partial.title || 'Rekordbox Track',
     artist: partial.artist || 'Unknown Artist',
     album: partial.album || '',
@@ -307,13 +309,7 @@ export function buildDeckTrackFromDatabase(
     originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
     isOriginalUntouched: true,
     audioBuffer: null,
-    beatGrid: partial.beatGrid ?? {
-      firstBeat: 0,
-      bpm,
-      meter: 4,
-      beats: [],
-      origin: DataOrigin.REKORDBOX_DB,
-    },
+    beatGrid: buildBeatGridFromTempo(0, bpm, duration, 4, DataOrigin.REKORDBOX_DB),
     cues: partial.cues || [],
     loops: partial.loops || [],
     analysis: null,
@@ -323,7 +319,7 @@ export function buildDeckTrackFromDatabase(
     originalMedia: partial.originalMedia,
     workingSegments: [
       {
-        id: nextId('seg-db'),
+        id: `seg-db-${Date.now()}`,
         type: 'ORIGINAL',
         trackId: partial.id || '1',
         sourceStart: 0,

@@ -8,7 +8,6 @@
 import React from 'react';
 import { X, ShieldCheck, Database, FileText, CheckCircle2, Lock } from 'lucide-react';
 import { TrackModel } from '../../types/rekordbox';
-import { APP_VERSION } from '../../utils/appVersion';
 
 interface ProjectInfoModalProps {
   isOpen: boolean;
@@ -32,9 +31,6 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({
             <ShieldCheck size={16} className="text-[#00c853]" />
             <span className="font-bold text-white text-xs tracking-wide">
               Rekordbox Data Layer & Originalschutz
-            </span>
-            <span className="ml-2 font-mono text-[10px] text-neutral-400 px-1.5 py-0.5 rounded-xs border border-neutral-700 bg-neutral-800/40">
-              Version {APP_VERSION}
             </span>
           </div>
           <button

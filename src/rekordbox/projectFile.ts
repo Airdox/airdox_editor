@@ -27,8 +27,6 @@ import {
   SelectionRange,
   TrackModel,
 } from '../types/rekordbox';
-import { adoptIds } from '../utils/ids';
-
 
 export const PROJECT_FORMAT = 'airdox-project';
 export const PROJECT_VERSION = 1;
@@ -119,30 +117,10 @@ export function audioBufferToWavBase64(buffer: AudioBufferLike): string {
 // Serialized (persisted) shapes
 // ---------------------------------------------------------------------------
 
-export interface SerializedBeatNode {
-  time: number;
-  isBarStart: boolean;
-  barNumber: number;
-  beatInBar: number;
-  bpm?: number;
-  /** @deprecated Legacy project compatibility only. */
-  tailExtended?: boolean;
-}
-
 export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
-  /**
-   * Grid provenance (may differ from the track origin, e.g. an ANLZ grid on
-   * an XML track). Absent in files saved before beat persistence existed.
-   */
-  origin?: DataOrigin;
-  /**
-   * Verbatim beat nodes. Absent in older files (uniform rebuild fallback) and
-   * for tracks whose grid was never expanded beyond its scalars.
-   */
-  beats?: SerializedBeatNode[];
 }
 
 export interface SerializedSegment {
@@ -157,15 +135,6 @@ export interface SerializedSegment {
   gain: number;
   /** Inserted/replaced/overdubbed clip material, embedded as base64 WAV. */
   clipWavBase64?: string;
-  /**
-   * Clip provenance, needed to reuse stored ANLZ columns after re-opening
-   * instead of re-analysing audio: which track the material came from, where
-   * inside it, and which time/pitch adaptation was applied.
-   */
-  sourceTrackId?: string;
-  sourceClipStart?: number;
-  tempoRatio?: number;
-  pitchShift?: number;
 }
 
 export interface SerializedTrack {
@@ -215,11 +184,6 @@ export interface SerializedPaletteClip {
   key: string;
   color: string;
   miniPeaks?: number[];
-  /** 'ANLZ' = Vorschau aus gespeicherten Spalten, 'EDIT' = aus dem Clip-Audio. */
-  previewOrigin?: 'ANLZ' | 'EDIT';
-  previewNote?: string;
-  /** Nur true, wenn sourceStart/sourceEnd ein geprüftes Fenster im ORIGINAL sind. */
-  sourceMapped?: boolean;
   origin: DataOrigin;
   clipWavBase64?: string;
 }
@@ -255,10 +219,6 @@ function serializeSegment(segment: EditSegment): SerializedSegment {
     projectDuration: segment.projectDuration,
     clipId: segment.clipId,
     gain: segment.gain ?? 1.0,
-    ...(segment.sourceTrackId ? { sourceTrackId: segment.sourceTrackId } : {}),
-    ...(segment.sourceClipStart !== undefined ? { sourceClipStart: segment.sourceClipStart } : {}),
-    ...(segment.tempoRatio !== undefined ? { tempoRatio: segment.tempoRatio } : {}),
-    ...(segment.pitchShift !== undefined ? { pitchShift: segment.pitchShift } : {}),
   };
   if (segment.clipBuffer) {
     out.clipWavBase64 = audioBufferToWavBase64(segment.clipBuffer);
@@ -293,19 +253,6 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
-      // Verbatim persistence: PQTZ/USER_EDIT node times and the grid origin
-      // must survive the save/load cycle (never a silent uniform rebuild).
-      origin: track.beatGrid?.origin,
-      beats: (track.beatGrid?.beats?.length ?? 0) > 0
-        ? track.beatGrid.beats.map((node) => ({
-            time: node.time,
-            isBarStart: node.isBarStart,
-            barNumber: node.barNumber,
-            beatInBar: node.beatInBar,
-            ...(node.bpm !== undefined ? { bpm: node.bpm } : {}),
-            ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
-          }))
-        : undefined,
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],
@@ -342,12 +289,6 @@ function serializeClip(clip: PaletteClip): SerializedPaletteClip {
     key: clip.key,
     color: clip.color,
     miniPeaks: clip.miniPeaks,
-    ...(clip.previewOrigin ? { previewOrigin: clip.previewOrigin } : {}),
-    ...(clip.previewNote ? { previewNote: clip.previewNote } : {}),
-    // Bewusst nur `true`/`false`, nie weglassen: ein Projekt aus einer älteren
-    // Version kennt die Prüfung nicht und darf nach dem Laden kein
-    // Quellfenster behaupten.
-    sourceMapped: clip.sourceMapped === true,
     origin: clip.origin,
   };
   if (clip.audioBuffer) {
@@ -397,29 +338,6 @@ export function deserializeProject(json: string): SerializedProjectDocument {
   if (!Array.isArray(doc.tracks)) {
     throw new Error('Die Projektdatei enthält keine Track-Liste.');
   }
-
-  /**
-   * Ids from a previous session are adopted, so the id counter of THIS session can
-   * never hand out an id the loaded project already uses. The projection resolves
-   * segments by id — a duplicate would silently edit the wrong edit.
-   */
-  const loadedIds: string[] = [];
-  for (const raw of (doc.tracks ?? []) as unknown as Array<Record<string, unknown> | null>) {
-    if (!raw) continue;
-    if (typeof raw.id === 'string') loadedIds.push(raw.id);
-    for (const key of ['segments', 'cues', 'loops', 'phrases', 'beats'] as const) {
-      const list = raw[key];
-      if (!Array.isArray(list)) continue;
-      for (const item of list) {
-        const id = (item as { id?: unknown } | null)?.id;
-        if (typeof id === 'string') loadedIds.push(id);
-      }
-    }
-  }
-  for (const clip of (doc.paletteClips ?? []) as unknown as Array<{ id?: unknown } | null>) {
-    if (typeof clip?.id === 'string') loadedIds.push(clip.id);
-  }
-  adoptIds(loadedIds);
 
   return {
     format: PROJECT_FORMAT,

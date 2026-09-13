@@ -79,8 +79,6 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
-  /** Every successfully decoded PWV variant, tagged with its source tag. */
-  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -123,7 +121,7 @@ function readUtf16Be(view: DataView, offset: number, byteLength: number): string
   return String.fromCharCode(...chars);
 }
 
-export const WAVEFORM_PRIORITY: Record<string, number> = {
+const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
@@ -231,10 +229,6 @@ function createWaveform(
   const lowEnergy = new Float32Array(entryCount);
   const midEnergy = new Float32Array(entryCount);
   const highEnergy = new Float32Array(entryCount);
-  const whiteness = style === 'MONO_5BIT' ? new Float32Array(entryCount) : undefined;
-  const luminance = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
-  const backPeaks = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
-  const frontPeaks = style === 'COLOR_6BYTE' ? new Float32Array(entryCount) : undefined;
 
   for (let i = 0; i < entryCount; i++) {
     const p = dataOffset + i * entryBytes;
@@ -244,17 +238,13 @@ function createWaveform(
     let high = 0;
 
     if (style === 'MONO_5BIT') {
-      // Documented blue waveform: 5 low-order bits = column height,
-      // 3 high-order bits = whiteness of the blue shade.
       const value = view.getUint8(p);
       peak = (value & 0x1f) / 31;
-      whiteness![i] = ((value >> 5) & 0x07) / 7;
       low = mid = high = peak;
     } else if (style === 'MONO_4BIT') {
       peak = (view.getUint8(p) & 0x0f) / 15;
       low = mid = high = peak;
     } else if (style === 'RGB_5BIT') {
-      // Documented color detail: 3 bits red, 3 green, 3 blue, 5 bits height.
       const value = view.getUint16(p, false);
       low = ((value >> 13) & 0x07) / 7;
       mid = ((value >> 10) & 0x07) / 7;
@@ -267,22 +257,13 @@ function createWaveform(
       low = view.getUint8(p + 2) / 255;
       peak = Math.max(low, mid, high);
     } else if (style === 'COLOR_6BYTE') {
-      // Documented PWV4 layout (jan2000 / Deep Symmetry): byte0 unknown,
-      // byte1 luminance boost, byte2 blue-waveform intensity, byte3 red,
-      // byte4 green, byte5 blue (= front waveform height). Back column
-      // height = max(byte2, red, green); all values are 7-bit (/127).
-      const lum = (view.getUint8(p + 1) & 0x7f) / 127;
-      const d2 = (view.getUint8(p + 2) & 0x7f) / 127;
-      const r = (view.getUint8(p + 3) & 0x7f) / 127;
-      const g = (view.getUint8(p + 4) & 0x7f) / 127;
-      const b = (view.getUint8(p + 5) & 0x7f) / 127;
-      low = r;
-      mid = g;
-      high = b;
-      luminance![i] = lum;
-      frontPeaks![i] = b;
-      backPeaks![i] = Math.max(d2, r, g);
-      peak = backPeaks![i];
+      // PWV4: 6 bytes per column. The exact Rekordbox color mapping is not
+      // fully published; the final three bytes carry the dominant band
+      // energy and are used as a labeled visual approximation.
+      low = view.getUint8(p + 3) / 255;
+      mid = view.getUint8(p + 4) / 255;
+      high = view.getUint8(p + 5) / 255;
+      peak = Math.max(low, mid, high);
     }
 
     peaks[i] = peak;
@@ -301,10 +282,6 @@ function createWaveform(
     lowEnergy,
     midEnergy,
     highEnergy,
-    whiteness,
-    luminance,
-    backPeaks,
-    frontPeaks,
     origin: DataOrigin.REKORDBOX_ANLZ,
   };
 }
@@ -332,20 +309,12 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
     const time = view.getUint32(entry + 4, false) / 1000;
     if (beatInBar < 1 || beatInBar > 16 || tempo < 1) return undefined;
     if (i === 0 || beatInBar === 1) barNumber++;
-    beats.push({
-      index: i,
-      time,
-      isBarStart: beatInBar === 1,
-      barNumber,
-      beatInBar,
-      bpm: tempo / 100,
-    });
+    beats.push({ index: i, time, isBarStart: beatInBar === 1, barNumber, beatInBar });
   }
 
   return {
     firstBeat: beats[0].time,
     bpm: view.getUint16(entriesStart + 2, false) / 100,
-    // PQTZ carries no meter; 4/4 is the display default (beat times are unaffected).
     meter: 4,
     beats,
     origin: DataOrigin.REKORDBOX_ANLZ,
@@ -562,10 +531,12 @@ function phrasesFromPssi(
   mood: number,
   endBeat: number,
   entries: AnlzPhraseEntry[],
-  beats: BeatNode[],
+  bpm: number,
+  firstBeat: number,
   durationSec: number
 ): PhraseSection[] {
   const moodLabels = PHRASE_LABELS[mood] || PHRASE_LABELS[2];
+  const spb = 60.0 / bpm;
   const phrases: PhraseSection[] = [];
 
   entries.forEach((entry, index) => {
@@ -573,16 +544,11 @@ function phrasesFromPssi(
     const startBeat = Math.max(1, entry.beat);
     const endBeatIncl =
       next && next.beat > startBeat ? next.beat - 1 : Math.max(startBeat, endBeat || startBeat);
-    const startNode = beats[startBeat - 1];
-    if (!startNode) return; // never estimate a missing PQTZ position
-    const exclusiveEndNode = beats[endBeatIncl];
-    const startTime = startNode.time;
-    const endTime = exclusiveEndNode
-      ? exclusiveEndNode.time
-      : Math.min(durationSec, beats[beats.length - 1]?.time ?? durationSec);
+    const startTime = firstBeat + (startBeat - 1) * spb;
+    const endTime = Math.min(durationSec, firstBeat + endBeatIncl * spb);
     const baseName = moodLabels[entry.kind] || 'VERSE';
-    const startBar = startNode.barNumber;
-    const endBar = beats[Math.min(endBeatIncl - 1, beats.length - 1)]?.barNumber ?? startBar;
+    const startBar = Math.floor((startBeat - 1) / 4) + 1;
+    const endBar = Math.floor((endBeatIncl - 1) / 4) + 1;
 
     phrases.push({
       id: `pssi-${entry.index}`,
@@ -590,7 +556,7 @@ function phrasesFromPssi(
       startBar,
       endBar,
       startTime: Math.max(0, startTime),
-      endTime: Math.max(startTime, endTime),
+      endTime: Math.max(0, endTime),
       color: PHRASE_COLORS[baseName],
       origin: DataOrigin.REKORDBOX_ANLZ,
     });
@@ -610,7 +576,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
-    waveformVariants: [],
     warnings: [],
   };
 
@@ -679,7 +644,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
-          result.warnings.push(`${tag}: keine Beat-Einträge lesbar; nur BPM/First Beat übernommen (Fallback-Layout, kein Beatgrid-Ersatz).`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -789,31 +753,25 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         result.pssiBank = decoded.bank;
         result.rawPhrases = decoded.entries;
 
-        if ((result.beatGrid?.beats.length ?? 0) > 0) {
+        if (result.bpm && result.firstBeat !== undefined) {
           result.phrases = phrasesFromPssi(
             decoded.mood,
             decoded.endBeat,
             decoded.entries,
-            result.beatGrid?.beats ?? [],
+            result.bpm,
+            result.firstBeat,
             24 * 60 * 60 // duration is clamped by the caller to the real track length
           );
         } else {
-          result.warnings.push('PSSI ohne vollständige PQTZ-Beatpositionen übersprungen.');
+          result.warnings.push('PSSI ohne bekannte BPM/First-Beat-Referenz übersprungen.');
         }
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec) {
-        // Every genuine variant is kept (zoom selection happens in the
-        // renderer); `waveform` remains the highest-priority variant.
-        const variant = createWaveform(spec, view);
-        variant.sourceTag = tag;
-        result.waveformVariants.push(variant);
-        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-          result.waveform = variant;
-          waveformPriority = WAVEFORM_PRIORITY[tag];
-        }
-      } else {
+      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+        result.waveform = createWaveform(spec, view);
+        waveformPriority = WAVEFORM_PRIORITY[tag];
+      } else if (!spec) {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }

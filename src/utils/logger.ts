@@ -6,8 +6,6 @@
  * subscriber notifications, and complete incident telemetry for maximum transparency.
  */
 
-import { nextId } from './ids';
-
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
 
 export type LogCategory =
@@ -17,8 +15,16 @@ export type LogCategory =
   | 'BEATGRID'
   | 'EDITING'
   | 'DATABASE'
-  | 'COPILOT'
-  | 'UI';
+  | 'CHATBOT'
+  | 'UI'
+  | 'RECORDING'
+  | 'PLAYBACK'
+  | 'CUES'
+  | 'CLIP_LIBRARY'
+  | 'AUTOMATION'
+  | 'KEYBOARD'
+  | 'PERFORMANCE'
+  | 'EXPORT';
 
 export interface LogEntry {
   id: string;
@@ -26,7 +32,9 @@ export interface LogEntry {
   timeString: string;
   level: LogLevel;
   category: LogCategory;
+  subsystem?: string;
   message: string;
+  durationMs?: number;
   details?: any;
   stack?: string;
 }
@@ -35,10 +43,11 @@ export type LogListener = (entry: LogEntry) => void;
 
 class LoggerService {
   private static instance: LoggerService;
-  private readonly maxEntries = 1000;
+  private readonly maxEntries = 5000;
   private entries: LogEntry[] = [];
   private listeners: Set<LogListener> = new Set();
   private isInitialized = false;
+  private sessionId = `session-${Date.now().toString(36)}`;
 
   private constructor() {
     this.initGlobalHandlers();
@@ -57,20 +66,6 @@ class LoggerService {
 
     // Capture uncaught JavaScript runtime errors
     window.addEventListener('error', (event) => {
-      const msg = typeof event.message === 'string' ? event.message : '';
-      // Ignore benign browser events that do not represent application crashes
-      if (
-        msg.includes('ResizeObserver') ||
-        msg.includes('Script error.') ||
-        msg.includes('Extension context invalidated')
-      ) {
-        return;
-      }
-      // If it's a resource load failure (<img>, <audio>, etc.), event is an Event, not an ErrorEvent
-      if (typeof ErrorEvent !== 'undefined' && !(event instanceof ErrorEvent)) {
-        return;
-      }
-
       this.fatal(
         'SYSTEM',
         `Uncaught Global Error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
@@ -80,7 +75,8 @@ class LoggerService {
           colno: event.colno,
           error: event.error?.message || String(event.error),
           stack: event.error?.stack,
-        }
+        },
+        'WindowErrorHandler'
       );
     });
 
@@ -89,93 +85,147 @@ class LoggerService {
       const reason = event.reason;
       const message = reason instanceof Error ? reason.message : String(reason);
       const stack = reason instanceof Error ? reason.stack : undefined;
-
-      // Ignore benign rejections like user aborts, autoplay restrictions, or clipboard permissions
-      if (
-        message.includes('AudioContext') ||
-        message.includes('user gesture') ||
-        message.includes('The play() request was interrupted') ||
-        message.includes('AbortError') ||
-        message.includes('ResizeObserver') ||
-        message.includes('clipboard')
-      ) {
-        return;
-      }
-
       this.fatal(
         'SYSTEM',
         `Unhandled Promise Rejection: ${message}`,
-        { reason, stack }
+        { reason, stack },
+        'UnhandledPromiseHandler'
       );
     });
 
-    this.info('SYSTEM', 'Umfassendes Log-System erfolgreich initialisiert (Max Transparenz).');
+    this.info('SYSTEM', 'Umfassendes Log-System erfolgreich initialisiert (Max Transparenz, Puffer: 5000 Einträge).', {
+      sessionId: this.sessionId,
+      maxEntries: this.maxEntries,
+    }, 'Kernel');
   }
 
   public log(
     level: LogLevel,
     category: LogCategory,
     message: string,
-    details?: any
+    details?: any,
+    subsystem?: string,
+    durationMs?: number
   ): LogEntry {
-    try {
-      const now = new Date();
-      const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
-        .getMinutes()
-        .toString()
-        .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now
-        .getMilliseconds()
-        .toString()
-        .padStart(3, '0')}`;
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
+      .getMinutes()
+      .toString()
+      .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now
+      .getMilliseconds()
+      .toString()
+      .padStart(3, '0')}`;
 
-      let stack: string | undefined;
-      if (level === 'ERROR' || level === 'FATAL') {
-        if (details instanceof Error) {
-          stack = details.stack;
-        } else if (details && typeof details === 'object' && typeof details.stack === 'string') {
-          stack = details.stack;
-        } else {
-          stack = new Error().stack;
-        }
+    let stack: string | undefined;
+    if (level === 'ERROR' || level === 'FATAL') {
+      if (details instanceof Error) {
+        stack = details.stack;
+      } else {
+        stack = new Error().stack;
       }
-
-      const entry: LogEntry = {
-        // Kein Date.now() als Identität: zwei Einträge im selben Millisekunden-tick
-        // bekämen dieselbe Id, und die Liste verliert ihre React-keys. Der Zähler aus
-        // utils/ids ist pro Prozess monoton und damit eindeutig.
-        id: nextId('log'),
-        timestamp: now.getTime(),
-        timeString,
-        level,
-        category,
-        message,
-        details: details !== undefined ? this.sanitizeDetails(details) : undefined,
-        stack,
-      };
-
-      this.entries.push(entry);
-      if (this.entries.length > this.maxEntries) {
-        this.entries.shift();
-      }
-
-      // Console output with Pioneer DJ-styled coloring
-      this.printToConsole(entry);
-
-      // Notify active listeners (e.g., live log modals)
-      this.notifyListeners(entry);
-
-      return entry;
-    } catch {
-      // Failsafe: logger must never throw
-      return {
-        id: 'log-failsafe',
-        timestamp: Date.now(),
-        timeString: '',
-        level,
-        category,
-        message,
-      };
     }
+
+    const entry: LogEntry = {
+      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: now.getTime(),
+      timeString,
+      level,
+      category,
+      subsystem,
+      message,
+      durationMs: durationMs !== undefined ? Math.round(durationMs * 100) / 100 : undefined,
+      details: details !== undefined ? this.sanitizeDetails(details) : undefined,
+      stack,
+    };
+
+    this.entries.push(entry);
+    if (this.entries.length > this.maxEntries) {
+      this.entries.shift();
+    }
+
+    // Console output with Pioneer DJ-styled coloring
+    this.printToConsole(entry);
+
+    // Notify active listeners (e.g., live log modals)
+    this.notifyListeners(entry);
+
+    return entry;
+  }
+
+  public debug(category: LogCategory, message: string, details?: any, subsystem?: string) {
+    return this.log('DEBUG', category, message, details, subsystem);
+  }
+
+  public info(category: LogCategory, message: string, details?: any, subsystem?: string) {
+    return this.log('INFO', category, message, details, subsystem);
+  }
+
+  public warn(category: LogCategory, message: string, details?: any, subsystem?: string) {
+    return this.log('WARN', category, message, details, subsystem);
+  }
+
+  public error(category: LogCategory, message: string, details?: any, subsystem?: string) {
+    return this.log('ERROR', category, message, details, subsystem);
+  }
+
+  public fatal(category: LogCategory, message: string, details?: any, subsystem?: string) {
+    return this.log('FATAL', category, message, details, subsystem);
+  }
+
+  /**
+   * Times a synchronous function execution and records diagnostic execution telemetry
+   */
+  public time<T>(category: LogCategory, message: string, fn: () => T, subsystem?: string, details?: any): T {
+    const start = performance.now();
+    try {
+      const result = fn();
+      const durationMs = performance.now() - start;
+      this.log('DEBUG', category, `${message} (${durationMs.toFixed(1)}ms)`, details, subsystem, durationMs);
+      return result;
+    } catch (err: any) {
+      const durationMs = performance.now() - start;
+      this.log('ERROR', category, `${message} FEHLGESCHLAGEN nach ${durationMs.toFixed(1)}ms: ${err?.message || err}`, { error: err, details }, subsystem, durationMs);
+      throw err;
+    }
+  }
+
+  /**
+   * Times an asynchronous promise operation and records diagnostic telemetry
+   */
+  public async timeAsync<T>(category: LogCategory, message: string, fn: () => Promise<T>, subsystem?: string, details?: any): Promise<T> {
+    const start = performance.now();
+    try {
+      const result = await fn();
+      const durationMs = performance.now() - start;
+      this.log('DEBUG', category, `${message} (${durationMs.toFixed(1)}ms)`, details, subsystem, durationMs);
+      return result;
+    } catch (err: any) {
+      const durationMs = performance.now() - start;
+      this.log('ERROR', category, `${message} FEHLGESCHLAGEN nach ${durationMs.toFixed(1)}ms: ${err?.message || err}`, { error: err, details }, subsystem, durationMs);
+      throw err;
+    }
+  }
+
+  public getStats() {
+    const levels: Record<LogLevel, number> = {
+      DEBUG: 0,
+      INFO: 0,
+      WARN: 0,
+      ERROR: 0,
+      FATAL: 0,
+    };
+    const categories: Record<string, number> = {};
+
+    for (const e of this.entries) {
+      levels[e.level] = (levels[e.level] || 0) + 1;
+      categories[e.category] = (categories[e.category] || 0) + 1;
+    }
+
+    return {
+      total: this.entries.length,
+      levels,
+      categories,
+    };
   }
 
   private sanitizeDetails(details: any): any {
@@ -221,26 +271,6 @@ class LoggerService {
     }
   }
 
-  public debug(category: LogCategory, message: string, details?: any) {
-    return this.log('DEBUG', category, message, details);
-  }
-
-  public info(category: LogCategory, message: string, details?: any) {
-    return this.log('INFO', category, message, details);
-  }
-
-  public warn(category: LogCategory, message: string, details?: any) {
-    return this.log('WARN', category, message, details);
-  }
-
-  public error(category: LogCategory, message: string, details?: any) {
-    return this.log('ERROR', category, message, details);
-  }
-
-  public fatal(category: LogCategory, message: string, details?: any) {
-    return this.log('FATAL', category, message, details);
-  }
-
   public getEntries(): LogEntry[] {
     return [...this.entries];
   }
@@ -274,19 +304,62 @@ class LoggerService {
   public generateDiagnosticReport(appContextState?: any): string {
     const report = {
       title: 'airdox_SMART_Editor – Diagnosebericht',
+      sessionId: this.sessionId,
       generatedAt: new Date().toISOString(),
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A',
       screenResolution: typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : 'N/A',
+      stats: this.getStats(),
       appContext: appContextState || {},
       recentLogs: this.entries,
     };
     return JSON.stringify(report, null, 2);
   }
 
+  public exportCsv(): string {
+    const header = ['Timestamp', 'TimeString', 'Level', 'Category', 'Subsystem', 'Message', 'DurationMs', 'Details'];
+    const rows = this.entries.map((e) => [
+      e.timestamp,
+      `"${e.timeString}"`,
+      `"${e.level}"`,
+      `"${e.category}"`,
+      `"${e.subsystem || ''}"`,
+      `"${e.message.replace(/"/g, '""')}"`,
+      e.durationMs || '',
+      `"${e.details ? JSON.stringify(e.details).replace(/"/g, '""') : ''}"`,
+    ]);
+    return [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
+  }
+
+  public exportPlainText(): string {
+    return this.entries
+      .map((e) => {
+        const sub = e.subsystem ? ` [${e.subsystem}]` : '';
+        const dur = e.durationMs !== undefined ? ` (${e.durationMs}ms)` : '';
+        const det = e.details ? ` | Details: ${JSON.stringify(e.details)}` : '';
+        return `[${e.timeString}] [${e.level}] [${e.category}]${sub} ${e.message}${dur}${det}`;
+      })
+      .join('\n');
+  }
+
   public downloadReport(appContextState?: any, filename = 'rekordbox_diagnostic_log.json') {
     if (typeof document === 'undefined') return;
     const jsonStr = this.generateDiagnosticReport(appContextState);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
+    this.triggerDownload(new Blob([jsonStr], { type: 'application/json' }), filename);
+  }
+
+  public downloadCsv(filename = 'rekordbox_logs.csv') {
+    if (typeof document === 'undefined') return;
+    const csv = this.exportCsv();
+    this.triggerDownload(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), filename);
+  }
+
+  public downloadPlainText(filename = 'rekordbox_logs.txt') {
+    if (typeof document === 'undefined') return;
+    const txt = this.exportPlainText();
+    this.triggerDownload(new Blob([txt], { type: 'text/plain;charset=utf-8;' }), filename);
+  }
+
+  private triggerDownload(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

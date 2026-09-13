@@ -18,7 +18,45 @@ import {
 } from '../src/rekordbox/dbParser';
 import { DataOrigin } from '../src/types/rekordbox';
 
-import { runTest, assert, same, report } from './helpers/microTest.mjs';
+interface TestResult {
+  suite: string;
+  name: string;
+  passed: boolean;
+  error?: string;
+  durationMs: number;
+}
+
+const results: TestResult[] = [];
+
+function runTest(suite: string, name: string, testFn: () => void) {
+  const t0 = performance.now();
+  try {
+    testFn();
+    results.push({ suite, name, passed: true, durationMs: Math.round((performance.now() - t0) * 100) / 100 });
+  } catch (err: any) {
+    results.push({
+      suite,
+      name,
+      passed: false,
+      error: err?.message || String(err),
+      durationMs: Math.round((performance.now() - t0) * 100) / 100,
+    });
+  }
+}
+
+function assert(condition: boolean, message: string) {
+  if (!condition) throw new Error(`Assertion Failed: ${message}`);
+}
+
+function assertEqual<T>(actual: T, expected: T, message: string) {
+  if (actual !== expected) {
+    throw new Error(`Assertion Failed [${message}]: expected ${expected}, got ${actual}`);
+  }
+}
+
+console.log('═══════════════════════════════════════════════════════════════════');
+console.log('  REKORDBOX 6/7 DATABASE IMPORT MAPPING TEST SUITE              ');
+console.log('═══════════════════════════════════════════════════════════════════\n');
 
 // ─── FIXTURES (documented master.db column names) ───────────────────────────
 const masterRows = {
@@ -121,20 +159,20 @@ const oneLibraryRows = {
 // ─── SUITE 1: master.db mapping ─────────────────────────────────────────────
 runTest('master.db mapping', 'Normalizes BPM, rating, joins and metadata', () => {
   const mapped = mapRekordboxDatabaseRows(masterRows, 'MASTER_DB');
-  same(mapped.tracks.length, 2, 'Track count');
+  assertEqual(mapped.tracks.length, 2, 'Track count');
   const track = mapped.tracks[0]!;
 
-  same(track.title, 'Obsidian Voltage (Club Mix)', 'Title');
-  same(track.artist, 'Klangfeld', 'Artist join');
-  same(track.album, 'Subterranean Records', 'Album join');
-  same(track.genre, 'Techno', 'Genre join');
-  same(track.key, '6A', 'Key join');
-  same(track.bpm, 128, 'BPM /100');
-  same(Math.round(track.duration! * 1000), 240000, 'Duration from ms');
-  same(track.rating, 5, 'Rating 255 -> 5');
-  same(track.playCount, 18, 'Play count');
+  assertEqual(track.title, 'Obsidian Voltage (Club Mix)', 'Title');
+  assertEqual(track.artist, 'Klangfeld', 'Artist join');
+  assertEqual(track.album, 'Subterranean Records', 'Album join');
+  assertEqual(track.genre, 'Techno', 'Genre join');
+  assertEqual(track.key, '6A', 'Key join');
+  assertEqual(track.bpm, 128, 'BPM /100');
+  assertEqual(Math.round(track.duration! * 1000), 240000, 'Duration from ms');
+  assertEqual(track.rating, 5, 'Rating 255 -> 5');
+  assertEqual(track.playCount, 18, 'Play count');
   assert(track.originalMedia?.location === 'C:\\Music\\Obsidian Voltage.wav', 'File location');
-  same(track.origin, DataOrigin.REKORDBOX_DB, 'DB origin');
+  assertEqual(track.origin, DataOrigin.REKORDBOX_DB, 'DB origin');
 });
 
 runTest('master.db mapping', 'Decodes memory cues, hot cues and loops with beat alignment', () => {
@@ -143,68 +181,92 @@ runTest('master.db mapping', 'Decodes memory cues, hot cues and loops with beat 
   const cues = track.cues || [];
   const loops = track.loops || [];
 
-  same(cues.filter((c) => c.type === 'MEMORY').length, 2, 'Memory cues');
-  same(cues.filter((c) => c.type === 'HOT_CUE').length, 2, 'Hot cues');
+  assertEqual(cues.filter((c) => c.type === 'MEMORY').length, 2, 'Memory cues');
+  assertEqual(cues.filter((c) => c.type === 'HOT_CUE').length, 2, 'Hot cues');
   const hotA = cues.find((c) => c.type === 'HOT_CUE' && c.hotCueNum === 0);
   assert(hotA !== undefined, 'Hot A exists');
-  same(hotA!.letter, 'A', 'Hot A letter');
-  same(hotA!.comment, 'Hot A', 'Hot A comment');
-  same(loops.length, 1, 'Loop count');
-  same(Math.round(loops[0].start * 1000), 75000, 'Loop start');
-  same(Math.round(loops[0].end * 1000), 90000, 'Loop end');
+  assertEqual(hotA!.letter, 'A', 'Hot A letter');
+  assertEqual(hotA!.comment, 'Hot A', 'Hot A comment');
+  assertEqual(loops.length, 1, 'Loop count');
+  assertEqual(Math.round(loops[0].start * 1000), 75000, 'Loop start');
+  assertEqual(Math.round(loops[0].end * 1000), 90000, 'Loop end');
   // Stats are global across all tracks (incl. the second fixture track).
-  same(mapped.stats.memoryCues, 3, 'Stats memory cues');
-  same(mapped.stats.hotCues, 2, 'Stats hot cues');
-  same(mapped.stats.loops, 1, 'Stats loops');
+  assertEqual(mapped.stats.memoryCues, 3, 'Stats memory cues');
+  assertEqual(mapped.stats.hotCues, 2, 'Stats hot cues');
+  assertEqual(mapped.stats.loops, 1, 'Stats loops');
 });
 
 runTest('master.db mapping', 'Missing path remains a metadata-only track', () => {
   const mapped = mapRekordboxDatabaseRows(masterRows, 'MASTER_DB');
   const track = mapped.tracks[1]!;
-  same(track.originalMedia, undefined, 'No original media reference');
-  same(track.duration, 210, 'Duration preserved');
+  assertEqual(track.originalMedia, undefined, 'No original media reference');
+  assertEqual(track.duration, 210, 'Duration preserved');
 });
 
 // ─── SUITE 2: OneLibrary mapping ────────────────────────────────────────────
 runTest('OneLibrary mapping', 'Maps camelCase OneLibrary rows to the shared contract', () => {
   const mapped = mapRekordboxDatabaseRows(oneLibraryRows, 'ONE_LIBRARY');
-  same(mapped.tracks.length, 1, 'Track count');
+  assertEqual(mapped.tracks.length, 1, 'Track count');
   const track = mapped.tracks[0]!;
 
-  same(track.id, '55', 'Content id');
-  same(track.title, 'Quantum Velocity (VIP Roller)', 'Title');
-  same(track.artist, 'Subsonic Pulse', 'Artist join');
-  same(track.album, 'Neurofunk Archives', 'Album join');
-  same(track.genre, 'Drum & Bass', 'Genre join');
-  same(track.key, '4A', 'Key join');
-  same(track.bpm, 174, 'BPM');
-  same(track.sampleRate, 48000, 'Sample rate');
-  same(track.duration, 190, 'Duration');
-  same(track.rating, 5, 'Rating stays 0..5');
+  assertEqual(track.id, '55', 'Content id');
+  assertEqual(track.title, 'Quantum Velocity (VIP Roller)', 'Title');
+  assertEqual(track.artist, 'Subsonic Pulse', 'Artist join');
+  assertEqual(track.album, 'Neurofunk Archives', 'Album join');
+  assertEqual(track.genre, 'Drum & Bass', 'Genre join');
+  assertEqual(track.key, '4A', 'Key join');
+  assertEqual(track.bpm, 174, 'BPM');
+  assertEqual(track.sampleRate, 48000, 'Sample rate');
+  assertEqual(track.duration, 190, 'Duration');
+  assertEqual(track.rating, 5, 'Rating stays 0..5');
   assert(track.originalMedia?.location.includes('Quantum Velocity.flac'), 'Location');
 });
 
 runTest('OneLibrary mapping', 'Decodes microsecond cue positions', () => {
   const mapped = mapRekordboxDatabaseRows(oneLibraryRows, 'ONE_LIBRARY');
   const cues = mapped.tracks[0]!.cues || [];
-  same(cues.length, 2, 'Cue count');
-  same(Math.round(cues[0].position * 1000), 0, 'Memory cue position');
-  same(Math.round(cues[1].position * 1000), 44138, 'Hot cue position (us -> ms)');
-  same(cues[1].type, 'HOT_CUE', 'Hot cue type');
+  assertEqual(cues.length, 2, 'Cue count');
+  assertEqual(Math.round(cues[0].position * 1000), 0, 'Memory cue position');
+  assertEqual(Math.round(cues[1].position * 1000), 44138, 'Hot cue position (us -> ms)');
+  assertEqual(cues[1].type, 'HOT_CUE', 'Hot cue type');
 });
 
 // ─── SUITE 3: Deck expansion ────────────────────────────────────────────────
 runTest('Deck expansion', 'Builds a playable-format TrackModel without synthetic audio', () => {
   const mapped = mapRekordboxDatabaseRows(masterRows, 'MASTER_DB');
   const deck = buildDeckTrackFromDatabase(mapped.tracks[0]!);
-  same(deck.audioBuffer, null, 'No synthetic audio');
-  same(deck.beatGrid.bpm, 128, 'Beat grid bpm');
-  same(deck.beatGrid.beats.length, 0, 'No grid invented before PQTZ is loaded');
-  same(deck.beatGrid.origin, DataOrigin.REKORDBOX_DB, 'Beat grid DB origin');
-  same(deck.origin, DataOrigin.REKORDBOX_DB, 'Track DB origin');
-  same(deck.originalSha256, 'NOT_COMPUTED_READ_ONLY_SOURCE', 'Read-only checksum marker');
+  assertEqual(deck.audioBuffer, null, 'No synthetic audio');
+  assertEqual(deck.beatGrid.bpm, 128, 'Beat grid bpm');
+  assert(deck.beatGrid.beats.length > 0, 'Dense grid generated on load');
+  assertEqual(deck.beatGrid.origin, DataOrigin.REKORDBOX_DB, 'Beat grid DB origin');
+  assertEqual(deck.origin, DataOrigin.REKORDBOX_DB, 'Track DB origin');
+  assertEqual(deck.originalSha256, 'NOT_COMPUTED_READ_ONLY_SOURCE', 'Read-only checksum marker');
 });
 
 // ─── SUMMARY OUTPUT ─────────────────────────────────────────────────────────
+console.log('Test Results:\n');
+let passedCount = 0;
+let failedCount = 0;
 
-report('REKORDBOX 6/7 DATABASE IMPORT MAPPING TEST SUITE');
+results.forEach((r, idx) => {
+  const icon = r.passed ? ' PASS ' : ' FAIL ';
+  const status = r.passed ? '\x1b[32m' : '\x1b[31m';
+  const reset = '\x1b[0m';
+  console.log(`${status}[${icon}]${reset} #${idx + 1} [${r.suite}] ${r.name} (${r.durationMs}ms)`);
+  if (!r.passed) {
+    console.error(`       Error: ${r.error}`);
+    failedCount++;
+  } else {
+    passedCount++;
+  }
+});
+
+console.log('\n───────────────────────────────────────────────────────────────────');
+console.log(`Total: ${results.length} | Passed: ${passedCount} | Failed: ${failedCount}`);
+console.log('═══════════════════════════════════════════════════════════════════\n');
+
+if (failedCount > 0) {
+  process.exit(1);
+} else {
+  process.exit(0);
+}

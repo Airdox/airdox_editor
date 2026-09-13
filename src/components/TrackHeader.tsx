@@ -5,9 +5,9 @@
  */
 
 import React from 'react';
+import { FileAudio, Check } from 'lucide-react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
-import { APP_VERSION } from '../utils/appVersion';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -16,47 +16,8 @@ interface TrackHeaderProps {
   viewDuration: number; // duration of detail window in seconds
   onSeek: (time: number) => void;
   onPanView: (newOffset: number) => void;
+  onLoadAudioClick?: () => void;
 }
-
-
-function AnlzStatusChip({ track }: { track: TrackModel }) {
-  const hasAnlz = !!(track.analysis && track.analysis.length > 0);
-  const label = hasAnlz
-    ? `ANLZ OK${track.analysis?.sourceTag ? ` • ${track.analysis.sourceTag}` : ''}`
-    : 'MISSING_REKORDBOX_ANALYSIS';
-  const cls = hasAnlz
-    ? 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40'
-    : 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10';
-  const title = hasAnlz
-    ? 'Rekordbox-ANLZ über den exakten AnalysisDataPath aus master.db geladen.'
-    : 'Keine Rekordbox-Analysedaten geladen; es wird keine Ersatz-Waveform oder kein Ersatz-Beatgrid erzeugt.';
-
-  return (
-    <span className={`font-mono text-[9.5px] px-1 rounded-xs border ${cls}`} title={title}>
-      {label}
-    </span>
-  );
-}
-
-/** Honest origin labels — every track origin is named, never implied. */
-const ORIGIN_LABELS: Record<string, string> = {
-  REKORDBOX_XML: 'REKORDBOX XML',
-  REKORDBOX_DB: 'REKORDBOX DB',
-  REKORDBOX_ANLZ: 'REKORDBOX ANLZ',
-  LOCAL_ANALYSIS: 'LOKALER IMPORT',
-  PROJECT: 'PROJEKT',
-  ANALYSIS_CACHE: 'ANALYSE-CACHE',
-  USER_EDIT: 'USER EDIT',
-  GENERATED_FALLBACK: 'GENERIERTE DEMO',
-};
-
-/** Read-only source status: missing originals are shown as MISSING, loudly. */
-const STATUS_STYLES: Record<string, string> = {
-  AVAILABLE: 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40',
-  MISSING: 'text-[#ff5555] border-[#ff5555]/50 bg-[#ff5555]/10',
-  UNSUPPORTED: 'text-[#f5b800] border-[#f5b800]/50 bg-[#f5b800]/10',
-  UNVERIFIED: 'text-neutral-400 border-neutral-700 bg-neutral-800/40',
-};
 
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
   track,
@@ -65,6 +26,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   viewDuration,
   onSeek,
   onPanView,
+  onLoadAudioClick,
 }) => {
   // Format 05:26.3
   const formatTime = (secs: number) => {
@@ -95,34 +57,32 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
               <span className="text-white font-semibold text-[13px] tracking-wide">
                 {track ? track.title : 'Kein Track geladen'}
               </span>
+              {track && !track.audioBuffer && onLoadAudioClick && (
+                <button
+                  onClick={onLoadAudioClick}
+                  className="flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 text-[10px] font-semibold transition-all cursor-pointer shadow-sm animate-pulse"
+                  title="Audiodatei (MP3/WAV/FLAC) für diesen Track verknüpfen"
+                >
+                  <FileAudio size={11} />
+                  <span>Audiodatei fehlt – Klicken zum Verknüpfen</span>
+                </button>
+              )}
+              {track && track.audioBuffer && (
+                <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 text-[9.5px] font-mono">
+                  <Check size={10} />
+                  <span>Audio aktiv ({track.sampleRate}Hz)</span>
+                </span>
+              )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">
               <span>{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
               <span>•</span>
               <span className="text-[#00a2ff] font-mono text-[9.5px]">
-                {!track ? 'LEERES PROJEKT' : ORIGIN_LABELS[track.origin] ?? track.origin}
-              </span>
-              {track?.originalMedia && (
-                <>
-                  <span>•</span>
-                  <span className={`font-mono text-[9.5px] px-1 rounded-xs border ${STATUS_STYLES[track.originalMedia.status] ?? STATUS_STYLES.UNVERIFIED}`}>
-                    {track.originalMedia.status === 'AVAILABLE'
-                      ? 'QUELLE OK'
-                      : `QUELLE: ${track.originalMedia.status}`}
-                  </span>
-                </>
-              )}
-              {track && (
-                <>
-                  <span>•</span>
-                  <AnlzStatusChip track={track} />
-                </>
-              )}
-              <span
-                className="font-mono text-[9.5px] px-1 rounded-xs border border-neutral-700 bg-neutral-800/40 text-neutral-400"
-                title={`airdox_SMART_Editor Version ${APP_VERSION}`}
-              >
-                v{APP_VERSION}
+                {!track
+                  ? 'LEERES PROJEKT'
+                  : track.origin === 'REKORDBOX_XML'
+                  ? 'REKORDBOX XML'
+                  : 'EDIT WORKING COPY'}
               </span>
             </div>
           </div>
