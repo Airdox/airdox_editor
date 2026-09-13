@@ -139,9 +139,24 @@ console.log('══════════════════════�
   console.log('[ PASS ] #1 Clip without ANLZ analysis renders dense detailed waveform (BLUE)');
 }
 
-// #2: native analysis buckets are honoured and RGB gradient is applied
+// #2: native analysis buckets are honoured and RGB columns are coloured from
+// their real spectral content (rekordbox-authentic): a bass-heavy drop half
+// must render red-dominant, a hat/air-heavy break half blue-dominant.
 {
-  const buffer = makeAudioBuffer(makeClipSignal(), SAMPLE_RATE);
+  const seconds = 10;
+  const n = seconds * SAMPLE_RATE;
+  const sectioned = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SAMPLE_RATE;
+    if (t < 5) {
+      // Drop: loud low-frequency content (smooth transitions, high amplitude)
+      sectioned[i] = 0.85 * Math.sin(2 * Math.PI * 8 * t);
+    } else {
+      // Break: hats/air only (large sample-to-sample deltas, lower amplitude)
+      sectioned[i] = (i % 2 === 0 ? 0.35 : -0.35);
+    }
+  }
+  const buffer = makeAudioBuffer(sectioned, SAMPLE_RATE);
   const clip = makeClip({
     audioBuffer: buffer,
     analysis: analyzeAudioBuffer(buffer as AudioBuffer, DataOrigin.REKORDBOX_ANLZ),
@@ -151,8 +166,30 @@ console.log('══════════════════════�
 
   const columns = new Set(rec.fills.filter((f) => f.h > 0).map((f) => f.x));
   assert.ok(columns.size >= 260 * 0.8, 'dense RGB waveform');
-  assert.ok(rec.styles.has('gradient(rgb)'), 'RGB vertical gradient used');
-  console.log('[ PASS ] #2 Native analysis buckets render with RGB gradient');
+  assert.ok(!rec.styles.has('gradient(rgb)'), 'static vertical gradient must no longer be used');
+
+  const parseRgb = (style: string): [number, number, number] | null => {
+    const m = style.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+  const dominant = (xFrom: number, xTo: number): [number, number, number] => {
+    let r = 0, g = 0, b = 0, count = 0;
+    for (const f of rec.fills) {
+      if (f.x < xFrom || f.x >= xTo || f.h <= 0) continue;
+      const rgb = parseRgb(f.style);
+      if (!rgb) continue;
+      r += rgb[0]; g += rgb[1]; b += rgb[2]; count++;
+    }
+    assert.ok(count > 0, `coloured columns exist in ${xFrom}-${xTo}`);
+    return [r / count, g / count, b / count];
+  };
+
+  const [dropR, , dropB] = dominant(0, 130);
+  const [breakR, , breakB] = dominant(130, 260);
+  assert.ok(dropR > dropB, `drop half must be red-dominant (r=${dropR.toFixed(0)} b=${dropB.toFixed(0)})`);
+  assert.ok(breakB > breakR, `break half must be blue-dominant (r=${breakR.toFixed(0)} b=${breakB.toFixed(0)})`);
+  assert.ok(dropR > breakR, 'red energy concentrates in the drop');
+  console.log('[ PASS ] #2 RGB columns are spectrally coloured: drop=red, break=blue (rekordbox-authentic)');
 }
 
 // #3: 3BAND mode draws the three band layers (red low / cyan mid / white high)

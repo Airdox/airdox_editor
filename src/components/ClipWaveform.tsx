@@ -17,6 +17,7 @@
 import React, { useRef, useEffect } from 'react';
 import { PaletteClip, WaveformMode, WaveformAnalysisData } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
+import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
 
 // Cache for clips that do not carry native analysis (WeakMap = no leak)
 const computedAnalysisCache = new WeakMap<AudioBuffer, WaveformAnalysisData>();
@@ -136,12 +137,36 @@ export function drawDetailedClipWaveform(
   } else if (waveformMode === 'BLUE') {
     drawColumns((b0, b1) => maxOver(analysis.peaks, b0, b1), 1.0, '#159fe8', 'rgba(184, 233, 255, 0.34)');
   } else {
-    const gradient = ctx.createLinearGradient(0, centerY - maxHalf, 0, centerY + maxHalf);
-    gradient.addColorStop(0, '#86d8ff');
-    gradient.addColorStop(0.48, '#21a8e8');
-    gradient.addColorStop(0.52, '#21a8e8');
-    gradient.addColorStop(1, '#ff4655');
-    drawColumns((b0, b1) => maxOver(analysis.peaks, b0, b1), 1.0, gradient);
+    // RGB: rekordbox-authentic per-column spectral colouring — bass-heavy
+    // drops render red/orange, breaks and vocal sections blue/green, exactly
+    // like the main DetailWaveform renderer.
+    const avgOver = (band: Float32Array, b0: number, b1: number): number => {
+      let sum = 0;
+      let n = 0;
+      for (let b = b0; b <= b1; b++) {
+        sum += band[b] || 0;
+        n++;
+      }
+      return n > 0 ? sum / n : 0;
+    };
+    for (let x = 0; x < width; x++) {
+      const [b0, b1] = columnRange(x);
+      const amp = Math.min(1, maxOver(analysis.peaks, b0, b1));
+      if (amp <= 0.004) continue;
+      const low = avgOver(analysis.lowEnergy, b0, b1);
+      const mid = avgOver(analysis.midEnergy, b0, b1);
+      const high = avgOver(analysis.highEnergy, b0, b1);
+      const h = amp * maxHalf;
+      ctx.fillStyle = spectralRgb(low, mid, high);
+      ctx.fillRect(x, centerY - h, 1, h * 2);
+      const coreH = h * 0.45;
+      if (coreH >= 0.5) {
+        ctx.fillStyle = spectralRgbCore(low, mid, high);
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(x, centerY - coreH, 1, coreH * 2);
+        ctx.globalAlpha = 1;
+      }
+    }
   }
 
   // Beatgrid overlay (bars brighter, beats only when spacing allows)

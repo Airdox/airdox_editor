@@ -14,7 +14,7 @@ import assert from 'node:assert';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { isProtectedTarget, normalizeForCompare } = require('../electron/pathGuard.cjs');
+const { OriginalSourceRegistry, isProtectedTarget, normalizeForCompare } = require('../electron/pathGuard.cjs');
 
 const protectedPaths = [
   'C:\\Music\\Track.wav',
@@ -44,5 +44,16 @@ assert.strictEqual(isProtectedTarget('C:\\Music\\Track.wav', ['', '  ']), false)
 
 // Normalization is stable for cross-platform paths.
 assert.strictEqual(normalizeForCompare('C:\\Music\\Track.wav'), normalizeForCompare('c:/music/track.wav'));
+
+// The main process keeps its own authoritative source list. Protection cannot
+// be bypassed by an empty or incomplete renderer-provided protectedPaths list.
+const registry = new OriginalSourceRegistry();
+assert.strictEqual(registry.register('C:\\Music\\Track.wav'), true);
+registry.registerMany(['D:\\Rekordbox\\collection.xml', '', null]);
+assert.strictEqual(registry.isProtected('c:/music/TRACK.WAV', []), true);
+assert.strictEqual(registry.isProtected('D:\\Rekordbox\\collection.xml', []), true);
+assert.strictEqual(registry.isProtected('C:\\Exports\\safe.wav', []), false);
+assert.strictEqual(registry.isProtected('E:\\Pioneer\\master.db', ['E:\\Pioneer\\master.db']), true);
+assert.strictEqual(registry.values().length, 2, 'registry deduplicates and ignores invalid paths');
 
 console.log('path overwrite guard: OK');

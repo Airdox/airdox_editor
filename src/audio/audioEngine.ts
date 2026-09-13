@@ -1,13 +1,19 @@
 /**
  * @license
  * Rekordbox Audio Engine
- * Real Web Audio API pipeline with Master Bus, Analyser meters,
+ * Real Web Audio API pipeline with Master Bus, Stem Mixer, Analyser meters,
  * Non-destructive Edit Graph playback, and WAV export.
  */
 
 import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
 import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
 import { renderEditSegments } from './editingEngine';
+import {
+  TrackStems,
+  StemsMixerState,
+  STEM_TYPES,
+  DEFAULT_STEMS_MIXER_STATE,
+} from './stemEngine';
 
 const SAMPLE_INDEX_EPSILON = 1e-6;
 
@@ -22,7 +28,28 @@ class AudioEngine {
   private analyserR: AnalyserNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
 
+  // Single-source playback
   private currentSource: AudioBufferSourceNode | null = null;
+
+  // Stems playback
+  private stemSources: {
+    vocals: AudioBufferSourceNode | null;
+    drums: AudioBufferSourceNode | null;
+    bass: AudioBufferSourceNode | null;
+    other: AudioBufferSourceNode | null;
+  } = { vocals: null, drums: null, bass: null, other: null };
+
+  private stemGains: {
+    vocals: GainNode | null;
+    drums: GainNode | null;
+    bass: GainNode | null;
+    other: GainNode | null;
+  } = { vocals: null, drums: null, bass: null, other: null };
+
+  private isPlayingStems: boolean = false;
+  private activeStems: TrackStems | null = null;
+  private stemsMixerState: StemsMixerState = { ...DEFAULT_STEMS_MIXER_STATE };
+
   private startTime: number = 0; // audioCtx.currentTime when playback started
   private pauseOffset: number = 0; // playback position in seconds
   private isPlaying: boolean = false;
@@ -53,6 +80,14 @@ class AudioEngine {
       this.masterGain.connect(this.splitter);
       this.splitter.connect(this.analyserL, 0);
       this.splitter.connect(this.analyserR, 1);
+
+      // Initialize Stem gain nodes
+      for (const stem of STEM_TYPES) {
+        const gain = this.ctx.createGain();
+        gain.gain.value = 1.0;
+        gain.connect(this.masterGain);
+        this.stemGains[stem] = gain;
+      }
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -92,6 +127,38 @@ class AudioEngine {
     };
   }
 
+  /**
+   * Applies the Stems mixer state (Mute / Solo / Volume) to the active stem gain nodes.
+   */
+  public updateStemMixer(mixer: StemsMixerState) {
+    this.stemsMixerState = { ...mixer };
+    if (!this.ctx) return;
+
+    const hasAnySolo = STEM_TYPES.some((s) => mixer[s].solo);
+    const now = this.ctx.currentTime;
+
+    for (const stem of STEM_TYPES) {
+      const gainNode = this.stemGains[stem];
+      if (!gainNode) continue;
+
+      const state = mixer[stem];
+      let targetGain = state.volume;
+
+      if (hasAnySolo) {
+        targetGain = state.solo ? state.volume : 0.0;
+      } else if (state.muted) {
+        targetGain = 0.0;
+      }
+
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      gainNode.gain.linearRampToValueAtTime(Math.max(0, targetGain), now + 0.02);
+    }
+  }
+
+  /**
+   * Standard single-buffer playback.
+   */
   public play(
     buffer: AudioBuffer,
     offsetSeconds: number = 0,
@@ -102,7 +169,9 @@ class AudioEngine {
     const ctx = this.init();
     this.stop();
 
+    this.isPlayingStems = false;
     this.activeBuffer = buffer;
+    this.activeStems = null;
     this.pauseOffset = Math.max(0, Math.min(offsetSeconds, buffer.duration));
     this.loopActive = loop;
     this.loopStart = loopStartSec;
@@ -136,6 +205,72 @@ class AudioEngine {
     };
   }
 
+  /**
+   * Real-time 4-stem multi-channel playback with individual gain nodes.
+   */
+  public playWithStems(
+    stems: TrackStems,
+    mixerState: StemsMixerState,
+    offsetSeconds: number = 0,
+    loop: boolean = false,
+    loopStartSec: number = 0,
+    loopEndSec: number = 0
+  ) {
+    const ctx = this.init();
+    this.stop();
+
+    this.isPlayingStems = true;
+    this.activeStems = stems;
+    this.activeBuffer = stems.vocals; // reference for duration/timing
+    this.pauseOffset = Math.max(0, Math.min(offsetSeconds, stems.duration));
+    this.loopActive = loop;
+    this.loopStart = loopStartSec;
+    this.loopEnd = loopEndSec > loopStartSec ? loopEndSec : stems.duration;
+
+    this.updateStemMixer(mixerState);
+
+    this.startTime = ctx.currentTime - this.pauseOffset;
+
+    for (const stem of STEM_TYPES) {
+      const stemBuf = stems[stem];
+      const source = ctx.createBufferSource();
+      source.buffer = stemBuf;
+
+      if (this.loopActive && this.loopEnd > this.loopStart) {
+        source.loop = true;
+        source.loopStart = this.loopStart;
+        source.loopEnd = this.loopEnd;
+      }
+
+      const gainNode = this.stemGains[stem];
+      if (gainNode) {
+        source.connect(gainNode);
+      } else if (this.masterGain) {
+        source.connect(this.masterGain);
+      } else {
+        source.connect(ctx.destination);
+      }
+
+      source.start(0, this.pauseOffset);
+      this.stemSources[stem] = source;
+    }
+
+    this.isPlaying = true;
+
+    // Monitor 'ended' on the primary source
+    const leadSource = this.stemSources.vocals;
+    if (leadSource) {
+      leadSource.onended = () => {
+        // Ignore delayed onended events from a source that was replaced during
+        // a live mixer transition. Otherwise the stale vocal source can stop
+        // the newly started stem set and make Vocal Solo sound completely dead.
+        if (this.isPlayingStems && this.stemSources.vocals === leadSource) {
+          this.stop();
+        }
+      };
+    }
+  }
+
   public pause(): number {
     const pos = this.getCurrentTime();
     this.stop();
@@ -153,7 +288,22 @@ class AudioEngine {
       }
       this.currentSource = null;
     }
+
+    for (const stem of STEM_TYPES) {
+      const src = this.stemSources[stem];
+      if (src) {
+        try {
+          src.stop();
+          src.disconnect();
+        } catch {
+          // already stopped
+        }
+        this.stemSources[stem] = null;
+      }
+    }
+
     this.isPlaying = false;
+    this.isPlayingStems = false;
   }
 
   public getCurrentTime(): number {
@@ -172,6 +322,18 @@ class AudioEngine {
 
   public getIsPlaying(): boolean {
     return this.isPlaying;
+  }
+
+  public getIsPlayingStems(): boolean {
+    return this.isPlayingStems;
+  }
+
+  public getActiveStems(): TrackStems | null {
+    return this.activeStems;
+  }
+
+  public getStemsMixerState(): StemsMixerState {
+    return { ...this.stemsMixerState };
   }
 
   /**

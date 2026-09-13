@@ -7,6 +7,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
+import { spectralRgb } from '../waveform/spectralColor';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -95,12 +96,9 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const yTop = (height - barH) / 2;
 
         // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
-
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+        // Red = Bass, Green = Mids, Blue/Cyan = Highs — shared helper keeps
+        // the overview identical in hue to the detail waveform below it.
+        ctx.fillStyle = spectralRgb(low, mid, high);
         ctx.fillRect(col, yTop, 1, barH);
       }
     } else {

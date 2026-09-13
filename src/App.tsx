@@ -46,6 +46,7 @@ import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
 import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
+import { DeckStemsControl } from './components/DeckStemsControl';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
@@ -61,6 +62,19 @@ import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
+import { DeleteModeModal } from './components/Modals/DeleteModeModal';
+import { MidiControllerModal } from './components/Modals/MidiControllerModal';
+import {
+  stemEngine,
+  StemType,
+  TrackStems,
+  StemsMixerState,
+  StemSeparationProgress,
+  DEFAULT_STEMS_MIXER_STATE,
+  STEM_TYPES,
+} from './audio/stemEngine';
+import { applyStemMixDuringPlayback, isCustomStemMix } from './audio/stemPlayback';
+import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
@@ -71,7 +85,7 @@ import {
   cloneAudioBuffer,
   executeCopy,
   executeCut,
-  executeDelete,
+  executeRippleDelete,
   executeClear,
   executeInsert,
   executePaste,
@@ -406,8 +420,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth, recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject]);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
+  const [deleteModeModalOpen, setDeleteModeModalOpen] = useState<boolean>(false);
   const [isGlobalDragging, setIsGlobalDragging] = useState<boolean>(false);
   const dragCounterRef = useRef<number>(0);
+
+  // Stems Separation and Multi-Track Mixer state
+  const [activeTrackStems, setActiveTrackStems] = useState<TrackStems | null>(null);
+  const [stemsMixerState, setStemsMixerState] = useState<StemsMixerState>({ ...DEFAULT_STEMS_MIXER_STATE });
+  const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
+  const [separationProgress, setSeparationProgress] = useState<StemSeparationProgress | null>(null);
+
+  // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
+  const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
+  const [isMidiConnected, setIsMidiConnected] = useState<boolean>(false);
+  const [midiStatusLabel, setMidiStatusLabel] = useState<string>('MIDI bereit');
 
   // Edit Assistant State Manager (protects selection buffer & clipboard integrity)
   const { state: editAssistantState, summary: editAssistantSummary } = useEditAssistant(
@@ -713,13 +739,197 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [viewOffset, viewDuration]);
 
   // Master volume control
-  const handleMasterVolumeChange = (vol: number) => {
+  const handleMasterVolumeChange = useCallback((vol: number) => {
     setMasterVolume(vol);
     audioEngine.setMasterVolume(vol);
-  };
+  }, []);
 
-  // Playback Toggle
-  const handleTogglePlay = () => {
+
+  // Check cached stems on track change
+  useEffect(() => {
+    if (activeTrack) {
+      const cached = stemEngine.getCachedStems(activeTrack.id, activeTrack.originalSha256);
+      setActiveTrackStems(cached || null);
+    } else {
+      setActiveTrackStems(null);
+    }
+  }, [activeTrackId, activeTrack]);
+
+  // Stem separation & mixer handlers
+  const handleSeparateStems = useCallback(async () => {
+    if (!activeTrack || !workingAudioBuffer) {
+      alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    setIsSeparatingStems(true);
+    try {
+      const separated = await stemEngine.separateAudioBufferWithModel(
+        workingAudioBuffer,
+        activeTrack.id,
+        activeTrack.originalSha256,
+        (prog) => setSeparationProgress(prog)
+      );
+      setActiveTrackStems(separated);
+      const methodLabel = separated.separationMethod === 'DEMUCS_HTDEMUCS_FT'
+        ? 'Demucs htdemucs_ft'
+        : 'lokalem Spektral-Fallback';
+      showOperationFeedback({
+        title: 'Stems erfolgreich getrennt',
+        operationType: 'CUE',
+        description: `Track "${activeTrack.title}" mit ${methodLabel} in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
+        originalSha256: activeTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      logger.error('EDITING', `Fehler bei Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
+      alert(`Fehler bei der Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSeparatingStems(false);
+      setSeparationProgress(null);
+    }
+  }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
+
+  const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
+    applyStemMixDuringPlayback(
+      audioEngine,
+      activeTrackStems,
+      workingAudioBuffer,
+      next,
+      loopActive,
+      loopActive && selection ? selection.start : 0,
+      loopActive && selection ? selection.end : 0
+    );
+  }, [activeTrackStems, workingAudioBuffer, loopActive, selection]);
+
+  const handleToggleStemMute = useCallback((stem: StemType) => {
+    setStemsMixerState((prev) => {
+      const next: StemsMixerState = {
+        ...prev,
+        [stem]: { ...prev[stem], muted: !prev[stem].muted },
+      };
+      updateLiveStemPlayback(next);
+      midiManager.updateStemPadLeds(next);
+      return next;
+    });
+  }, [updateLiveStemPlayback]);
+
+  const handleToggleStemSolo = useCallback((stem: StemType) => {
+    setStemsMixerState((prev) => {
+      const next: StemsMixerState = {
+        ...prev,
+        [stem]: { ...prev[stem], solo: !prev[stem].solo },
+      };
+      updateLiveStemPlayback(next);
+      midiManager.updateStemPadLeds(next);
+      return next;
+    });
+  }, [updateLiveStemPlayback]);
+
+  const handleStemVolumeChange = useCallback((stem: StemType, vol: number) => {
+    setStemsMixerState((prev) => {
+      const next: StemsMixerState = {
+        ...prev,
+        [stem]: { ...prev[stem], volume: vol },
+      };
+      updateLiveStemPlayback(next);
+      return next;
+    });
+  }, [updateLiveStemPlayback]);
+
+  const handleExtractStemToClip = useCallback((stem: StemType) => {
+    if (!activeTrack || !activeTrackStems) return;
+    const stemBuffer = activeTrackStems[stem];
+    const startSec = selection ? selection.start : 0;
+    const endSec = selection ? selection.end : stemBuffer.duration;
+    const sliced = audioEngine.sliceAudioBuffer(stemBuffer, startSec, endSec);
+    const beats = selection ? selection.beatsCount : Math.round(sliced.duration * (activeTrack.bpm / 60));
+    const bars = selection ? selection.barsCount : Math.max(1, Math.round(beats / 4));
+
+    const stemColorMap: Record<StemType, string> = {
+      vocals: '#00c8ff',
+      drums: '#ffaa00',
+      bass: '#ff3b30',
+      other: '#00e676',
+    };
+
+    const newClipId = `clip-stem-${stem}-${Date.now()}`;
+    const newClip: PaletteClip = {
+      id: newClipId,
+      name: `${activeTrack.title} [${stem.toUpperCase()}]`,
+      sourceTrackId: activeTrack.id,
+      sourceTrackName: activeTrack.title,
+      sourceStart: startSec,
+      sourceEnd: endSec,
+      duration: sliced.duration,
+      beats,
+      bars,
+      bpm: activeTrack.bpm,
+      key: activeTrack.key,
+      color: stemColorMap[stem],
+      audioBuffer: sliced,
+      miniPeaks: extractMiniPeaks(sliced, 48),
+      analysis: analyzeAudioBuffer(sliced, DataOrigin.PROJECT),
+      origin: DataOrigin.PROJECT,
+    };
+
+    setPaletteClips((prev) => [...prev, newClip]);
+    setSelectedClipId(newClipId);
+    if (!paletteOpen) setPaletteOpen(true);
+
+    showOperationFeedback({
+      title: `${stem.toUpperCase()}-Stem als Clip extrahiert`,
+      operationType: 'COPY',
+      description: `Isolierter Stem "${stem.toUpperCase()}" (${sliced.duration.toFixed(2)}s / ${bars.toFixed(1)} Takte) wurde als neuer Clip zur Palette hinzugefügt.`,
+      timeRangeSec: { start: startSec, end: endSec, duration: sliced.duration },
+      barsCount: bars,
+      beatsCount: beats,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  }, [activeTrack, activeTrackStems, selection, paletteOpen, showOperationFeedback]);
+
+  const applyStemsMixerState = useCallback((next: StemsMixerState) => {
+    setStemsMixerState(next);
+    midiManager.updateStemPadLeds(next);
+
+    updateLiveStemPlayback(next);
+  }, [updateLiveStemPlayback]);
+
+  const handleSetAcapella = useCallback(() => {
+    applyStemsMixerState({
+      vocals: { ...DEFAULT_STEMS_MIXER_STATE.vocals, solo: true },
+      drums: { ...DEFAULT_STEMS_MIXER_STATE.drums },
+      bass: { ...DEFAULT_STEMS_MIXER_STATE.bass },
+      other: { ...DEFAULT_STEMS_MIXER_STATE.other },
+    });
+  }, [applyStemsMixerState]);
+
+  const handleSetInstrumental = useCallback(() => {
+    applyStemsMixerState({
+      vocals: { ...DEFAULT_STEMS_MIXER_STATE.vocals, muted: true },
+      drums: { ...DEFAULT_STEMS_MIXER_STATE.drums },
+      bass: { ...DEFAULT_STEMS_MIXER_STATE.bass },
+      other: { ...DEFAULT_STEMS_MIXER_STATE.other },
+    });
+  }, [applyStemsMixerState]);
+
+  const handleResetStems = useCallback(() => {
+    applyStemsMixerState({
+      vocals: { ...DEFAULT_STEMS_MIXER_STATE.vocals },
+      drums: { ...DEFAULT_STEMS_MIXER_STATE.drums },
+      bass: { ...DEFAULT_STEMS_MIXER_STATE.bass },
+      other: { ...DEFAULT_STEMS_MIXER_STATE.other },
+    });
+  }, [applyStemsMixerState]);
+
+  /** Stems playback is only engaged when the mixer actually deviates from the full mix. */
+  const stemsMixIsCustom = useMemo(
+    () => activeTrackStems !== null && isCustomStemMix(stemsMixerState),
+    [activeTrackStems, stemsMixerState]
+  );
+
+  // Playback Toggle (supports both master working audio and isolated multi-stem playback)
+  const handleTogglePlay = useCallback(() => {
     if (!activeTrack) {
       alert('Bitte lade zuerst einen Track oder importiere eine Audiodatei (WAV, MP3, FLAC).');
       return;
@@ -746,25 +956,85 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         loopStart = selection.start;
         loopEnd = selection.end;
       }
-      audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+      if (activeTrackStems && stemsMixIsCustom) {
+        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTime, loopActive, loopStart, loopEnd);
+      } else {
+        audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+      }
       setIsPlaying(true);
     }
-  };
+  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom, currentTime]);
 
-  const handleReturnToStart = () => {
+  const handleReturnToStart = useCallback(() => {
     audioEngine.stop();
     setIsPlaying(false);
     setCurrentTime(0);
     setViewOffset(0);
-  };
+  }, []);
 
-  const handleSeek = (targetTime: number) => {
+  const handleSeek = useCallback((targetTime: number) => {
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
     setCurrentTime(clamped);
     if (isPlaying && workingAudioBuffer) {
-      audioEngine.play(workingAudioBuffer, clamped, loopActive);
+      if (activeTrackStems && stemsMixIsCustom) {
+        audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
+      } else {
+        audioEngine.play(workingAudioBuffer, clamped, loopActive);
+      }
     }
-  };
+  }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
+
+  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshDeviceState = () => {
+      if (cancelled) return;
+      setIsMidiConnected(midiManager.getConnectedDevices().length > 0);
+      setMidiStatusLabel(midiManager.getStatusLabel());
+    };
+
+    midiManager.init().then(refreshDeviceState);
+    const unsubState = midiManager.onStateChange(refreshDeviceState);
+
+    const unsubActions = midiManager.subscribe((action) => {
+      switch (action.type) {
+        case 'STEM_TOGGLE':
+          if (action.stem) handleToggleStemMute(action.stem);
+          break;
+        case 'STEM_SOLO':
+          if (action.stem) handleToggleStemSolo(action.stem);
+          break;
+        case 'PLAY_PAUSE':
+          handleTogglePlay();
+          break;
+        case 'CUE':
+          handleReturnToStart();
+          break;
+        case 'LOOP_TOGGLE':
+          setLoopActive((prev) => !prev);
+          break;
+        case 'SEEK':
+          if (action.value !== undefined) {
+            handleSeek(currentTime + action.value * 0.15);
+          }
+          break;
+        case 'MASTER_VOLUME':
+          if (action.value !== undefined) {
+            handleMasterVolumeChange(action.value);
+          }
+          break;
+        default:
+          break;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubState();
+      unsubActions();
+    };
+  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, currentTime, handleMasterVolumeChange]);
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -1421,7 +1691,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime = currentTime) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -1435,7 +1705,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // path is a lossless copy; no WSOLA/pitch processing is allowed to invent a
     // tail of silence.
     const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-    const insertPos = currentTime;
+    const insertPos = Math.max(0, Math.min(workingAudioBuffer.duration, requestedInsertTime));
     const isExactSameSourceSlot = isExactSameSourceSlotRoundTrip({
       targetBuffer: workingAudioBuffer,
       clipBuffer: adapted.adaptedBuffer,
@@ -1506,6 +1776,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
+  };
+
+  const handleDropPaletteClip = (clipId: string, dropTime: number) => {
+    const clip = paletteClips.find((candidate) => candidate.id === clipId);
+    if (!clip) {
+      logger.warn('EDITING', `Drag-and-Drop-Clip nicht mehr in der Palette vorhanden: ${clipId}`);
+      return;
+    }
+    setSelectedClipId(clip.id);
+    setCurrentTime(dropTime);
+    handleInsertClipToDeckA(clip, dropTime);
   };
 
   // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
@@ -1635,18 +1916,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     handleOverdubDeckAWithClip(activeClip);
   };
 
-  // Delete selection (removes range and shifts subsequent material, validated by Edit Assistant)
+  // DELETE button opens an explicit choice; no timeline behavior is implicit.
   const handleDelete = () => {
-    const validation = editAssistant.validateDelete(selection, workingAudioBuffer);
+    const validation = editAssistant.validateClear(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    setDeleteModeModalOpen(true);
+  };
+
+  // Normal Delete: duration-preserving silence on the working representation.
+  const handleNormalDelete = () => {
+    setDeleteModeModalOpen(false);
+    const validation = editAssistant.validateClear(selection, workingAudioBuffer);
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
     }
     const effectiveSel = validation.sanitizedSelection || selection;
     if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Delete');
+    pushHistorySnapshot('Normal Delete');
 
-    const result = executeDelete(
+    const result = executeClear(
       workingAudioBuffer,
       effectiveSel,
       activeTrack.cues,
@@ -1661,9 +1953,51 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setSelection(null);
 
     showOperationFeedback({
-      title: 'Auswahl gelöscht (Delete)',
+      title: 'Auswahl gelöscht (Normales Delete)',
       operationType: 'DELETE',
-      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${effectiveSel.duration.toFixed(3)}s nach vorne gerückt.`,
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) in der Arbeitsrepräsentation durch Stille ersetzt. Tracklänge und nachfolgende Positionen bleiben unverändert; die Originaldatei bleibt schreibgeschützt.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Ripple Delete: removes the range and shifts all subsequent timeline data.
+  const handleRippleDelete = () => {
+    setDeleteModeModalOpen(false);
+    const validation = editAssistant.validateDelete(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
+    pushHistorySnapshot('Ripple Delete');
+
+    const result = executeRippleDelete(
+      {
+        originalBuffer: activeTrack.audioBuffer,
+        workingBuffer: workingAudioBuffer,
+        originalMedia: activeTrack.originalMedia,
+      },
+      effectiveSel,
+      activeTrack.cues,
+      activeTrack.workingSegments,
+      undefined,
+      createEditContext(activeTrack)
+    );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+    setSelection(null);
+
+    showOperationFeedback({
+      title: 'Auswahl entfernt (Ripple Delete)',
+      operationType: 'DELETE',
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) ausschließlich aus der Arbeitsrepräsentation entfernt. Nachfolgendes Audio-Material wurde um -${effectiveSel.duration.toFixed(3)}s nach vorne gerückt; die Originaldatei bleibt unverändert und schreibgeschützt.`,
       timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
       barsCount: effectiveSel.barsCount,
       beatsCount: effectiveSel.beatsCount,
@@ -2509,6 +2843,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (deleteModeModalOpen) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -2872,6 +3207,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         hasClipboard={clipboardBuffer !== null}
         onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
         onAnalyzeMixIn={() => setChatbotOpen(true)}
+        onOpenMidiModal={() => setMidiModalOpen(true)}
+        onSeparateStems={handleSeparateStems}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -2915,6 +3252,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onPanView={handlePanView}
       />
 
+      {/* 4b. Deck Stems Control Bar (Pioneer DJ Stems: Vocals, Drums, Bass, Other) */}
+      <DeckStemsControl
+        stems={activeTrackStems}
+        mixerState={stemsMixerState}
+        isSeparating={isSeparatingStems}
+        separationProgress={separationProgress}
+        onSeparateStems={handleSeparateStems}
+        onToggleStemMute={handleToggleStemMute}
+        onToggleStemSolo={handleToggleStemSolo}
+        onStemVolumeChange={handleStemVolumeChange}
+        onExtractStemToClip={handleExtractStemToClip}
+        onSetAcapella={handleSetAcapella}
+        onSetInstrumental={handleSetInstrumental}
+        onResetStems={handleResetStems}
+        onOpenMidiModal={() => setMidiModalOpen(true)}
+        midiStatusLabel={midiStatusLabel}
+        isMidiConnected={isMidiConnected}
+      />
+
       {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
@@ -2952,6 +3308,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
+          onDropPaletteClip={handleDropPaletteClip}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
@@ -3167,6 +3524,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onClose={() => setSystemLogModalOpen(false)}
       />
 
+      {/* Explicit Normal Delete / Ripple Delete choice */}
+      {deleteModeModalOpen && selection && (
+        <DeleteModeModal
+          selection={selection}
+          onNormalDelete={handleNormalDelete}
+          onRippleDelete={handleRippleDelete}
+          onCancel={() => setDeleteModeModalOpen(false)}
+        />
+      )}
+
       {/* Clear History Confirmation Modal (Data Loss Prevention) */}
       <ClearHistoryModal
         isOpen={clearHistoryModalOpen}
@@ -3185,6 +3552,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         summary={editAssistantSummary}
         autoCorrect={editAssistantState.autoCorrect}
         onToggleAutoCorrect={(enabled) => editAssistant.setAutoCorrect(enabled)}
+      />
+
+      {/* Pioneer Hardware Controller & MIDI Mapping Modal */}
+      <MidiControllerModal
+        isOpen={midiModalOpen}
+        onClose={() => setMidiModalOpen(false)}
+        stemsMixerState={stemsMixerState}
+        onToggleStemMute={handleToggleStemMute}
+        onToggleStemSolo={handleToggleStemSolo}
       />
     </div>
   );

@@ -53,6 +53,22 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       } | null>;
+      getStemEngineStatus(): Promise<{
+        available: boolean;
+        python: string | null;
+        model: string;
+        weightsPresent: number;
+        weightsRequired: number;
+        weightsReady: boolean;
+        reason?: string;
+        details?: { version: number[]; executable: string; torch: string; torchaudio: string };
+        probes: Array<{ command: string; usable: boolean; reason?: string }>;
+      }>;
+      separateStems(wavBytes: Uint8Array): Promise<{
+        engine: 'demucs';
+        model: string;
+        stems: Record<'vocals' | 'drums' | 'bass' | 'other', Uint8Array>;
+      }>;
     };
   }
 

@@ -16,6 +16,7 @@ import {
   EditSegment,
   LoopPoint,
   PhraseSection,
+  OriginalMediaReference,
   SelectionRange,
   TrackModel,
   WaveformAnalysisData,
@@ -750,6 +751,47 @@ export function executeDelete(
     newBeatGrid,
     newPhrases,
   };
+}
+
+export interface RippleDeleteSources {
+  /** Immutable decoded source. It is retained for replay and must never be an edit target. */
+  readonly originalBuffer: AudioBuffer | null;
+  /** Current app-owned render/EDL state on which the operation is performed. */
+  readonly workingBuffer: AudioBuffer;
+  /** Optional physical source identity. Runtime validation is deliberately fail-closed. */
+  readonly originalMedia?: OriginalMediaReference;
+}
+
+/**
+ * Explicit non-destructive Ripple Delete boundary.
+ *
+ * The physical original is never opened here and `originalBuffer` is never
+ * passed to a mutating operation. DELETE works exclusively from the current
+ * working representation, allocates a fresh output buffer, and updates the
+ * EDL so the result can later be replayed from the immutable original.
+ * Keeping this as a separate API prevents UI code from accidentally treating
+ * the source buffer/path as an editable target.
+ */
+export function executeRippleDelete(
+  sources: RippleDeleteSources,
+  selection: SelectionRange,
+  cues: CuePoint[] = [],
+  segments: EditSegment[] = [],
+  factory?: BufferFactory,
+  context?: EditCommandContext
+): EditExecutionResult {
+  if (!sources || !sources.workingBuffer) {
+    throw new Error('Ripple Delete benötigt eine editierbare Arbeitsrepräsentation.');
+  }
+  if (sources.originalMedia && sources.originalMedia.accessMode !== 'READ_ONLY') {
+    throw new Error('Ripple Delete verweigert eine nicht schreibgeschützte Originalreferenz.');
+  }
+
+  const result = executeDelete(sources.workingBuffer, selection, cues, segments, factory, context);
+  if (result.newBuffer === sources.workingBuffer || result.newBuffer === sources.originalBuffer) {
+    throw new Error('Ripple Delete muss einen neuen Arbeitspuffer erzeugen.');
+  }
+  return result;
 }
 
 /** CUT combines COPY and DELETE while preserving the copied samples exactly. */

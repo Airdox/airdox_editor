@@ -28,4 +28,34 @@ function isProtectedTarget(targetPath, protectedPaths) {
   );
 }
 
-module.exports = { normalizeForCompare, isProtectedTarget };
+/**
+ * Main-process-owned registry of every source path opened read-only. Renderer
+ * payloads are not a security boundary, so save/export checks must also use
+ * this authoritative list even if a renderer accidentally omits a source.
+ */
+class OriginalSourceRegistry {
+  constructor() {
+    this.paths = new Map();
+  }
+
+  register(filePath) {
+    if (typeof filePath !== 'string' || !filePath.trim()) return false;
+    this.paths.set(normalizeForCompare(filePath), path.resolve(filePath));
+    return true;
+  }
+
+  registerMany(filePaths) {
+    if (!Array.isArray(filePaths)) return;
+    for (const filePath of filePaths) this.register(filePath);
+  }
+
+  isProtected(targetPath, additionalPaths = []) {
+    return isProtectedTarget(targetPath, [...this.values(), ...(Array.isArray(additionalPaths) ? additionalPaths : [])]);
+  }
+
+  values() {
+    return Array.from(this.paths.values());
+  }
+}
+
+module.exports = { normalizeForCompare, isProtectedTarget, OriginalSourceRegistry };
