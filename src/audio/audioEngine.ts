@@ -7,7 +7,6 @@
 
 import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
 import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
-import { logger } from '../utils/logger';
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -15,7 +14,6 @@ class AudioEngine {
   private analyserL: AnalyserNode | null = null;
   private analyserR: AnalyserNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
-  private recordingDestination: MediaStreamAudioDestinationNode | null = null;
 
   private currentSource: AudioBufferSourceNode | null = null;
   private startTime: number = 0; // audioCtx.currentTime when playback started
@@ -29,9 +27,6 @@ class AudioEngine {
   // Analyser buffers
   private dataArrayL: Uint8Array = new Uint8Array(32);
   private dataArrayR: Uint8Array = new Uint8Array(32);
-
-  // Observers for playback state (e.g. for Auto-Record)
-  private playbackListeners: Set<(isPlaying: boolean, offset: number) => void> = new Set();
 
   public init(): AudioContext {
     if (!this.ctx) {
@@ -47,31 +42,13 @@ class AudioEngine {
       this.analyserL.fftSize = 64;
       this.analyserR.fftSize = 64;
 
-      // Master output routing
       this.masterGain.connect(this.ctx.destination);
       this.masterGain.connect(this.splitter);
       this.splitter.connect(this.analyserL, 0);
       this.splitter.connect(this.analyserR, 1);
-
-      // Dedicated stream destination for internal recording
-      try {
-        this.recordingDestination = this.ctx.createMediaStreamDestination();
-        this.masterGain.connect(this.recordingDestination);
-      } catch (err) {
-        logger.warn('AUDIO_ENGINE', 'MediaStreamDestination konnte nicht initialisiert werden', err);
-      }
-
-      logger.info('AUDIO_ENGINE', `Web AudioContext gestartet: ${this.ctx.sampleRate} Hz, State: ${this.ctx.state}`, {
-        sampleRate: this.ctx.sampleRate,
-        state: this.ctx.state,
-      }, 'EngineCore');
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume().then(() => {
-        logger.debug('AUDIO_ENGINE', 'AudioContext wurde reaktiviert (State: running)', null, 'EngineCore');
-      }).catch(() => {
-        // Ignoriere Autoplay-Richtlinien-Verweigerung bis zur ersten Benutzerinteraktion
-      });
+      this.ctx.resume();
     }
     return this.ctx;
   }
@@ -80,40 +57,12 @@ class AudioEngine {
     return this.init();
   }
 
-  public getMasterNode(): GainNode | null {
-    this.init();
-    return this.masterGain;
-  }
-
-  public getMasterStream(): MediaStream | null {
-    this.init();
-    return this.recordingDestination ? this.recordingDestination.stream : null;
-  }
-
-  public onPlaybackChange(listener: (isPlaying: boolean, offset: number) => void): () => void {
-    this.playbackListeners.add(listener);
-    return () => {
-      this.playbackListeners.delete(listener);
-    };
-  }
-
-  private notifyPlaybackChange(isPlaying: boolean, offset: number) {
-    this.playbackListeners.forEach((fn) => {
-      try {
-        fn(isPlaying, offset);
-      } catch (err) {
-        console.error('Error in playback listener:', err);
-      }
-    });
-  }
-
   public setMasterVolume(vol: number) {
     if (this.masterGain && this.ctx) {
-      const clamped = Math.max(0, Math.min(1.5, vol));
-      this.masterGain.gain.setValueAtTime(clamped, this.ctx.currentTime);
-      logger.debug('AUDIO_ENGINE', `Master-Lautstärke geändert: ${Math.round(clamped * 100)}%`, { volume: clamped }, 'MasterBus');
+      this.masterGain.gain.setValueAtTime(Math.max(0, Math.min(1.2, vol)), this.ctx.currentTime);
     }
   }
+
   public getMasterMeter(): { left: number; right: number; peak: number } {
     if (!this.analyserL || !this.analyserR || !this.isPlaying) {
       return { left: 0, right: 0, peak: 0 };
@@ -172,20 +121,10 @@ class AudioEngine {
     this.currentSource = source;
     this.isPlaying = true;
 
-    this.notifyPlaybackChange(true, this.pauseOffset);
-    logger.info('PLAYBACK', `Deck-Wiedergabe gestartet bei ${this.pauseOffset.toFixed(2)}s / ${buffer.duration.toFixed(2)}s`, {
-      offsetSeconds: this.pauseOffset,
-      duration: buffer.duration,
-      loop: this.loopActive,
-      sampleRate: buffer.sampleRate,
-    }, 'DeckPlayer');
-
     source.onended = () => {
       if (this.currentSource === source) {
         this.isPlaying = false;
         this.currentSource = null;
-        this.notifyPlaybackChange(false, this.pauseOffset);
-        logger.debug('PLAYBACK', 'Deck-Wiedergabe beendet (Track-Ende erreicht)', null, 'DeckPlayer');
       }
     };
   }
@@ -194,7 +133,6 @@ class AudioEngine {
     const pos = this.getCurrentTime();
     this.stop();
     this.pauseOffset = pos;
-    logger.info('PLAYBACK', `Deck-Wiedergabe pausiert bei ${pos.toFixed(2)}s`, { position: pos }, 'DeckPlayer');
     return pos;
   }
 
@@ -208,12 +146,7 @@ class AudioEngine {
       }
       this.currentSource = null;
     }
-    const wasPlaying = this.isPlaying;
     this.isPlaying = false;
-    if (wasPlaying) {
-      this.notifyPlaybackChange(false, this.pauseOffset);
-      logger.debug('PLAYBACK', 'Deck-Wiedergabe gestoppt', null, 'DeckPlayer');
-    }
   }
 
   public getCurrentTime(): number {

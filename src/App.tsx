@@ -52,14 +52,13 @@ import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportM
 import { ImportProgressModal } from './components/Modals/ImportProgressModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
+import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
-import { RecordModal } from './components/Modals/RecordModal';
-import { recordingEngine } from './audio/recordingEngine';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
-import { ChatbotModal } from './components/ChatbotModal';
+import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn } from './audio/mixAnalysis';
 import {
@@ -231,10 +230,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
 
-  // Palette & Edit panels: Start collapsed in ultra-compact minimal mode for maximum waveform canvas
-  const [paletteOpen, setPaletteOpen] = useState<boolean>(false); // Starts collapsed
-  const [editPaletteOpen, setEditPaletteOpen] = useState<boolean>(false); // Starts collapsed in sleek 28px bar
-  const [autoCollapseTools, setAutoCollapseTools] = useState<boolean>(true); // Auto-reveals & auto-collapses
+  // Palette state - Starts completely empty
+  const [paletteOpen, setPaletteOpen] = useState<boolean>(true); // Screenshot 01 (open) vs Screenshot 02 (closed)
+  const [editPaletteOpen, setEditPaletteOpen] = useState<boolean>(true); // Collapsible lower Edit Palette (BEAT SELECT / SELECT / EDIT)
   const [paletteClips, setPaletteClips] = useState<PaletteClip[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [paletteViewMode, setPaletteViewMode] = useState<'SIDEBAR' | 'FULL_DECK'>('SIDEBAR');
@@ -276,6 +274,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [importProgressModalOpen, setImportProgressModalOpen] = useState<boolean>(false);
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
@@ -313,64 +312,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
 
-  // Chatbot Pop-up Window state
+  // Chatbot Palette state
   const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
-
-  // Audio Recording Pop-up Window state & Engine bindings
-  const [recordModalOpen, setRecordModalOpen] = useState<boolean>(false);
-  const [isRecording, setIsRecording] = useState<boolean>(recordingEngine.getState() === 'RECORDING');
-  const [isRecordArmed, setIsRecordArmed] = useState<boolean>(recordingEngine.getState() === 'ARMED');
-
-  // Recording engine lifecycle subscription
-  useEffect(() => {
-    const unsubState = recordingEngine.subscribeState((newState) => {
-      setIsRecording(newState === 'RECORDING');
-      setIsRecordArmed(newState === 'ARMED');
-    });
-
-    const unsubAuto = recordingEngine.subscribeAutoTrigger((reason) => {
-      logger.info('RECORDING', `Auto-Record Ereignis empfangen: ${reason}`);
-      const settings = recordingEngine.getSettings();
-      if (settings.autoOpenWindowOnRecord) {
-        setRecordModalOpen(true);
-      }
-    });
-
-    return () => {
-      unsubState();
-      unsubAuto();
-    };
-  }, []);
-
-  // Handler to load recorded take directly into active deck
-  const handleLoadRecordedTake = useCallback((takeBuffer: AudioBuffer, title: string) => {
-    logger.info('RECORDING', `Lade aufgenommenen Take in den Haupt-Editor: "${title}"`, {
-      duration: takeBuffer.duration,
-      sampleRate: takeBuffer.sampleRate,
-    });
-    setWorkingAudioBuffer(takeBuffer);
-    setCurrentTime(0);
-    audioEngine.pause();
-    showOperationFeedback({
-      title: 'Audio-Aufnahme ins Deck geladen',
-      operationType: 'INSERT',
-      description: `${title}: ${takeBuffer.duration.toFixed(1)}s, ${takeBuffer.sampleRate} Hz Stereo`,
-      originalSha256: 'recording-take-stream',
-      timestamp: Date.now(),
-    });
-  }, [showOperationFeedback]);
-
-  // Handler to save recorded take as clip into palette
-  const handleSaveRecordedClip = useCallback((clipBuffer: AudioBuffer, name: string) => {
-    logger.info('RECORDING', `Aufnahme als Clip bereitgestellt: "${name}"`);
-    showOperationFeedback({
-      title: 'Aufnahme in Palette gesichert',
-      operationType: 'COPY',
-      description: `${name}: ${clipBuffer.duration.toFixed(1)}s`,
-      originalSha256: 'recording-clip-stream',
-      timestamp: Date.now(),
-    });
-  }, [showOperationFeedback]);
 
   // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
   // (Disabled on startup so the app opens with a completely empty project as requested)
@@ -935,17 +878,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       barsCount: actualBeats / bg.meter,
       duration: endSec - startSec,
     });
-    setEditPaletteOpen(true);
-  };
-
-  // Selection from Waveform drag - auto reveals edit palette if selection created
-  const handleSelectionFromWaveform = (newSelection: SelectionRange | null) => {
-    setSelection(newSelection);
-    if (newSelection && newSelection.duration > 0) {
-      setEditPaletteOpen(true);
-    } else if (!newSelection && autoCollapseTools) {
-      setEditPaletteOpen(false);
-    }
   };
 
   // SELECT Modus (Screenshot 03): HALF (1/2), DOUBLE (×2), CANCEL (⊗)
@@ -987,9 +919,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   const handleCancelSelection = () => {
     setSelection(null);
-    if (autoCollapseTools) {
-      setEditPaletteOpen(false);
-    }
   };
 
   // Add selection to Palette (CLONE or '+' button)
@@ -2404,9 +2333,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
-        onOpenRecordModal={() => setRecordModalOpen(true)}
-        isRecording={isRecording}
-        isRecordArmed={isRecordArmed}
         onClearHistory={() => setClearHistoryModalOpen(true)}
         hasHistory={undoStack.length > 0 || redoStack.length > 0}
         onCopy={handleCopy}
@@ -2433,6 +2359,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSaveProject={handleSaveProject}
         onExport={() => setExportModalOpen(true)}
         onShowInfo={() => setInfoModalOpen(true)}
+        onOpenSettings={() => setSettingsModalOpen(true)}
         masterVolume={masterVolume}
         onMasterVolumeChange={handleMasterVolumeChange}
         meterL={meterL}
@@ -2470,7 +2397,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           selection={selection}
           quantize={quantize}
           onSeek={handleSeek}
-          onSelect={handleSelectionFromWaveform}
+          onSelect={setSelection}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onResetZoom={handleResetZoom}
@@ -2519,6 +2446,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             targetKey={activeTrack?.key}
           />
         )}
+
+        {/* Collapsible AI Copilot Assistant Palette */}
+        <ChatbotPalette
+          isOpen={chatbotOpen}
+          onClose={() => setChatbotOpen(false)}
+          trackContext={chatbotTrackContext}
+          onExecuteAction={handleExecuteChatbotAction}
+          onSelectZoomPreset={handleSelectZoomPreset}
+        />
       </div>
 
       {/* Full Deck View (Expanded Clip Library Deck B) */}
@@ -2574,8 +2510,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
         isOpen={editPaletteOpen}
         onToggle={() => setEditPaletteOpen(!editPaletteOpen)}
-        autoCollapse={autoCollapseTools}
-        onToggleAutoCollapse={() => setAutoCollapseTools((prev) => !prev)}
       />
 
       {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
@@ -2601,6 +2535,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
+      <WorkspaceSettingsModal
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        onShowInfo={() => setInfoModalOpen(true)}
+        onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
+        onOpenSystemLogs={() => setSystemLogModalOpen(true)}
+        onClearHistory={() => setClearHistoryModalOpen(true)}
+        waveformMode={waveformMode}
+        onSetWaveformMode={setWaveformMode}
+      />
       {activeTrack && (
         <>
           <ProjectInfoModal
@@ -2641,7 +2585,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         fileName={xmlFileName}
         onSelectTrack={handleSelectTrackFromXml}
         currentTrackId={activeTrackId}
-        activeTrack={activeTrack}
       />
 
       {/* Real-time Non-blocking Import Telemetry Progress Modal */}
@@ -2686,29 +2629,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         summary={editAssistantSummary}
         autoCorrect={editAssistantState.autoCorrect}
         onToggleAutoCorrect={(enabled) => editAssistant.setAutoCorrect(enabled)}
-      />
-
-      {/* Dedicated Pop-up Modal: AI Smart Copilot & Visual Track Intelligence */}
-      <ChatbotModal
-        isOpen={chatbotOpen}
-        onClose={() => setChatbotOpen(false)}
-        trackContext={chatbotTrackContext}
-        activeTrack={activeTrack}
-        currentTime={currentTime}
-        audioBuffer={workingAudioBuffer}
-        onSeek={handleSeek}
-        onExecuteAction={handleExecuteChatbotAction}
-        onSelectZoomPreset={handleSelectZoomPreset}
-        onLoadDemoTrack={handleLoadDemoTrack}
-        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
-      />
-
-      {/* Dedicated Pop-up Modal: Audio Set Recording & Studio Limiter */}
-      <RecordModal
-        isOpen={recordModalOpen}
-        onClose={() => setRecordModalOpen(false)}
-        onLoadRecordingIntoDeck={handleLoadRecordedTake}
-        onSaveAsClip={handleSaveRecordedClip}
       />
     </div>
   );

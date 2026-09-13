@@ -121,7 +121,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
   const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
-  const [showLeftTools, setShowLeftTools] = useState(false);
 
   // Dynamic canvas sizing to respond to panel collapse/expand and container layout changes
   useEffect(() => {
@@ -140,25 +139,16 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
     };
 
-    let rafId: number | null = null;
-    const debouncedUpdate = () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        updateCanvasSize();
-      });
-    };
-
     updateCanvasSize();
     const ro = new ResizeObserver(() => {
-      debouncedUpdate();
+      updateCanvasSize();
     });
     ro.observe(container);
 
-    window.addEventListener('resize', debouncedUpdate);
+    window.addEventListener('resize', updateCanvasSize);
     return () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
       ro.disconnect();
-      window.removeEventListener('resize', debouncedUpdate);
+      window.removeEventListener('resize', updateCanvasSize);
     };
   }, []);
 
@@ -824,108 +814,160 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         isDraggingOver ? 'ring-2 ring-[#00a2ff] ring-inset bg-[#0d1525]' : ''
       }`}
     >
-      {/* Left side column: Collapsible Pioneer DJ Memory Cue & Beatgrid Fine Adjustment tools */}
-      {track && (
-        <>
-          {showLeftTools ? (
-            <div className="w-11 bg-[#0d0e12] border-r border-[#181a22] flex flex-col justify-between py-1.5 px-1 z-20 flex-shrink-0 select-none">
-              {/* Top: BPM display tag + Collapse button */}
-              <div className="flex flex-col space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="bg-[#16171e] border border-[#262835] rounded-xs px-1 py-0.5 text-center flex-1">
-                    <span className="text-[9px] font-mono font-bold text-white tracking-tighter">
-                      {track.bpm.toFixed(1)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setShowLeftTools(false)}
-                    className="p-0.5 ml-0.5 text-neutral-500 hover:text-white"
-                    title="Werkzeuge einklappen"
-                  >
-                    <ChevronLeft size={10} />
-                  </button>
-                </div>
-              </div>
+      {/* Left side column: BPM display, Memory Cue controls & Zoom controls */}
+      <div className="w-12 bg-[#0d0e12] border-r border-[#181a22] flex flex-col justify-between py-1.5 px-1 z-20 flex-shrink-0">
+        {/* Top: BPM display tag */}
+        <div className="flex flex-col space-y-1">
+          <div className="bg-[#16171e] border border-[#262835] rounded-xs px-0.5 py-0.5 text-center">
+            <span className="text-[9.5px] font-mono font-bold text-white tracking-tighter">
+              {track ? track.bpm.toFixed(2) : '--.--'}
+            </span>
+          </div>
 
-              {/* Middle: Pioneer Memory Cue Navigation (MEM <, +MEM, MEM >) */}
-              <div className="flex flex-col space-y-1 items-center border-y border-[#1a1b24] py-1.5 my-1">
-                <div className="text-[7.5px] text-[#ff3b30] font-bold tracking-tighter">
-                  MEM CUE
-                </div>
-                <div className="flex space-x-0.5 w-full">
-                  <button
-                    onClick={onPrevMemoryCue}
-                    className="flex-1 h-5 bg-[#1f1618] border border-[#4a1c20] hover:bg-[#ff2222] text-[#ff6666] hover:text-white rounded-xs flex items-center justify-center text-[8px] font-bold transition-colors"
-                    title="Previous Memory Cue (CDJ Memory Call <)"
-                  >
-                    &lt;
-                  </button>
-                  <button
-                    onClick={onNextMemoryCue}
-                    className="flex-1 h-5 bg-[#1f1618] border border-[#4a1c20] hover:bg-[#ff2222] text-[#ff6666] hover:text-white rounded-xs flex items-center justify-center text-[8px] font-bold transition-colors"
-                    title="Next Memory Cue (CDJ Memory Call >)"
-                  >
-                    &gt;
-                  </button>
-                </div>
-                <button
-                  onClick={onAddMemoryCue}
-                  className="w-full h-4 bg-[#261618] border border-[#521c22] hover:bg-[#ff2222] text-[#ff8888] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors"
-                  title="Set Memory Cue at Current Position (MEM)"
-                >
-                  +MEM
-                </button>
-              </div>
-
-              {/* Rekordbox Beatgrid Adjustments (GRID <, >, 1.1, AUTO) */}
-              <div className="flex flex-col space-y-1 items-center w-full">
-                <div className="text-[7.5px] text-[#00a2ff] font-bold tracking-wider">
-                  GRID
-                </div>
-                <div className="flex space-x-0.5 w-full">
-                  <button
-                    onClick={(e) => onShiftBeatgrid?.(e.shiftKey ? -0.01 : -0.001)}
-                    className="flex-1 h-4 bg-[#141822] border border-[#23304a] hover:bg-[#0088ff] text-[#70b0ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors"
-                    title="Grid feinjustieren: 1ms nach links (Shift: 10ms)"
-                  >
-                    ◀
-                  </button>
-                  <button
-                    onClick={(e) => onShiftBeatgrid?.(e.shiftKey ? 0.01 : 0.001)}
-                    className="flex-1 h-4 bg-[#141822] border border-[#23304a] hover:bg-[#0088ff] text-[#70b0ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors"
-                    title="Grid feinjustieren: 1ms nach rechts (Shift: 10ms)"
-                  >
-                    ▶
-                  </button>
-                </div>
-                <button
-                  onClick={onSetFirstBeatHere}
-                  className="w-full h-4 bg-[#1e2330] border border-[#2e3b55] hover:bg-[#2563eb] text-[#8cb4ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors"
-                  title="Takt 1.1 an aktuellen Playhead setzen"
-                >
-                  1.1
-                </button>
-                <button
-                  onClick={onAutoAlignBeatgrid}
-                  className="w-full h-4 bg-[#12241c] border border-[#1d4634] hover:bg-[#10b981] text-[#6ee7b7] hover:text-white rounded-xs flex items-center justify-center text-[7px] font-bold transition-colors"
-                  title="Auto-Align: Grid an Transienten ausrichten"
-                >
-                  AUTO
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* Collapsed mini-tab to open Beatgrid/Cue tools only when needed */
+          {/* Database Inspector button */}
+          {onOpenDatabaseInspector && (
             <button
-              onClick={() => setShowLeftTools(true)}
-              className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-12 bg-[#141620]/90 hover:bg-[#222638] border-r border-y border-[#2d3248] rounded-r-xs text-neutral-400 hover:text-white flex items-center justify-center z-30 transition-colors shadow-md"
-              title="Cue- & Beatgrid-Werkzeuge einblenden"
+              onClick={onOpenDatabaseInspector}
+              disabled={!track}
+              className={`w-full py-0.5 rounded-xs text-[7.5px] font-bold tracking-tight transition-colors text-center ${
+                track
+                  ? 'bg-[#0088ff]/15 hover:bg-[#0088ff] text-[#0088ff] hover:text-white border border-[#0088ff]/30'
+                  : 'bg-[#15161c] text-neutral-600 border border-neutral-800 cursor-not-allowed'
+              }`}
+              title="Rekordbox Datenbank & Visualisierungs-Daten"
             >
-              <ChevronRight size={10} />
+              DATA
             </button>
           )}
-        </>
-      )}
+        </div>
+
+        {/* Middle: Pioneer Memory Cue Navigation (MEM <, +MEM, MEM >) */}
+        <div className="flex flex-col space-y-1 items-center border-y border-[#1a1b24] py-1.5 my-1">
+          <div className="text-[7.5px] text-[#ff3b30] font-bold tracking-tighter">
+            MEM CUE
+          </div>
+          <div className="flex space-x-0.5 w-full">
+            <button
+              onClick={onPrevMemoryCue}
+              disabled={!track}
+              className="flex-1 h-5 bg-[#1f1618] border border-[#4a1c20] hover:bg-[#ff2222] text-[#ff6666] hover:text-white rounded-xs flex items-center justify-center text-[8px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              title="Previous Memory Cue (CDJ Memory Call <)"
+            >
+              &lt;
+            </button>
+            <button
+              onClick={onNextMemoryCue}
+              disabled={!track}
+              className="flex-1 h-5 bg-[#1f1618] border border-[#4a1c20] hover:bg-[#ff2222] text-[#ff6666] hover:text-white rounded-xs flex items-center justify-center text-[8px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              title="Next Memory Cue (CDJ Memory Call >)"
+            >
+              &gt;
+            </button>
+          </div>
+          <button
+            onClick={onAddMemoryCue}
+            disabled={!track}
+            className="w-full h-4 bg-[#261618] border border-[#521c22] hover:bg-[#ff2222] text-[#ff8888] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Set Memory Cue at Current Position (MEM)"
+          >
+            +MEM
+          </button>
+        </div>
+
+        {/* Rekordbox Beatgrid Adjustments (GRID <, >, 1.1, AUTO) */}
+        <div className="flex flex-col space-y-1 items-center border-b border-[#1a1b24] pb-1.5 mb-1 w-full">
+          <div className="text-[7.5px] text-[#00a2ff] font-bold tracking-wider">
+            GRID
+          </div>
+          <div className="flex space-x-0.5 w-full">
+            <button
+              onClick={(e) => onShiftBeatgrid?.(e.shiftKey ? -0.01 : -0.001)}
+              disabled={!track}
+              className="flex-1 h-4 bg-[#141822] border border-[#23304a] hover:bg-[#0088ff] text-[#70b0ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              title="Grid feinjustieren: 1ms nach links (Shift: 10ms)"
+            >
+              ◀
+            </button>
+            <button
+              onClick={(e) => onShiftBeatgrid?.(e.shiftKey ? 0.01 : 0.001)}
+              disabled={!track}
+              className="flex-1 h-4 bg-[#141822] border border-[#23304a] hover:bg-[#0088ff] text-[#70b0ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+              title="Grid feinjustieren: 1ms nach rechts (Shift: 10ms)"
+            >
+              ▶
+            </button>
+          </div>
+          <button
+            onClick={onSetFirstBeatHere}
+            disabled={!track}
+            className="w-full h-4 bg-[#1e2330] border border-[#2e3b55] hover:bg-[#2563eb] text-[#8cb4ff] hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Takt 1.1 an aktuellen Playhead setzen (Set 1.1 here)"
+          >
+            1.1
+          </button>
+          <button
+            onClick={onAutoAlignBeatgrid}
+            disabled={!track}
+            className="w-full h-4 bg-[#12241c] border border-[#1d4634] hover:bg-[#10b981] text-[#6ee7b7] hover:text-white rounded-xs flex items-center justify-center text-[7px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Wellenform-Transienten analysieren & Grid automatisch anpassen (Auto-Align)"
+          >
+            AUTO
+          </button>
+        </div>
+
+        {/* Bottom Zoom controls (+, RST, -, <, >) */}
+        <div className="flex flex-col space-y-1 items-center">
+          {/* Zoom in (+) */}
+          <button
+            onClick={onZoomIn}
+            disabled={!track}
+            className="w-7 h-5 bg-[#181920] border border-[#2b2e3a] hover:bg-[#252834] text-neutral-300 hover:text-white rounded-xs flex items-center justify-center transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Zoom In (+)"
+          >
+            <Plus size={10} strokeWidth={2.5} />
+          </button>
+
+          {/* Reset Zoom (RST) */}
+          <button
+            onClick={onResetZoom}
+            disabled={!track}
+            className="w-7 h-4 bg-[#181920] border border-[#2b2e3a] hover:bg-[#252834] text-neutral-300 hover:text-white rounded-xs flex items-center justify-center text-[7.5px] font-bold transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Reset Zoom (RST)"
+          >
+            RST
+          </button>
+
+          {/* Zoom out (-) */}
+          <button
+            onClick={onZoomOut}
+            disabled={!track}
+            className="w-7 h-5 bg-[#181920] border border-[#2b2e3a] hover:bg-[#252834] text-neutral-300 hover:text-white rounded-xs flex items-center justify-center transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Zoom Out (-)"
+          >
+            <Minus size={10} strokeWidth={2.5} />
+          </button>
+
+          {/* Pan Left (<) */}
+          <button
+            onClick={() => onPanView(Math.max(0, viewOffset - viewDuration * 0.25))}
+            disabled={!track}
+            className="w-7 h-5 bg-[#181920] border border-[#2b2e3a] hover:bg-[#252834] text-neutral-300 hover:text-white rounded-xs flex items-center justify-center transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Pan Left (<)"
+          >
+            <ChevronLeft size={11} />
+          </button>
+
+          {/* Pan Right (>) */}
+          <button
+            onClick={() => track && onPanView(Math.min(track.duration - viewDuration, viewOffset + viewDuration * 0.25))}
+            disabled={!track}
+            className="w-7 h-5 bg-[#181920] border border-[#2b2e3a] hover:bg-[#252834] text-neutral-300 hover:text-white rounded-xs flex items-center justify-center transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            title="Pan Right (>)"
+          >
+            <ChevronRight size={11} />
+          </button>
+        </div>
+      </div>
 
       {/* Center Waveform Canvas */}
       <div ref={canvasContainerRef} className="flex-1 h-full relative overflow-hidden bg-[#0a0b0d]">
@@ -1074,7 +1116,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         )}
 
         {/* Subtle Database Extraction & Memory Cue Status Overlay */}
-        {track && (
+        {track ? (
           <div className="absolute bottom-1.5 left-2 pointer-events-none flex items-center space-x-2 text-[9.5px] font-mono select-none">
             <span className="px-1.5 py-0.5 rounded-xs bg-[#0088ff]/20 border border-[#0088ff]/40 text-[#00a2ff] font-semibold">
               {track.databaseRecord?.databaseSource || track.origin}
@@ -1094,6 +1136,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                 </span>
               </>
             )}
+          </div>
+        ) : (
+          <div className="absolute bottom-1.5 left-2 pointer-events-none flex items-center space-x-2 text-[9.5px] font-mono select-none text-neutral-500">
+            <span className="px-1.5 py-0.5 rounded-xs bg-[#161822] border border-[#262835] text-neutral-400 font-semibold">
+              STANDBY / LEERES PROJEKT
+            </span>
+            <span>KEINE MEDIENDATEN GELADEN</span>
           </div>
         )}
 

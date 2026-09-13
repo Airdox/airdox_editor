@@ -189,10 +189,6 @@ export interface TrackModel {
   rawXmlAttributes?: Record<string, string>;
   originalMedia?: OriginalMediaReference;
   workingSegments: EditSegment[];
-  /** Rekordbox 2-Track Matching / Verknüpfungen (Related Tracks feature) */
-  matchingTrackIds?: string[];
-  /** Optional DJ mixing notes for paired tracks (keyed by paired track ID) */
-  matchingNotes?: Record<string, string>;
 }
 
 /**

@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot, Radio, FileText } from 'lucide-react';
+import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -36,9 +36,6 @@ interface MenuBarProps {
   onOpenDatabaseInspector?: () => void;
   onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
-  onOpenRecordModal?: () => void;
-  isRecording?: boolean;
-  isRecordArmed?: boolean;
   onClearHistory?: () => void;
   hasHistory?: boolean;
   onCopy?: () => void;
@@ -79,9 +76,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenDatabaseInspector,
   onOpenXmlCollection,
   onOpenSystemLogs,
-  onOpenRecordModal,
-  isRecording = false,
-  isRecordArmed = false,
   onClearHistory,
   hasHistory,
   onCopy,
@@ -184,18 +178,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span>Audiodatei laden (WAV, MP3, FLAC)...</span>
               </button>
               <div className="h-px bg-[#262830] my-1" />
-              {onOpenRecordModal && (
-                <button
-                  onClick={() => { onOpenRecordModal(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-red-600 hover:text-white flex justify-between items-center text-red-400 font-semibold"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                    <span>Live-Set aufnehmen (Record Pop-up)...</span>
-                  </span>
-                  <span className="text-[10px] text-neutral-500 hover:text-neutral-200">R</span>
-                </button>
-              )}
               <button
                 onClick={() => { onExportWav(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
@@ -439,7 +421,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 >
                   <span className="flex items-center space-x-1.5">
                     <Sparkles size={11} />
-                    <span>AI Smart Copilot (Pop-up Fenster)...</span>
+                    <span>AI Smart Copilot Palette</span>
                   </span>
                   <span>{chatbotOpen ? '✓' : ''}</span>
                 </button>
@@ -494,26 +476,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* Right side: Quick access triggers */}
       <div className="flex items-center space-x-1.5">
-        {onOpenRecordModal && (
-          <button
-            onClick={onOpenRecordModal}
-            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded text-[10.5px] font-mono font-bold transition-all shadow-sm cursor-pointer ${
-              isRecording
-                ? 'bg-red-600 hover:bg-red-500 text-white border border-red-400 animate-pulse shadow-lg shadow-red-950/60'
-                : isRecordArmed
-                ? 'bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 border border-amber-500/50'
-                : 'bg-[#181a24] hover:bg-[#222636] text-neutral-200 border border-[#2d3144] hover:border-red-500/60'
-            }`}
-            title="Aufnahme-Fenster öffnen (Audio aufnehmen während Rekordbox Set, Limiter & Formate einstellen)"
-          >
-            <span className={`w-2 h-2 rounded-full ${
-              isRecording ? 'bg-white animate-ping' : isRecordArmed ? 'bg-amber-400 animate-pulse' : 'bg-red-500'
-            }`} />
-            <span className="tracking-wider">
-              {isRecording ? 'REC LAUFEND' : isRecordArmed ? 'AUTO-REC' : 'REC'}
-            </span>
-          </button>
-        )}
         {onToggleChatbot && (
           <button
             onClick={onToggleChatbot}
@@ -522,21 +484,11 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 ? 'bg-gradient-to-r from-[#0088ff] to-[#7c3aed] text-white border border-blue-400/50 shadow-blue-500/20'
                 : 'bg-[#181a24] hover:bg-[#202330] text-neutral-200 border border-[#2d3144] hover:border-[#0088ff]/50'
             }`}
-            title="AI Smart Copilot Pop-up Fenster öffnen / schließen"
+            title="AI Smart Copilot Palette öffnen / schließen"
           >
             <Sparkles size={11} className={chatbotOpen ? 'text-amber-300 animate-spin' : 'text-[#00a2ff]'} />
             <span className="tracking-wider">AI COPILOT</span>
             <span className={`w-1.5 h-1.5 rounded-full ${chatbotOpen ? 'bg-emerald-400 animate-ping' : 'bg-[#00a2ff]'}`} />
-          </button>
-        )}
-        {onOpenSystemLogs && (
-          <button
-            onClick={onOpenSystemLogs}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#181a24] hover:bg-[#222636] text-neutral-300 hover:text-white border border-[#2c2f3f] text-[10px] transition-colors cursor-pointer"
-            title="Internes System- und Vorgangsprotokoll öffnen (Live-Logs)"
-          >
-            <FileText size={10} className="text-[#00ffa3]" />
-            <span className="font-semibold tracking-wide">LOGS</span>
           </button>
         )}
         {onOpenXmlCollection && (

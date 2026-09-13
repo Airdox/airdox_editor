@@ -1,11 +1,11 @@
 /**
  * @license
  * Rekordbox BottomControlBlock Component
- * Minimalist & Context-Aware Audio Editing Command Bar:
- * - Auto-collapses into a sleek 28px mini-strip when no editing is required
- * - Auto-reveals editing operations when an audio range is selected or beats are picked
- * - Contextually dims/hides operations that cannot be performed
- * - Compact 112px expanded height (reduced from bulky 176px)
+ * Lower control blocks matching screenshots 01, 02, and 03:
+ * - 3 interconnected panels with angled polygonal tabs: BEAT SELECT, SELECT, EDIT
+ * - BEAT SELECT: 1, 2, 4, 8, 16, 32, 64, 128 BEAT buttons
+ * - SELECT (Screenshot 03 Select Mode): 1/2 HALF, ×2 DOUBLE, ⊗ CANCEL
+ * - EDIT: CLONE, COPY, PASTE, INSERT, DELETE, CLEAR, UNDO, REDO (+ REPLACE, OVERDUB)
  */
 
 import React from 'react';
@@ -25,7 +25,6 @@ import {
   ChevronDown,
   ChevronUp,
   Scissors,
-  Zap,
 } from 'lucide-react';
 import { SelectionRange } from '../types/rekordbox';
 
@@ -56,8 +55,6 @@ interface BottomControlBlockProps {
   onOpenEditAssistant?: () => void;
   isOpen?: boolean;
   onToggle?: () => void;
-  autoCollapse?: boolean;
-  onToggleAutoCollapse?: () => void;
 }
 
 export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
@@ -83,150 +80,113 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   matchPitch = true,
   onToggleMatchPitch,
   targetKey,
+  onClearHistory,
   onOpenEditAssistant,
-  isOpen = false,
+  isOpen = true,
   onToggle,
-  autoCollapse = true,
-  onToggleAutoCollapse,
 }) => {
   const hasSelection = selection !== null && selection.duration > 0;
 
-  // Minimal Collapsed Strip (Height: 28px)
-  // Provides 100% full vertical canvas for waveforms while retaining 1-click beat triggers
-  if (!isOpen) {
+  // Collapsed Minimal Mode: releases maximum vertical screen real estate for waveforms
+  if (isOpen === false) {
     return (
-      <div className="h-7 bg-[#0c0d11] border-t border-[#1a1b22] flex items-center justify-between px-2.5 select-none z-20">
-        {/* Left: Expand toggle & Direct 1-Click Beat Selector Pills */}
-        <div className="flex items-center space-x-2">
-          {onToggle && (
-            <button
-              onClick={onToggle}
-              className="flex items-center space-x-1 px-2 py-0.5 bg-[#161820] hover:bg-[#202330] text-[#00a2ff] hover:text-white rounded-xs border border-[#262a3c] transition-colors text-[10px] font-bold tracking-wider uppercase"
-              title="Editierpalette ausklappen [Taste: E]"
-            >
-              <ChevronUp size={11} />
-              <span>WERKZEUGE</span>
-            </button>
-          )}
+      <div className="h-7 bg-[#0d0e12] border-t border-[#1c1e26] flex items-center justify-between px-3 select-none z-20 transition-all">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={onToggle}
+            className="flex items-center space-x-1.5 px-2.5 py-0.5 bg-[#181a22] hover:bg-[#232634] text-neutral-300 hover:text-white rounded-xs border border-[#2d303f] transition-colors text-[10.5px] font-bold"
+            title="Editierpalette ausklappen (BEAT SELECT / SELECT / EDIT) [Taste: E]"
+          >
+            <ChevronUp size={12} className="text-[#00a2ff]" />
+            <span className="tracking-wider uppercase">EDITIERPALETTE</span>
+          </button>
 
-          {/* Direct 1-click beat selection pills directly accessible in collapsed mode */}
-          <div className="flex items-center space-x-0.5 pl-1 border-l border-[#1f212a]">
-            <span className="text-[9px] text-neutral-500 font-mono uppercase mr-1 hidden sm:inline">
-              Beat:
-            </span>
-            {[1, 2, 4, 8, 16, 32, 64].map((beats) => {
-              const isMatch = hasSelection && Math.round(selection.beatsCount) === beats;
-              return (
-                <button
-                  key={beats}
-                  onClick={() => onBeatSelect(beats)}
-                  className={`px-1.5 py-0.5 rounded-xs text-[10px] font-mono font-semibold transition-colors ${
-                    isMatch
-                      ? 'bg-[#0088ff] text-white'
-                      : 'bg-[#14151c] text-neutral-400 hover:text-white hover:bg-[#222532] border border-[#20222e]'
-                  }`}
-                  title={`${beats} Beats auswählen & Werkzeuge öffnen`}
-                >
-                  {beats}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Status or Active Selection readout */}
-          {hasSelection && (
-            <div className="hidden md:flex items-center space-x-1.5 text-[10.5px] text-neutral-300 pl-2 border-l border-[#1f212a]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#00a2ff] animate-pulse" />
+          {/* Real-time selection badge */}
+          {hasSelection ? (
+            <div className="flex items-center space-x-2 text-[10.5px] text-neutral-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00a2ff] animate-pulse"></span>
               <span>
-                <strong className="text-white">{selection.barsCount.toFixed(1)} Takte</strong>{' '}
-                <span className="text-neutral-500">({Math.round(selection.beatsCount)} Beats)</span>
+                Auswahl: <strong className="text-white">{selection.barsCount.toFixed(1)} Takte</strong>{' '}
+                <span className="text-neutral-400">({Math.round(selection.beatsCount)} Beats • {selection.duration.toFixed(3)}s)</span>
               </span>
-              <button
-                onClick={onCancelSelection}
-                className="text-neutral-400 hover:text-[#ff453a] ml-1 p-0.5"
-                title="Auswahl aufheben"
-              >
-                <XCircle size={11} />
-              </button>
+            </div>
+          ) : (
+            <div className="text-[10px] text-neutral-500 italic">
+              Keine Auswahl • In der Wellenform ziehen oder Taste E drücken
             </div>
           )}
         </div>
 
-        {/* Right: Quick Clipboard, Undo/Redo & Fast Action Buttons */}
+        {/* Quick action operations accessible directly even when collapsed */}
         <div className="flex items-center space-x-1.5 text-[10.5px]">
           {hasClipboard && (
-            <span className="text-[9px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-0.2 rounded-xs">
-              Puffer aktiv
+            <span className="text-[9.5px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-0.5 rounded-xs mr-1">
+              Zwischenablage bereit
             </span>
           )}
-
-          {hasSelection && (
-            <>
-              <button
-                onClick={onCopy}
-                className="px-1.5 py-0.5 bg-[#15161c] hover:bg-[#20222a] text-neutral-300 hover:text-white rounded-xs border border-[#252732] flex items-center space-x-1 text-[10px]"
-                title="Kopieren (Ctrl+C)"
-              >
-                <Copy size={10} />
-                <span>Copy</span>
-              </button>
-              {onCut && (
-                <button
-                  onClick={onCut}
-                  className="px-1.5 py-0.5 bg-[#15161c] hover:bg-[#20222a] text-neutral-300 hover:text-white rounded-xs border border-[#252732] flex items-center space-x-1 text-[10px]"
-                  title="Ausschneiden (Ctrl+X)"
-                >
-                  <Scissors size={10} />
-                  <span>Cut</span>
-                </button>
-              )}
-              <button
-                onClick={onDelete}
-                className="px-1.5 py-0.5 bg-[#201214] hover:bg-[#30161a] text-[#ff453a] hover:text-white rounded-xs border border-[#401f24] flex items-center space-x-1 text-[10px]"
-                title="Löschen (Del)"
-              >
-                <Trash2 size={10} />
-                <span>Del</span>
-              </button>
-            </>
+          <button
+            onClick={onCopy}
+            disabled={!hasSelection}
+            className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
+            title="Kopieren (Ctrl+C)"
+          >
+            <Copy size={11} />
+            <span>Copy</span>
+          </button>
+          {onCut && (
+            <button
+              onClick={onCut}
+              disabled={!hasSelection}
+              className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
+              title="Ausschneiden (Ctrl+X)"
+            >
+              <Scissors size={11} />
+              <span>Cut</span>
+            </button>
           )}
-
           <button
             onClick={onPaste}
             disabled={!hasClipboard}
-            className="px-1.5 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 text-[#00a2ff] hover:text-white rounded-xs border border-[#252732] flex items-center space-x-1 text-[10px]"
+            className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-[#00a2ff] hover:text-white disabled:text-neutral-500 flex items-center space-x-1"
             title="Einfügen (Ctrl+V)"
           >
-            <ClipboardPaste size={10} />
+            <ClipboardPaste size={11} />
             <span>Paste</span>
           </button>
-
-          <div className="flex items-center space-x-0.5 pl-1 border-l border-[#20222e]">
-            <button
-              onClick={onUndo}
-              disabled={!canUndo}
-              className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-25 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
-              title="Undo (Ctrl+Z)"
-            >
-              <RotateCcw size={10} />
-            </button>
-            <button
-              onClick={onRedo}
-              disabled={!canRedo}
-              className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-25 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
-              title="Redo (Ctrl+Y)"
-            >
-              <RotateCw size={10} />
-            </button>
-          </div>
+          <button
+            onClick={onDelete}
+            disabled={!hasSelection}
+            className="px-2 py-0.5 bg-[#1f1214] hover:bg-[#301a1c] disabled:opacity-30 rounded-xs border border-[#402024] text-[#ff453a] hover:text-white flex items-center space-x-1"
+            title="Löschen (Del)"
+          >
+            <Trash2 size={11} />
+            <span>Delete</span>
+          </button>
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
+            title="Undo (Ctrl+Z)"
+          >
+            <RotateCcw size={11} />
+          </button>
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
+            title="Redo (Ctrl+Y)"
+          >
+            <RotateCw size={11} />
+          </button>
 
           {onToggle && (
             <button
               onClick={onToggle}
-              className="ml-1 px-1.5 py-0.5 bg-[#1b1e2a] hover:bg-[#252a3c] text-neutral-300 hover:text-white rounded-xs border border-[#2d3348] text-[9.5px] font-medium"
-              title="Werkzeuge vollständig öffnen"
+              className="ml-2 px-2 py-0.5 bg-[#1e2230] hover:bg-[#282d40] text-[#00a2ff] hover:text-white rounded-xs border border-[#353d55] flex items-center space-x-1 text-[10px] font-semibold transition-colors"
+              title="Editierpalette vollständig ausklappen (BEAT SELECT / SELECT / EDIT)"
             >
-              Mehr...
+              <ChevronUp size={11} />
+              <span>Ausklappen</span>
             </button>
           )}
         </div>
@@ -234,37 +194,37 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
     );
   }
 
-  // Compact Expanded Panel (Height: 112px ~ h-28)
   return (
-    <div className="h-28 bg-[#0c0d11] border-t border-[#1a1b22] flex select-none z-20">
+    <div className="h-44 bg-[#0d0e12] border-t border-[#1c1e26] flex select-none z-20">
       {/* 1. BEAT SELECT Panel */}
-      <div className="w-[280px] border-r border-[#1a1b22] flex flex-col flex-shrink-0">
-        {/* Header */}
-        <div className="h-5 bg-[#111217] border-b border-[#1f2129] flex items-center px-2">
-          <span className="text-neutral-300 text-[10px] font-bold tracking-wider uppercase font-mono">
+      <div className="w-[320px] border-r border-[#1a1b22] flex flex-col">
+        {/* Angled Tab Header */}
+        <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center px-2">
+          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
             BEAT SELECT
-          </span>
+          </div>
         </div>
 
-        {/* 8 Buttons in 2 rows of 4 */}
-        <div className="flex-1 p-1.5 grid grid-cols-4 grid-rows-2 gap-1">
+        {/* 8 Buttons in 2 rows of 4 matching screenshots */}
+        <div className="flex-1 p-2 grid grid-cols-4 grid-rows-2 gap-1.5">
           {[1, 2, 4, 8, 16, 32, 64, 128].map((beats) => {
-            const isMatch = hasSelection && Math.round(selection.beatsCount) === beats;
+            const isCurrentMatch =
+              hasSelection && Math.round(selection.beatsCount) === beats;
 
             return (
               <button
                 key={beats}
                 onClick={() => onBeatSelect(beats)}
-                className={`flex flex-col items-center justify-center rounded-xs transition-colors border ${
-                  isMatch
-                    ? 'border-[#0088ff] text-white bg-[#0c2238] shadow-xs'
-                    : 'border-[#20222c] bg-[#14151b] text-neutral-300 hover:text-white hover:bg-[#1f212b]'
+                className={`rb-button-grid flex flex-col items-center justify-center rounded-xs transition-all ${
+                  isCurrentMatch
+                    ? 'border-[#0088ff] text-[#00a2ff] bg-[#1a2130]'
+                    : 'text-neutral-300'
                 }`}
               >
-                <span className="text-[12px] font-mono font-bold leading-tight">
+                <span className="text-[15px] font-mono font-bold leading-tight">
                   {beats}
                 </span>
-                <span className="text-[8px] font-medium text-neutral-500 tracking-wider">
+                <span className="text-[9px] font-semibold text-neutral-400 tracking-wider">
                   BEAT
                 </span>
               </button>
@@ -273,214 +233,240 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
         </div>
       </div>
 
-      {/* 2. SELECT Panel: Only active when selection exists, otherwise shows helpful guidance */}
-      <div className="w-[180px] border-r border-[#1a1b22] flex flex-col flex-shrink-0">
-        {/* Header */}
-        <div className="h-5 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
-          <span className="text-neutral-300 text-[10px] font-bold tracking-wider uppercase font-mono">
+      {/* 2. SELECT Panel (Screenshot 03 Select Mode: HALF, DOUBLE, CANCEL) */}
+      <div className="w-[210px] border-r border-[#1a1b22] flex flex-col">
+        {/* Angled Tab Header */}
+        <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center px-2">
+          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
             SELECT
-          </span>
-          {hasSelection && (
-            <span className="text-[9px] font-mono text-[#00a2ff]">
-              {selection.barsCount.toFixed(1)} Bar
-            </span>
-          )}
+          </div>
         </div>
 
-        {hasSelection ? (
-          <div className="flex-1 p-1.5 grid grid-cols-3 gap-1">
-            {/* HALF (1/2) */}
-            <button
-              onClick={onHalfSelection}
-              className="flex flex-col items-center justify-center rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] transition-colors"
-              title="Auswahl halbieren"
-            >
-              <span className="text-[12px] font-bold leading-tight">1/2</span>
-              <span className="text-[8px] font-medium text-neutral-400">HALF</span>
-            </button>
-
-            {/* DOUBLE (×2) */}
-            <button
-              onClick={onDoubleSelection}
-              className="flex flex-col items-center justify-center rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] transition-colors"
-              title="Auswahl verdoppeln"
-            >
-              <span className="text-[12px] font-bold leading-tight">×2</span>
-              <span className="text-[8px] font-medium text-neutral-400">DOUBLE</span>
-            </button>
-
-            {/* CANCEL (⊗) */}
-            <button
-              onClick={onCancelSelection}
-              className="flex flex-col items-center justify-center rounded-xs border border-[#35191c] bg-[#1c1214] text-[#ff453a] hover:bg-[#2b1619] hover:text-white transition-colors"
-              title="Auswahl aufheben"
-            >
-              <XCircle size={13} strokeWidth={2} />
-              <span className="text-[8px] font-medium text-[#ff6660]">CANCEL</span>
-            </button>
-          </div>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-2 text-center">
-            <span className="text-[9.5px] text-neutral-500 font-sans leading-tight">
-              Keine Auswahl aktiv
+        {/* 3 Select Buttons: 1/2 HALF, ×2 DOUBLE, ⊗ CANCEL */}
+        <div className="flex-1 p-2 grid grid-cols-3 gap-1.5">
+          {/* HALF (1/2) */}
+          <button
+            onClick={onHalfSelection}
+            disabled={!hasSelection}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Auswahl halbieren"
+          >
+            <span className="text-[15px] font-bold leading-tight">1/2</span>
+            <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
+              HALF
             </span>
-            <span className="text-[8.5px] text-neutral-600 mt-1">
-              Wähle BEAT oder ziehe in Wellenform
+          </button>
+
+          {/* DOUBLE (×2) */}
+          <button
+            onClick={onDoubleSelection}
+            disabled={!hasSelection}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Auswahl verdoppeln"
+          >
+            <span className="text-[15px] font-bold leading-tight">× 2</span>
+            <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
+              DOUBLE
             </span>
-          </div>
-        )}
+          </button>
+
+          {/* CANCEL (⊗) */}
+          <button
+            onClick={onCancelSelection}
+            disabled={!hasSelection}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
+            title="Auswahl aufheben"
+          >
+            <XCircle size={16} strokeWidth={2} />
+            <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
+              CANCEL
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* 3. EDIT Panel */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header Bar */}
-        <div className="h-5 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
-          <span className="text-neutral-300 text-[10px] font-bold tracking-wider uppercase font-mono">
+      <div className="flex-1 flex flex-col">
+        {/* Angled Tab Header */}
+        <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
+          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
             EDIT
-          </span>
+          </div>
 
-          <div className="flex items-center space-x-2 text-[9.5px]">
+          {/* Pitch adaptation checkbox & Quick operations badge (REPLACE / OVERDUB) */}
+          <div className="flex items-center space-x-2.5 text-[10px]">
             {onToggleMatchPitch && (
               <label
-                className="flex items-center space-x-1 cursor-pointer select-none text-neutral-400 hover:text-white"
-                title="Tonhöhe bei Einfügen an Zieltrack anpassen"
+                className="flex items-center space-x-1 cursor-pointer select-none text-neutral-300 hover:text-white"
+                title="Tonhöhe beim Einfügen/Überschreiben an Zieltrack anpassen"
               >
                 <input
                   type="checkbox"
                   checked={matchPitch}
                   onChange={(e) => onToggleMatchPitch(e.target.checked)}
-                  className="w-2.5 h-2.5 rounded-xs accent-[#0088ff] cursor-pointer"
+                  className="w-3 h-3 rounded-xs accent-[#0088ff] cursor-pointer"
                 />
-                <span>Tonhöhe anpassen {targetKey ? `(${targetKey})` : ''}</span>
+                <span className="text-[9.5px] font-medium text-neutral-300">
+                  Tonhöhe anpassen {targetKey ? `(${targetKey})` : ''}
+                </span>
               </label>
             )}
+
+            <button
+              onClick={onReplace}
+              disabled={!hasSelection}
+              className="text-[#ff9500] hover:text-[#ffaa33] disabled:opacity-40 px-2 py-0.5 rounded bg-[#20180a] border border-[#3d2e15] flex items-center space-x-1"
+              title="Replace (Clip ersetzt Bereich)"
+            >
+              <Repeat size={10} />
+              <span>REPLACE</span>
+            </button>
+            <button
+              onClick={onOverdub}
+              disabled={!hasSelection}
+              className="text-[#00c853] hover:text-[#33d677] disabled:opacity-40 px-2 py-0.5 rounded bg-[#0a2012] border border-[#153d20] flex items-center space-x-1"
+              title="Overdub (Clip wird überlagert)"
+            >
+              <Layers size={10} />
+              <span>OVERDUB</span>
+            </button>
 
             {onOpenEditAssistant && (
               <button
                 onClick={onOpenEditAssistant}
-                className="text-[#00e5ff] hover:text-white px-1.5 py-0.2 rounded-xs bg-[#0088ff]/15 border border-[#0088ff]/30 flex items-center space-x-1 text-[9px] font-semibold"
+                className="text-[#00e5ff] hover:text-white px-2 py-0.5 rounded bg-[#0088ff]/15 border border-[#0088ff]/40 flex items-center space-x-1 text-[9px] font-semibold"
                 title="Edit Assistant: Puffer- & Bereichs-Integrität prüfen"
               >
-                <ShieldCheck size={10} />
+                <ShieldCheck size={10} className="text-[#00e5ff]" />
                 <span>ASSISTANT</span>
               </button>
             )}
 
-            {/* Auto-collapse toggle */}
-            {onToggleAutoCollapse && (
+            {onClearHistory && (canUndo || canRedo) && (
               <button
-                onClick={onToggleAutoCollapse}
-                className={`px-1.5 py-0.2 rounded-xs border text-[9px] font-mono transition-colors flex items-center space-x-1 ${
-                  autoCollapse
-                    ? 'border-[#0088ff]/40 bg-[#0c2035] text-[#00a2ff]'
-                    : 'border-[#262832] bg-[#14151b] text-neutral-500 hover:text-neutral-300'
-                }`}
-                title="Automatisch einklappen, wenn keine Auswahl aktiv ist"
+                onClick={onClearHistory}
+                className="text-neutral-400 hover:text-[#ff6b62] px-1.5 py-0.5 rounded hover:bg-[#251315] border border-transparent hover:border-[#ff453a]/30 flex items-center space-x-1 text-[9px] transition-colors"
+                title="Verlauf leeren (Sicherheitsdialog zur Vermeidung von Datenverlust)"
               >
-                <Zap size={9} />
-                <span>Auto-Fold</span>
+                <Trash2 size={9} />
+                <span>CLEAR HIST</span>
               </button>
             )}
 
             {onToggle && (
               <button
                 onClick={onToggle}
-                className="text-neutral-400 hover:text-white px-1.5 py-0.2 rounded-xs bg-[#161820] hover:bg-[#202330] flex items-center space-x-0.5 border border-[#282b3a] transition-colors"
-                title="Editierpalette einklappen [Taste: E]"
+                className="text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-[#181a22] hover:bg-[#242838] flex items-center space-x-1 border border-[#2d3040] transition-colors ml-1 font-medium"
+                title="Editierpalette einklappen (für maximale Wellenform-Fläche) [Taste: E]"
               >
-                <ChevronDown size={10} className="text-[#00a2ff]" />
-                <span className="text-[9px]">Einklappen</span>
+                <ChevronDown size={11} className="text-[#00a2ff]" />
+                <span className="text-[9.5px]">Einklappen</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* 8 Action Buttons in 2 rows of 4 */}
-        <div className="flex-1 p-1.5 grid grid-cols-4 grid-rows-2 gap-1">
-          {/* Row 1: CLONE, COPY, CUT, PASTE */}
+        {/* 8 Action Buttons in 2 rows matching screenshots */}
+        <div className="flex-1 p-2 grid grid-cols-4 grid-rows-2 gap-1.5">
+          {/* Row 1: CLONE, COPY, PASTE, INSERT */}
           <button
             onClick={onClone}
             disabled={!hasSelection}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Auswahl klonen / zur Clip-Palette hinzufügen"
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Auswahl klonen / zur Palette"
           >
-            <PlusSquare size={13} className="text-[#00a2ff]" />
-            <span className="text-[10px] font-semibold tracking-wider">CLONE</span>
+            <PlusSquare size={16} strokeWidth={1.8} className="text-[#00a2ff]" />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              CLONE
+            </span>
           </button>
 
           <button
             onClick={onCopy}
             disabled={!hasSelection}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
             title="Kopieren (Ctrl+C)"
           >
-            <Copy size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">COPY</span>
-          </button>
-
-          <button
-            onClick={onCut}
-            disabled={!hasSelection}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Ausschneiden (Ctrl+X)"
-          >
-            <Scissors size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">CUT</span>
+            <Copy size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              COPY
+            </span>
           </button>
 
           <button
             onClick={onPaste}
             disabled={!hasClipboard}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-[#00a2ff] hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
             title="Einfügen (Ctrl+V)"
           >
-            <ClipboardPaste size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">PASTE</span>
-          </button>
-
-          {/* Row 2: DELETE, CLEAR, REPLACE, INSERT/OVERDUB */}
-          <button
-            onClick={onDelete}
-            disabled={!hasSelection}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#35191c] bg-[#1c1214] text-[#ff453a] hover:bg-[#2b1619] hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Löschen mit Zeitanpassung (Del)"
-          >
-            <Trash2 size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">DELETE</span>
-          </button>
-
-          <button
-            onClick={onClear}
-            disabled={!hasSelection}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Stumm schalten (Clear / Stille)"
-          >
-            <Brush size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">CLEAR</span>
-          </button>
-
-          <button
-            onClick={onReplace}
-            disabled={!hasSelection || !hasClipboard}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#352514] bg-[#1c150e] text-[#ff9500] hover:bg-[#2a1d12] hover:text-white disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Replace: Puffer ersetzt Auswahl bei gleicher Länge"
-          >
-            <Repeat size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">REPLACE</span>
+            <ClipboardPaste size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              PASTE
+            </span>
           </button>
 
           <button
             onClick={onInsert}
             disabled={!hasClipboard}
-            className="flex items-center justify-center space-x-1.5 rounded-xs border border-[#20222c] bg-[#14151b] text-neutral-200 hover:text-white hover:bg-[#1f212b] disabled:opacity-25 disabled:pointer-events-none transition-colors"
-            title="Insert: Puffer an Cursor / Auswahl einfügen"
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Einfügen mit Zeittransformation (Insert)"
           >
-            <ArrowRightLeft size={13} />
-            <span className="text-[10px] font-semibold tracking-wider">INSERT</span>
+            <ArrowRightLeft size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              INSERT
+            </span>
+          </button>
+
+          {/* Row 2: DELETE, CLEAR, UNDO, REDO */}
+          <button
+            onClick={onDelete}
+            disabled={!hasSelection}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
+            title="Löschen mit Zeitanpassung (Delete)"
+          >
+            <Trash2 size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              DELETE
+            </span>
+          </button>
+
+          <button
+            onClick={onClear}
+            disabled={!hasSelection}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Stumm schalten / leeren (Clear)"
+          >
+            <Brush size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              CLEAR
+            </span>
+          </button>
+
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Rückgängig (Ctrl+Z)"
+          >
+            <RotateCcw size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              UNDO
+            </span>
+          </button>
+
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+            title="Wiederholen (Ctrl+Y)"
+          >
+            <RotateCw size={16} strokeWidth={1.8} />
+            <span className="text-[9.5px] font-semibold tracking-wider mt-1">
+              REDO
+            </span>
           </button>
         </div>
       </div>
     </div>
   );
 };
-

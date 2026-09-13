@@ -1,22 +1,24 @@
 /**
  * @license
  * Rekordbox EditModeBar Component
- * Streamlined Pioneer DJ Transport & Layout Control Bar:
- * - Compact 32px height (maximum vertical workspace for waveforms)
- * - Free of redundant buttons and non-functional badges
- * - Essential transport controls, quantize, segmented view toggles, and master stereo meters
+ * Sub-toolbar matching screenshots 01, 02, 03:
+ * EDIT dropdown, transport controls, quantize, master stereo meters, Free Plus badge.
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
+  FilePlus,
+  Save,
+  Share2,
   ChevronDown,
   RotateCcw,
+  Info,
+  Settings,
   Volume2,
   PanelBottom,
   PanelRight,
   Maximize2,
   Minimize2,
-  Columns,
 } from 'lucide-react';
 
 interface EditModeBarProps {
@@ -28,10 +30,11 @@ interface EditModeBarProps {
   onToggleLoop: () => void;
   quantizeActive: boolean;
   onToggleQuantize: () => void;
-  onNewProject?: () => void;
-  onSaveProject?: () => void;
-  onExport?: () => void;
-  onShowInfo?: () => void;
+  onNewProject: () => void;
+  onSaveProject: () => void;
+  onExport: () => void;
+  onShowInfo: () => void;
+  onOpenSettings?: () => void;
   masterVolume: number;
   onMasterVolumeChange: (vol: number) => void;
   meterL: number;
@@ -55,138 +58,183 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onToggleLoop,
   quantizeActive,
   onToggleQuantize,
+  onNewProject,
+  onSaveProject,
+  onExport,
+  onShowInfo,
+  onOpenSettings,
   masterVolume,
   onMasterVolumeChange,
   meterL,
   meterR,
   paletteViewMode = 'SIDEBAR',
   onTogglePaletteViewMode,
-  bottomControlOpen = false,
+  bottomControlOpen = true,
   onToggleBottomControl,
-  paletteOpen = false,
+  paletteOpen = true,
   onTogglePalette,
   isMaxWaveform = false,
   onToggleMaxWaveform,
 }) => {
+  const [timeStr, setTimeStr] = useState<string>('15:21');
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const hours = now.getHours().toString().padStart(2, '0');
+      const mins = now.getMinutes().toString().padStart(2, '0');
+      setTimeStr(`${hours}:${mins}`);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <div className="h-8 bg-[#0e0f12] border-b border-[#1c1d23] flex items-center justify-between px-2.5 text-xs select-none">
-      {/* Left section: EDIT Mode indicator & Transport Controls */}
-      <div className="flex items-center space-x-2.5">
-        {/* EDIT Mode indicator tag */}
-        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[11px] bg-[#16171d] px-2 py-0.5 border border-[#2b2d38] rounded-xs cursor-default shadow-xs">
-          <span className="text-[#00a2ff]">EDIT</span>
-          <span className="text-neutral-500 font-normal">|</span>
-          <span className="text-neutral-300 font-medium text-[10.5px] truncate max-w-[120px]" title={projectName}>
-            {projectName}
-          </span>
+    <div className="h-10 bg-[#0e0f12] border-b border-[#1c1d23] flex items-center justify-between px-3 text-xs select-none">
+      {/* Left section: EDIT mode dropdown, Project tools, Transport */}
+      <div className="flex items-center space-x-3">
+        {/* EDIT Mode selector */}
+        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027]">
+          <span>EDIT</span>
+          <ChevronDown size={12} className="text-neutral-400" />
+        </div>
+
+        {/* Small project icons */}
+        <div className="flex items-center space-x-1.5 text-neutral-400 pl-1 border-r border-[#262832] pr-3">
+          <button
+            onClick={onNewProject}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Neues Projekt"
+          >
+            <FilePlus size={14} />
+          </button>
+          <button
+            onClick={onSaveProject}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Projekt speichern"
+          >
+            <Save size={14} />
+          </button>
+          <button
+            onClick={onExport}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Exportieren"
+          >
+            <Share2 size={14} />
+          </button>
+        </div>
+
+        {/* Project Name dropdown */}
+        <div className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]">
+          <span>{projectName}</span>
+          <ChevronDown size={11} className="text-neutral-500" />
         </div>
 
         {/* Transport Controls */}
-        <div className="flex items-center space-x-1.5 pl-1 border-l border-[#20222a]">
+        <div className="flex items-center space-x-2 pl-4">
           {/* Cue / Return to Start: |< */}
           <button
             onClick={onReturnToStart}
-            className="w-6 h-6 flex items-center justify-center text-neutral-300 hover:text-white hover:bg-[#242630] rounded-xs transition-colors"
+            className="w-6 h-6 flex items-center justify-center text-neutral-300 hover:text-white hover:bg-[#242630] rounded transition-colors"
             title="Return to Cue / Start (|<)"
           >
             <div className="flex items-center">
               <div className="w-[2px] h-3 bg-current mr-[1px]"></div>
-              <div className="w-0 h-0 border-y-[4.5px] border-y-transparent border-r-[7px] border-r-current"></div>
+              <div className="w-0 h-0 border-y-[5px] border-y-transparent border-r-[8px] border-r-current"></div>
             </div>
           </button>
 
           {/* Play / Pause: > */}
           <button
             onClick={onTogglePlay}
-            className={`w-6 h-6 flex items-center justify-center rounded-xs transition-all ${
+            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
               isPlaying
-                ? 'bg-[#00c853] text-black shadow-[0_0_8px_rgba(0,200,83,0.4)]'
+                ? 'bg-[#00c853] text-black shadow-[0_0_10px_rgba(0,200,83,0.4)]'
                 : 'text-neutral-200 hover:text-white hover:bg-[#282a34]'
             }`}
-            title="Play / Pause (Leertaste)"
+            title="Play / Pause"
           >
             {isPlaying ? (
               <div className="flex space-x-[2px]">
-                <div className="w-[2.5px] h-3 bg-black rounded-[0.5px]" />
-                <div className="w-[2.5px] h-3 bg-black rounded-[0.5px]" />
+                <div className="w-[3px] h-3.5 bg-black rounded-[0.5px]" />
+                <div className="w-[3px] h-3.5 bg-black rounded-[0.5px]" />
               </div>
             ) : (
-              <div className="w-0 h-0 border-y-[5px] border-y-transparent border-l-[8px] border-l-current ml-0.5"></div>
+              <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[10px] border-l-current ml-0.5"></div>
             )}
           </button>
 
           {/* Loop toggle */}
           <button
             onClick={onToggleLoop}
-            className={`w-6 h-6 flex items-center justify-center rounded-xs transition-colors ${
+            className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
               loopActive ? 'text-[#ff9500] bg-[#332200]' : 'text-neutral-400 hover:text-white hover:bg-[#242630]'
             }`}
-            title="Loop aktiv / inaktiv"
+            title="Loop"
           >
-            <RotateCcw size={12} />
+            <RotateCcw size={13} />
           </button>
 
           {/* Quantize: Q : AUTO */}
           <button
             onClick={onToggleQuantize}
-            className={`flex items-center space-x-1 px-1.5 py-0.5 rounded-xs text-[10.5px] font-mono border transition-colors ${
+            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors ${
               quantizeActive
                 ? 'border-[#ff3b30]/60 bg-[#281414] text-neutral-200'
                 : 'border-transparent text-neutral-500 hover:text-neutral-300'
             }`}
-            title="Quantize Modus umschalten"
+            title="Quantize Mode"
           >
             <span className="text-[#ff3b30] font-bold">Q</span>
-            <span className="text-neutral-300 font-sans text-[10px]">: AUTO</span>
+            <span className="text-neutral-300 font-sans text-[11px]">: AUTO</span>
+            <ChevronDown size={10} className="text-neutral-400" />
           </button>
-        </div>
-      </div>
 
-      {/* Center/Right section: Sleek Segmented View Toggles & Master Meter */}
-      <div className="flex items-center space-x-3">
-        {/* Sleek Segmented Layout Controls */}
-        <div className="flex items-center bg-[#13141a] p-0.5 rounded-xs border border-[#232530] space-x-0.5">
+          {/* Deck View Layout Toggle: 1-DECK vs 2-DECK (Dual Deck Clip View) */}
           {onTogglePaletteViewMode && (
             <button
               onClick={onTogglePaletteViewMode}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded-xs text-[10px] font-semibold transition-colors ${
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
                 paletteViewMode === 'FULL_DECK'
-                  ? 'bg-[#0088ff] text-white shadow-xs'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1c1d25]'
+                  ? 'border-[#0088ff] bg-[#0d2238] text-[#00c8ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white hover:border-[#383d4e]'
               }`}
-              title="2-Deck Clip-Ansicht umschalten"
+              title="Zwischen Standard-Ansicht und 2-Deck-Ansicht (Deck A + Clip-Deck B) umschalten"
             >
-              <Columns size={11} />
-              <span>2-DECK</span>
+              <span>{paletteViewMode === 'FULL_DECK' ? '2-DECK AKTIV' : '2-DECK ANSICHT'}</span>
             </button>
           )}
+
+          {/* Collapsible Edit Palette (Bottom) & Clip Palette (Side) & Max Waveform Mode */}
+          <div className="h-4 w-px bg-[#262832] mx-0.5" />
 
           {onToggleBottomControl && (
             <button
               onClick={onToggleBottomControl}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded-xs text-[10px] font-semibold transition-colors ${
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
                 bottomControlOpen
-                  ? 'bg-[#0088ff] text-white shadow-xs'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1c1d25]'
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
               }`}
-              title="Editierpalette (Taste: E)"
+              title="Editierpalette unten ein-/ausklappen für maximale Wellenform-Fläche (Taste: E)"
             >
-              <PanelBottom size={11} />
-              <span>EDIT</span>
+              <PanelBottom size={12} />
+              <span>EDIT-PANEL</span>
             </button>
           )}
 
           {onTogglePalette && (
             <button
               onClick={onTogglePalette}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded-xs text-[10px] font-semibold transition-colors ${
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
                 paletteOpen
-                  ? 'bg-[#0088ff] text-white shadow-xs'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1c1d25]'
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
               }`}
-              title="Clip-Palette (Taste: P)"
+              title="Clip-Palette rechts ein-/ausklappen (Taste: P)"
             >
-              <PanelRight size={11} />
+              <PanelRight size={12} />
               <span>CLIPS</span>
             </button>
           )}
@@ -194,27 +242,49 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
           {onToggleMaxWaveform && (
             <button
               onClick={onToggleMaxWaveform}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded-xs text-[10px] font-bold transition-colors ${
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
                 isMaxWaveform
-                  ? 'bg-[#00e5ff] text-black shadow-[0_0_8px_rgba(0,229,255,0.4)]'
-                  : 'text-neutral-400 hover:text-[#00e5ff] hover:bg-[#1c1d25]'
+                  ? 'border-[#00e5ff] bg-[#003848] text-[#00e5ff] shadow-[0_0_8px_rgba(0,229,255,0.3)]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-[#00e5ff] hover:border-[#383d4e]'
               }`}
-              title="Wellenform maximieren (Zen-Modus, Taste: M)"
+              title="Wellenform maximieren (Zen-Modus: klappt Paletten ein für maximale Bearbeitungsfläche) [Taste: M]"
             >
-              {isMaxWaveform ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
-              <span>ZEN</span>
+              {isMaxWaveform ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              <span>{isMaxWaveform ? 'MAX AKTIV' : 'MAX ZOOM'}</span>
             </button>
           )}
         </div>
+      </div>
 
-        {/* Master Volume & Dual Stereo LED Meter */}
-        <div className="flex items-center space-x-2 bg-[#121317] px-2 py-0.5 rounded-xs border border-[#22242d]">
-          <Volume2 size={12} className="text-neutral-400" />
+      {/* Right section: Settings, Master Meter, Clock */}
+      <div className="flex items-center space-x-3">
+        {/* Settings gear */}
+        <button
+          onClick={onOpenSettings}
+          className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#242630] rounded transition-colors"
+          title="Workspace Settings & Utilities"
+        >
+          <Settings size={14} />
+        </button>
+
+        {/* Master Meter & Level */}
+        <div className="flex items-center space-x-2 bg-[#121317] px-2.5 py-1 rounded border border-[#22242d]">
+          {/* Rotary indicator */}
+          <div className="w-4 h-4 rounded-full border border-neutral-500 relative flex items-center justify-center">
+            <div
+              className="w-1.5 h-[1.5px] bg-[#00a2ff] absolute"
+              style={{
+                transform: `rotate(${(masterVolume * 240) - 120}deg)`,
+                transformOrigin: 'right center',
+                right: '50%',
+              }}
+            />
+          </div>
 
           {/* Dual Stereo LED Meter (Left / Right) */}
-          <div className="flex flex-col space-y-[2px] w-12">
+          <div className="flex flex-col space-y-[2px] w-14">
             {/* L */}
-            <div className="h-[3px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
               <div
                 className="h-full transition-all duration-75"
                 style={{
@@ -229,7 +299,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               />
             </div>
             {/* R */}
-            <div className="h-[3px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
               <div
                 className="h-full transition-all duration-75"
                 style={{
@@ -257,8 +327,12 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             title={`Master Volume: ${Math.round(masterVolume * 100)}%`}
           />
         </div>
+
+        {/* Digital Time display matching screenshot (e.g. 15:21) */}
+        <div className="font-mono text-[11.5px] text-neutral-300 pl-1 font-semibold">
+          {timeStr}
+        </div>
       </div>
     </div>
   );
 };
-
