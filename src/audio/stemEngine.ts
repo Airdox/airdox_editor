@@ -53,6 +53,8 @@ export interface TrackStems {
   normalizationFallbacks?: number;
   /** Absolute peak of the source material used as per-stem ceiling. */
   sourcePeak?: number;
+  /** Actual engine used, surfaced so tests/UI never confuse fallback DSP with Demucs. */
+  separationMethod?: 'DEMUCS_HTDEMUCS_FT' | 'LOCAL_SPECTRAL_FALLBACK';
 }
 
 export interface StemChannelState {
@@ -90,9 +92,9 @@ interface DemucsResponse {
   stems: Record<StemType, string | Uint8Array>;
 }
 
-function encodeStereoPcmWav(buffer: AudioBuffer): Uint8Array {
+function encodeStereoFloatWav(buffer: AudioBuffer): Uint8Array {
   const channels = 2;
-  const bytesPerSample = 2;
+  const bytesPerSample = 4;
   const dataSize = buffer.length * channels * bytesPerSample;
   const bytes = new Uint8Array(44 + dataSize);
   const view = new DataView(bytes.buffer);
@@ -100,19 +102,20 @@ function encodeStereoPcmWav(buffer: AudioBuffer): Uint8Array {
     for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
   };
   write(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); write(8, 'WAVE');
-  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  // IEEE float WAV keeps the decoded source at full Web Audio precision. The
+  // former 16-bit transport introduced avoidable quantization before inference.
+  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 3, true);
   view.setUint16(22, channels, true); view.setUint32(24, buffer.sampleRate, true);
   view.setUint32(28, buffer.sampleRate * channels * bytesPerSample, true);
-  view.setUint16(32, channels * bytesPerSample, true); view.setUint16(34, 16, true);
+  view.setUint16(32, channels * bytesPerSample, true); view.setUint16(34, 32, true);
   write(36, 'data'); view.setUint32(40, dataSize, true);
   const left = buffer.getChannelData(0);
   const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
   let offset = 44;
   for (let i = 0; i < buffer.length; i++) {
     for (const sample of [left[i], right[i]]) {
-      const value = Math.max(-1, Math.min(1, sample));
-      view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
-      offset += 2;
+      view.setFloat32(offset, Number.isFinite(sample) ? sample : 0, true);
+      offset += bytesPerSample;
     }
   }
   return bytes;
@@ -224,14 +227,21 @@ class StemEngine {
     this.isProcessing = true;
     const duration = sourceBuffer.duration;
     try {
+      onProgress?.({ percent: 1, phaseText: 'Stem-Engine und Python-Installation prüfen…', processedSeconds: 0, totalSeconds: duration });
+      const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop : undefined;
+      if (desktop?.getStemEngineStatus) {
+        const status = await desktop.getStemEngineStatus();
+        if (!status.available) throw new Error(status.reason || 'Demucs/Python ist nicht einsatzbereit.');
+      }
+
       onProgress?.({ percent: 2, phaseText: 'Songmix für Demucs vorbereiten…', processedSeconds: 0, totalSeconds: duration });
-      const wav = encodeStereoPcmWav(sourceBuffer);
+      const wav = encodeStereoFloatWav(sourceBuffer);
       let response: DemucsResponse;
 
-      if (window.rekordboxDesktop?.separateStems) {
-        response = await window.rekordboxDesktop.separateStems(wav);
+      if (desktop?.separateStems) {
+        response = await desktop.separateStems(wav);
       } else {
-        onProgress?.({ percent: 5, phaseText: 'Demucs htdemucs_ft analysiert den vollständigen Mix…', processedSeconds: 0, totalSeconds: duration });
+        onProgress?.({ percent: 5, phaseText: 'Demucs htdemucs_ft Max-Qualität (4 Modelle × 10 Shifts) analysiert den Mix…', processedSeconds: 0, totalSeconds: duration });
         const request = await fetch('/api/stems/separate', {
           method: 'POST',
           headers: { 'Content-Type': 'audio/wav' },
@@ -269,6 +279,7 @@ class StemEngine {
           bass: decoded.bass,
           other: decoded.other,
           separatedAt: Date.now(),
+          separationMethod: 'DEMUCS_HTDEMUCS_FT',
         };
         this.cacheStems(trackId, result, originalSha256);
         onProgress?.({ percent: 100, phaseText: `Echte KI-Stems mit ${response.model} fertig`, processedSeconds: duration, totalSeconds: duration });
@@ -276,15 +287,32 @@ class StemEngine {
       } finally {
         await context.close();
       }
+    } catch (modelError) {
+      // A model download, Python installation or local service must never leave
+      // the Stem controls completely unusable. Fall back visibly to the bounded
+      // local separator. The result is tagged so it cannot be mistaken for AI.
+      const reason = modelError instanceof Error ? modelError.message : String(modelError);
+      console.warn('[Stems] Demucs unavailable, using local spectral fallback:', reason);
+      onProgress?.({
+        percent: 8,
+        phaseText: 'Demucs nicht verfügbar – lokale Spektral-Separation läuft…',
+        processedSeconds: 0,
+        totalSeconds: duration,
+      });
+      return this.separateAudioBuffer(
+        sourceBuffer,
+        trackId,
+        originalSha256,
+        onProgress
+      );
     } finally {
       this.isProcessing = false;
     }
   }
 
   /**
-   * Legacy deterministic frequency splitter retained for low-level DSP tests.
-   * It is NOT suitable for production vocal extraction. The application UI
-   * deliberately uses separateAudioBufferWithModel instead.
+   * Deterministic local spectral fallback. It is less accurate than Demucs but
+   * always produces four playable, sum-preserving stems without external tools.
    */
   public async separateAudioBuffer(
     sourceBuffer: AudioBuffer,
@@ -398,10 +426,13 @@ class StemEngine {
             bassLp[ch] = bAlpha * bassLp[ch] + (1 - bAlpha) * sample;
             const rawBass = bassLp[ch];
 
-            // 2. Vocal Band-Pass Filter (260Hz - 4200Hz)
+            // 2. Vocal Band-Pass Filter (260Hz - 4200Hz). Both low-passes
+            // must operate on the source; LP(4200) - LP(260) is the band.
+            // The previous cascaded/reversed subtraction nearly cancelled the
+            // complete vocal range and made Vocal Solo effectively silent.
             vocalLpLow[ch] = vLowAlpha * vocalLpLow[ch] + (1 - vLowAlpha) * sample;
-            vocalLpHigh[ch] = vHighAlpha * vocalLpHigh[ch] + (1 - vHighAlpha) * vocalLpLow[ch];
-            const midBand = vocalLpLow[ch] - vocalLpHigh[ch];
+            vocalLpHigh[ch] = vHighAlpha * vocalLpHigh[ch] + (1 - vHighAlpha) * sample;
+            const midBand = vocalLpHigh[ch] - vocalLpLow[ch];
 
             // 3. Drum High Band (air / cymbals above ~4800Hz)
             drumLpHigh[ch] = dHighAlpha * drumLpHigh[ch] + (1 - dHighAlpha) * sample;
@@ -534,6 +565,7 @@ class StemEngine {
         separatedAt: Date.now(),
         normalizationFallbacks,
         sourcePeak: peakCeiling,
+        separationMethod: 'LOCAL_SPECTRAL_FALLBACK',
       };
 
       this.cacheStems(trackId, result, originalSha256);

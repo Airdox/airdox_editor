@@ -16,8 +16,10 @@ const acapella: StemsMixerState = {
 };
 
 const calls: Array<{ type: string; position?: number; mixer?: StemsMixerState }> = [];
+let playingStems = false;
 const engine: StemPlaybackController = {
   getIsPlaying: () => true,
+  getIsPlayingStems: () => playingStems,
   getCurrentTime: () => 6.375,
   playWithStems: (_stems, mixer, position) => calls.push({ type: 'STEMS', position, mixer }),
   play: (_buffer, position) => calls.push({ type: 'MASTER', position }),
@@ -32,6 +34,15 @@ assert.equal(calls[0].type, 'STEMS', 'Acapella must replace the running master s
 assert.equal(calls[0].position, 6.375, 'source switch must preserve the exact playhead position');
 assert.equal(calls[0].mixer?.vocals.solo, true);
 assert.equal(calls[0].mixer?.drums.solo, false);
+
+// Pressing Vocal Solo while stems already run must not restart or kill sources;
+// it only changes gains so vocals remain audible.
+calls.length = 0;
+playingStems = true;
+applyStemMixDuringPlayback(engine, stems, buffer, acapella);
+assert.equal(calls.length, 1);
+assert.equal(calls[0].type, 'GAIN_ONLY');
+assert.equal(calls[0].mixer?.vocals.solo, true);
 
 calls.length = 0;
 const reset: StemsMixerState = {

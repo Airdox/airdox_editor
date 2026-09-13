@@ -9,7 +9,7 @@ const {
 } = require('./dbReader.cjs');
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
-const { separateWav } = require('./demucsRunner.cjs');
+const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -175,6 +175,12 @@ function toLocalPath(location) {
     return null;
   }
 }
+
+// Probe executable, supported Python version, imports and cached model weights
+// without touching audio. This catches Python 3.14 / missing-module installs up front.
+ipcMain.handle('stems:get-status', async () =>
+  inspectDemucsEnvironment(path.join(__dirname, '..'))
+);
 
 // High-quality local AI separation. The renderer sends one finished WAV mix;
 // Demucs returns newly inferred stems and never receives reference sources.
