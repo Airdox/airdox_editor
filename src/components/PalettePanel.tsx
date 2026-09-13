@@ -4,15 +4,17 @@
  * Right-hand clip palette matching Screenshot 01 and 02:
  * - Polygon angled tab header "PALETTE"
  * - Trash can icon on top-right
- * - Clip list items with real mini-waveforms, play preview, and clip metadata
+ * - Clip list items with detailed canvas waveforms (BLUE/RGB/3BAND, same
+ *   visual language as the main DetailWaveform), play preview, clip metadata
  * - Bottom "+" button to create clip from current selection
  * - Collapse / Expand toggle (< / >) on the divider border
  */
 
 import React, { useState } from 'react';
-import { PaletteClip } from '../types/rekordbox';
+import { PaletteClip, WaveformMode } from '../types/rekordbox';
 import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, CheckSquare } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
+import { ClipWaveform } from './ClipWaveform';
 
 interface PalettePanelProps {
   isOpen: boolean;
@@ -28,6 +30,8 @@ interface PalettePanelProps {
   onToggleMatchPitch?: (match: boolean) => void;
   targetBpm?: number;
   targetKey?: string;
+  /** Active waveform render mode shared with the main DetailWaveform. */
+  waveformMode?: WaveformMode;
 }
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
@@ -44,6 +48,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   onToggleMatchPitch,
   targetBpm,
   targetKey,
+  waveformMode = 'RGB',
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
 
@@ -177,31 +182,10 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                     : 'bg-[#14151a] border-[#22242d] hover:border-[#323543]'
                 }`}
               >
-                {/* Mini Waveform Display */}
-                <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
-                  {clip.miniPeaks && clip.miniPeaks.length > 0 ? (
-                    <div className="w-full h-full flex items-center px-1">
-                      {clip.miniPeaks.map((pk, idx) => {
-                        const h = Math.max(2, pk * 28);
-                        // RGB coloration based on position/frequency
-                        const col =
-                          idx % 3 === 0
-                            ? '#ff3b30'
-                            : idx % 3 === 1
-                            ? '#00e5ff'
-                            : '#0088ff';
-                        return (
-                          <div
-                            key={idx}
-                            style={{ height: `${h}px`, backgroundColor: col }}
-                            className="flex-1 mx-[0.5px] rounded-[0.5px]"
-                          />
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="text-[10px] text-neutral-600">Clip Waveform</div>
-                  )}
+                {/* Detailed Waveform Display (native ANLZ buckets or per-sample
+                    analysis, rendered in the active BLUE/RGB/3BAND mode) */}
+                <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden relative border border-[#1b1c23]">
+                  <ClipWaveform clip={clip} waveformMode={waveformMode} showBeatgrid />
 
                   {/* Playhead / preview indicator */}
                   {isPlaying && (
