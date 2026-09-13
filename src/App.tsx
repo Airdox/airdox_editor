@@ -71,7 +71,7 @@ import {
   cloneAudioBuffer,
   executeCopy,
   executeCut,
-  executeDelete,
+  executeRippleDelete,
   executeClear,
   executeInsert,
   executePaste,
@@ -1640,10 +1640,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
     const effectiveSel = validation.sanitizedSelection || selection;
     if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
-    pushHistorySnapshot('Delete');
+    pushHistorySnapshot('Ripple Delete');
 
-    const result = executeDelete(
-      workingAudioBuffer,
+    const result = executeRippleDelete(
+      {
+        originalBuffer: activeTrack.audioBuffer,
+        workingBuffer: workingAudioBuffer,
+        originalMedia: activeTrack.originalMedia,
+      },
       effectiveSel,
       activeTrack.cues,
       activeTrack.workingSegments,
@@ -1657,9 +1661,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setSelection(null);
 
     showOperationFeedback({
-      title: 'Auswahl gelöscht (Delete)',
+      title: 'Auswahl entfernt (Ripple Delete)',
       operationType: 'DELETE',
-      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${effectiveSel.duration.toFixed(3)}s nach vorne gerückt.`,
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) ausschließlich aus der Arbeitsrepräsentation entfernt. Nachfolgendes Audio-Material wurde um -${effectiveSel.duration.toFixed(3)}s nach vorne gerückt; die Originaldatei bleibt unverändert und schreibgeschützt.`,
       timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
       barsCount: effectiveSel.barsCount,
       beatsCount: effectiveSel.beatsCount,

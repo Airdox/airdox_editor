@@ -7,7 +7,7 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
-const { isProtectedTarget } = require('./pathGuard.cjs');
+const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
@@ -33,6 +33,8 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow;
 let analysisPathRegistry;
+// Authoritative main-process list; it cannot be weakened by renderer payloads.
+const originalSourceRegistry = new OriginalSourceRegistry();
 
 /**
  * The local index is deliberately outside the Rekordbox folders. It contains
@@ -183,6 +185,7 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   try {
     await access(localPath, constants.R_OK);
     const details = await stat(localPath);
+    if (details.isFile()) originalSourceRegistry.register(localPath);
     return {
       validLocation: true,
       exists: details.isFile(),
@@ -205,7 +208,9 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
       { name: 'All files', extensions: ['*'] },
     ],
   });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  if (result.canceled) return null;
+  originalSourceRegistry.register(result.filePaths[0]);
+  return { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
@@ -217,7 +222,9 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
       { name: 'All files', extensions: ['*'] },
     ],
   });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  if (result.canceled) return null;
+  originalSourceRegistry.register(result.filePaths[0]);
+  return { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
@@ -228,6 +235,7 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
+  originalSourceRegistry.register(dbPath);
   return readRekordboxDatabase(dbPath);
 });
 
@@ -266,6 +274,7 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
     throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     path: localPath,
@@ -296,7 +305,7 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
     return { saved: false };
   }
   const targetPath = path.resolve(result.filePath);
-  if (isProtectedTarget(targetPath, protectedPaths)) {
+  if (originalSourceRegistry.isProtected(targetPath, protectedPaths)) {
     throw new Error(
       'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
     );
@@ -341,6 +350,7 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
     throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     path: localPath,
