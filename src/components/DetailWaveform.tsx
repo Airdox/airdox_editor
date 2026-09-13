@@ -34,6 +34,7 @@ import {
   paletteDropTime,
   readPaletteClipDrag,
 } from '../utils/paletteDrag';
+import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -380,26 +381,69 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           drawEnvelope(envelopeRuns((bucket) => analysis.midEnergy[bucket] * 0.70), '#18d8df', 0.48);
           drawEnvelope(envelopeRuns((bucket) => analysis.highEnergy[bucket] * 0.55), '#effcff', 0.30);
         } else {
-          const gradient = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
-          gradient.addColorStop(0, '#86d8ff');
-          gradient.addColorStop(0.48, '#21a8e8');
-          gradient.addColorStop(0.52, '#21a8e8');
-          gradient.addColorStop(1, '#ff4655');
-          drawEnvelope(peakRuns, gradient);
+          // RGB: rekordbox-authentic per-column spectral colouring. Every pixel
+          // column is coloured from the real frequency content at that time so
+          // drops (bass-heavy) glow red/orange while breaks and vocal passages
+          // read blue/green — song sections are recognisable at a glance.
+          // A single static top-to-bottom gradient cannot express this.
+          for (let x = 0; x < width; x++) {
+            const t0 = viewOffset + (x / width) * viewDuration;
+            const t1 = viewOffset + ((x + 1) / width) * viewDuration;
+            const b0 = Math.max(0, Math.floor(t0 / secPerBucket));
+            const b1 = Math.min(buckets - 1, Math.floor(t1 / secPerBucket));
+            if (b1 < b0) continue;
+
+            let maxPeak = 0;
+            let sumLow = 0;
+            let sumMid = 0;
+            let sumHigh = 0;
+            let count = 0;
+            for (let b = b0; b <= b1; b++) {
+              const p = analysis.peaks[b] || 0;
+              if (p > maxPeak) maxPeak = p;
+              sumLow += analysis.lowEnergy[b] || 0;
+              sumMid += analysis.midEnergy[b] || 0;
+              sumHigh += analysis.highEnergy[b] || 0;
+              count++;
+            }
+            // Zero-energy (CLEAR/silence) columns stay empty — no invented floor.
+            if (maxPeak <= 0) continue;
+
+            const low = count > 0 ? sumLow / count : 0;
+            const mid = count > 0 ? sumMid / count : 0;
+            const high = count > 0 ? sumHigh / count : 0;
+
+            const h = maxPeak * maxHalfH;
+            ctx.fillStyle = spectralRgb(low, mid, high);
+            ctx.fillRect(x, centerY - h, 1, h * 2);
+
+            // Bright inner core in the same spectral hue gives the glowing
+            // centre rekordbox waveforms have.
+            const coreH = h * 0.45;
+            if (coreH >= 0.5) {
+              ctx.fillStyle = spectralRgbCore(low, mid, high);
+              ctx.globalAlpha = 0.55;
+              ctx.fillRect(x, centerY - coreH, 1, coreH * 2);
+              ctx.globalAlpha = 1;
+            }
+          }
         }
 
         // Fine centre traces retain visual detail without manufacturing audio in
-        // zero-valued analysis buckets.
-        ctx.strokeStyle = waveformMode === 'RGB' ? 'rgba(255,255,255,.42)' : 'rgba(220,245,255,.38)';
-        ctx.lineWidth = 0.7;
-        for (const { upper, lower } of peakRuns) {
-          if (upper.length < 2) continue;
-          ctx.beginPath();
-          upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-          ctx.stroke();
-          ctx.beginPath();
-          lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-          ctx.stroke();
+        // zero-valued analysis buckets. The RGB columns already carry their own
+        // spectral highlight, so the white trace applies to envelope modes only.
+        if (waveformMode !== 'RGB') {
+          ctx.strokeStyle = 'rgba(220,245,255,.38)';
+          ctx.lineWidth = 0.7;
+          for (const { upper, lower } of peakRuns) {
+            if (upper.length < 2) continue;
+            ctx.beginPath();
+            upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+            ctx.stroke();
+            ctx.beginPath();
+            lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+            ctx.stroke();
+          }
         }
       } else {
         // Never invent a rhythmic waveform from BPM metadata. Until real
