@@ -25,6 +25,9 @@ function timeToSampleFloor(seconds: number, sampleRate: number): number {
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  /** Final safety stage shared by playback, meters and the recorder. */
+  private masterLimiter: DynamicsCompressorNode | null = null;
+  private masterRecordDestination: MediaStreamAudioDestinationNode | null = null;
   private analyserL: AnalyserNode | null = null;
   private analyserR: AnalyserNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
@@ -71,14 +74,27 @@ class AudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 0.9;
 
+      // A real safety limiter lives after the master gain. This is deliberately
+      // before both the meters and the record tap, so the file can never clip
+      // merely because a DJ pushes the master above unity.
+      this.masterLimiter = this.ctx.createDynamicsCompressor();
+      this.masterLimiter.threshold.value = -1;
+      this.masterLimiter.knee.value = 0;
+      this.masterLimiter.ratio.value = 20;
+      this.masterLimiter.attack.value = 0.001;
+      this.masterLimiter.release.value = 0.08;
+
       this.splitter = this.ctx.createChannelSplitter(2);
       this.analyserL = this.ctx.createAnalyser();
       this.analyserR = this.ctx.createAnalyser();
       this.analyserL.fftSize = 64;
       this.analyserR.fftSize = 64;
+      this.masterRecordDestination = this.ctx.createMediaStreamDestination();
 
-      this.masterGain.connect(this.ctx.destination);
-      this.masterGain.connect(this.splitter);
+      this.masterGain.connect(this.masterLimiter);
+      this.masterLimiter.connect(this.ctx.destination);
+      this.masterLimiter.connect(this.splitter);
+      this.masterLimiter.connect(this.masterRecordDestination);
       this.splitter.connect(this.analyserL, 0);
       this.splitter.connect(this.analyserR, 1);
 
@@ -109,6 +125,60 @@ class AudioEngine {
 
   public getContext(): AudioContext {
     return this.init();
+  }
+
+  /**
+   * Returns the post-limiter master tap used by the professional recorder.
+   * It is a MediaStreamAudioDestinationNode, not the speakers' output, so
+   * recording the internal editor master never depends on microphone access.
+   */
+  public getMasterRecordStream(): MediaStream {
+    this.init();
+    if (!this.masterRecordDestination) {
+      throw new Error('Der Master-Record-Tap konnte nicht initialisiert werden.');
+    }
+    return this.masterRecordDestination.stream;
+  }
+
+  /**
+   * Routes an external microphone/line/loopback stream through an isolated
+   * safety limiter. The processed stream is sent only to MediaRecorder and is
+   * never fed back to the speakers (avoids feedback loops).
+   */
+  public createInputRecordingStream(input: MediaStream, useLimiter = true): {
+    stream: MediaStream;
+    dispose: () => void;
+  } {
+    const ctx = this.init();
+    const source = ctx.createMediaStreamSource(input);
+    const destination = ctx.createMediaStreamDestination();
+    const inputGain = ctx.createGain();
+    inputGain.gain.value = 1;
+    source.connect(inputGain);
+
+    let safety: DynamicsCompressorNode | null = null;
+    if (useLimiter) {
+      safety = ctx.createDynamicsCompressor();
+      safety.threshold.value = -1;
+      safety.knee.value = 0;
+      safety.ratio.value = 20;
+      safety.attack.value = 0.001;
+      safety.release.value = 0.08;
+      inputGain.connect(safety);
+      safety.connect(destination);
+    } else {
+      inputGain.connect(destination);
+    }
+
+    return {
+      stream: destination.stream,
+      dispose: () => {
+        try { source.disconnect(); } catch { /* already disconnected */ }
+        try { inputGain.disconnect(); } catch { /* already disconnected */ }
+        try { safety?.disconnect(); } catch { /* already disconnected */ }
+        try { destination.disconnect(); } catch { /* already disconnected */ }
+      },
+    };
   }
 
   public setMasterVolume(vol: number) {

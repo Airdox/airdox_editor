@@ -12,6 +12,7 @@ import {
   Info,
   Settings,
   Volume2,
+  CircleStop,
 } from 'lucide-react';
 
 interface EditModeBarProps {
@@ -40,6 +41,8 @@ interface EditModeBarProps {
   onTogglePalette?: () => void;
   isMaxWaveform?: boolean;
   onToggleMaxWaveform?: () => void;
+  onOpenRecorder?: () => void;
+  recorderActive?: boolean;
 }
 
 export const EditModeBar: React.FC<EditModeBarProps> = ({
@@ -68,6 +71,8 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onTogglePalette,
   isMaxWaveform = false,
   onToggleMaxWaveform,
+  onOpenRecorder,
+  recorderActive = false,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('15:21');
 
@@ -132,6 +137,16 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[10px] border-l-current ml-0.5"></div>
             )}
           </button>
+
+          {onOpenRecorder && (
+            <button
+              onClick={onOpenRecorder}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold tracking-wide transition-colors ${recorderActive ? 'border-[#ff3b30] bg-[#3a1517] text-[#ff625b]' : 'border-[#3b2830] bg-[#21151a] text-[#ff5147] hover:bg-[#3a1517] hover:text-white'}`}
+              title="Pro Recorder für Rekordbox-/Set-Aufnahmen öffnen"
+            >
+              <CircleStop size={12} /> REC
+            </button>
+          )}
 
           {/* Loop toggle */}
           <button

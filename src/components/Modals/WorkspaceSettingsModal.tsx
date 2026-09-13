@@ -3,7 +3,7 @@ import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves }
 import { WaveformMode } from '../../types/rekordbox';
 
 export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
-export type RecordingFormat = 'WAV' | 'FLAC';
+export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3';
 
 interface WorkspaceSettingsModalProps {
   isOpen: boolean;
@@ -13,6 +13,7 @@ interface WorkspaceSettingsModalProps {
   onOpenSystemLogs?: () => void;
   onAutoCue?: () => void;
   onClearHistory?: () => void;
+  onOpenRecorder?: () => void;
   waveformMode: WaveformMode;
   onSetWaveformMode: (mode: WaveformMode) => void;
   snapToBeatgrid: boolean;
@@ -47,6 +48,7 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onOpenSystemLogs,
   onAutoCue,
   onClearHistory,
+  onOpenRecorder,
   waveformMode,
   onSetWaveformMode,
   snapToBeatgrid,
@@ -176,10 +178,11 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                   <option value="AUDIO_INPUT">Mikrofon / Line-In</option>
                   <option value="SYSTEM_LOOPBACK">Windows / Rekordbox Master (Loopback)</option>
                 </select>
-                <div className="text-[10px] text-neutral-500 mt-1">Die Quelle wird für die künftige Aufnahmefunktion gespeichert; Rekordbox wird über WASAPI-Loopback aufgenommen, nicht über den Editor-Master.</div>
+                <div className="text-[10px] text-neutral-500 mt-1">Die Quelle wird für den Pro Recorder vorgemerkt. Rekordbox kann über Windows/System-Loopback aufgenommen werden, der Editor-Master bleibt separat verfügbar.</div>
+                {onOpenRecorder && <button onClick={() => { onClose(); onOpenRecorder(); }} className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[#8b2d35] bg-[#2a1519] text-[#ff7169] hover:bg-[#481c22] text-[10px] font-semibold">Pro Recorder öffnen (F9)</button>}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <label className="text-[10px] text-neutral-400">Format<select value={recordingFormat} onChange={(e) => onSetRecordingFormat(e.target.value as RecordingFormat)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="WAV">WAV (PCM)</option><option value="FLAC">FLAC</option></select></label>
+                <label className="text-[10px] text-neutral-400">Format<select value={recordingFormat} onChange={(e) => onSetRecordingFormat(e.target.value as RecordingFormat)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="WAV">WAV (PCM)</option><option value="FLAC">FLAC</option><option value="MP3">MP3 (320 kbps)</option></select></label>
                 <label className="text-[10px] text-neutral-400">Samplerate<select value={recordingSampleRate} onChange={(e) => onSetRecordingSampleRate(Number(e.target.value) as 44100 | 48000)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select></label>
                 <label className="text-[10px] text-neutral-400">Bit-Tiefe<select value={recordingBitDepth} onChange={(e) => onSetRecordingBitDepth(Number(e.target.value) as 16 | 24 | 32)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="16">16 Bit</option><option value="24">24 Bit</option><option value="32">32 Bit Float</option></select></label>
                 <label className="text-[10px] text-neutral-400">Kanäle<select value={recordingChannels} onChange={(e) => onSetRecordingChannels(e.target.value as 'STEREO' | 'MONO')} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="STEREO">Stereo</option><option value="MONO">Mono</option></select></label>

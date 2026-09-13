@@ -55,7 +55,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setShowLayerInspector(false);
     setIsExporting(true);
     setSuccessMsgInfo(null);
-    setSuccessMsg(null);
     const exportStartedAt = Date.now();
     logger.info('EXPORT', `Export gestartet (Format: ${format})`, {
       format,
@@ -125,6 +124,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             formatLabel: format,
             bytesSize: bytes.byteLength,
           });
+        }
         if (res.saved) {
           logger.info('EXPORT', `${kind}-Export gespeichert: ${res.path}`, {
             kind,
@@ -132,7 +132,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             bytes: res.bytes,
             durationMs: Date.now() - exportStartedAt,
           });
-          setSuccessMsg(`${kind} erfolgreich als "${res.path?.split(/[\\\\/]/).pop() || defaultName}" gespeichert.`);
         } else {
           logger.info('EXPORT', `${kind}-Export vom Benutzer abgebrochen (kein Ziel gewählt).`);
           setIsExporting(false);
@@ -163,13 +162,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           bytes: bytes.byteLength,
           durationMs: Date.now() - exportStartedAt,
         });
-        setSuccessMsg(
-          kind === 'WAV'
-            ? `Master-Audio erfolgreich als "${defaultName}" exportiert.`
-            : kind === 'XML'
-            ? `Rekordbox XML erfolgreich als "${defaultName}" exportiert.`
-            : 'Projektzustand erfolgreich gespeichert.'
-        );
       }
 
       onExportComplete?.({

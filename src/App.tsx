@@ -26,6 +26,8 @@ import {
   sliceWaveformAnalysis,
 } from './waveform/analysisComposer';
 import { audioEngine } from './audio/audioEngine';
+import { exportAudioBuffer } from './audio/audioExporter';
+import { measureRecordingAudio, optimizeRecordingBuffer } from './audio/recordingProcessor';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
   parseRekordboxXml,
@@ -65,6 +67,7 @@ import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
 import { DeleteModeModal } from './components/Modals/DeleteModeModal';
 import { MidiControllerModal } from './components/Modals/MidiControllerModal';
+import { RecorderModal, RecorderSource, RecorderFormat, RecorderStage } from './components/Modals/RecorderModal';
 import {
   stemEngine,
   StemType,
@@ -402,11 +405,37 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (typeof window === 'undefined') return 'EDITOR_MASTER';
     return (window.localStorage.getItem('airdox.recordingSource') as 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK') || 'EDITOR_MASTER';
   });
-  const [recordingFormat, setRecordingFormat] = useState<'WAV' | 'FLAC'>('WAV');
+  const [recordingFormat, setRecordingFormat] = useState<RecorderFormat>('WAV');
   const [recordingSampleRate, setRecordingSampleRate] = useState<44100 | 48000>(48000);
   const [recordingBitDepth, setRecordingBitDepth] = useState<16 | 24 | 32>(24);
   const [recordingChannels, setRecordingChannels] = useState<'STEREO' | 'MONO'>('STEREO');
   const [recordingLimiter, setRecordingLimiter] = useState<boolean>(true);
+
+  // Dedicated set recorder state. The modal is intentionally independent from
+  // the edit transport: Rekordbox can be captured while the editor remains
+  // open, and the complete file is mastered only after Stop.
+  const [recorderOpen, setRecorderOpen] = useState<boolean>(false);
+  const [recorderStage, setRecorderStage] = useState<RecorderStage>('IDLE');
+  const [recorderElapsed, setRecorderElapsed] = useState<number>(0);
+  const [recorderSource, setRecorderSource] = useState<RecorderSource>(recordingSource);
+  const [recorderOptimize, setRecorderOptimize] = useState<boolean>(true);
+  const [recorderTargetLufs, setRecorderTargetLufs] = useState<-14 | -12 | -9>(-14);
+  const [recorderTruePeak, setRecorderTruePeak] = useState<-1 | -0.3>(-1);
+  const [recorderPreRoll, setRecorderPreRoll] = useState<0 | 3 | 5>(3);
+  const [recorderFileName, setRecorderFileName] = useState<string>('airdox_rekordbox_set');
+  const [recorderError, setRecorderError] = useState<string | null>(null);
+  const [recorderSavedPath, setRecorderSavedPath] = useState<string | null>(null);
+  const [recorderStats, setRecorderStats] = useState<{ beforeLufs: number; afterLufs: number; peak: number; duration: number } | null>(null);
+  const recorderSessionRef = useRef<{
+    mediaRecorder: MediaRecorder | null;
+    chunks: Blob[];
+    inputStream: MediaStream | null;
+    processedStream: MediaStream | null;
+    dispose: (() => void) | null;
+    timer: number | null;
+    countdown: number | null;
+    startedAt: number;
+  }>({ mediaRecorder: null, chunks: [], inputStream: null, processedStream: null, dispose: null, timer: null, countdown: null, startedAt: 0 });
   const [confirmDestructiveEdits, setConfirmDestructiveEdits] = useState<boolean>(true);
   const [autoSaveProject, setAutoSaveProject] = useState<boolean>(false);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
@@ -415,6 +444,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
+    window.localStorage?.setItem('airdox.recordingSource', recordingSource);
     window.localStorage?.setItem('airdox.settings', JSON.stringify({
       recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth,
       recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject,
@@ -468,6 +498,234 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+
+  const clearRecorderResources = useCallback(() => {
+    const session = recorderSessionRef.current;
+    if (session.timer !== null) window.clearInterval(session.timer);
+    if (session.countdown !== null) window.clearTimeout(session.countdown);
+    session.timer = null;
+    session.countdown = null;
+    session.dispose?.();
+    session.dispose = null;
+    // Only device/display tracks are owned by the recorder. The editor master
+    // destination is an internal tap and has no hardware track to stop.
+    session.inputStream?.getTracks().forEach((track) => track.stop());
+    session.inputStream = null;
+    session.processedStream = null;
+    session.mediaRecorder = null;
+  }, []);
+
+  const openRecorder = useCallback(() => {
+    setRecorderError(null);
+    setRecorderSavedPath(null);
+    setRecorderStats(null);
+    if (recorderStage === 'DONE' || recorderStage === 'ERROR') setRecorderStage('IDLE');
+    setRecorderOpen(true);
+  }, [recorderStage]);
+
+  const saveRecorderBytes = useCallback(async (
+    bytes: Uint8Array,
+    extension: string,
+    mimeType: string,
+    defaultName: string
+  ): Promise<string | null> => {
+    const safeBase = (defaultName.trim() || 'airdox_rekordbox_set')
+      .replace(/[\\/:*?\"<>|]/g, '_')
+      .replace(/\.(wav|flac|mp3)$/i, '');
+    const fileName = `${safeBase}.${extension}`;
+
+    if (window.rekordboxDesktop) {
+      const result = await window.rekordboxDesktop.saveExportFile({
+        kind: 'AUDIO',
+        data: bytes,
+        defaultName: fileName,
+        protectedPaths,
+      });
+      if (!result.saved) return null;
+      return result.path || fileName;
+    }
+
+    const blob = new Blob([bytes as BlobPart], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    return fileName;
+  }, [protectedPaths]);
+
+  const handleRecorderStart = useCallback(async () => {
+    if (recorderStage === 'PREROLL' || recorderStage === 'RECORDING' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING') return;
+    if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+      setRecorderError('Dieser Chromium/Electron-Build unterstützt keine Audioaufnahme. Bitte die Desktop-App aktualisieren.');
+      setRecorderStage('ERROR');
+      return;
+    }
+
+    clearRecorderResources();
+    setRecorderError(null);
+    setRecorderSavedPath(null);
+    setRecorderStats(null);
+    setRecorderElapsed(0);
+
+    const beginCapture = async () => {
+      try {
+        let capturedStream: MediaStream;
+        let ownedInput: MediaStream | null = null;
+        let dispose: (() => void) | null = null;
+
+        if (recorderSource === 'EDITOR_MASTER') {
+          // This is already post master-limiter and therefore the cleanest
+          // source when the set is played inside airdox.
+          capturedStream = audioEngine.getMasterRecordStream();
+        } else if (recorderSource === 'AUDIO_INPUT') {
+          ownedInput = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 2, echoCancellation: false, autoGainControl: false, noiseSuppression: false },
+            video: false,
+          });
+          const processed = audioEngine.createInputRecordingStream(ownedInput, recordingLimiter);
+          capturedStream = processed.stream;
+          dispose = processed.dispose;
+        } else {
+          // Electron/Chromium shows a native chooser. The user selects the
+          // display or output carrying Rekordbox and enables "Audio teilen".
+          ownedInput = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          } as DisplayMediaStreamOptions);
+          if (ownedInput.getAudioTracks().length === 0) {
+            ownedInput.getTracks().forEach((track) => track.stop());
+            throw new Error('Kein Loopback-Audiosignal gewählt. Bitte in der Systemauswahl "Audio teilen" aktivieren.');
+          }
+          ownedInput.getVideoTracks().forEach((track) => track.stop());
+          const processed = audioEngine.createInputRecordingStream(ownedInput, recordingLimiter);
+          capturedStream = processed.stream;
+          dispose = processed.dispose;
+        }
+
+        const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
+        const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
+        const recorder = new MediaRecorder(capturedStream, {
+          ...(mimeType ? { mimeType } : {}),
+          audioBitsPerSecond: 320000,
+        });
+        const session = recorderSessionRef.current;
+        session.mediaRecorder = recorder;
+        session.chunks = [];
+        session.inputStream = ownedInput;
+        session.processedStream = capturedStream;
+        session.dispose = dispose;
+        session.startedAt = Date.now();
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) session.chunks.push(event.data);
+        };
+        recorder.start(1000);
+        setRecorderStage('RECORDING');
+        session.timer = window.setInterval(() => {
+          setRecorderElapsed((Date.now() - session.startedAt) / 1000);
+        }, 250);
+      } catch (error) {
+        clearRecorderResources();
+        setRecorderError(error instanceof Error ? error.message : String(error));
+        setRecorderStage('ERROR');
+        logger.error('RECORDER', `Aufnahme konnte nicht gestartet werden: ${error instanceof Error ? error.message : String(error)}`, error);
+      }
+    };
+
+    if (recorderPreRoll > 0) {
+      setRecorderStage('PREROLL');
+      recorderSessionRef.current.countdown = window.setTimeout(() => { void beginCapture(); }, recorderPreRoll * 1000);
+    } else {
+      await beginCapture();
+    }
+  }, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter]);
+
+  const handleRecorderStop = useCallback(async () => {
+    const session = recorderSessionRef.current;
+    if (recorderStage === 'PREROLL') {
+      if (session.countdown !== null) window.clearTimeout(session.countdown);
+      session.countdown = null;
+      clearRecorderResources();
+      setRecorderStage('IDLE');
+      setRecorderElapsed(0);
+      return;
+    }
+    if (recorderStage !== 'RECORDING' || !session.mediaRecorder) return;
+
+    const mediaRecorder = session.mediaRecorder;
+    setRecorderStage('OPTIMIZING');
+    if (session.timer !== null) window.clearInterval(session.timer);
+    session.timer = null;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        mediaRecorder.addEventListener('stop', () => resolve(), { once: true });
+        mediaRecorder.addEventListener('error', () => reject(new Error('MediaRecorder hat einen Fehler gemeldet.')), { once: true });
+        mediaRecorder.stop();
+      });
+      const captureBlob = new Blob(session.chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const rawBytes = await captureBlob.arrayBuffer();
+      const audioContext = audioEngine.getContext();
+      const decoded = await audioContext.decodeAudioData(rawBytes.slice(0));
+      const before = measureRecordingAudio(decoded);
+
+      // Even when the optional loudness pass is disabled, a requested limiter
+      // still gets a final whole-file safety ceiling before encoding.
+      const shouldProcess = recorderOptimize || recordingLimiter;
+      const processed = shouldProcess
+        ? await optimizeRecordingBuffer(decoded, {
+            targetLufs: recorderOptimize ? recorderTargetLufs : before.estimatedLufs as -14 | -12 | -9,
+            truePeakDb: recorderTruePeak,
+            targetSampleRate: recordingSampleRate,
+            channels: recordingChannels,
+          })
+        : { buffer: decoded, before, after: { ...before, gainDb: 0 } };
+      const after = processed.after;
+      setRecorderStats({ beforeLufs: before.estimatedLufs, afterLufs: after.estimatedLufs, peak: after.peakDbtp, duration: after.duration });
+
+      setRecorderStage('SAVING');
+      const encoded = await exportAudioBuffer(processed.buffer, {
+        format: recordingFormat,
+        bitDepth: recordingBitDepth,
+        sampleRate: recordingSampleRate,
+        bitrateKbps: 320,
+      });
+      const saved = await saveRecorderBytes(encoded.bytes, encoded.extension, encoded.mimeType, recorderFileName);
+      setRecorderSavedPath(saved);
+      if (!saved) {
+        setRecorderError('Speichern abgebrochen. Die Aufnahme wurde verarbeitet, aber keine Zieldatei gewählt.');
+      }
+      setRecorderStage('DONE');
+      showOperationFeedback({
+        title: saved ? `Set aufgenommen und optimiert (${recordingFormat})` : 'Aufnahme verarbeitet',
+        operationType: 'EXPORT',
+        description: saved
+          ? `Die komplette Aufnahme wurde als ein zusammenhängendes Set auf ${recorderTargetLufs} LUFS (≈) und ${recorderTruePeak} dBTP begrenzt. Originalquellen bleiben unverändert.`
+          : 'Die Aufnahme wurde optimiert, das Speichern wurde jedoch abgebrochen.',
+        originalSha256: activeTrack?.originalSha256 || 'RECORDER_EXTERNAL_SOURCE',
+        timestamp: Date.now(),
+      });
+      logger.info('RECORDER', `Set-Aufnahme beendet: ${saved || 'nicht gespeichert'}`, {
+        source: recorderSource,
+        format: recordingFormat,
+        duration: after.duration,
+        beforeLufs: before.estimatedLufs,
+        afterLufs: after.estimatedLufs,
+        peakDbtp: after.peakDbtp,
+      });
+    } catch (error) {
+      setRecorderError(error instanceof Error ? error.message : String(error));
+      setRecorderStage('ERROR');
+      logger.error('RECORDER', `Set-Aufnahme konnte nicht verarbeitet werden: ${error instanceof Error ? error.message : String(error)}`, error);
+    } finally {
+      clearRecorderResources();
+    }
+  }, [activeTrack, clearRecorderResources, recorderFileName, recorderOptimize, recorderSource, recorderStage, recorderTargetLufs, recorderTruePeak, recordingBitDepth, recordingChannels, recordingFormat, recordingLimiter, recordingSampleRate, saveRecorderBytes, showOperationFeedback]);
+
+  useEffect(() => () => clearRecorderResources(), [clearRecorderResources]);
 
   // Chatbot Palette state
   const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
@@ -3032,7 +3290,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
-      if (e.code === 'Space') {
+      if (e.code === 'F9') {
+        e.preventDefault();
+        openRecorder();
+      } else if (e.code === 'Space') {
         e.preventDefault();
         handleTogglePlay();
       } else if (e.code === 'Escape') {
@@ -3394,6 +3655,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onAnalyzeMixIn={() => setChatbotOpen(true)}
         onOpenMidiModal={() => setMidiModalOpen(true)}
         onSeparateStems={handleSeparateStems}
+        onOpenRecorder={openRecorder}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -3425,6 +3687,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onTogglePalette={() => setPaletteOpen(!paletteOpen)}
         isMaxWaveform={isMaxWaveform}
         onToggleMaxWaveform={handleToggleMaxWaveform}
+        onOpenRecorder={openRecorder}
+        recorderActive={recorderStage === 'RECORDING' || recorderStage === 'PREROLL' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING'}
       />
 
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
@@ -3608,6 +3872,39 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
+      <RecorderModal
+        isOpen={recorderOpen}
+        onClose={() => setRecorderOpen(false)}
+        stage={recorderStage}
+        elapsed={recorderElapsed}
+        source={recorderSource}
+        onSetSource={(value) => { setRecorderSource(value); setRecordingSource(value); }}
+        format={recordingFormat}
+        onSetFormat={setRecordingFormat}
+        sampleRate={recordingSampleRate}
+        onSetSampleRate={setRecordingSampleRate}
+        bitDepth={recordingBitDepth}
+        onSetBitDepth={setRecordingBitDepth}
+        channels={recordingChannels}
+        onSetChannels={setRecordingChannels}
+        limiter={recordingLimiter}
+        onSetLimiter={setRecordingLimiter}
+        optimize={recorderOptimize}
+        onSetOptimize={setRecorderOptimize}
+        targetLufs={recorderTargetLufs}
+        onSetTargetLufs={setRecorderTargetLufs}
+        truePeak={recorderTruePeak}
+        onSetTruePeak={setRecorderTruePeak}
+        preRoll={recorderPreRoll}
+        onSetPreRoll={setRecorderPreRoll}
+        fileName={recorderFileName}
+        onSetFileName={setRecorderFileName}
+        onStart={() => { void handleRecorderStart(); }}
+        onStop={() => { void handleRecorderStop(); }}
+        error={recorderError}
+        savedPath={recorderSavedPath}
+        stats={recorderStats}
+      />
       <WorkspaceSettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
@@ -3615,6 +3912,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
+        onOpenRecorder={openRecorder}
         onAutoCue={() => {
           handleAutoCue();
           setSettingsModalOpen(false);
@@ -3628,7 +3926,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         highQualityRendering={highQualityRendering}
         onSetHighQualityRendering={setHighQualityRendering}
         recordingSource={recordingSource}
-        onSetRecordingSource={setRecordingSource}
+        onSetRecordingSource={(value) => { setRecordingSource(value); setRecorderSource(value); }}
         recordingFormat={recordingFormat}
         onSetRecordingFormat={setRecordingFormat}
         recordingSampleRate={recordingSampleRate}

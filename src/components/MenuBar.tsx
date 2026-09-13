@@ -48,6 +48,7 @@ interface MenuBarProps {
   onAnalyzeMixIn?: () => void;
   onOpenMidiModal?: () => void;
   onSeparateStems?: () => void;
+  onOpenRecorder?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -90,6 +91,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onAnalyzeMixIn,
   onOpenMidiModal,
   onSeparateStems,
+  onOpenRecorder,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -191,6 +193,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               >
                 <span>Audiodatei laden (WAV, MP3, FLAC)...</span>
               </button>
+              {onOpenRecorder && (
+                <button
+                  onClick={() => { onOpenRecorder(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#ff5147] font-semibold"
+                >
+                  <span className="flex items-center gap-2"><Radio size={13} /> Pro Recorder öffnen…</span>
+                  <span className="text-neutral-500">F9</span>
+                </button>
+              )}
               <div className="h-px bg-[#262830] my-1" />
               <button
                 onClick={() => { onExportWav(); setActiveMenu(null); }}

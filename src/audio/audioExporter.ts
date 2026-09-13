@@ -36,7 +36,7 @@ function writeString(view: DataView, offset: number, str: string) {
  * Encodes an AudioBuffer into standard 16/24/32-bit PCM WAV.
  */
 export function encodeWav(buffer: AudioBuffer, bitDepth: number = 16): Uint8Array {
-  const numChannels = 2;
+  const numChannels = Math.min(2, Math.max(1, buffer.numberOfChannels));
   const sampleRate = buffer.sampleRate;
   const numSamples = buffer.length;
   const bytesPerSample = Math.floor(bitDepth / 8);
@@ -67,41 +67,26 @@ export function encodeWav(buffer: AudioBuffer, bitDepth: number = 16): Uint8Arra
   writeString(view, 36, 'data');
   view.setUint32(40, dataSize, true);
 
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  const channelData = Array.from({ length: numChannels }, (_, channel) => buffer.getChannelData(channel));
 
   let offset = 44;
-  if (bitDepth === 16) {
-    for (let i = 0; i < numSamples; i++) {
-      const sL = Math.max(-1, Math.min(1, left[i]));
-      const sR = Math.max(-1, Math.min(1, right[i]));
-      view.setInt16(offset, sL < 0 ? sL * 0x8000 : sL * 0x7fff, true);
-      offset += 2;
-      view.setInt16(offset, sR < 0 ? sR * 0x8000 : sR * 0x7fff, true);
-      offset += 2;
-    }
-  } else if (bitDepth === 24) {
-    for (let i = 0; i < numSamples; i++) {
-      const sL = Math.max(-1, Math.min(1, left[i]));
-      const sR = Math.max(-1, Math.min(1, right[i]));
-      const valL = Math.floor(sL < 0 ? sL * 0x800000 : sL * 0x7fffff);
-      const valR = Math.floor(sR < 0 ? sR * 0x800000 : sR * 0x7fffff);
-      view.setUint8(offset, valL & 0xff);
-      view.setUint8(offset + 1, (valL >> 8) & 0xff);
-      view.setUint8(offset + 2, (valL >> 16) & 0xff);
-      offset += 3;
-      view.setUint8(offset, valR & 0xff);
-      view.setUint8(offset + 1, (valR >> 8) & 0xff);
-      view.setUint8(offset + 2, (valR >> 16) & 0xff);
-      offset += 3;
-    }
-  } else {
-    // 32-bit float
-    for (let i = 0; i < numSamples; i++) {
-      view.setFloat32(offset, left[i], true);
-      offset += 4;
-      view.setFloat32(offset, right[i], true);
-      offset += 4;
+  for (let i = 0; i < numSamples; i++) {
+    for (let channel = 0; channel < numChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, channelData[channel][i] || 0));
+      if (bitDepth === 16) {
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += 2;
+      } else if (bitDepth === 24) {
+        const value = Math.floor(sample < 0 ? sample * 0x800000 : sample * 0x7fffff);
+        view.setUint8(offset, value & 0xff);
+        view.setUint8(offset + 1, (value >> 8) & 0xff);
+        view.setUint8(offset + 2, (value >> 16) & 0xff);
+        offset += 3;
+      } else {
+        // 32-bit WAV is IEEE float, which preserves the editor's internal mix.
+        view.setFloat32(offset, sample, true);
+        offset += 4;
+      }
     }
   }
 
@@ -111,17 +96,17 @@ export function encodeWav(buffer: AudioBuffer, bitDepth: number = 16): Uint8Arra
 /**
  * Encodes an AudioBuffer into valid native FLAC stream with STREAMINFO & audio frames.
  */
-export function encodeFlac(buffer: AudioBuffer): Uint8Array {
-  const numChannels = 2;
+export function encodeFlac(buffer: AudioBuffer, bitDepth: 16 | 24 | 32 = 16): Uint8Array {
+  const numChannels = Math.min(2, Math.max(1, buffer.numberOfChannels));
   const sampleRate = buffer.sampleRate;
   const numSamples = buffer.length;
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  const channels = Array.from({ length: numChannels }, (_, channel) => buffer.getChannelData(channel));
+  const bytesPerSample = Math.ceil(bitDepth / 8);
 
   const blockSize = 4096;
   const numBlocks = Math.ceil(numSamples / blockSize);
 
-  const estimatedSize = 42 + numBlocks * (20 + numChannels * (1 + 2 * blockSize) + 4);
+  const estimatedSize = 42 + numBlocks * (20 + numChannels * (1 + bytesPerSample * blockSize) + 4);
   const out = new Uint8Array(estimatedSize);
   let pos = 0;
 
@@ -147,7 +132,7 @@ export function encodeFlac(buffer: AudioBuffer): Uint8Array {
 
   const sr = sampleRate & 0xfffff;
   const ch = (numChannels - 1) & 0x7;
-  const bps = (16 - 1) & 0x1f;
+  const bps = (bitDepth - 1) & 0x1f;
 
   out[pos++] = (sr >> 12) & 0xff;
   out[pos++] = (sr >> 4) & 0xff;
@@ -176,7 +161,9 @@ export function encodeFlac(buffer: AudioBuffer): Uint8Array {
     else if (sampleRate === 96000) srIdx = 0b0010;
     out[pos++] = 0xc0 | (srIdx & 0x0f);
 
-    out[pos++] = 0x18; // Stereo + 16 bit
+    // Independent channel assignment; the sample-size code is part of the frame header.
+    const sampleSizeCode = bitDepth === 16 ? 4 : bitDepth === 24 ? 6 : 7;
+    out[pos++] = (((numChannels - 1) & 0x0f) << 4) | ((sampleSizeCode & 0x07) << 1);
 
     if (b < 0x80) {
       out[pos++] = b;
@@ -195,22 +182,19 @@ export function encodeFlac(buffer: AudioBuffer): Uint8Array {
     const crc8 = computeCrc8(out.subarray(frameHeaderStart, pos));
     out[pos++] = crc8;
 
-    // Subframe Left
-    out[pos++] = 0x00;
-    for (let i = 0; i < curBlockLen; i++) {
-      const s = Math.max(-1, Math.min(1, left[startSample + i]));
-      const v = Math.floor(s < 0 ? s * 0x8000 : s * 0x7fff);
-      out[pos++] = (v >> 8) & 0xff;
-      out[pos++] = v & 0xff;
-    }
-
-    // Subframe Right
-    out[pos++] = 0x00;
-    for (let i = 0; i < curBlockLen; i++) {
-      const s = Math.max(-1, Math.min(1, right[startSample + i]));
-      const v = Math.floor(s < 0 ? s * 0x8000 : s * 0x7fff);
-      out[pos++] = (v >> 8) & 0xff;
-      out[pos++] = v & 0xff;
+    // Verbatim subframes. FLAC stores integer PCM big-endian; the source is
+    // float PCM, so convert only at the final codec boundary.
+    for (let channel = 0; channel < numChannels; channel++) {
+      out[pos++] = 0x00;
+      for (let i = 0; i < curBlockLen; i++) {
+        const s = Math.max(-1, Math.min(1, channels[channel][startSample + i] || 0));
+        const maxPositive = Math.pow(2, bitDepth - 1) - 1;
+        const maxNegative = Math.pow(2, bitDepth - 1);
+        const v = Math.floor(s < 0 ? s * maxNegative : s * maxPositive);
+        for (let byte = bytesPerSample - 1; byte >= 0; byte--) {
+          out[pos++] = (v >> (byte * 8)) & 0xff;
+        }
+      }
     }
 
     const crc16 = computeCrc16(out.subarray(frameHeaderStart, pos));
@@ -441,7 +425,7 @@ export async function exportAudioBuffer(
       return { blob, mimeType: 'audio/mpeg', extension: 'mp3', bytes };
     }
     case 'FLAC': {
-      const bytes = encodeFlac(buffer);
+      const bytes = encodeFlac(buffer, options.bitDepth || 16);
       const blob = new Blob([bytes as BlobPart], { type: 'audio/flac' });
       return { blob, mimeType: 'audio/flac', extension: 'flac', bytes };
     }
