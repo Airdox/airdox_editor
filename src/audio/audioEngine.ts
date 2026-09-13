@@ -261,7 +261,10 @@ class AudioEngine {
     const leadSource = this.stemSources.vocals;
     if (leadSource) {
       leadSource.onended = () => {
-        if (this.isPlayingStems) {
+        // Ignore delayed onended events from a source that was replaced during
+        // a live mixer transition. Otherwise the stale vocal source can stop
+        // the newly started stem set and make Vocal Solo sound completely dead.
+        if (this.isPlayingStems && this.stemSources.vocals === leadSource) {
           this.stop();
         }
       };

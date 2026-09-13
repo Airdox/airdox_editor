@@ -23,11 +23,35 @@ Windows PowerShell:
 npm run stems:setup:win
 ```
 
+Das Windows-Setup wählt bewusst Python 3.12, 3.11, 3.10 oder 3.9 und prüft
+anschließend echte Imports von `demucs`, `torch` und `torchaudio`. Ein zufällig
+installiertes Python 3.14 wird nicht mehr ungeprüft verwendet. Vor jeder
+Separation kontrolliert die Desktop-App außerdem: ausführbare Python-Datei,
+unterstützte Version, alle drei Module sowie den Status der vier
+`htdemucs_ft`-Gewichte. Erst nach bestandener Vorprüfung wird die Audiodatei an
+den Modellprozess übergeben; andernfalls startet direkt der lokale Separator.
+
 Beim ersten Durchlauf lädt Demucs seine Modellgewichte. Danach läuft die
 Inference lokal; die Musik wird nicht an einen Cloud-Anbieter geschickt.
-Standard ist CPU. Mit `DEMUCS_DEVICE=cuda` kann eine kompatible NVIDIA-Installation
-verwendet werden. `DEMUCS_MODEL=htdemucs` ist schneller, `htdemucs_ft` (Standard)
-hat Qualitätspriorität.
+Demucs wählt CUDA automatisch, wenn es verfügbar ist, andernfalls CPU.
+`DEMUCS_DEVICE=cpu|cuda` kann das Verhalten explizit festlegen.
+
+### Verbindliches Max-Quality-Profil
+
+- `htdemucs_ft`: Ensemble aus vier separat feinabgestimmten Modellen
+- `--shifts 10`: Stabilisierung durch zehn zeitverschobene Vorhersagen – die
+  Qualitätseinstellung aus dem Demucs-Paper
+- `--overlap 0.5`: 50 % überlappende Segmente gegen Übergangsartefakte
+- Float32 vom Web-Audio-Buffer bis zu allen vier Ausgabe-WAVs; keine
+  zwischenzeitliche 16-Bit-Quantisierung
+- `clip-mode=rescale` statt hartem digitalen Clipping
+- automatische Hardwarebeschleunigung
+
+Ein Lauf benötigt dadurch ungefähr 40 Modellvorhersagen und ist erheblich
+langsamer als die Standardeinstellung. Das ist beabsichtigt: Ausgabequalität
+hat Vorrang vor Wartezeit. Für gezielte Benchmarks lassen sich die Defaults mit
+`DEMUCS_SHIFTS` und `DEMUCS_OVERLAP` überschreiben; die Anwendung selbst nutzt
+standardmäßig das oben beschriebene Qualitätsprofil.
 
 ## Reales Abnahmeszenario
 
@@ -64,6 +88,9 @@ sie werden erst nach dem Modelllauf für SI-SDR geöffnet.
 
 Source Separation ist eine Schätzung. Auch ein hochwertiges Modell kann Hall,
 Backing-Vocals oder stark verzerrte Instrumente teilweise dem falschen Stem
-zuordnen. Die UI meldet einen Fehler, falls Demucs nicht installiert ist; sie
-fällt absichtlich nicht still auf die qualitativ unzureichende Filterlösung
-zurück.
+zuordnen. Falls Demucs oder seine Modellgewichte nicht verfügbar sind, bleibt
+die Funktion benutzbar: Der Editor verwendet den lokalen, summentreuen
+Spektral-Separator und weist ihn im Ergebnis ausdrücklich als
+`lokaler Spektral-Fallback` aus. Der reale MUSDB-Test stellt sicher, dass auch
+dieser Pfad vier hörbare und unterscheidbare Ausgabedateien erzeugt und Vocal
+Solo nicht stumm ist.

@@ -770,10 +770,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         (prog) => setSeparationProgress(prog)
       );
       setActiveTrackStems(separated);
+      const methodLabel = separated.separationMethod === 'DEMUCS_HTDEMUCS_FT'
+        ? 'Demucs htdemucs_ft'
+        : 'lokalem Spektral-Fallback';
       showOperationFeedback({
         title: 'Stems erfolgreich getrennt',
         operationType: 'CUE',
-        description: `Track "${activeTrack.title}" in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
+        description: `Track "${activeTrack.title}" mit ${methodLabel} in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
         originalSha256: activeTrack.originalSha256,
         timestamp: Date.now(),
       });
@@ -786,17 +789,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
 
+  const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
+    applyStemMixDuringPlayback(
+      audioEngine,
+      activeTrackStems,
+      workingAudioBuffer,
+      next,
+      loopActive,
+      loopActive && selection ? selection.start : 0,
+      loopActive && selection ? selection.end : 0
+    );
+  }, [activeTrackStems, workingAudioBuffer, loopActive, selection]);
+
   const handleToggleStemMute = useCallback((stem: StemType) => {
     setStemsMixerState((prev) => {
       const next: StemsMixerState = {
         ...prev,
         [stem]: { ...prev[stem], muted: !prev[stem].muted },
       };
-      audioEngine.updateStemMixer(next);
+      updateLiveStemPlayback(next);
       midiManager.updateStemPadLeds(next);
       return next;
     });
-  }, []);
+  }, [updateLiveStemPlayback]);
 
   const handleToggleStemSolo = useCallback((stem: StemType) => {
     setStemsMixerState((prev) => {
@@ -804,11 +819,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         ...prev,
         [stem]: { ...prev[stem], solo: !prev[stem].solo },
       };
-      audioEngine.updateStemMixer(next);
+      updateLiveStemPlayback(next);
       midiManager.updateStemPadLeds(next);
       return next;
     });
-  }, []);
+  }, [updateLiveStemPlayback]);
 
   const handleStemVolumeChange = useCallback((stem: StemType, vol: number) => {
     setStemsMixerState((prev) => {
@@ -816,10 +831,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         ...prev,
         [stem]: { ...prev[stem], volume: vol },
       };
-      audioEngine.updateStemMixer(next);
+      updateLiveStemPlayback(next);
       return next;
     });
-  }, []);
+  }, [updateLiveStemPlayback]);
 
   const handleExtractStemToClip = useCallback((stem: StemType) => {
     if (!activeTrack || !activeTrackStems) return;
@@ -877,19 +892,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setStemsMixerState(next);
     midiManager.updateStemPadLeds(next);
 
-    // Switch from an already-running master source to the four stem sources at
-    // the exact playhead position. Updating inactive gain nodes was the reason
-    // Acapella previously sounded unchanged until playback was restarted.
-    applyStemMixDuringPlayback(
-      audioEngine,
-      activeTrackStems,
-      workingAudioBuffer,
-      next,
-      loopActive,
-      loopActive && selection ? selection.start : 0,
-      loopActive && selection ? selection.end : 0
-    );
-  }, [activeTrackStems, workingAudioBuffer, loopActive, selection]);
+    updateLiveStemPlayback(next);
+  }, [updateLiveStemPlayback]);
 
   const handleSetAcapella = useCallback(() => {
     applyStemsMixerState({

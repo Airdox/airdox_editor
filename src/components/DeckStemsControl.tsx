@@ -200,10 +200,10 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             <Cpu size={16} className="text-[#00a2ff]" />
             <div className="flex flex-col">
               <span className="text-white text-xs font-semibold">
-                Demucs KI Stem-Separation bereit
+                Stem-Separation bereit
               </span>
               <span className="text-neutral-400 text-[10px]">
-                Trennt den fertigen Songmix mit htdemucs_ft in Vocals, Drums, Bass &amp; Other.
+                Demucs Max-Qualität, bei fehlendem Modell automatisch lokaler Separator.
               </span>
             </div>
           </div>
