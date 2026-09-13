@@ -276,7 +276,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 >
                   <span className="flex items-center space-x-1.5">
                     <Trash2 size={12} />
-                    <span>Löschen (Delete)</span>
+                    <span>Löschen… (Delete-Variante)</span>
                   </span>
                   <span className="text-neutral-500 hover:text-neutral-200">Del</span>
                 </button>
