@@ -138,10 +138,12 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
         return `[${l.timeString}] [${l.level}] [${l.category}]${sub} ${l.message}${dur}`;
       })
       .join('\n');
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {});
+    }
   };
 
   const handleDownloadJson = () => {

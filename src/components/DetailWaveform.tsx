@@ -140,16 +140,25 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
     };
 
+    let rafId: number | null = null;
+    const debouncedUpdate = () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        updateCanvasSize();
+      });
+    };
+
     updateCanvasSize();
     const ro = new ResizeObserver(() => {
-      updateCanvasSize();
+      debouncedUpdate();
     });
     ro.observe(container);
 
-    window.addEventListener('resize', updateCanvasSize);
+    window.addEventListener('resize', debouncedUpdate);
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       ro.disconnect();
-      window.removeEventListener('resize', updateCanvasSize);
+      window.removeEventListener('resize', debouncedUpdate);
     };
   }, []);
 

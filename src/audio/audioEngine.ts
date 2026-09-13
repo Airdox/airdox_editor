@@ -69,6 +69,8 @@ class AudioEngine {
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().then(() => {
         logger.debug('AUDIO_ENGINE', 'AudioContext wurde reaktiviert (State: running)', null, 'EngineCore');
+      }).catch(() => {
+        // Ignoriere Autoplay-Richtlinien-Verweigerung bis zur ersten Benutzerinteraktion
       });
     }
     return this.ctx;
