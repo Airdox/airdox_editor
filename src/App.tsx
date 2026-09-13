@@ -47,6 +47,7 @@ import { MenuBar } from './components/MenuBar';
 import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
 import { DeckStemsControl } from './components/DeckStemsControl';
+import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
@@ -81,6 +82,7 @@ import { logger } from './utils/logger';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
+import { detectTrackParts } from './audio/phraseDetection';
 import {
   cloneAudioBuffer,
   executeCopy,
@@ -428,6 +430,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [activeTrackStems, setActiveTrackStems] = useState<TrackStems | null>(null);
   const [stemsMixerState, setStemsMixerState] = useState<StemsMixerState>({ ...DEFAULT_STEMS_MIXER_STATE });
   const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
+  const [stemQualityWarning, setStemQualityWarning] = useState<string | null>(null);
   const [separationProgress, setSeparationProgress] = useState<StemSeparationProgress | null>(null);
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
@@ -755,8 +758,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrackId, activeTrack]);
 
-  // Stem separation & mixer handlers
-  const handleSeparateStems = useCallback(async () => {
+  // Stem separation & mixer handlers.
+  // Runs the separation with the given fallback policy. With allowFallback=false
+  // (default flow) a missing Demucs installation opens the quality warning
+  // modal instead of silently producing low-quality frequency-splitter stems.
+  const runStemSeparation = useCallback(async (allowFallback: boolean) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
@@ -767,19 +773,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         workingAudioBuffer,
         activeTrack.id,
         activeTrack.originalSha256,
-        (prog) => setSeparationProgress(prog)
+        (prog) => setSeparationProgress(prog),
+        { allowFallback }
       );
       setActiveTrackStems(separated);
-      const methodLabel = separated.separationMethod === 'DEMUCS_HTDEMUCS_FT'
-        ? 'Demucs htdemucs_ft'
-        : 'lokalem Spektral-Fallback';
-      showOperationFeedback({
-        title: 'Stems erfolgreich getrennt',
-        operationType: 'CUE',
-        description: `Track "${activeTrack.title}" mit ${methodLabel} in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
-        originalSha256: activeTrack.originalSha256,
-        timestamp: Date.now(),
-      });
+      if (separated.separationMethod === 'DEMUCS_HTDEMUCS_FT') {
+        showOperationFeedback({
+          title: 'Stems erfolgreich getrennt (KI-Qualität)',
+          operationType: 'CUE',
+          description: `Track "${activeTrack.title}" mit Demucs htdemucs_ft (KI-Modell, Max-Qualität) in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.info('EDITING', `Stem-Separation: Demucs htdemucs_ft für "${activeTrack.title}" abgeschlossen.`);
+      } else {
+        // Fallback result — label it honestly as low quality, never as success.
+        showOperationFeedback({
+          title: 'Stems getrennt — NUR VORSCHAU-QUALITÄT',
+          operationType: 'CUE',
+          description: `⚠️ Track "${activeTrack.title}" wurde mit dem lokalen Spektral-Fallback getrennt, weil Demucs nicht verfügbar ist (${separated.fallbackReason || 'unbekannter Grund'}). Diese Stems sind ein reiner Frequenz-/Stereo-Split mit deutlichen Übersprechern und NICHT für Performance geeignet. Für echte KI-Qualität: "npm run stems:setup" ausführen und erneut trennen.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.warn('EDITING', `Stem-Separation lief im Low-Quality-Fallback (Demucs fehlt): ${separated.fallbackReason || 'unbekannt'}`);
+      }
     } catch (err) {
       logger.error('EDITING', `Fehler bei Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
       alert(`Fehler bei der Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
@@ -788,6 +805,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setSeparationProgress(null);
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
+
+  const handleSeparateStems = useCallback(async () => {
+    if (!activeTrack || !workingAudioBuffer) {
+      alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    // Preflight: check the real AI engine BEFORE any processing. If Demucs is
+    // missing, the user decides explicitly — no silent quality downgrade.
+    setIsSeparatingStems(true);
+    setSeparationProgress({ percent: 1, phaseText: 'KI-Engine (Demucs) wird geprüft…', processedSeconds: 0, totalSeconds: workingAudioBuffer.duration });
+    const availability = await stemEngine.checkAvailability();
+    if (!availability.available) {
+      setIsSeparatingStems(false);
+      setSeparationProgress(null);
+      logger.warn('EDITING', `Stem-Preflight: Demucs nicht verfügbar — ${availability.reason || 'unbekannter Grund'}. Nutzer wird gefragt.`);
+      setStemQualityWarning(availability.reason || 'Demucs/Python wurde nicht gefunden.');
+      return;
+    }
+    await runStemSeparation(false);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -1386,6 +1423,57 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       timestamp: Date.now(),
     });
   };
+
+  // Track-Part-Analyse: erkennt Intro/Build/Drop/Break aus der realen
+  // Wellenform-Energie, zeigt die Parts farbig unter der Wellenform und setzt
+  // an den prägnanten Part-Grenzen (Drop, Break, Build) Cue-Punkte.
+  const handleAnalyzeParts = useCallback(() => {
+    if (!activeTrack) return;
+    try {
+      const detectedParts = detectTrackParts(activeTrack);
+      if (!detectedParts || detectedParts.length === 0) {
+        logger.warn(
+          'BEATGRID',
+          `Part-Analyse: Keine Wellenform-Analyse für "${activeTrack.title}" vorhanden — Parts können nicht erkannt werden.`
+        );
+        return;
+      }
+
+      const trackWithParts: TrackModel = { ...activeTrack, phrases: detectedParts };
+      const newCues = generateAutoCuesForTrack(trackWithParts);
+
+      setTracks((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeTrack.id) return t;
+          // Alte Auto-Cues (ANALYSIS_CACHE) entfernen, damit eine erneute
+          // Analyse keine doppelten Marker anhäuft. User-Cues bleiben erhalten.
+          const keptCues = t.cues.filter((c) => c.origin !== DataOrigin.ANALYSIS_CACHE);
+          return {
+            ...t,
+            phrases: detectedParts,
+            cues: [...keptCues, ...newCues].sort((a, b) => a.position - b.position),
+          };
+        })
+      );
+
+      const partSummary = detectedParts
+        .map((p) => `${p.name === 'BREAKDOWN' ? 'BREAK' : p.name} (Takt ${p.startBar})`)
+        .join(', ');
+      logger.info(
+        'BEATGRID',
+        `Part-Analyse: ${detectedParts.length} Parts erkannt [${partSummary}] und ${newCues.length} Cue-Punkte an prägnanten Stellen gesetzt für "${activeTrack.title}".`
+      );
+      showOperationFeedback({
+        title: 'Track-Parts analysiert',
+        operationType: 'CUE',
+        description: `${detectedParts.length} Parts aus der Wellenform-Energie erkannt: ${partSummary}. ${newCues.length} Cue-Punkte wurden an den prägnanten Part-Grenzen (Drop, Break, Build-Up) gesetzt. Die Parts werden farblich unter der Wellenform angezeigt.`,
+        originalSha256: activeTrack.originalSha256 || 'N/A',
+        timestamp: Date.now(),
+      });
+    } catch (err: any) {
+      logger.error('BEATGRID', `Fehler bei der Track-Part-Analyse: ${err.message}`, err);
+    }
+  }, [activeTrack, showOperationFeedback]);
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
   const handleAutoCue = useCallback(() => {
@@ -3309,6 +3397,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
           onDropPaletteClip={handleDropPaletteClip}
+          onAnalyzeParts={handleAnalyzeParts}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
@@ -3542,6 +3631,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         undoCount={undoStack.length}
         redoCount={redoStack.length}
         recentActions={[...undoStack, ...redoStack].slice(-6).map((s) => s.description)}
+      />
+
+      {/* Honest quality gate: Demucs missing -> user decides about the fallback */}
+      <StemQualityWarningModal
+        isOpen={stemQualityWarning !== null}
+        reason={stemQualityWarning || ''}
+        onClose={() => setStemQualityWarning(null)}
+        onProceedWithFallback={() => {
+          setStemQualityWarning(null);
+          void runStemSeparation(true);
+        }}
+        onEngineInstalled={() => {
+          logger.info('EDITING', 'KI-Stem-Engine (Demucs) wurde in-App installiert und verifiziert.');
+        }}
+        onRunWithInstalledEngine={() => {
+          setStemQualityWarning(null);
+          // Cache leeren, damit die vorhandenen Fallback-Stems nicht die neue
+          // Demucs-Trennung verdecken, dann direkt in KI-Qualität trennen.
+          stemEngine.clearCache();
+          setActiveTrackStems(null);
+          void runStemSeparation(false);
+        }}
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}

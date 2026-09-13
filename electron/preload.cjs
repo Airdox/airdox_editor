@@ -23,4 +23,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // before a large audio buffer is handed to the model process.
   getStemEngineStatus: () => ipcRenderer.invoke('stems:get-status'),
   separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
+  // One-click installation of the real AI engine (Python venv + torch +
+  // demucs + htdemucs_ft weights). Progress arrives via onStemInstallProgress.
+  installStemEngine: () => ipcRenderer.invoke('stems:install-engine'),
+  onStemInstallProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('stems:install-progress', listener);
+    return () => ipcRenderer.removeListener('stems:install-progress', listener);
+  },
 });
