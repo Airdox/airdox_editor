@@ -50,6 +50,12 @@ als Artifact (30 Tage) hoch:
 Laufen bei schnellen Push-Folgen mehrere Builds, wird der ältere automatisch
 abgebrochen – es gewinnt immer der neueste Commit.
 
+Der Build ist robust gegen unvollständige Commits: Fehlt die
+`package-lock.json` oder ist sie nicht synchron mit der `package.json`
+(passiert bei parallelen Branches), schaltet der Workflow automatisch auf
+`npm install` ohne Cache um und baut trotzdem – mit einer Warnung im
+Build-Protokoll statt eines Abruchs. Die CI nutzt Node.js 22.
+
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 
 Der DB-Import (`better-sqlite3-multiple-ciphers`) ist optional. Ohne ihn bleibt

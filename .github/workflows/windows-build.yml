@@ -3,6 +3,10 @@ name: Windows-Build
 # Baut auf JEDEM Push (alle Branches + Tags) automatisch die Windows-App
 # (NSIS-Installer + Portable). So entsteht zu jedem Commit ein frisches,
 # herunterladbares Build-Artefakt.
+#
+# Robustheit: Auch Commits ohne (oder mit veralteter) package-lock.json
+# werden gebaut – der Workflow schaltet dann automatisch auf Caching aus
+# und 'npm install' um, statt wie bisher hart abzubrechen.
 on:
   push:
     branches: ['**']   # jeder Push auf irgendeinen Branch baut die WIN-App
@@ -29,14 +33,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Node.js aufsetzen
+      # setup-node mit npm-Cache bricht hart ab, wenn die Lock-Datei im
+      # Commit fehlt (Fehler aus dem Screenshot) – daher vorher prüfen.
+      - name: Lock-Datei prüfen
+        id: lock
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Keine package-lock.json in diesem Commit – baue ohne npm-Cache und mit 'npm install'."
+          fi
+
+      - name: Node.js aufsetzen (mit npm-Cache)
+        if: steps.lock.outputs.exists == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
+      - name: Node.js aufsetzen (ohne Cache)
+        if: steps.lock.outputs.exists != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 'npm ci' scheitert, wenn Lock- und package.json nicht synchron sind
+      # (kommt bei parallelen Branches vor) – 'npm install' löst dann auf.
       - name: Abhängigkeiten installieren
-        run: npm ci
+        shell: bash
+        run: |
+          if [ -f package-lock.json ] && npm ci --no-audit --no-fund; then
+            echo "npm ci erfolgreich (Lock-Datei synchron)."
+          else
+            echo "::warning::'npm ci' nicht möglich (Lock fehlt oder ist veraltet) – falle zurück auf 'npm install'."
+            rm -rf node_modules
+            npm install --no-audit --no-fund
+          fi
 
       - name: TypeScript-Prüfung
         run: npm run lint
