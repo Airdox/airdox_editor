@@ -9,11 +9,50 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
+// Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
+// Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
+// und im esbuild-CJS-Bundle (dist/server.cjs).
+import loggerPackage from './electron/logger.cjs';
+
+type MainLogger = {
+  configure(options: {
+    logDirectory: string;
+    processName?: string;
+    level?: string;
+    retentionDays?: number;
+    appInfo?: Record<string, unknown>;
+  }): MainLogger;
+  installProcessHandlers(): void;
+  installConsoleCapture?(): void;
+  flush?(): Promise<void>;
+  getCurrentFilePath?(): string;
+  getInfo(): Record<string, unknown>;
+  ingestRendererEntries(entries: unknown[]): { accepted: number };
+  debug(category: string, message: string, details?: unknown): void;
+  info(category: string, message: string, details?: unknown): void;
+  warn(category: string, message: string, details?: unknown): void;
+  error(category: string, message: string, details?: unknown): void;
+  fatal(category: string, message: string, details?: unknown): void;
+};
+
+const { mainLogger: logger } = loggerPackage as { mainLogger: MainLogger };
+logger.configure({
+  logDirectory: path.join(process.cwd(), 'logs'),
+  processName: 'server',
+  level: process.env.AIRDOX_LOG_LEVEL || 'INFO',
+  appInfo: { appName: 'airdox_SMART_Editor', appVersion: 'dev' },
+});
+logger.installProcessHandlers();
 
 const { separateWav } = demucsRunner as {
   separateWav: (
     bytes: Uint8Array,
-    options?: { repoRoot?: string; model?: string; onProgress?: (text: string) => void }
+    options?: {
+      repoRoot?: string;
+      model?: string;
+      onProgress?: (text: string) => void;
+      onLog?: (level: string, category: string, message: string, details?: unknown) => void;
+    }
   ) => Promise<{ model: string; stems: Record<string, Buffer> }>;
 };
 
@@ -21,7 +60,32 @@ dotenv.config();
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Allumfassendes HTTP-Audit-Protokoll: jede Anfrage mit Methode, Pfad,
+  // Status, Dauer und Antwortgröße. Statische Asset-Anfragen laufen auf DEBUG,
+  // API-Aufrufe auf INFO, Fehler auf WARN/ERROR.
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      const durationMs = Date.now() - startedAt;
+      const level =
+        res.statusCode >= 500
+          ? 'error'
+          : res.statusCode >= 400
+          ? 'warn'
+          : req.url.startsWith('/api')
+          ? 'info'
+          : 'debug';
+      const contentLength = Number(res.getHeader('content-length')) || undefined;
+      logger[level]('NETWORK', `${req.method} ${req.originalUrl || req.url} → ${res.statusCode}`, {
+        durationMs,
+        bytes: contentLength,
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 200) || undefined,
+      });
+    });
+    next();
+  });
 
   // Real Stem-Separation: the request body is the finished stereo song mix.
   // Demucs never receives or has access to reference/ground-truth stems.
@@ -31,15 +95,29 @@ async function startServer() {
     async (req, res) => {
       try {
         if (!Buffer.isBuffer(req.body) || req.body.length < 44) {
+          logger.warn('STEMS', 'Separationsanfrage ohne gültige WAV-Mixdatei abgelehnt (400).');
           return res.status(400).json({ error: 'Eine gültige PCM-WAV-Mixdatei ist erforderlich.' });
         }
+        logger.info('STEMS', `HTTP /api/stems/separate – ${req.body.length} Bytes WAV empfangen.`);
         const result = await separateWav(req.body, {
           repoRoot: process.cwd(),
           model: process.env.DEMUCS_MODEL || 'htdemucs_ft',
-          onProgress: (text) => console.info(`[Demucs] ${text.trimEnd()}`),
+          onProgress: (text) => {
+            const line = text.trim();
+            if (line) logger.debug('STEMS', `[demucs-fortschritt] ${line.slice(0, 300)}`);
+          },
+          onLog: (level: string, category: string, message: string, details?: unknown) =>
+            logger[level] ? logger[level](category, message, details) : logger.info(category, message, details),
         });
         // One response keeps all four files from the exact same model pass aligned.
         // Base64 is intentionally used only on the local API/desktop path.
+        const stemSizes = Object.fromEntries(
+          Object.entries(result.stems).map(([name, bytes]) => [name, bytes.length])
+        );
+        logger.info('STEMS', `Separation erfolgreich (${result.model}) – Stems ausgeliefert.`, {
+          model: result.model,
+          stemBytes: stemSizes,
+        });
         return res.json({
           engine: 'demucs',
           model: result.model,
@@ -49,7 +127,9 @@ async function startServer() {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error('[Demucs] Separation failed:', message);
+        logger.error('STEMS', `HTTP-Separation fehlgeschlagen: ${message}`, {
+          stack: error instanceof Error ? error.stack : undefined,
+        });
         return res.status(503).json({ error: message });
       }
     }
@@ -199,7 +279,7 @@ Halte deine Antworten strukturiert, professionell und praxisnah.`;
           }
           cleanText = responseText.replace(/```json\s*\{[\s\S]*?"actions"[\s\S]*?\}\s*```/, '').trim();
         } catch (err) {
-          console.warn('Could not parse action JSON block:', err);
+          logger.warn('CHATBOT', `Aktions-JSON aus KI-Antwort konnte nicht geparst werden: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
@@ -209,11 +289,31 @@ Halte deine Antworten strukturiert, professionell und praxisnah.`;
         model,
       });
     } catch (err: any) {
-      console.error('Chat endpoint error:', err);
+      logger.error('CHATBOT', `Chat-Endpunkt fehlgeschlagen: ${err?.message || String(err)}`, {
+        stack: err?.stack,
+      });
       return res.status(500).json({
         error: err.message || 'Interner Server-Fehler beim Verarbeiten der Anfrage',
       });
     }
+  });
+
+  // Client-seitige Logs auch im Browser-/Dev-Betrieb in dieselben Tagesdateien
+  // schreiben (Desktop läuft über Electron-IPC; der Dev-Server bietet hierfür
+  // einen einfachen Sammel-Endpunkt).
+  app.post('/api/logs', express.json({ limit: '8mb' }), (req, res) => {
+    try {
+      const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+      const { accepted } = logger.ingestRendererEntries(entries);
+      logger.flush?.();
+      res.json({ ok: true, accepted });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/logs/info', (_req, res) => {
+    res.json(logger.getInfo());
   });
 
   // Vite development middleware or static production serving
@@ -232,7 +332,11 @@ Halte deine Antworten strukturiert, professionell und praxisnah.`;
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`airdox_SMART_Editor Server running on http://localhost:${PORT}`);
+    logger.info('SYSTEM', `Dev-/API-Server gestartet auf http://localhost:${PORT}`, {
+      port: PORT,
+      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      logFile: logger.getCurrentFilePath?.() || null,
+    });
   });
 }
 

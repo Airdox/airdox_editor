@@ -8,3 +8,4 @@ coverage/
 stem-test-output/
 .env*
 !.env.example
+logs/

@@ -11,6 +11,7 @@ import { audioEngine } from '../../audio/audioEngine';
 import { exportToRekordboxXml } from '../../rekordbox/xmlParser';
 import { OperationTelemetry } from './OperationFeedbackModal';
 import { MultiLayerRenderInspector } from './MultiLayerRenderInspector';
+import { logger } from '../../utils/logger';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -42,6 +43,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     setShowLayerInspector(false);
     setIsExporting(true);
     setSuccessMsg(null);
+    const exportStartedAt = Date.now();
+    logger.info('EXPORT', `Export gestartet (Format: ${format})`, {
+      format,
+      trackTitle: track.title,
+      desktop: Boolean(window.rekordboxDesktop),
+    });
 
     try {
       let defaultName = '';
@@ -96,8 +103,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           protectedPaths,
         });
         if (res.saved) {
+          logger.info('EXPORT', `${kind}-Export gespeichert: ${res.path}`, {
+            kind,
+            path: res.path,
+            bytes: res.bytes,
+            durationMs: Date.now() - exportStartedAt,
+          });
           setSuccessMsg(`${kind} erfolgreich als "${res.path?.split(/[\\\\/]/).pop() || defaultName}" gespeichert.`);
         } else {
+          logger.info('EXPORT', `${kind}-Export vom Benutzer abgebrochen (kein Ziel gewählt).`);
           setIsExporting(false);
           return;
         }
@@ -113,6 +127,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        logger.info('EXPORT', `${kind}-Export als Browser-Download: ${defaultName}`, {
+          kind,
+          defaultName,
+          bytes: bytes.byteLength,
+          durationMs: Date.now() - exportStartedAt,
+        });
         setSuccessMsg(
           kind === 'WAV'
             ? `Master-Audio erfolgreich als "${defaultName}" exportiert.`
@@ -130,7 +150,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error(err);
+      logger.error('EXPORT', `Export (${format}) fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
       alert(`Fehler beim Exportieren: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsExporting(false);

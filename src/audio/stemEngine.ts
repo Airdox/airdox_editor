@@ -8,6 +8,7 @@
  */
 
 import { BufferFactory } from './editingEngine';
+import { logger } from '../utils/logger';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 
@@ -222,10 +223,20 @@ class StemEngine {
     onProgress?: StemProgressCallback
   ): Promise<TrackStems> {
     const cached = this.getCachedStems(trackId, originalSha256);
-    if (cached) return cached;
+    if (cached) {
+      logger.debug('STEMS', `Stems für Track ${trackId} aus Cache geladen.`);
+      return cached;
+    }
 
     this.isProcessing = true;
     const duration = sourceBuffer.duration;
+    const startedAt = Date.now();
+    logger.info('STEMS', `KI-Stem-Separation gestartet für Track ${trackId}`, {
+      trackId,
+      duration,
+      sampleRate: sourceBuffer.sampleRate,
+      channels: sourceBuffer.numberOfChannels,
+    });
     try {
       onProgress?.({ percent: 1, phaseText: 'Stem-Engine und Python-Installation prüfen…', processedSeconds: 0, totalSeconds: duration });
       const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop : undefined;
@@ -283,6 +294,11 @@ class StemEngine {
         };
         this.cacheStems(trackId, result, originalSha256);
         onProgress?.({ percent: 100, phaseText: `Echte KI-Stems mit ${response.model} fertig`, processedSeconds: duration, totalSeconds: duration });
+        logger.info('STEMS', `Echte KI-Stems mit ${response.model} fertig (${Date.now() - startedAt} ms)`, {
+          trackId,
+          model: response.model,
+          durationMs: Date.now() - startedAt,
+        });
         return result;
       } finally {
         await context.close();
@@ -292,7 +308,10 @@ class StemEngine {
       // the Stem controls completely unusable. Fall back visibly to the bounded
       // local separator. The result is tagged so it cannot be mistaken for AI.
       const reason = modelError instanceof Error ? modelError.message : String(modelError);
-      console.warn('[Stems] Demucs unavailable, using local spectral fallback:', reason);
+      logger.warn('STEMS', `Demucs nicht verfügbar, nutze lokale Spektral-Fallback-Separation: ${reason}`, {
+        trackId,
+        reason,
+      });
       onProgress?.({
         percent: 8,
         phaseText: 'Demucs nicht verfügbar – lokale Spektral-Separation läuft…',
@@ -332,6 +351,12 @@ class StemEngine {
       return cached;
     }
 
+    const spectralStartedAt = Date.now();
+    logger.info('STEMS', `Lokale Spektral-Stemseparierung gestartet für Track ${trackId}`, {
+      trackId,
+      duration: sourceBuffer.duration,
+      sampleRate: sourceBuffer.sampleRate,
+    });
     this.isProcessing = true;
     try {
       const sampleRate = sourceBuffer.sampleRate;
@@ -575,6 +600,12 @@ class StemEngine {
         phaseText: 'Stems erfolgreich getrennt',
         processedSeconds: duration,
         totalSeconds: duration,
+      });
+
+      logger.info('STEMS', `Lokale Stems fertig (${Date.now() - spectralStartedAt} ms, Normalisierungs-Fallbacks: ${normalizationFallbacks})`, {
+        trackId,
+        durationMs: Date.now() - spectralStartedAt,
+        normalizationFallbacks,
       });
 
       return result;

@@ -69,6 +69,23 @@ declare global {
         model: string;
         stems: Record<'vocals' | 'drums' | 'bass' | 'other', Uint8Array>;
       }>;
+      // --- Diagnostics / logging bridge ---
+      writeLogEntries(entries: unknown[]): void;
+      getLogInfo(): Promise<{
+        sessionId: string;
+        processName: string;
+        logDirectory: string | null;
+        currentFile: string | null;
+        level: string;
+        retentionDays: number;
+        entriesWritten: number;
+        platform?: string;
+        pid?: number;
+        userData?: string;
+        isPackaged?: boolean;
+      }>;
+      readLogTail(maxBytes?: number): Promise<{ file: string | null; text: string }>;
+      openLogFolder(): Promise<{ opened: boolean; target: string; logDirectory: string }>;
     };
   }
 

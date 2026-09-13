@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -10,9 +10,71 @@ const {
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
+const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
+const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
+
+// ---------------------------------------------------------------------------
+// Logging-System so früh wie möglich aktivieren – noch vor dem ersten
+// Fenster und vor allen IPC-Registrierungen, damit kein Ereignis verloren geht.
+// ---------------------------------------------------------------------------
+const bootLogDir = path.join(app.getPath('appData'), app.getName(), 'logs');
+logger.configure({
+  logDirectory: bootLogDir,
+  processName: 'main',
+  level: process.env.AIRDOX_LOG_LEVEL || (IS_DEV ? 'DEBUG' : 'INFO'),
+  appInfo: { appName: APP_NAME, appVersion: app.getVersion() },
+});
+logger.installProcessHandlers();
+logger.installConsoleCapture();
+logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
+  platform: process.platform,
+  arch: process.arch,
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  node: process.version,
+  dev: IS_DEV,
+});
+
+/**
+ * Automatisches Audit-Protokoll für JEDEN ipcMain.handle-Kanal: Aufruf mit
+ * kompakter Argument-Zusammenfassung, Dauer, Ergebnisgröße und Fehlern.
+ * Große Binärdaten (Audio, ANLZ, WAV) werden nur als Byte-Länge erfasst.
+ */
+(function installIpcAudit() {
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = function auditedHandle(channel, listener) {
+    return originalHandle(channel, async (event, ...args) => {
+      const startedAt = Date.now();
+      logger.debug('IPC', `Aufruf ›${channel}‹`, {
+        args: summarizeForLog(args),
+        sender: event.senderFrame ? { url: event.senderFrame.url } : undefined,
+      });
+      try {
+        const result = await listener(event, ...args);
+        const durationMs = Date.now() - startedAt;
+        logger.debug('IPC', `Antwort ›${channel}‹`, {
+          durationMs,
+          result: summarizeForLog(result),
+        });
+        if (durationMs >= 2000) {
+          logger.warn('PERFORMANCE', `Langsamer IPC-Handler ›${channel}‹: ${durationMs} ms`);
+        }
+        return result;
+      } catch (error) {
+        const durationMs = Date.now() - startedAt;
+        logger.error(
+          'IPC',
+          `IPC ›${channel}‹ nach ${durationMs} ms fehlgeschlagen: ${error.message}`,
+          { name: error.name, stack: error.stack, code: error.code, args: summarizeForLog(args) }
+        );
+        throw error;
+      }
+    });
+  };
+})();
 
 // WICHTIG: Das eigene Protokoll muss VOR app.whenReady() als privilegiert
 // registriert werden, damit Chromium es als "standard" (http-ähnlich)
@@ -83,10 +145,26 @@ function createWindow() {
 
   // Renderer-Abstürze und fehlgeschlagene Ladungen protokollieren.
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[Electron] Renderer-Prozess abgestürzt:', details);
+    logger.fatal('SYSTEM', `Renderer-Prozess abgestürzt (${details.reason})`, details);
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    logger.warn('UI', 'Renderer reagiert nicht mehr (unresponsive).');
+  });
+  mainWindow.webContents.on('responsive', () => {
+    logger.info('UI', 'Renderer reagiert wieder.');
   });
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[Electron] Laden fehlgeschlagen (${errorCode}) bei ${validatedURL}: ${errorDescription}`);
+    logger.error('SYSTEM', `Laden fehlgeschlagen (${errorCode}) bei ${validatedURL}: ${errorDescription}`);
+  });
+  // Renderer-Konsolenmeldungen, die nicht über den Logger laufen, trotzdem
+  // dauerhaft im Datei-Protokoll sichern (keine stillen Fehler mehr).
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    // 0=verbose 1=info 2=warning 3=error
+    if (level === 3) {
+      logger.error('UI', `[renderer-console] ${message}`, { line, source: sourceId });
+    } else if (level === 2) {
+      logger.warn('UI', `[renderer-console] ${message}`, { line, source: sourceId });
+    }
   });
 
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
@@ -101,7 +179,7 @@ function createWindow() {
     // ordner. Dadurch funktionieren <script type="module" crossorigin> und
     // alle relativen Asset-Pfade ohne CORS-/Origin-Probleme.
     mainWindow.loadURL(`${APP_PROTOCOL}://app/index.html`).catch((err) => {
-      console.error('[Electron] Konnte App-Startseite nicht laden:', err);
+      logger.fatal('SYSTEM', 'Konnte App-Startseite nicht laden:', err);
     });
     // F12 schaltet DevTools in der ausgelieferten App an/aus (Diagnose).
     mainWindow.webContents.on('before-input-event', (_event, input) => {
@@ -151,7 +229,10 @@ function registerAppProtocol() {
       }
       return net.fetch(pathToFileURL(target).toString());
     } catch (err) {
-      console.error('[App-Protocol] Fehler bei', request.url, err);
+      logger.error('SYSTEM', `App-Protocol Fehler bei ${request.url}: ${err.message}`, {
+        stack: err.stack,
+        url: request.url,
+      });
       return new Response('Internal Error', { status: 500 });
     }
   });
@@ -179,16 +260,30 @@ function toLocalPath(location) {
 // Probe executable, supported Python version, imports and cached model weights
 // without touching audio. This catches Python 3.14 / missing-module installs up front.
 ipcMain.handle('stems:get-status', async () =>
-  inspectDemucsEnvironment(path.join(__dirname, '..'))
+  inspectDemucsEnvironment(
+    path.join(__dirname, '..'),
+    undefined,
+    undefined,
+    (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
+  )
 );
 
 // High-quality local AI separation. The renderer sends one finished WAV mix;
 // Demucs returns newly inferred stems and never receives reference sources.
 ipcMain.handle('stems:separate', async (_event, wavBytes) => {
+  let lastProgressLine = '';
   const result = await separateWav(Buffer.from(wavBytes), {
     repoRoot: path.join(__dirname, '..'),
     model: process.env.DEMUCS_MODEL || 'htdemucs_ft',
-    onProgress: (text) => console.info(`[Demucs] ${text.trimEnd()}`),
+    onProgress: (text) => {
+      const line = text.trim();
+      if (line && line !== lastProgressLine) {
+        lastProgressLine = line;
+        logger.debug('STEMS', `[demucs-fortschritt] ${line.slice(0, 300)}`);
+      }
+    },
+    onLog: (level, category, message, details) =>
+      logger[level] ? logger[level](category, message, details) : logger.info(category, message, details),
   });
   return {
     engine: 'demucs',
@@ -384,14 +479,80 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
+// --- Diagnose & Logging ------------------------------------------------------
+
+// Gebündelter Log-Strom aus dem Renderer (gleiche Tagesdatei wie der Main-Prozess).
+ipcMain.on('logs:write', (event, entries) => {
+  try {
+    if (!Array.isArray(entries)) return;
+    logger.ingestRendererEntries(entries);
+  } catch (error) {
+    logger.error('LOG', `Renderer-Logs konnten nicht geschrieben werden: ${error.message}`, {
+      stack: error.stack,
+    });
+  }
+});
+
+ipcMain.handle('logs:get-info', async () => {
+  return {
+    ...logger.getInfo(),
+    userData: app.getPath('userData'),
+    isPackaged: app.isPackaged,
+  };
+});
+
+ipcMain.handle('logs:read-tail', async (_event, maxBytes) => {
+  const cap = Math.min(Number(maxBytes) || 256 * 1024, 2 * 1024 * 1024);
+  return logger.readRecent(cap);
+});
+
+ipcMain.handle('logs:open-log-folder', async () => {
+  const info = logger.readRecent(1);
+  const target = info.file || logger.getLogDirectory();
+  logger.info('LOG', 'Log-Ordner wird im System-Dateimanager geöffnet.', { target });
+  shell.showItemInFolder(target);
+  return { opened: true, target, logDirectory: logger.getLogDirectory() };
+});
+
 app.whenReady().then(() => {
+  // Offizielles userData-Logverzeichnis übernehmen, falls es beim Boot noch
+  // nicht zur Verfügung stand (Normalfall: beide Pfade sind identisch).
+  const officialDir = path.join(app.getPath('userData'), 'logs');
+  if (logger.getLogDirectory() !== officialDir) {
+    logger.info('SYSTEM', `Log-Verzeichnis gewechselt: ${logger.getLogDirectory()} → ${officialDir}`);
+    logger.configure({ logDirectory: officialDir });
+  }
+
+  logger.info('SYSTEM', `Electron app ready – packaged=${app.isPackaged}`, {
+    userData: app.getPath('userData'),
+    argv: process.argv,
+  });
+
   registerAppProtocol();
   createWindow();
+
   app.on('activate', () => {
+    logger.info('SYSTEM', 'App-Aktivierung (activate) – Fenster werden geprüft.');
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+app.on('child-process-gone', (_event, details) => {
+  logger.error('SYSTEM', `Kindprozess abgestürzt: ${details.type} (${details.reason})`, details);
+});
+
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('render-process-gone', (_e, details) => {
+    logger.fatal('SYSTEM', `WebContents Renderer abgestürzt (${details.reason})`, details);
+  });
+});
+
+app.on('before-quit', () => {
+  logger.info('SYSTEM', 'Anwendung wird beendet (before-quit) – Log-Puffer wird synchron geschrieben.');
+  logger.flushSync();
+});
+
 app.on('window-all-closed', () => {
+  logger.info('SYSTEM', 'Alle Fenster geschlossen (window-all-closed).');
   if (process.platform !== 'darwin') app.quit();
 });

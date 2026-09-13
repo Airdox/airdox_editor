@@ -32,6 +32,7 @@ import {
   PhraseSection,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export interface AnlzCueEntry {
   /** 0 = memory point, 1..N = hot cue number (A=1, B=2, ...) */
@@ -788,6 +789,18 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
   const memModel = entriesToModel(rawMemoryCues, false, bpm, firstBeat);
   result.cues = [...memModel.cues, ...hotModel.cues];
   result.loops = [...memModel.loops, ...hotModel.loops];
+
+  logger.debug('XML_IMPORT', `ANLZ binär geparst (${(len / 1024).toFixed(1)} KB)`, {
+    byteLength: len,
+    tags: result.tagsFound,
+    cues: result.cues.length,
+    loops: result.loops.length,
+    phrases: result.phrases.length,
+    bpm: result.bpm,
+    hasWaveform: Boolean(result.waveform),
+    waveformBuckets: result.waveform?.length,
+    warnings: result.warnings,
+  });
 
   return result;
 }
