@@ -161,6 +161,21 @@ class LoggerService {
       // Console output with Pioneer DJ-styled coloring
       this.printToConsole(entry);
 
+      // Report errors to server telemetry if available
+      if ((level === 'ERROR' || level === 'FATAL') && typeof fetch !== 'undefined') {
+        fetch('/api/telemetry/log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            level,
+            category,
+            message,
+            details: entry.details,
+            stack,
+          }),
+        }).catch(() => {});
+      }
+
       // Notify active listeners (e.g., live log modals)
       this.notifyListeners(entry);
 
@@ -204,19 +219,19 @@ class LoggerService {
     const prefix = `[${entry.timeString}] [${entry.category}]`;
     switch (entry.level) {
       case 'DEBUG':
-        console.debug(`%c${prefix} ${entry.message}`, 'color: #888', entry.details || '');
+        console.debug(`[DEBUG] ${prefix} ${entry.message}`, entry.details || '');
         break;
       case 'INFO':
-        console.log(`%c${prefix} ${entry.message}`, 'color: #00a2ff; font-weight: bold', entry.details || '');
+        console.log(`[INFO] ${prefix} ${entry.message}`, entry.details || '');
         break;
       case 'WARN':
-        console.warn(`%c${prefix} ${entry.message}`, 'color: #f59e0b; font-weight: bold', entry.details || '');
+        console.warn(`[WARN] ${prefix} ${entry.message}`, entry.details || '');
         break;
       case 'ERROR':
-        console.error(`%c${prefix} ${entry.message}`, 'color: #ef4444; font-weight: bold', entry.details || '', entry.stack || '');
+        console.error(`[ERROR] ${prefix} ${entry.message}`, entry.details || '', entry.stack || '');
         break;
       case 'FATAL':
-        console.error(`%c[FATAL CRASH] ${prefix} ${entry.message}`, 'background: #990000; color: #fff; font-weight: bold; font-size: 12px; padding: 2px 4px', entry.details || '', entry.stack || '');
+        console.error(`[FATAL CRASH] ${prefix} ${entry.message}`, entry.details || '', entry.stack || '');
         break;
     }
   }

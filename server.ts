@@ -5,6 +5,7 @@
 
 import express from 'express';
 import path from 'path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -48,6 +49,26 @@ async function startServer() {
       hasGeminiKey: !!process.env.GEMINI_API_KEY,
       timestamp: Date.now(),
     });
+  });
+
+  // Telemetry endpoint to capture client-side errors and warnings
+  app.post('/api/telemetry/log', (req, res) => {
+    const { level, category, message, details, stack } = req.body || {};
+    const logLine = `[CLIENT ${level}] [${category}] ${message} ${details ? JSON.stringify(details) : ''} ${stack || ''}\n`;
+    console.error(logLine);
+    try {
+      fs.appendFileSync('/tmp/client_errors.log', logLine);
+    } catch {}
+    res.json({ ok: true });
+  });
+
+  app.get('/api/telemetry/log', (req, res) => {
+    try {
+      const content = fs.existsSync('/tmp/client_errors.log') ? fs.readFileSync('/tmp/client_errors.log', 'utf8') : '';
+      res.type('text/plain').send(content);
+    } catch {
+      res.status(500).send('Error reading logs');
+    }
   });
 
   // Chatbot Copilot endpoint
