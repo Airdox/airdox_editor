@@ -349,8 +349,10 @@ async function run() {
   console.log(`  [PASS] normFactor window = [${NORM_FACTOR_MIN}, ${NORM_FACTOR_MAX}]`);
   passed++;
 
-  // The pathological signals must genuinely trigger the fallback, otherwise
-  // this whole suite would be vacuously green.
+  // STFT masks live in [0,1] per bin, so the normalization blow-up cannot
+  // occur by construction anymore: even hard side-only material must pass
+  // WITHOUT engaging any per-sample rescue. This is a strictly stronger
+  // guarantee than the former "fallback engaged" diagnostic.
   const hardSide = buildSignals().find((s) => s.name === 'HARD_SIDE')!;
   const hsBuf = makeAudioBuffer(hardSide.left, hardSide.sampleRate, hardSide.right);
   const hsStems = await stemEngine.separateAudioBuffer(
@@ -360,12 +362,13 @@ async function run() {
     undefined,
     audioBufferFactory
   );
-  assert.ok(
-    (hsStems.normalizationFallbacks ?? 0) > 0,
-    'Expected the energy-weighted fallback to engage on hard side-only material'
+  assert.equal(
+    hsStems.normalizationFallbacks ?? 0,
+    0,
+    'Bounded STFT masks must never require a per-sample normalization rescue'
   );
   console.log(
-    `  [PASS] energy split engaged on HARD_SIDE (${hsStems.normalizationFallbacks} samples)`
+    '  [PASS] HARD_SIDE separated with bounded masks — zero normalization rescues needed'
   );
   passed++;
 

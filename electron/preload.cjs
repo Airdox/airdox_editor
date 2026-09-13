@@ -31,4 +31,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   getLogInfo: () => ipcRenderer.invoke('logs:get-info'),
   readLogTail: (maxBytes) => ipcRenderer.invoke('logs:read-tail', maxBytes),
   openLogFolder: () => ipcRenderer.invoke('logs:open-log-folder'),
+  // One-click installation of the real AI engine (Python venv + torch +
+  // demucs + htdemucs_ft weights). Progress arrives via onStemInstallProgress.
+  installStemEngine: () => ipcRenderer.invoke('stems:install-engine'),
+  onStemInstallProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('stems:install-progress', listener);
+    return () => ipcRenderer.removeListener('stems:install-progress', listener);
+  },
 });

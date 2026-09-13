@@ -86,7 +86,25 @@ declare global {
       }>;
       readLogTail(maxBytes?: number): Promise<{ file: string | null; text: string }>;
       openLogFolder(): Promise<{ opened: boolean; target: string; logDirectory: string }>;
+      installStemEngine(): Promise<{
+        ok: boolean;
+        error?: string;
+        python?: string;
+        model?: string;
+        weightsReady?: boolean;
+      }>;
+      onStemInstallProgress(
+        callback: (progress: StemInstallProgress) => void
+      ): () => void;
     };
+  }
+
+  interface StemInstallProgress {
+    step: number;
+    totalSteps: number;
+    percent: number;
+    label: string;
+    logLine?: string;
   }
 
   interface RekordboxAnalysisPathLookup {

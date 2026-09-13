@@ -44,7 +44,16 @@ logger.configure({
 });
 logger.installProcessHandlers();
 
-const { separateWav } = demucsRunner as {
+import stemInstaller from './electron/stemInstaller.cjs';
+
+const { installStemEngine } = stemInstaller as {
+  installStemEngine: (
+    repoRoot: string,
+    onProgress?: (p: { step: number; totalSteps: number; percent: number; label: string; logLine?: string }) => void
+  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string }>;
+};
+
+const { separateWav, inspectDemucsEnvironment } = demucsRunner as {
   separateWav: (
     bytes: Uint8Array,
     options?: {
@@ -54,6 +63,9 @@ const { separateWav } = demucsRunner as {
       onLog?: (level: string, category: string, message: string, details?: unknown) => void;
     }
   ) => Promise<{ model: string; stems: Record<string, Buffer> }>;
+  inspectDemucsEnvironment: (
+    repoRoot: string
+  ) => Promise<{ available: boolean; model: string; reason?: string; weightsReady?: boolean }>;
 };
 
 dotenv.config();
@@ -85,6 +97,50 @@ async function startServer() {
       });
     });
     next();
+  });
+
+  // Preflight: report honestly whether the real Demucs engine is usable, so
+  // the UI can warn BEFORE separating instead of silently degrading quality.
+  app.get('/api/stems/status', async (_req, res) => {
+    try {
+      const status = await inspectDemucsEnvironment(process.cwd());
+      return res.json({
+        available: Boolean(status.available),
+        model: status.model || 'htdemucs_ft',
+        weightsReady: Boolean(status.weightsReady),
+        reason: status.available ? undefined : status.reason || 'Demucs nicht gefunden.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.json({ available: false, model: 'htdemucs_ft', reason: message });
+    }
+  });
+
+  // One-click installer with Server-Sent-Events progress stream. The browser
+  // UI triggers this; the actual work happens locally on this machine.
+  let installRunning = false;
+  app.post('/api/stems/install', async (_req, res) => {
+    if (installRunning) {
+      res.status(409).json({ ok: false, error: 'Die Installation läuft bereits.' });
+      return;
+    }
+    installRunning = true;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress));
+      send('done', result);
+    } catch (error) {
+      send('done', { ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      installRunning = false;
+      res.end();
+    }
   });
 
   // Real Stem-Separation: the request body is the finished stereo song mix.

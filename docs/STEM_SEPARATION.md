@@ -11,7 +11,16 @@ nicht mehr als Stem-Separation angeboten.
 
 ## Installation
 
-Linux/macOS:
+**Empfohlener Weg: direkt in der App.** Wenn Demucs fehlt, zeigt der Editor
+vor jeder Trennung den Qualitäts-Warndialog mit dem Button
+**„KI-Engine jetzt installieren“**. Ein Klick richtet lokal alles ein
+(Python-venv, PyTorch, Demucs 4.0.1, htdemucs_ft-Gewichte) und zeigt den
+Fortschritt der sechs Schritte live an. Einzige Voraussetzung: Python
+3.9–3.13 (64-Bit) ist auf dem System vorhanden. Nach erfolgreicher
+Installation startet „Fertig — jetzt in KI-Qualität trennen“ die Separation
+sofort mit Demucs.
+
+Alternativ manuell — Linux/macOS:
 
 ```bash
 npm run stems:setup
@@ -88,9 +97,42 @@ sie werden erst nach dem Modelllauf für SI-SDR geöffnet.
 
 Source Separation ist eine Schätzung. Auch ein hochwertiges Modell kann Hall,
 Backing-Vocals oder stark verzerrte Instrumente teilweise dem falschen Stem
-zuordnen. Falls Demucs oder seine Modellgewichte nicht verfügbar sind, bleibt
-die Funktion benutzbar: Der Editor verwendet den lokalen, summentreuen
-Spektral-Separator und weist ihn im Ergebnis ausdrücklich als
-`lokaler Spektral-Fallback` aus. Der reale MUSDB-Test stellt sicher, dass auch
-dieser Pfad vier hörbare und unterscheidbare Ausgabedateien erzeugt und Vocal
-Solo nicht stumm ist.
+zuordnen.
+
+## Lokaler Fallback: STFT-HPSS statt Ein-Pol-Splitter
+
+Der frühere Ein-Pol-Filter-Fallback hatte auf realem Material (MUSDB
+Falcon 69) eine gemessene Qualität von SI-SDR **-6,6 dB (Vocals) bis
+-10,8 dB (Drums)** — der Fehler war lauter als das Nutzsignal. Er wurde
+durch einen STFT-Separator ersetzt (Hann 4096/Hop 1024, Median-Filter-HPSS
+nach Fitzgerald 2010, weiche Mid/Side-Spektralmasken, exakter
+Zeitbereichs-Rest für OTHER). Gemessene Qualität auf demselben Material:
+Vocals **-4,5 dB**, Drums **+1,7 dB**, Bass **-2,6 dB**, Other **-5,1 dB**.
+Diese Werte sind als SI-SDR-Mindestgrenzen im Test
+`stem-real-mixed-track.test.ts` festgeschrieben — eine Qualitätsregression
+kann CI nicht mehr passieren. Da alle Masken pro Bin in [0,1] liegen und
+auf 1 summieren, ist der frühere Normalisierungs-Blowup (Knacksen bei
+Solo/Mute) konstruktiv ausgeschlossen.
+
+## Kein stiller Qualitäts-Downgrade
+
+Auch der verbesserte STFT-Fallback bleibt deutlich unter Demucs-Qualität
+und ist **nicht für Club-/Performance-Einsatz geeignet**. Deshalb gilt:
+
+1. Vor jeder Separation prüft der Editor die Demucs-Verfügbarkeit
+   (Desktop-IPC-Preflight bzw. `GET /api/stems/status` im Browser).
+2. Fehlt Demucs, wird die Trennung **nicht still** mit dem Fallback
+   ausgeführt. Stattdessen erscheint ein Warn-Dialog mit der genauen
+   Diagnose (fehlendes Python, fehlendes Modul, fehlende Gewichte) und der
+   Installationsanleitung.
+3. Nur wenn der Nutzer den Fallback ausdrücklich bestätigt
+   (`allowFallback: true` in der Engine-API), läuft der lokale Separator.
+   Das Ergebnis trägt dann dauerhaft das Badge **„⚠ FALLBACK-QUALITÄT“** in
+   der Stems-Leiste und der Abschluss-Dialog spricht von
+   „NUR VORSCHAU-QUALITÄT“, nie von Erfolg in Performance-Qualität.
+
+Der reale MUSDB-Test stellt alles zusammen sicher: Der Standardpfad lehnt bei
+fehlendem Demucs mit einer erklärenden Fehlermeldung ab; der ausdrücklich
+angeforderte Fallback erzeugt vier hörbare, unterscheidbare Ausgabedateien,
+Vocal Solo ist nicht stumm, und jede Stem-Ausgabe muss ihre
+SI-SDR-Mindestgrenze gegen die echten Referenzspuren erreichen.
