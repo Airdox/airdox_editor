@@ -10,6 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { mainLogger: logger } = require('./logger.cjs');
 
 const REGISTRY_VERSION = 1;
 const DEFAULT_MAX_ENTRIES = 100_000;
@@ -117,7 +118,9 @@ class AnalysisPathRegistry {
       if (error && error.code !== 'ENOENT') {
         // A broken cache must never prevent the desktop app from starting. A
         // subsequent successful registration atomically replaces it.
-        console.warn('[AnalysisRegistry] Index konnte nicht gelesen werden:', error.message || error);
+        logger.warn('DATABASE', `Analyse-Pfadindex konnte nicht gelesen werden: ${error.message || error}`, {
+          filePath: this.filePath,
+        });
       }
     }
   }
@@ -178,7 +181,22 @@ class AnalysisPathRegistry {
           .slice(0, this.maxEntries);
         this.entries = new Map(retained);
       }
-      this.persist();
+      try {
+        this.persist();
+        logger.debug('DATABASE', `Analyse-Pfadindex gespeichert: +${accepted} (aktualisiert ${updated}), insgesamt ${this.entries.size}`, {
+          accepted,
+          updated,
+          rejected,
+          total: this.entries.size,
+          filePath: this.filePath,
+        });
+      } catch (error) {
+        logger.error('DATABASE', `Analyse-Pfadindex konnte nicht gespeichert werden: ${error.message}`, {
+          stack: error.stack,
+          filePath: this.filePath,
+        });
+        throw error;
+      }
     }
 
     return { accepted, updated, rejected, total: this.entries.size };

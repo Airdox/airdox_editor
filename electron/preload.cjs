@@ -23,6 +23,14 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // before a large audio buffer is handed to the model process.
   getStemEngineStatus: () => ipcRenderer.invoke('stems:get-status'),
   separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
+
+  // --- Diagnostics / logging bridge -----------------------------------------
+  // Fire-and-forget batched log stream from the renderer. send() (not invoke)
+  // so the message is handed to the main process even during page hide/unload.
+  writeLogEntries: (entries) => ipcRenderer.send('logs:write', entries),
+  getLogInfo: () => ipcRenderer.invoke('logs:get-info'),
+  readLogTail: (maxBytes) => ipcRenderer.invoke('logs:read-tail', maxBytes),
+  openLogFolder: () => ipcRenderer.invoke('logs:open-log-folder'),
   // One-click installation of the real AI engine (Python venv + torch +
   // demucs + htdemucs_ft weights). Progress arrives via onStemInstallProgress.
   installStemEngine: () => ipcRenderer.invoke('stems:install-engine'),

@@ -28,6 +28,7 @@ import {
   SelectionRange,
   TrackModel,
 } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export const PROJECT_FORMAT = 'airdox-project';
 export const PROJECT_VERSION = 1;
@@ -344,7 +345,14 @@ export function serializeProject(snapshot: ProjectSnapshot): string {
     tracks: snapshot.tracks.map(serializeTrack),
     paletteClips: snapshot.paletteClips.map(serializeClip),
   };
-  return JSON.stringify(doc, null, 2);
+  const json = JSON.stringify(doc, null, 2);
+  logger.info('PROJECT', `Projekt serialisiert: "${snapshot.projectName}" (${(json.length / 1024).toFixed(1)} KB, ${doc.tracks.length} Track(s), ${doc.paletteClips.length} Clip(s))`, {
+    projectName: snapshot.projectName,
+    tracks: doc.tracks.length,
+    paletteClips: doc.paletteClips.length,
+    bytes: json.length,
+  });
+  return json;
 }
 
 /**
@@ -355,7 +363,8 @@ export function deserializeProject(json: string): SerializedProjectDocument {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
-  } catch {
+  } catch (err) {
+    logger.error('PROJECT', `Projektdatei ist kein gültiges JSON: ${err instanceof Error ? err.message : String(err)}`);
     throw new Error('Die Projektdatei ist kein gültiges JSON-Dokument.');
   }
 
@@ -372,7 +381,7 @@ export function deserializeProject(json: string): SerializedProjectDocument {
     throw new Error('Die Projektdatei enthält keine Track-Liste.');
   }
 
-  return {
+  const result: SerializedProjectDocument = {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
     savedAt: typeof doc.savedAt === 'string' ? doc.savedAt : new Date().toISOString(),
@@ -382,4 +391,6 @@ export function deserializeProject(json: string): SerializedProjectDocument {
     tracks: doc.tracks as SerializedTrack[],
     paletteClips: (doc.paletteClips as SerializedPaletteClip[] | undefined) ?? [],
   };
+  logger.info('PROJECT', `Projektdatei deserialisiert: "${result.projectName}" v${result.version} (${result.tracks.length} Track(s), ${result.paletteClips.length} Clip(s))`);
+  return result;
 }
