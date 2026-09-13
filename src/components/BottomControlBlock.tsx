@@ -157,10 +157,10 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onDelete}
             disabled={!hasSelection}
             className="px-2 py-0.5 bg-[#1f1214] hover:bg-[#301a1c] disabled:opacity-30 rounded-xs border border-[#402024] text-[#ff453a] hover:text-white flex items-center space-x-1"
-            title="Ripple Delete: Auswahl entfernen und Folgeaudio nachrücken (Del) – Original bleibt unverändert"
+            title="Delete-Variante auswählen (Normales Delete oder Ripple Delete) [Del]"
           >
             <Trash2 size={11} />
-            <span>Ripple Delete</span>
+            <span>Delete…</span>
           </button>
           <button
             onClick={onUndo}
@@ -422,11 +422,11 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onDelete}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
-            title="Ripple Delete: Auswahl nur in der Arbeitsrepräsentation entfernen; Folgeaudio rückt nach"
+            title="Delete-Variante auswählen: normal ohne Nachrücken oder Ripple Delete"
           >
             <Trash2 size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
-              RIPPLE DELETE
+              DELETE…
             </span>
           </button>
 

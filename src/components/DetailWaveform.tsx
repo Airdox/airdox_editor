@@ -1263,7 +1263,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                   onClick={() => { onDelete(); setContextMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#ff3b30] hover:text-white text-[#ff453a]"
                 >
-                  Ripple Delete (Original bleibt unverändert)
+                  Delete… (Variante auswählen)
                 </button>
                 <button
                   onClick={() => { onClear(); setContextMenu(null); }}

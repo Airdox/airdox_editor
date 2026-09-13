@@ -61,6 +61,7 @@ import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
+import { DeleteModeModal } from './components/Modals/DeleteModeModal';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
@@ -406,6 +407,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth, recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject]);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
+  const [deleteModeModalOpen, setDeleteModeModalOpen] = useState<boolean>(false);
   const [isGlobalDragging, setIsGlobalDragging] = useState<boolean>(false);
   const dragCounterRef = useRef<number>(0);
 
@@ -1642,8 +1644,57 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     handleOverdubDeckAWithClip(activeClip);
   };
 
-  // Delete selection (removes range and shifts subsequent material, validated by Edit Assistant)
+  // DELETE button opens an explicit choice; no timeline behavior is implicit.
   const handleDelete = () => {
+    const validation = editAssistant.validateClear(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    setDeleteModeModalOpen(true);
+  };
+
+  // Normal Delete: duration-preserving silence on the working representation.
+  const handleNormalDelete = () => {
+    setDeleteModeModalOpen(false);
+    const validation = editAssistant.validateClear(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
+    pushHistorySnapshot('Normal Delete');
+
+    const result = executeClear(
+      workingAudioBuffer,
+      effectiveSel,
+      activeTrack.cues,
+      activeTrack.workingSegments,
+      undefined,
+      createEditContext(activeTrack)
+    );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+    setSelection(null);
+
+    showOperationFeedback({
+      title: 'Auswahl gelöscht (Normales Delete)',
+      operationType: 'DELETE',
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) in der Arbeitsrepräsentation durch Stille ersetzt. Tracklänge und nachfolgende Positionen bleiben unverändert; die Originaldatei bleibt schreibgeschützt.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
+  };
+
+  // Ripple Delete: removes the range and shifts all subsequent timeline data.
+  const handleRippleDelete = () => {
+    setDeleteModeModalOpen(false);
     const validation = editAssistant.validateDelete(selection, workingAudioBuffer);
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
@@ -2520,6 +2571,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (deleteModeModalOpen) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -3177,6 +3229,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isOpen={systemLogModalOpen}
         onClose={() => setSystemLogModalOpen(false)}
       />
+
+      {/* Explicit Normal Delete / Ripple Delete choice */}
+      {deleteModeModalOpen && selection && (
+        <DeleteModeModal
+          selection={selection}
+          onNormalDelete={handleNormalDelete}
+          onRippleDelete={handleRippleDelete}
+          onCancel={() => setDeleteModeModalOpen(false)}
+        />
+      )}
 
       {/* Clear History Confirmation Modal (Data Loss Prevention) */}
       <ClearHistoryModal
