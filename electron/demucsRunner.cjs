@@ -64,8 +64,9 @@ function captureProcess(command, args, timeoutMs = 15000) {
 }
 
 /** Validate the executable, Python version and imports before processing audio. */
-async function probePython(command, execute = captureProcess) {
+async function probePython(command, execute = captureProcess, onLog) {
   if (path.isAbsolute(command) && !await exists(command)) {
+    onLog?.('debug', 'STEMS', `Python-Kandidat nicht gefunden: ${command}`);
     return { command, usable: false, reason: 'Datei nicht gefunden' };
   }
   const script = [
@@ -80,6 +81,10 @@ async function probePython(command, execute = captureProcess) {
   ].join('\n');
   const processResult = await execute(command, ['-c', script]);
   if (!processResult.ok) {
+    onLog?.('debug', 'STEMS', `Python-Kandidat unbrauchbar: ${command}`, {
+      reason: processResult.error || processResult.stderr.trim() || `Exit-Code ${processResult.code}`,
+      code: processResult.code,
+    });
     return {
       command, usable: false,
       reason: processResult.error || processResult.stderr.trim() || `Exit-Code ${processResult.code}`,
@@ -89,23 +94,32 @@ async function probePython(command, execute = captureProcess) {
     const details = JSON.parse(processResult.stdout.trim().split(/\r?\n/).at(-1));
     const [major, minor] = details.version || [];
     if (major !== 3 || minor < 9 || minor > 13) {
+      onLog?.('debug', 'STEMS', `Python ${major}.${minor} unzulässig (${command})`);
       return { command, usable: false, details, reason: `Python ${major}.${minor} wird nicht unterstützt (benötigt 3.9–3.13)` };
     }
     if (!details.demucs) {
+      onLog?.('debug', 'STEMS', `Demucs-Import fehlgeschlagen für ${command}`, { importError: details.importError });
       return { command, usable: false, details, reason: `Demucs-Import fehlgeschlagen: ${details.importError}` };
     }
+    onLog?.('info', 'STEMS', `Verwendbare Demucs-Umgebung: ${command}`, {
+      python: details.version,
+      torch: details.torch,
+      torchaudio: details.torchaudio,
+      executable: details.executable,
+    });
     return { command, usable: true, details };
   } catch (error) {
+    onLog?.('debug', 'STEMS', `Ungültige Python-Prüfantwort von ${command}: ${error.message}`);
     return { command, usable: false, reason: `Ungültige Python-Prüfantwort: ${error.message}` };
   }
 }
 
-async function inspectDemucsEnvironment(repoRoot, candidateOverride, probe = probePython) {
+async function inspectDemucsEnvironment(repoRoot, candidateOverride, probe = probePython, onLog) {
   const explicit = process.env.DEMUCS_PYTHON;
   const candidates = candidateOverride || (explicit ? [explicit] : defaultPythonCandidates(repoRoot));
   const probes = [];
   for (const candidate of [...new Set(candidates)]) {
-    const probeResult = await probe(candidate);
+    const probeResult = await probe(candidate, captureProcess, onLog);
     probes.push(probeResult);
     if (probeResult.usable) {
       const checkpointDir = process.env.TORCH_HOME
@@ -114,6 +128,11 @@ async function inspectDemucsEnvironment(repoRoot, candidateOverride, probe = pro
       const weightsPresent = (await Promise.all(
         FT_WEIGHT_FILES.map((file) => exists(path.join(checkpointDir, file)))
       )).filter(Boolean).length;
+      onLog?.('info', 'STEMS', `Demucs-Modell-Checkpoints: ${weightsPresent}/${FT_WEIGHT_FILES.length} vorhanden`, {
+        checkpointDir,
+        weightsPresent,
+        weightsRequired: FT_WEIGHT_FILES.length,
+      });
       return {
         available: true,
         python: candidate,
@@ -126,6 +145,8 @@ async function inspectDemucsEnvironment(repoRoot, candidateOverride, probe = pro
       };
     }
   }
+  const reason = probes.map((p) => `${p.command}: ${p.reason}`).join(' | ') || 'Kein Python-Kandidat gefunden';
+  onLog?.('warn', 'STEMS', `Keine verwendbare Demucs-Umgebung: ${reason}`, { probes });
   return {
     available: false,
     python: null,
@@ -134,12 +155,12 @@ async function inspectDemucsEnvironment(repoRoot, candidateOverride, probe = pro
     weightsRequired: FT_WEIGHT_FILES.length,
     weightsReady: false,
     probes,
-    reason: probes.map((p) => `${p.command}: ${p.reason}`).join(' | ') || 'Kein Python-Kandidat gefunden',
+    reason,
   };
 }
 
-async function resolvePython(repoRoot, candidateOverride) {
-  const status = await inspectDemucsEnvironment(repoRoot, candidateOverride);
+async function resolvePython(repoRoot, candidateOverride, onLog) {
+  const status = await inspectDemucsEnvironment(repoRoot, candidateOverride, probePython, onLog);
   if (!status.available) {
     throw new Error(
       `Keine verwendbare Demucs-Installation gefunden. ${status.reason}. ` +
@@ -149,24 +170,49 @@ async function resolvePython(repoRoot, candidateOverride) {
   return status.python;
 }
 
-function run(command, args, onProgress) {
+function run(command, args, onProgress, onLog) {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    onLog?.('info', 'STEMS', `Demucs-Prozess gestartet: ${command} ${args.join(' ')}`);
     const child = spawn(command, args, { windowsHide: true, env: process.env });
     let output = '';
+    let lastLoggedLine = '';
     const capture = (chunk) => {
       const text = chunk.toString();
       output = (output + text).slice(-16000);
       onProgress?.(text);
+      // tqdm/Progress-Bars nutzen \r; nur inhaltliche Zeilen ins Log schreiben.
+      for (const rawLine of text.split(/[\r\n]+/)) {
+        const line = rawLine.trim();
+        if (line && line !== lastLoggedLine) {
+          lastLoggedLine = line;
+          onLog?.('debug', 'STEMS', `[demucs] ${line.slice(0, 500)}`);
+        }
+      }
     };
     child.stdout.on('data', capture);
     child.stderr.on('data', capture);
-    child.on('error', (error) => reject(new Error(
-      `Demucs konnte nicht gestartet werden (${command}): ${error.message}. ` +
-      'Bitte zuerst "npm run stems:setup" ausführen.'
-    )));
-    child.on('close', (code) => code === 0
-      ? resolve()
-      : reject(new Error(`Demucs ist mit Code ${code} fehlgeschlagen.\n${output}`)));
+    child.on('error', (error) => {
+      onLog?.('error', 'STEMS', `Demucs konnte nicht gestartet werden (${command}): ${error.message}`, {
+        stack: error.stack,
+      });
+      reject(new Error(
+        `Demucs konnte nicht gestartet werden (${command}): ${error.message}. ` +
+        'Bitte zuerst "npm run stems:setup" ausführen.'
+      ));
+    });
+    child.on('close', (code) => {
+      const durationMs = Date.now() - startedAt;
+      if (code === 0) {
+        onLog?.('info', 'STEMS', `Demucs-Prozess erfolgreich beendet (${durationMs} ms)`);
+        resolve();
+      } else {
+        onLog?.('error', 'STEMS', `Demucs-Prozess mit Code ${code} fehlgeschlagen (${durationMs} ms)`, {
+          outputTail: output.slice(-2000),
+        });
+        reject(new Error(`Demucs ist mit Code ${code} fehlgeschlagen.\n${output}`));
+      }
+    });
   });
 }
 
@@ -188,26 +234,46 @@ async function separateWav(wavBytes, options = {}) {
   const repoRoot = options.repoRoot || path.join(__dirname, '..');
   const model = options.model || process.env.DEMUCS_MODEL || 'htdemucs_ft';
   // Preflight occurs before allocating/writing a potentially huge song file.
-  const python = await resolvePython(repoRoot, options.pythonCandidates);
+  const onLog = options.onLog;
+  onLog?.('info', 'STEMS', `Stem-Separation gestartet (Modell: ${model})`, {
+    inputBytes: wavBytes.byteLength,
+  });
+  const python = await resolvePython(repoRoot, options.pythonCandidates, onLog);
   const workDir = await mkdtemp(path.join(os.tmpdir(), 'airdox-demucs-'));
   const inputPath = path.join(workDir, 'input-mix.wav');
   const outputRoot = path.join(workDir, 'output');
+  onLog?.('debug', 'STEMS', `Temporäres Arbeitsverzeichnis: ${workDir}`);
 
   try {
     await writeFile(inputPath, Buffer.from(wavBytes));
-    await run(python, buildDemucsArgs(inputPath, outputRoot, model), options.onProgress);
+    await run(python, buildDemucsArgs(inputPath, outputRoot, model), options.onProgress, onLog);
     const songDir = path.join(outputRoot, model, 'input-mix');
     const result = { model, stems: {} };
     for (const stem of STEM_NAMES) {
       const stemPath = path.join(songDir, `${stem}.wav`);
-      if (!await exists(stemPath)) throw new Error(`Demucs-Ausgabe fehlt: ${stem}.wav`);
+      if (!await exists(stemPath)) {
+        onLog?.('error', 'STEMS', `Demucs-Ausgabe fehlt: ${stem}.wav`, { songDir });
+        throw new Error(`Demucs-Ausgabe fehlt: ${stem}.wav`);
+      }
       const bytes = await readFile(stemPath);
-      if (bytes.length < 44) throw new Error(`Demucs-Ausgabe ist ungültig oder leer: ${stem}.wav`);
+      if (bytes.length < 44) {
+        onLog?.('error', 'STEMS', `Demucs-Ausgabe ist ungültig oder leer: ${stem}.wav (${bytes.length} B)`);
+        throw new Error(`Demucs-Ausgabe ist ungültig oder leer: ${stem}.wav`);
+      }
       result.stems[stem] = bytes;
+      onLog?.('debug', 'STEMS', `Stem erzeugt: ${stem}.wav`, { bytes: bytes.length });
     }
+    onLog?.('info', 'STEMS', 'Stem-Separation erfolgreich abgeschlossen', {
+      model,
+      stemBytes: Object.fromEntries(Object.entries(result.stems).map(([k, v]) => [k, v.length])),
+    });
     return result;
+  } catch (error) {
+    onLog?.('error', 'STEMS', `Stem-Separation fehlgeschlagen: ${error.message}`, { stack: error.stack });
+    throw error;
   } finally {
     await rm(workDir, { recursive: true, force: true });
+    onLog?.('debug', 'STEMS', `Temporäres Arbeitsverzeichnis bereinigt: ${workDir}`);
   }
 }
 

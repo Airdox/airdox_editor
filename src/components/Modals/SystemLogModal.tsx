@@ -20,8 +20,30 @@ import {
   AlertOctagon,
   Info,
   Layers,
+  FolderOpen,
+  FileText,
+  HardDrive,
 } from 'lucide-react';
-import { logger, LogEntry, LogLevel, LogCategory } from '../../utils/logger';
+import { logger, LogEntry, LogLevel, LogCategory, FileLogInfo } from '../../utils/logger';
+
+const ALL_CATEGORIES: LogCategory[] = [
+  'SYSTEM',
+  'XML_IMPORT',
+  'AUDIO_ENGINE',
+  'BEATGRID',
+  'EDITING',
+  'DATABASE',
+  'CHATBOT',
+  'UI',
+  'STEMS',
+  'MIDI',
+  'NETWORK',
+  'IPC',
+  'PROJECT',
+  'WAVEFORM',
+  'PERFORMANCE',
+  'EXPORT',
+];
 
 interface SystemLogModalProps {
   isOpen: boolean;
@@ -39,6 +61,9 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
+  const [fileInfo, setFileInfo] = useState<FileLogInfo | null>(null);
+  const [folderMsg, setFolderMsg] = useState<string>('');
+  const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,13 +72,27 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
     // Load initial logs
     setLogs(logger.getEntries());
 
+    // Information über die dauerhafte Datei-Protokollierung abfragen.
+    logger.getFileLogInfo().then(setFileInfo).catch(() => setFileInfo(null));
+
     // Subscribe to real-time additions
     const unsubscribe = logger.subscribe((entry) => {
-      setLogs((prev) => [...prev, entry]);
+      setLogs((prev) => (prev.length >= 5000 ? [...prev.slice(-4000), entry] : [...prev, entry]));
     });
 
     return () => unsubscribe();
   }, [isOpen]);
+
+  // Auto-scroll zum Ende bei neuen Einträgen.
+  useEffect(() => {
+    if (autoScroll) logEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [logs, autoScroll, isOpen]);
+
+  const handleOpenLogFolder = async () => {
+    const ok = await logger.openLogFolder();
+    setFolderMsg(ok ? 'Log-Ordner im System geöffnet.' : 'Log-Ordner ist nur in der Desktop-App direkt öffenbar.');
+    setTimeout(() => setFolderMsg(''), 3000);
+  };
 
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
@@ -154,14 +193,25 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
             onChange={(e) => setCategoryFilter(e.target.value)}
             className="bg-[#161822] border border-[#272b3c] rounded px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-[#0088ff]"
           >
-            <option value="ALL">Alle Kategorien</option>
-            <option value="XML_IMPORT">XML_IMPORT</option>
-            <option value="AUDIO_ENGINE">AUDIO_ENGINE</option>
-            <option value="BEATGRID">BEATGRID</option>
-            <option value="EDITING">EDITING</option>
-            <option value="DATABASE">DATABASE</option>
-            <option value="SYSTEM">SYSTEM</option>
+            <option value="ALL">Alle Kategorien ({new Set(logs.map((l) => l.category)).size})</option>
+            {ALL_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
           </select>
+
+          <button
+            onClick={() => setAutoScroll((v) => !v)}
+            className={`px-2 py-1 rounded border text-[11px] transition-colors ${
+              autoScroll
+                ? 'bg-[#00c853]/15 border-[#00c853]/40 text-[#34d399]'
+                : 'bg-[#1a1c26] border-[#2c3042] text-neutral-400 hover:text-white'
+            }`}
+            title="Automatisches Mitlaufen aktivieren/deaktivieren"
+          >
+            Auto-Scroll
+          </button>
 
           {/* Actions */}
           <div className="flex items-center space-x-1.5 ml-auto">
@@ -180,6 +230,14 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
             >
               <Download size={11} />
               <span>JSON Export</span>
+            </button>
+            <button
+              onClick={handleOpenLogFolder}
+              className="px-2.5 py-1 bg-[#00c853]/10 hover:bg-[#00c853]/25 border border-[#00c853]/35 text-[#34d399] hover:text-white rounded text-[11px] flex items-center space-x-1 transition-colors"
+              title="Den Ordner mit den dauerhaften Log-Dateien öffnen"
+            >
+              <FolderOpen size={11} />
+              <span>Log-Ordner</span>
             </button>
             <button
               onClick={handleClear}
@@ -258,9 +316,33 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
         </div>
 
         {/* Footer info strip */}
-        <div className="h-7 bg-[#101117] border-t border-[#1f222f] px-3 flex items-center justify-between text-[10px] text-neutral-500">
-          <span>Pioneer Rekordbox DJ Editor Diagnostics Engine</span>
-          <span className="font-mono">Maximale Transparenz • Non-blocking Logger</span>
+        <div className="h-9 bg-[#101117] border-t border-[#1f222f] px-3 flex items-center justify-between text-[10px] text-neutral-500 gap-3">
+          <div className="flex items-center space-x-1.5 min-w-0">
+            {fileInfo?.currentFile ? (
+              <>
+                <HardDrive size={11} className="text-[#34d399] flex-shrink-0" />
+                <span className="font-mono truncate" title={fileInfo.currentFile}>
+                  {fileInfo.processName}: {fileInfo.currentFile}
+                </span>
+              </>
+            ) : (
+              <>
+                <FileText size={11} className="flex-shrink-0" />
+                <span className="font-mono truncate">
+                  Sitzung {logger.getSessionId()} · localStorage-Sicherung aktiv
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center space-x-3 flex-shrink-0">
+            {folderMsg && <span className="text-[#34d399]">{folderMsg}</span>}
+            {fileInfo && (
+              <span className="font-mono">
+                {fileInfo.entriesWritten} geschrieben · {fileInfo.level}
+              </span>
+            )}
+            <span className="font-mono hidden md:inline">Dauerhafte Datei-Protokollierung</span>
+          </div>
         </div>
       </div>
     </div>

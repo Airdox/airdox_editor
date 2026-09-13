@@ -14,13 +14,34 @@ function desktop(overrides: Record<string, unknown>): Window {
 }
 
 async function expectFallback(name: string, configure: () => void): Promise<TrackStems> {
+  // 1. The DEFAULT path must now REFUSE the silent quality downgrade: without
+  //    an explicit allowFallback opt-in, a missing Demucs installation is an
+  //    error, never a degraded "success".
+  stemEngine.clearCache();
+  configure();
+  await assert.rejects(
+    () => stemEngine.separateAudioBufferWithModel(source, `strict-${name}`, `sha-strict-${name}`),
+    (error: Error) => {
+      assert.ok(
+        error.message.includes('nicht verfügbar') || error.message.includes('NICHT erzeugt'),
+        `${name}: strict mode error explains the refusal (got: ${error.message})`
+      );
+      return true;
+    },
+    `${name}: default (strict) mode must reject instead of silently using the fallback`
+  );
+
+  // 2. Only with the explicit opt-in does the local separator run — clearly
+  //    tagged so it can never be mistaken for AI separation.
   stemEngine.clearCache();
   configure();
   const phases: string[] = [];
   const result = await stemEngine.separateAudioBufferWithModel(
-    source, `fallback-${name}`, `sha-${name}`, (progress) => phases.push(progress.phaseText)
+    source, `fallback-${name}`, `sha-${name}`, (progress) => phases.push(progress.phaseText),
+    { allowFallback: true }
   );
   assert.equal(result.separationMethod, 'LOCAL_SPECTRAL_FALLBACK', `${name}: local fallback selected`);
+  assert.ok(typeof result.fallbackReason === 'string' && result.fallbackReason.length > 0, `${name}: fallback reason recorded`);
   assert.ok(phases.some((phase) => phase.includes('lokale Spektral-Separation')), `${name}: fallback disclosed`);
   let maxDiff = 0;
   for (let i = 0; i < source.length; i++) {

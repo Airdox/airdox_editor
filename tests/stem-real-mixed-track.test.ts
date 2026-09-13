@@ -59,6 +59,36 @@ function correlation(a: Float32Array, b: Float32Array): number {
   for (let i = 0; i < n; i++) { ab += a[i] * b[i]; aa += a[i] ** 2; bb += b[i] ** 2; }
   return ab / Math.sqrt(aa * bb);
 }
+/** Scale-invariant SDR (dB): the standard objective source-separation metric. */
+function siSdr(estimate: Float32Array, reference: Float32Array): number {
+  const n = Math.min(estimate.length, reference.length);
+  let dot = 0, refEnergy = 0;
+  for (let i = 0; i < n; i++) { dot += estimate[i] * reference[i]; refEnergy += reference[i] ** 2; }
+  if (refEnergy < 1e-12) return NaN;
+  const alpha = dot / refEnergy;
+  let signal = 0, error = 0;
+  for (let i = 0; i < n; i++) {
+    const s = alpha * reference[i];
+    signal += s * s;
+    const e = estimate[i] - s;
+    error += e * e;
+  }
+  return 10 * Math.log10(signal / Math.max(error, 1e-12));
+}
+
+/**
+ * Minimum SI-SDR (dB) the LOCAL FALLBACK must reach on this real mixed track.
+ * These floors encode the measured quality of the STFT/HPSS separator minus a
+ * safety margin. The former one-pole splitter scored vocals -6.6, drums -10.8,
+ * bass -5.5, other -9.8 dB — i.e. more error than signal — and these floors
+ * exist precisely so that such a regression can never pass CI again.
+ */
+const MIN_SI_SDR: Record<StemType, number> = {
+  vocals: -5.5,
+  drums: 0.5,
+  bass: -3.5,
+  other: -8.5,
+};
 
 async function run() {
   // The production separator receives exactly one pre-mixed professional song excerpt.
@@ -93,8 +123,17 @@ async function run() {
 
   let stems: TrackStems;
   try {
+    // Strict default first: the production path must refuse a silent quality
+    // downgrade when Demucs is missing.
+    await assert.rejects(
+      () => stemEngine.separateAudioBufferWithModel(source, 'musdb-falcon69-strict', 'fixture-strict'),
+      /nicht verfügbar/,
+      'missing Demucs must be surfaced as an error by default, not silently degraded'
+    );
+    // The fallback still has to work when the user explicitly opts in.
     stems = await stemEngine.separateAudioBufferWithModel(
-      source, 'musdb-falcon69-blind-mix', 'fixture-mixture-only'
+      source, 'musdb-falcon69-blind-mix', 'fixture-mixture-only', undefined,
+      { allowFallback: true }
     );
   } finally {
     if (originalWindow === undefined) delete (globalThis as unknown as { window?: Window }).window;
@@ -123,11 +162,20 @@ async function run() {
 
   // References are loaded only now, after blind inference, and only for evaluation.
   const scores = new Map<StemType, number>();
+  const sdrScores = new Map<StemType, number>();
   for (const stem of STEM_TYPES) {
     const reference = decodePcm16Wav(await readFile(path.join(FIXTURE, `${stem}.wav`)));
     const score = correlation(stems[stem].getChannelData(0), reference.left);
     scores.set(stem, score);
     assert.ok(score > 0.2, `${stem} output must contain its real source; correlation ${score}`);
+    // Objective quality floor: correlation alone passed the old, unusable
+    // splitter. SI-SDR against the real reference quantifies audible quality.
+    const sdr = siSdr(stems[stem].getChannelData(0), reference.left);
+    sdrScores.set(stem, sdr);
+    assert.ok(
+      sdr >= MIN_SI_SDR[stem],
+      `${stem} SI-SDR ${sdr.toFixed(2)} dB is below the fallback quality floor ${MIN_SI_SDR[stem]} dB — quality regression`
+    );
   }
   const mixVocalCorrelation = correlation(
     mix.left,
@@ -140,6 +188,7 @@ async function run() {
 
   console.log('REAL PRE-MIXED TRACK PASS — The Easton Ellises - Falcon 69 (MUSDB excerpt)');
   console.log(`input: mixture.wav only | correlations vocals=${scores.get('vocals')!.toFixed(3)} drums=${scores.get('drums')!.toFixed(3)} bass=${scores.get('bass')!.toFixed(3)} other=${scores.get('other')!.toFixed(3)}`);
+  console.log(`SI-SDR (dB): vocals=${sdrScores.get('vocals')!.toFixed(2)} drums=${sdrScores.get('drums')!.toFixed(2)} bass=${sdrScores.get('bass')!.toFixed(2)} other=${sdrScores.get('other')!.toFixed(2)}`);
   console.log(`RMS vocals=${rmsLevels.get('vocals')!.toFixed(4)} drums=${rmsLevels.get('drums')!.toFixed(4)} bass=${rmsLevels.get('bass')!.toFixed(4)} other=${rmsLevels.get('other')!.toFixed(4)}`);
   console.log(`audition files: ${OUTPUT}`);
 }

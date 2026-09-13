@@ -14,6 +14,7 @@ import {
   STEM_TYPES,
   DEFAULT_STEMS_MIXER_STATE,
 } from './stemEngine';
+import { logger } from '../utils/logger';
 
 const SAMPLE_INDEX_EPSILON = 1e-6;
 
@@ -88,9 +89,20 @@ class AudioEngine {
         gain.connect(this.masterGain);
         this.stemGains[stem] = gain;
       }
+
+      logger.info('AUDIO_ENGINE', `AudioContext erzeugt (${this.ctx.sampleRate} Hz, ${this.ctx.destination.maxChannelCount} Kanäle)`, {
+        sampleRate: this.ctx.sampleRate,
+        baseLatency: this.ctx.baseLatency,
+        outputChannelCount: this.ctx.destination.maxChannelCount,
+      });
+      this.ctx.onstatechange = () => {
+        logger.debug('AUDIO_ENGINE', `AudioContext-Zustand: ${this.ctx?.state}`);
+      };
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch((err: unknown) => {
+        logger.warn('AUDIO_ENGINE', `AudioContext konnte nicht fortgesetzt werden: ${err instanceof Error ? err.message : String(err)}`);
+      });
     }
     return this.ctx;
   }
@@ -196,11 +208,13 @@ class AudioEngine {
     source.start(0, this.pauseOffset);
     this.currentSource = source;
     this.isPlaying = true;
+    logger.debug('AUDIO_ENGINE', `Wiedergabe gestartet bei ${this.pauseOffset.toFixed(3)}s (Dauer ${buffer.duration.toFixed(2)}s, Loop: ${this.loopActive})`);
 
     source.onended = () => {
       if (this.currentSource === source) {
         this.isPlaying = false;
         this.currentSource = null;
+        logger.debug('AUDIO_ENGINE', 'Wiedergabe natürlich beendet (onended).');
       }
     };
   }
@@ -256,6 +270,7 @@ class AudioEngine {
     }
 
     this.isPlaying = true;
+    logger.debug('AUDIO_ENGINE', `Stem-Wiedergabe gestartet bei ${this.pauseOffset.toFixed(3)}s (Trennmethode: ${stems.separationMethod || 'unbekannt'}, Loop: ${this.loopActive})`);
 
     // Monitor 'ended' on the primary source
     const leadSource = this.stemSources.vocals;
@@ -275,6 +290,7 @@ class AudioEngine {
     const pos = this.getCurrentTime();
     this.stop();
     this.pauseOffset = pos;
+    logger.debug('AUDIO_ENGINE', `Wiedergabe pausiert bei ${pos.toFixed(3)}s.`);
     return pos;
   }
 
@@ -283,8 +299,9 @@ class AudioEngine {
       try {
         this.currentSource.stop();
         this.currentSource.disconnect();
-      } catch {
+      } catch (err) {
         // already stopped
+        logger.debug('AUDIO_ENGINE', `Source.stop() beim Stoppen ignoriert: ${err instanceof Error ? err.message : String(err)}`);
       }
       this.currentSource = null;
     }
@@ -295,8 +312,9 @@ class AudioEngine {
         try {
           src.stop();
           src.disconnect();
-        } catch {
+        } catch (err) {
           // already stopped
+          logger.debug('AUDIO_ENGINE', `Stem-Source.stop() (${stem}) ignoriert: ${err instanceof Error ? err.message : String(err)}`);
         }
         this.stemSources[stem] = null;
       }
@@ -471,6 +489,7 @@ class AudioEngine {
     const bitDepth = 16;
     const bytesPerSample = bitDepth / 8;
     const blockAlign = numChannels * bytesPerSample;
+    logger.debug('EXPORT', `Rendere 16-Bit-Stereo-WAV (${buffer.duration.toFixed(2)}s, ${sampleRate} Hz, ${(44 + buffer.length * blockAlign) / 1024 / 1024} MiB)`);
 
     const left = buffer.getChannelData(0);
     const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;

@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { logger } from '../utils/logger';
 import {
   Bot,
   Send,
@@ -154,7 +155,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
         speechRecognitionRef.current.start();
         setIsListening(true);
       } catch (e) {
-        console.warn('SpeechRecognition start failed', e);
+        logger.warn('UI', `Spracherkennung konnte nicht gestartet werden: ${e instanceof Error ? e.message : String(e)}`, e);
         setIsListening(false);
       }
     }
@@ -174,6 +175,11 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
     setMessages((prev) => [...prev, userMsg]);
     setInputQuery('');
     setIsLoading(true);
+    const chatStartedAt = Date.now();
+    logger.info('CHATBOT', `Copilot-Anfrage gesendet (${query.length} Zeichen, Modell ${selectedModel})`, {
+      model: selectedModel,
+      historyLength: [...messages, userMsg].slice(-10).length,
+    });
 
     try {
       const response = await fetch('/api/chat', {
@@ -202,13 +208,20 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
+      logger.info('CHATBOT', `Copilot-Antwort erhalten (${Date.now() - chatStartedAt} ms, ${assistantMsg.actions.length} Aktion(en), Modell ${assistantMsg.model || selectedModel})`, {
+        durationMs: Date.now() - chatStartedAt,
+        actions: assistantMsg.actions.length,
+        responseModel: assistantMsg.model,
+      });
 
       // If auto-execute is enabled and actions are returned, execute the first action autonomously!
       if (autoExecute && data.actions && data.actions.length > 0) {
         const firstAct = data.actions[0];
+        logger.info('CHATBOT', `Automatische Ausführung der Copilot-Aktion: ${firstAct.type}`);
         triggerAction(firstAct);
       }
     } catch (err: any) {
+      logger.error('CHATBOT', `Copilot-Anfrage fehlgeschlagen: ${err?.message || String(err)}`, err);
       const errorMsg: ChatMessage = {
         id: `err-${Date.now()}`,
         role: 'system',

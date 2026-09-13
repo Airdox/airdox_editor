@@ -47,6 +47,7 @@ import { MenuBar } from './components/MenuBar';
 import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
 import { DeckStemsControl } from './components/DeckStemsControl';
+import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
@@ -81,6 +82,7 @@ import { logger } from './utils/logger';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
+import { detectTrackParts } from './audio/phraseDetection';
 import {
   cloneAudioBuffer,
   executeCopy,
@@ -428,6 +430,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [activeTrackStems, setActiveTrackStems] = useState<TrackStems | null>(null);
   const [stemsMixerState, setStemsMixerState] = useState<StemsMixerState>({ ...DEFAULT_STEMS_MIXER_STATE });
   const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
+  const [stemQualityWarning, setStemQualityWarning] = useState<string | null>(null);
   const [separationProgress, setSeparationProgress] = useState<StemSeparationProgress | null>(null);
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
@@ -493,7 +496,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }]);
     } catch (error) {
       // A cache miss/write failure must never block loading an authentic source.
-      console.warn('[ANLZ-Pfadindex] Zuordnung konnte nicht gespeichert werden:', error);
+      logger.warn('DATABASE', `[ANLZ-Pfadindex] Zuordnung konnte nicht gespeichert werden: ${error instanceof Error ? error.message : String(error)}`, error);
     }
   }, []);
 
@@ -530,7 +533,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           artist: track.artist,
         });
       } catch (error) {
-        console.warn('[ANLZ-Pfadindex] Suche fehlgeschlagen:', error);
+        logger.warn('DATABASE', `[ANLZ-Pfadindex] Suche fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
       }
     }
     if (!mapping?.analysisPath) return track;
@@ -585,7 +588,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
       return withSource;
     } catch (error) {
-      console.warn(`[ANLZ-Pfadindex] ${mapping.analysisPath} konnte nicht erneut geöffnet werden:`, error);
+      logger.warn('DATABASE', `[ANLZ-Pfadindex] ${mapping.analysisPath} konnte nicht erneut geöffnet werden: ${error instanceof Error ? error.message : String(error)}`, error);
       return {
         ...track,
         analysisSource: {
@@ -707,7 +710,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         setViewDuration(14.76);
       }
     } catch (err) {
-      console.error('Fehler beim Laden des Referenz-Tracks:', err);
+      logger.error('XML_IMPORT', `Fehler beim Laden des Referenz-Tracks: ${err instanceof Error ? err.message : String(err)}`, err);
     }
   }, []);
 
@@ -755,8 +758,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrackId, activeTrack]);
 
-  // Stem separation & mixer handlers
-  const handleSeparateStems = useCallback(async () => {
+  // Stem separation & mixer handlers.
+  // Runs the separation with the given fallback policy. With allowFallback=false
+  // (default flow) a missing Demucs installation opens the quality warning
+  // modal instead of silently producing low-quality frequency-splitter stems.
+  const runStemSeparation = useCallback(async (allowFallback: boolean) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
@@ -767,19 +773,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         workingAudioBuffer,
         activeTrack.id,
         activeTrack.originalSha256,
-        (prog) => setSeparationProgress(prog)
+        (prog) => setSeparationProgress(prog),
+        { allowFallback }
       );
       setActiveTrackStems(separated);
-      const methodLabel = separated.separationMethod === 'DEMUCS_HTDEMUCS_FT'
-        ? 'Demucs htdemucs_ft'
-        : 'lokalem Spektral-Fallback';
-      showOperationFeedback({
-        title: 'Stems erfolgreich getrennt',
-        operationType: 'CUE',
-        description: `Track "${activeTrack.title}" mit ${methodLabel} in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
-        originalSha256: activeTrack.originalSha256,
-        timestamp: Date.now(),
-      });
+      if (separated.separationMethod === 'DEMUCS_HTDEMUCS_FT') {
+        showOperationFeedback({
+          title: 'Stems erfolgreich getrennt (KI-Qualität)',
+          operationType: 'CUE',
+          description: `Track "${activeTrack.title}" mit Demucs htdemucs_ft (KI-Modell, Max-Qualität) in 4 Stems aufgeteilt: Vocals, Drums, Bass und Other. Stems stehen für Mute, Solo, Remix und Clip-Export bereit. Die Originaldatei bleibt unverändert und schreibgeschützt.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.info('EDITING', `Stem-Separation: Demucs htdemucs_ft für "${activeTrack.title}" abgeschlossen.`);
+      } else {
+        // Fallback result — label it honestly as low quality, never as success.
+        showOperationFeedback({
+          title: 'Stems getrennt — NUR VORSCHAU-QUALITÄT',
+          operationType: 'CUE',
+          description: `⚠️ Track "${activeTrack.title}" wurde mit dem lokalen Spektral-Fallback getrennt, weil Demucs nicht verfügbar ist (${separated.fallbackReason || 'unbekannter Grund'}). Diese Stems sind ein reiner Frequenz-/Stereo-Split mit deutlichen Übersprechern und NICHT für Performance geeignet. Für echte KI-Qualität: "npm run stems:setup" ausführen und erneut trennen.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.warn('EDITING', `Stem-Separation lief im Low-Quality-Fallback (Demucs fehlt): ${separated.fallbackReason || 'unbekannt'}`);
+      }
     } catch (err) {
       logger.error('EDITING', `Fehler bei Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
       alert(`Fehler bei der Stem-Separation: ${err instanceof Error ? err.message : String(err)}`);
@@ -788,6 +805,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setSeparationProgress(null);
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
+
+  const handleSeparateStems = useCallback(async () => {
+    if (!activeTrack || !workingAudioBuffer) {
+      alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    // Preflight: check the real AI engine BEFORE any processing. If Demucs is
+    // missing, the user decides explicitly — no silent quality downgrade.
+    setIsSeparatingStems(true);
+    setSeparationProgress({ percent: 1, phaseText: 'KI-Engine (Demucs) wird geprüft…', processedSeconds: 0, totalSeconds: workingAudioBuffer.duration });
+    const availability = await stemEngine.checkAvailability();
+    if (!availability.available) {
+      setIsSeparatingStems(false);
+      setSeparationProgress(null);
+      logger.warn('EDITING', `Stem-Preflight: Demucs nicht verfügbar — ${availability.reason || 'unbekannter Grund'}. Nutzer wird gefragt.`);
+      setStemQualityWarning(availability.reason || 'Demucs/Python wurde nicht gefunden.');
+      return;
+    }
+    await runStemSeparation(false);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -1386,6 +1423,57 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       timestamp: Date.now(),
     });
   };
+
+  // Track-Part-Analyse: erkennt Intro/Build/Drop/Break aus der realen
+  // Wellenform-Energie, zeigt die Parts farbig unter der Wellenform und setzt
+  // an den prägnanten Part-Grenzen (Drop, Break, Build) Cue-Punkte.
+  const handleAnalyzeParts = useCallback(() => {
+    if (!activeTrack) return;
+    try {
+      const detectedParts = detectTrackParts(activeTrack);
+      if (!detectedParts || detectedParts.length === 0) {
+        logger.warn(
+          'BEATGRID',
+          `Part-Analyse: Keine Wellenform-Analyse für "${activeTrack.title}" vorhanden — Parts können nicht erkannt werden.`
+        );
+        return;
+      }
+
+      const trackWithParts: TrackModel = { ...activeTrack, phrases: detectedParts };
+      const newCues = generateAutoCuesForTrack(trackWithParts);
+
+      setTracks((prev) =>
+        prev.map((t) => {
+          if (t.id !== activeTrack.id) return t;
+          // Alte Auto-Cues (ANALYSIS_CACHE) entfernen, damit eine erneute
+          // Analyse keine doppelten Marker anhäuft. User-Cues bleiben erhalten.
+          const keptCues = t.cues.filter((c) => c.origin !== DataOrigin.ANALYSIS_CACHE);
+          return {
+            ...t,
+            phrases: detectedParts,
+            cues: [...keptCues, ...newCues].sort((a, b) => a.position - b.position),
+          };
+        })
+      );
+
+      const partSummary = detectedParts
+        .map((p) => `${p.name === 'BREAKDOWN' ? 'BREAK' : p.name} (Takt ${p.startBar})`)
+        .join(', ');
+      logger.info(
+        'BEATGRID',
+        `Part-Analyse: ${detectedParts.length} Parts erkannt [${partSummary}] und ${newCues.length} Cue-Punkte an prägnanten Stellen gesetzt für "${activeTrack.title}".`
+      );
+      showOperationFeedback({
+        title: 'Track-Parts analysiert',
+        operationType: 'CUE',
+        description: `${detectedParts.length} Parts aus der Wellenform-Energie erkannt: ${partSummary}. ${newCues.length} Cue-Punkte wurden an den prägnanten Part-Grenzen (Drop, Break, Build-Up) gesetzt. Die Parts werden farblich unter der Wellenform angezeigt.`,
+        originalSha256: activeTrack.originalSha256 || 'N/A',
+        timestamp: Date.now(),
+      });
+    } catch (err: any) {
+      logger.error('BEATGRID', `Fehler bei der Track-Part-Analyse: ${err.message}`, err);
+    }
+  }, [activeTrack, showOperationFeedback]);
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
   const handleAutoCue = useCallback(() => {
@@ -2060,6 +2148,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Non-blocking async Rekordbox XML file loading
   const loadXmlFile = async (file: File) => {
+    const importStartedAt = Date.now();
+    logger.info('XML_IMPORT', `Rekordbox-XML-Import gestartet: ${file.name}`, {
+      fileName: file.name,
+      sizeBytes: file.size,
+      type: file.type,
+    });
     try {
       setImportProgressModalOpen(true);
       setImportProgress({
@@ -2087,6 +2181,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(file.name);
+      logger.info('XML_IMPORT', `Rekordbox-XML erfolgreich geparst: ${fullTrackModels.length} Track(s) in ${Date.now() - importStartedAt} ms`, {
+        fileName: file.name,
+        tracks: fullTrackModels.length,
+        durationMs: Date.now() - importStartedAt,
+      });
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should
@@ -2100,7 +2199,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }, 1200);
 
     } catch (err: any) {
-      console.error('Fehler beim Einlesen der Rekordbox XML-Datei:', err);
+      logger.error('XML_IMPORT', `Fehler beim Einlesen der Rekordbox-XML: ${err?.message || String(err)}`, err);
       setImportProgress({
         phase: 'ERROR',
         phaseText: `Fehler beim Import: ${err?.message || err}`,
@@ -2132,6 +2231,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   ) => {
     if (!activeTrack) return;
 
+    logger.info('XML_IMPORT', `ANLZ-Analyseimport gestartet: ${fileName}`, {
+      fileName,
+      sizeBytes: data.byteLength,
+      fromDesktop: Boolean(sourceDetails?.path),
+    });
     try {
       const extraction = parseAnlzBinary(data);
       const sourceDuration = activeTrack.analysisSource?.sourceDuration || activeTrack.audioBuffer?.duration || workingAudioBuffer?.duration || activeTrack.duration;
@@ -2186,9 +2290,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         originalSha256: enrichedTrack.originalSha256,
         timestamp: Date.now(),
       });
-      console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
+      logger.info('XML_IMPORT', `[ANLZ Import] ${fileName} → Tags: ${tags}`, {
+        warnings: extraction.warnings,
+        cues: extraction.cues.length,
+        loops: extraction.loops.length,
+        phrases: extraction.phrases.length,
+        waveformBuckets: extraction.waveform?.length || 0,
+      });
     } catch (error) {
-      console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
+      logger.error('XML_IMPORT', `[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`, error);
     }
   };
 
@@ -2207,7 +2317,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const fileName = chosen.path.split(/[\\/]/).pop() || 'ANLZ-Datei';
       await handleImportAnlzData(source.data, fileName, source);
     } catch (error) {
-      console.error('[ANLZ Import] Windows-Lesepfad fehlgeschlagen:', error);
+      logger.error('XML_IMPORT', `[ANLZ Import] Windows-Lesepfad fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
       alert(`ANLZ-Datei konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -2217,6 +2327,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // returns only rows; the renderer never touches the source file.
   const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
     if (!window.rekordboxDesktop) return;
+    const dbStartedAt = Date.now();
+    logger.info('DATABASE', `Rekordbox-Datenbank-Import gestartet: ${sourceLabel || dbPath}`, { dbPath });
     try {
       const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
       if (!result.available || !result.rows) {
@@ -2262,7 +2374,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         try {
           await window.rekordboxDesktop.cacheAnalysisMappings(analysisMappings);
         } catch (cacheError) {
-          console.warn('[ANLZ-Pfadindex] DB-Zuordnungen konnten nicht gespeichert werden:', cacheError);
+          logger.warn('DATABASE', `[ANLZ-Pfadindex] DB-Zuordnungen konnten nicht gespeichert werden: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`, cacheError);
         }
       }
 
@@ -2281,10 +2393,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
-        console.warn('[Rekordbox DB] Hinweise:', warnings);
+        logger.warn('DATABASE', `[Rekordbox DB] ${warnings.length} Hinweis(e) beim Import`, { warnings });
       }
+      logger.info('DATABASE', `Rekordbox-Datenbank importiert: ${mapped.stats.tracks} Tracks in ${Date.now() - dbStartedAt} ms`, {
+        dbPath,
+        sourceLabel,
+        stats: mapped.stats,
+        dbType: result.dbType,
+        durationMs: Date.now() - dbStartedAt,
+      });
     } catch (error) {
-      console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
+      logger.error('DATABASE', `[Rekordbox DB] Import fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -2299,7 +2418,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!chosen) return;
       await handleLoadRekordboxDatabase(chosen.path);
     } catch (error) {
-      console.error('[Rekordbox DB] Dateiauswahl fehlgeschlagen:', error);
+      logger.error('DATABASE', `[Rekordbox DB] Dateiauswahl fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
     }
   };
 
@@ -2308,13 +2427,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       return await window.rekordboxDesktop.locateRekordboxDatabases();
     } catch (error) {
-      console.warn('[Rekordbox DB] Automatische Suche fehlgeschlagen:', error);
+      logger.warn('DATABASE', `[Rekordbox DB] Automatische Suche fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
       return [];
     }
   };
 
   // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
+    const loadStartedAt = Date.now();
+    logger.info('XML_IMPORT', `Track aus Sammlung wird ins Deck geladen: "${selectedDef.title}" (${selectedDef.artist})`, {
+      trackId: selectedDef.id,
+      title: selectedDef.title,
+      artist: selectedDef.artist,
+      bpm: selectedDef.bpm,
+      origin: selectedDef.origin,
+    });
     try {
       const resolvedDef = await hydrateNativeAnalysis(selectedDef);
       const audioCtx = audioEngine.getContext();
@@ -2337,7 +2464,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             status: 'AVAILABLE',
           };
         } catch (error) {
-          console.warn('[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio.', error);
+          logger.warn('XML_IMPORT', `[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio: ${error instanceof Error ? error.message : String(error)}`, error);
           originalMedia = { ...originalMedia, status: 'MISSING' };
         }
       }
@@ -2430,8 +2557,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
+      logger.info('AUDIO_ENGINE', `Track "${loadedTrack.title}" in ${Date.now() - loadStartedAt} ms ins Deck geladen`, {
+        duration: loadedTrack.duration,
+        sampleRate: loadedTrack.sampleRate,
+        channels: loadedTrack.channels,
+        hasOriginalAudio: Boolean(originalAudio),
+        cues: loadedTrack.cues.length,
+      });
     } catch (err) {
-      console.error('Fehler beim Laden des Tracks in das Deck:', err);
+      logger.error('AUDIO_ENGINE', `Fehler beim Laden des Tracks in das Deck: ${err instanceof Error ? err.message : String(err)}`, err);
     }
   };
 
@@ -2449,6 +2583,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     });
     const defaultName = `${sanitizeFileName(projectName) || 'project'}.airdox.json`;
     const data = new TextEncoder().encode(doc);
+    logger.info('PROJECT', `Projekt wird gespeichert: "${projectName}"`, {
+      defaultName,
+      bytes: data.length,
+      tracks: tracks.length,
+      paletteClips: paletteClips.length,
+    });
 
     try {
       if (window.rekordboxDesktop) {
@@ -2459,6 +2599,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           protectedPaths,
         });
         if (res.saved) {
+          logger.info('PROJECT', `Projekt gespeichert: ${res.path}`, {
+            bytes: res.bytes,
+            path: res.path,
+          });
           showOperationFeedback({
             title: 'Projekt gespeichert',
             operationType: 'EXPORT',
@@ -2466,6 +2610,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             originalSha256: activeTrack?.originalSha256 ?? 'NOT_COMPUTED_READ_ONLY_SOURCE',
             timestamp: Date.now(),
           });
+        } else {
+          logger.warn('PROJECT', 'Projektspeichern vom Benutzer abgebrochen (kein Ziel gewählt).');
         }
         return;
       }
@@ -2480,6 +2626,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      logger.info('PROJECT', `Projekt als Browser-Download heruntergeladen: ${defaultName}`, {
+        bytes: data.length,
+      });
       showOperationFeedback({
         title: 'Projekt gespeichert',
         operationType: 'EXPORT',
@@ -2488,7 +2637,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error('[Projekt] Speichern fehlgeschlagen:', err);
+      logger.error('PROJECT', `[Projekt] Speichern fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
       alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
@@ -2499,9 +2648,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       return;
     }
 
+    const openStartedAt = Date.now();
     try {
       const opened = await window.rekordboxDesktop.openProjectFile();
-      if (!opened) return;
+      if (!opened) {
+        logger.info('PROJECT', 'Projekt-Öffnen vom Benutzer abgebrochen (keine Datei gewählt).');
+        return;
+      }
+      logger.info('PROJECT', `Projektdatei wird geöffnet: ${opened.path}`, {
+        path: opened.path,
+        size: opened.size,
+      });
 
       const doc = deserializeProject(opened.data);
       const audioCtx = audioEngine.getContext();
@@ -2536,7 +2693,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               status: 'AVAILABLE' as const,
             };
           } catch (error) {
-            console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);
+            logger.warn('PROJECT', `[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar: ${error instanceof Error ? error.message : String(error)}`, error);
             originalMedia = { ...originalMedia, status: 'MISSING' as const };
           }
         }
@@ -2624,6 +2781,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setIsPlaying(false);
       audioEngine.stop();
 
+      logger.info('PROJECT', `Projekt "${doc.projectName}" geöffnet: ${rebuiltTracks.length} Track(s), ${rebuiltClips.length} Clip(s) in ${Date.now() - openStartedAt} ms`, {
+        projectName: doc.projectName,
+        formatVersion: doc.version,
+        tracks: rebuiltTracks.length,
+        paletteClips: rebuiltClips.length,
+        durationMs: Date.now() - openStartedAt,
+      });
       showOperationFeedback({
         title: 'Projekt geladen',
         operationType: 'EXPORT',
@@ -2632,20 +2796,26 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.error('[Projekt] Öffnen fehlgeschlagen:', err);
+      logger.error('PROJECT', `[Projekt] Öffnen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
       alert(`Projekt konnte nicht geöffnet werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [showOperationFeedback]);
 
   // Audio file loading (WAV, MP3, FLAC, AIFF)
   const loadAudioFile = async (file: File) => {
+    const loadStartedAt = Date.now();
+    logger.info('AUDIO_ENGINE', `Audiodatei wird geladen: ${file.name}`, {
+      fileName: file.name,
+      sizeBytes: file.size,
+      type: file.type,
+    });
     try {
       const audioCtx = audioEngine.getContext();
       if (audioCtx.state === 'suspended') {
         try {
           await audioCtx.resume();
         } catch (e) {
-          console.warn('AudioContext resume error:', e);
+          logger.warn('AUDIO_ENGINE', `AudioContext resume fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, e);
         }
       }
 
@@ -2717,6 +2887,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         setIsPlaying(false);
         audioEngine.stop();
 
+        logger.info('AUDIO_ENGINE', `Audiodatei mit Track "${updatedTrack.title}" verknüpft (${Date.now() - loadStartedAt} ms)`, {
+          fileName: file.name,
+          duration: decoded.duration,
+          sampleRate: decoded.sampleRate,
+          channels: decoded.numberOfChannels,
+          sha256: sha256.slice(0, 16),
+        });
         showOperationFeedback({
           title: 'Audiodatei verknüpft',
           operationType: 'CUE',
@@ -2790,6 +2967,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         setIsPlaying(false);
         audioEngine.stop();
 
+        logger.info('AUDIO_ENGINE', `Audiodatei importiert: "${newTrack.title}" (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz, ${detectedBpm.toFixed(1)} BPM, ${Date.now() - loadStartedAt} ms)`, {
+          fileName: file.name,
+          duration: decoded.duration,
+          sampleRate: decoded.sampleRate,
+          channels: decoded.numberOfChannels,
+          detectedBpm,
+          sizeBytes: file.size,
+        });
         showOperationFeedback({
           title: 'Audiodatei importiert',
           operationType: 'CUE',
@@ -2800,7 +2985,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         });
       }
     } catch (err) {
-      console.error('Fehler beim Decodieren der Audiodatei:', err);
+      logger.error('AUDIO_ENGINE', `Fehler beim Decodieren der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
       alert('Konnte Audiodatei nicht decodieren. Bitte überprüfe das Dateiformat (WAV, MP3, AIFF, FLAC).');
     }
   };
@@ -3309,6 +3494,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
           onDropPaletteClip={handleDropPaletteClip}
+          onAnalyzeParts={handleAnalyzeParts}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
@@ -3542,6 +3728,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         undoCount={undoStack.length}
         redoCount={redoStack.length}
         recentActions={[...undoStack, ...redoStack].slice(-6).map((s) => s.description)}
+      />
+
+      {/* Honest quality gate: Demucs missing -> user decides about the fallback */}
+      <StemQualityWarningModal
+        isOpen={stemQualityWarning !== null}
+        reason={stemQualityWarning || ''}
+        onClose={() => setStemQualityWarning(null)}
+        onProceedWithFallback={() => {
+          setStemQualityWarning(null);
+          void runStemSeparation(true);
+        }}
+        onEngineInstalled={() => {
+          logger.info('EDITING', 'KI-Stem-Engine (Demucs) wurde in-App installiert und verifiziert.');
+        }}
+        onRunWithInstalledEngine={() => {
+          setStemQualityWarning(null);
+          // Cache leeren, damit die vorhandenen Fallback-Stems nicht die neue
+          // Demucs-Trennung verdecken, dann direkt in KI-Qualität trennen.
+          stemEngine.clearCache();
+          setActiveTrackStems(null);
+          void runStemSeparation(false);
+        }}
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}
