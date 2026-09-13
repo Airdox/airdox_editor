@@ -1,5 +1,11 @@
 # Echte Stem-Separation (Demucs)
 
+> **Neu:** Die modulare, nicht-destruktive Stem-Engine (BS-RoFormer als
+> High-Quality-Engine, Modell-Registry, Chunking/Overlap-Add, Validierung,
+> Cache, Abbruch) ist in [`STEM_SEPARATION_ENGINE.md`](./STEM_SEPARATION_ENGINE.md)
+> beschrieben. Dieser Text dokumentiert weiterhin den heute ausgelieferten
+> Demucs-Pfad der Editor-UI.
+
 ## Warum ein Modell nötig ist
 
 Vocals, Gitarren, Synthesizer und Snare überlappen sich im Frequenzbereich. Ein
