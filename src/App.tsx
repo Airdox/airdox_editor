@@ -654,6 +654,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             color,
             audioBuffer: subBuf,
             miniPeaks: extractMiniPeaks(subBuf, 64),
+            // Detailed native-resolution analysis so the palette renders the
+            // same dense waveform as the main editor (BLUE/RGB/3BAND).
+            analysis: analyzeAudioBuffer(subBuf, DataOrigin.REKORDBOX_XML),
+            beatOffsets: Array.from({ length: numBeats }, (_, i) => i * secPerBeat),
             origin: DataOrigin.REKORDBOX_XML,
           };
         };
@@ -2969,6 +2973,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onToggleMatchPitch={setMatchPitchOnInsert}
             targetBpm={activeTrack?.bpm}
             targetKey={activeTrack?.key}
+            waveformMode={waveformMode}
           />
         )}
 
