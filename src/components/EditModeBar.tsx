@@ -7,18 +7,11 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  FilePlus,
-  Save,
-  Share2,
   ChevronDown,
   RotateCcw,
   Info,
   Settings,
   Volume2,
-  PanelBottom,
-  PanelRight,
-  Maximize2,
-  Minimize2,
 } from 'lucide-react';
 
 interface EditModeBarProps {
@@ -100,31 +93,6 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
           <ChevronDown size={12} className="text-neutral-400" />
         </div>
 
-        {/* Small project icons */}
-        <div className="flex items-center space-x-1.5 text-neutral-400 pl-1 border-r border-[#262832] pr-3">
-          <button
-            onClick={onNewProject}
-            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
-            title="Neues Projekt"
-          >
-            <FilePlus size={14} />
-          </button>
-          <button
-            onClick={onSaveProject}
-            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
-            title="Projekt speichern"
-          >
-            <Save size={14} />
-          </button>
-          <button
-            onClick={onExport}
-            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
-            title="Exportieren"
-          >
-            <Share2 size={14} />
-          </button>
-        </div>
-
         {/* Project Name dropdown */}
         <div className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]">
           <span>{projectName}</span>
@@ -191,68 +159,6 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             <ChevronDown size={10} className="text-neutral-400" />
           </button>
 
-          {/* Deck View Layout Toggle: 1-DECK vs 2-DECK (Dual Deck Clip View) */}
-          {onTogglePaletteViewMode && (
-            <button
-              onClick={onTogglePaletteViewMode}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
-                paletteViewMode === 'FULL_DECK'
-                  ? 'border-[#0088ff] bg-[#0d2238] text-[#00c8ff]'
-                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white hover:border-[#383d4e]'
-              }`}
-              title="Zwischen Standard-Ansicht und 2-Deck-Ansicht (Deck A + Clip-Deck B) umschalten"
-            >
-              <span>{paletteViewMode === 'FULL_DECK' ? '2-DECK AKTIV' : '2-DECK ANSICHT'}</span>
-            </button>
-          )}
-
-          {/* Collapsible Edit Palette (Bottom) & Clip Palette (Side) & Max Waveform Mode */}
-          <div className="h-4 w-px bg-[#262832] mx-0.5" />
-
-          {onToggleBottomControl && (
-            <button
-              onClick={onToggleBottomControl}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                bottomControlOpen
-                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
-                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
-              }`}
-              title="Editierpalette unten ein-/ausklappen für maximale Wellenform-Fläche (Taste: E)"
-            >
-              <PanelBottom size={12} />
-              <span>EDIT-PANEL</span>
-            </button>
-          )}
-
-          {onTogglePalette && (
-            <button
-              onClick={onTogglePalette}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
-                paletteOpen
-                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
-                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
-              }`}
-              title="Clip-Palette rechts ein-/ausklappen (Taste: P)"
-            >
-              <PanelRight size={12} />
-              <span>CLIPS</span>
-            </button>
-          )}
-
-          {onToggleMaxWaveform && (
-            <button
-              onClick={onToggleMaxWaveform}
-              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
-                isMaxWaveform
-                  ? 'border-[#00e5ff] bg-[#003848] text-[#00e5ff] shadow-[0_0_8px_rgba(0,229,255,0.3)]'
-                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-[#00e5ff] hover:border-[#383d4e]'
-              }`}
-              title="Wellenform maximieren (Zen-Modus: klappt Paletten ein für maximale Bearbeitungsfläche) [Taste: M]"
-            >
-              {isMaxWaveform ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-              <span>{isMaxWaveform ? 'MAX AKTIV' : 'MAX ZOOM'}</span>
-            </button>
-          )}
         </div>
       </div>
 

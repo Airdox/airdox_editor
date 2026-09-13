@@ -1110,10 +1110,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           return t;
         }));
         
-        logger.info('EDITING', `Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
+        logger.info('BEATGRID', `Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
       }
     } catch (err: any) {
-      logger.error('EDITING', `Fehler bei Auto-Cue Generierung: ${err.message}`, err);
+      logger.error('BEATGRID', `Fehler bei Auto-Cue Generierung: ${err.message}`, err);
     }
   }, [activeTrack]);
 

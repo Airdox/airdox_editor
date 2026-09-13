@@ -305,77 +305,104 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         });
       }
 
-      // 3. Render Waveform (BLUE / RGB / 3BAND)
+      // 3. Render the source waveform as a continuous silhouette.
+      // Never use edit-operation bars or a synthetic beat pattern here: inserted,
+      // replaced and overdubbed audio must be rendered by the same renderer as
+      // the untouched source so the waveform has one consistent visual language.
       const analysis = track.analysis;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
         const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
         const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
-
         const maxHalfH = height * 0.42;
 
-        for (let b = startBucket; b <= endBucket; b++) {
-          const t = b * secPerBucket;
-          const centerT = t + secPerBucket * 0.5;
-          const x = timeToPixel(centerT, width);
-          const nextX = timeToPixel(centerT + secPerBucket, width);
-          const colW = Math.max(1.2, nextX - x);
-
-          const peak = analysis.peaks[b];
-          const low = analysis.lowEnergy[b];
-          const mid = analysis.midEnergy[b];
-          const high = analysis.highEnergy[b];
-
-          // A zero bucket is true silence. Do not draw a decorative minimum
-          // height here: that made a muted/empty range look like invented audio.
-          if (peak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
-
-          if (waveformMode === 'BLUE') {
-            // High-contrast electric blue waveform
-            const barH = peak * maxHalfH;
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
-            const barH = peak * maxHalfH;
-            const r = Math.min(255, Math.floor(low * 270 + mid * 35));
-            const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-            const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
-
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
-            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
-          } else {
-            // 3BAND Mode: Separate layers
-            const lowH = low * maxHalfH * 0.85;
-            const midH = mid * maxHalfH * 0.7;
-            const highH = high * maxHalfH * 0.55;
-
-            // Lows (Red)
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
-            // Mids (Cyan/Green)
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
+        // Render from recorded analysis values only. The continuous envelope keeps
+        // the cleaned-up UI from main, while separate non-zero runs ensure a
+        // cleared/silent range is never bridged or given an invented minimum height.
+        type EnvelopePoint = { x: number; y: number };
+        type EnvelopeRun = { upper: EnvelopePoint[]; lower: EnvelopePoint[] };
+        const envelopeRuns = (amplitudeAt: (bucket: number) => number): EnvelopeRun[] => {
+          const runs: EnvelopeRun[] = [];
+          let run: EnvelopeRun | null = null;
+          for (let bucket = startBucket; bucket <= endBucket; bucket++) {
+            const amplitude = Math.max(0, Math.min(1, amplitudeAt(bucket) || 0));
+            if (amplitude <= 0) {
+              run = null;
+              continue;
+            }
+            if (!run) {
+              run = { upper: [], lower: [] };
+              runs.push(run);
+            }
+            const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
+            const halfHeight = amplitude * maxHalfH;
+            run.upper.push({ x, y: centerY - halfHeight });
+            run.lower.push({ x, y: centerY + halfHeight });
           }
+          return runs;
+        };
+
+        const drawEnvelope = (runs: EnvelopeRun[], colour: string | CanvasGradient, alpha = 1) => {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = colour;
+          for (const { upper, lower } of runs) {
+            if (upper.length === 1) {
+              const halfHeight = centerY - upper[0].y;
+              ctx.fillRect(upper[0].x - 0.5, centerY - halfHeight, 1, halfHeight * 2);
+              continue;
+            }
+            ctx.beginPath();
+            ctx.moveTo(upper[0].x, centerY);
+            upper.forEach((point) => ctx.lineTo(point.x, point.y));
+            for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        };
+
+        const peakRuns = envelopeRuns((bucket) => analysis.peaks[bucket]);
+        if (waveformMode === 'BLUE') {
+          drawEnvelope(peakRuns, '#159fe8');
+          drawEnvelope(peakRuns, '#b8e9ff', 0.34);
+        } else if (waveformMode === '3BAND') {
+          // Each continuous layer follows its actual recorded frequency band.
+          drawEnvelope(envelopeRuns((bucket) => analysis.lowEnergy[bucket] * 0.85), '#ff3b45', 0.72);
+          drawEnvelope(envelopeRuns((bucket) => analysis.midEnergy[bucket] * 0.70), '#18d8df', 0.48);
+          drawEnvelope(envelopeRuns((bucket) => analysis.highEnergy[bucket] * 0.55), '#effcff', 0.30);
+        } else {
+          const gradient = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
+          gradient.addColorStop(0, '#86d8ff');
+          gradient.addColorStop(0.48, '#21a8e8');
+          gradient.addColorStop(0.52, '#21a8e8');
+          gradient.addColorStop(1, '#ff4655');
+          drawEnvelope(peakRuns, gradient);
+        }
+
+        // Fine centre traces retain visual detail without manufacturing audio in
+        // zero-valued analysis buckets.
+        ctx.strokeStyle = waveformMode === 'RGB' ? 'rgba(255,255,255,.42)' : 'rgba(220,245,255,.38)';
+        ctx.lineWidth = 0.7;
+        for (const { upper, lower } of peakRuns) {
+          if (upper.length < 2) continue;
+          ctx.beginPath();
+          upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+          ctx.stroke();
+          ctx.beginPath();
+          lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+          ctx.stroke();
         }
       } else {
-        // Never fake a rhythmic waveform from BPM metadata. Until an actual
-        // ANLZ/audio analysis is available, show an honest empty lane.
+        // Never invent a rhythmic waveform from BPM metadata. Until real
+        // ANLZ/audio analysis exists, expose an honest empty lane.
         ctx.fillStyle = '#606578';
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('Keine native Rekordbox-Wellenform geladen', width / 2, centerY + 4);
         ctx.textAlign = 'left';
+
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
