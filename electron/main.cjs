@@ -9,6 +9,7 @@ const {
 } = require('./dbReader.cjs');
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
+const { separateWav } = require('./demucsRunner.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -174,6 +175,23 @@ function toLocalPath(location) {
     return null;
   }
 }
+
+// High-quality local AI separation. The renderer sends one finished WAV mix;
+// Demucs returns newly inferred stems and never receives reference sources.
+ipcMain.handle('stems:separate', async (_event, wavBytes) => {
+  const result = await separateWav(Buffer.from(wavBytes), {
+    repoRoot: path.join(__dirname, '..'),
+    model: process.env.DEMUCS_MODEL || 'htdemucs_ft',
+    onProgress: (text) => console.info(`[Demucs] ${text.trimEnd()}`),
+  });
+  return {
+    engine: 'demucs',
+    model: result.model,
+    stems: Object.fromEntries(
+      Object.entries(result.stems).map(([name, bytes]) => [name, new Uint8Array(bytes)])
+    ),
+  };
+});
 
 // --- IPC-Handler bleiben unverändert ---
 

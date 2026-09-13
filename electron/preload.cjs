@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
+  // Sends only the finished song mix to the local Demucs inference process.
+  separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
 });

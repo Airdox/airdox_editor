@@ -53,6 +53,11 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       } | null>;
+      separateStems(wavBytes: Uint8Array): Promise<{
+        engine: 'demucs';
+        model: string;
+        stems: Record<'vocals' | 'drums' | 'bass' | 'other', Uint8Array>;
+      }>;
     };
   }
 
