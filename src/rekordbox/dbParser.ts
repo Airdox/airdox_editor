@@ -81,6 +81,11 @@ function joinWindowsPath(folder: string | undefined, fileName: string | undefine
   return folder.replace(/[\\/]+$/, '') + sep + fileName;
 }
 
+function analysisFormat(pathValue: string | undefined): 'DAT' | 'EXT' | '2EX' | 'ANLZ' {
+  const extension = pathValue?.split('.').pop()?.toUpperCase();
+  return extension === 'DAT' || extension === 'EXT' || extension === '2EX' ? extension : 'ANLZ';
+}
+
 interface CueRowNormalized {
   kind: number;
   inMs: number;
@@ -228,6 +233,8 @@ export function mapRekordboxDatabaseRows(
     const duration = lengthMs > 0 ? lengthMs / 1000 : 0;
     const folderPath = asString(row.FolderPath ?? row.path);
     const fileName = asString(row.FileNameL ?? row.fileName);
+    const mediaPath = joinWindowsPath(folderPath, fileName);
+    const analysisDataPath = asString(row.AnalysisDataPath ?? row.analysisDataFilePath);
 
     const cueModel = buildCues(id, rows.cues, bpm, 0);
     memoryCues += cueModel.cues.filter((cue) => cue.type === 'MEMORY').length;
@@ -265,16 +272,26 @@ export function mapRekordboxDatabaseRows(
       origin: DataOrigin.REKORDBOX_DB,
       rawXmlAttributes: {
         databaseType: dbType,
-        analysisDataPath: asString(row.AnalysisDataPath ?? row.analysisDataFilePath) || '',
+        analysisDataPath: analysisDataPath || '',
         folderPath: folderPath || '',
         fileName: fileName || '',
         fileSize: String(asNumber(row.FileSize ?? row.fileSize) ?? 0),
       },
       originalMedia: folderPath || fileName
         ? {
-            location: joinWindowsPath(folderPath, fileName) || fileName!,
+            location: mediaPath || fileName!,
             accessMode: 'READ_ONLY',
             status: 'UNVERIFIED',
+          }
+        : undefined,
+      analysisSource: analysisDataPath
+        ? {
+            path: analysisDataPath,
+            accessMode: 'READ_ONLY',
+            status: 'UNVERIFIED',
+            sourceMediaPath: mediaPath,
+            sourceDuration: duration,
+            format: analysisFormat(analysisDataPath),
           }
         : undefined,
     };

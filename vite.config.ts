@@ -78,7 +78,7 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Arena previews arrive with a generated public hostname rather than localhost.
       // Vite must accept that host for the embedded live preview.
-      allowedHosts: true,
+      allowedHosts: true as const,
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

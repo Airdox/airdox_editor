@@ -32,6 +32,14 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      cacheAnalysisMappings(mappings: RekordboxAnalysisPathMapping[]): Promise<{
+        accepted: number;
+        updated: number;
+        rejected: number;
+        total: number;
+      }>;
+      findAnalysisMapping(query: RekordboxAnalysisPathLookup): Promise<RekordboxAnalysisPathMapping | null>;
+      getAnalysisMappingStats(): Promise<{ version: number; entries: number; filePath: string }>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
@@ -46,6 +54,26 @@ declare global {
         accessMode: 'READ_ONLY';
       } | null>;
     };
+  }
+
+  interface RekordboxAnalysisPathLookup {
+    trackId?: string;
+    mediaPath?: string;
+    sourceMediaPath?: string;
+    title?: string;
+    artist?: string;
+  }
+
+  interface RekordboxAnalysisPathMapping extends RekordboxAnalysisPathLookup {
+    analysisPath: string;
+    format?: 'DAT' | 'EXT' | '2EX' | 'ANLZ';
+    size?: number;
+    modifiedAt?: number;
+    /** Duration of the unedited media timeline represented by the ANLZ file. */
+    sourceDuration?: number;
+    source?: string;
+    observedAt?: number;
+    matchScore?: number;
   }
 
   interface RekordboxDatabaseReadRow {

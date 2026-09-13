@@ -7,6 +7,13 @@
 
 import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
 import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
+import { renderEditSegments } from './editingEngine';
+
+const SAMPLE_INDEX_EPSILON = 1e-6;
+
+function timeToSampleFloor(seconds: number, sampleRate: number): number {
+  return Math.floor(seconds * sampleRate + SAMPLE_INDEX_EPSILON);
+}
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -176,60 +183,11 @@ class AudioEngine {
     segments: EditSegment[]
   ): AudioBuffer {
     const ctx = this.init();
-    if (!segments || segments.length === 0) {
-      return originalBuffer;
-    }
-
-    // Calculate total duration from segments
-    let totalDuration = 0;
-    for (const seg of segments) {
-      const end = seg.projectStart + seg.projectDuration;
-      if (end > totalDuration) totalDuration = end;
-    }
-    if (totalDuration <= 0) totalDuration = originalBuffer.duration;
-
-    const sampleRate = originalBuffer.sampleRate;
-    const totalSamples = Math.max(1, Math.floor(totalDuration * sampleRate));
-    const channels = originalBuffer.numberOfChannels;
-    const outputBuffer = ctx.createBuffer(channels, totalSamples, sampleRate);
-
-    for (let ch = 0; ch < channels; ch++) {
-      const outCh = outputBuffer.getChannelData(ch);
-      const origCh = originalBuffer.getChannelData(ch);
-
-      for (const seg of segments) {
-        const destStart = Math.floor(seg.projectStart * sampleRate);
-        const destLen = Math.floor(seg.projectDuration * sampleRate);
-        const gain = seg.gain ?? 1.0;
-
-        if (seg.type === 'ORIGINAL' || seg.type === 'CUT') {
-          const srcStart = Math.floor(seg.sourceStart * sampleRate);
-          for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < origCh.length; i++) {
-            outCh[destStart + i] = origCh[srcStart + i] * gain;
-          }
-        } else if (seg.type === 'INSERT' || seg.type === 'REPLACE') {
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            const srcStart = Math.floor(seg.sourceStart * sampleRate);
-            for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < clipCh.length; i++) {
-              outCh[destStart + i] = clipCh[srcStart + i] * gain;
-            }
-          }
-        } else if (seg.type === 'OVERDUB') {
-          // Overdub layers onto existing sound
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            for (let i = 0; i < destLen && destStart + i < totalSamples && i < clipCh.length; i++) {
-              outCh[destStart + i] = Math.tanh(outCh[destStart + i] + clipCh[i] * gain * 0.85);
-            }
-          }
-        }
-      }
-    }
-
-    return outputBuffer;
+    return renderEditSegments(
+      originalBuffer,
+      segments,
+      (channels, length, sampleRate) => ctx.createBuffer(channels, length, sampleRate)
+    );
   }
 
   /**
@@ -242,8 +200,8 @@ class AudioEngine {
   ): AudioBuffer {
     const ctx = this.init();
     const sampleRate = buffer.sampleRate;
-    const startSample = Math.max(0, Math.floor(startSec * sampleRate));
-    const endSample = Math.min(buffer.length, Math.floor(endSec * sampleRate));
+    const startSample = Math.max(0, timeToSampleFloor(startSec, sampleRate));
+    const endSample = Math.min(buffer.length, timeToSampleFloor(endSec, sampleRate));
     const length = Math.max(1, endSample - startSample);
     const channels = buffer.numberOfChannels;
 
@@ -283,6 +241,25 @@ class AudioEngine {
     const isCrossTrack = clip.sourceTrackId !== destTrack.id;
     const destBpm = destTrack.bpm > 0 ? destTrack.bpm : 120.0;
     const clipBpm = clip.bpm > 0 ? clip.bpm : destBpm;
+    const pitchPreview = calculateHarmonicPitchShift(clip.key, destTrack.key);
+    const needsTempoAdaptation = Math.abs(destBpm / clipBpm - 1) > 0.002;
+    const needsPitchAdaptation = Boolean(matchPitch && clip.key && destTrack.key && pitchPreview.semitones !== 0);
+
+    // Do not route an already compatible clip through WSOLA. Apart from being
+    // needlessly expensive, an unnecessary resynthesis is precisely where a
+    // short/empty tail can be introduced. Returning the immutable clip buffer
+    // preserves a same-track palette round trip sample-for-sample.
+    if (!needsTempoAdaptation && !needsPitchAdaptation) {
+      return {
+        adaptedBuffer: clip.audioBuffer,
+        tempoRatio: destBpm / clipBpm,
+        semitonesShifted: 0,
+        harmonicRelation: matchPitch ? pitchPreview.harmonicRelation : 'Keine Tonhöhenanpassung',
+        originalDuration: clip.audioBuffer.duration,
+        newDuration: clip.audioBuffer.duration,
+        isCrossTrack,
+      };
+    }
 
     const res = adaptClipAudioBuffer(
       clip.audioBuffer,

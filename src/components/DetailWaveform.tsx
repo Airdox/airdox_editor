@@ -317,60 +317,92 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
         const maxHalfH = height * 0.42;
 
-        // A filled upper/lower envelope is visually continuous at every zoom
-        // level. It deliberately uses the measured peak profile, not rectangles.
-        const upper: Array<{ x: number; y: number; b: number }> = [];
-        const lower: Array<{ x: number; y: number; b: number }> = [];
-        for (let bucket = startBucket; bucket <= endBucket; bucket++) {
-          const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
-          const peak = Math.max(0, Math.min(1, analysis.peaks[bucket] || 0));
-          upper.push({ x, y: centerY - Math.max(1, peak * maxHalfH), b: bucket });
-          lower.push({ x, y: centerY + Math.max(1, peak * maxHalfH), b: bucket });
-        }
+        // Render from recorded analysis values only. The continuous envelope keeps
+        // the cleaned-up UI from main, while separate non-zero runs ensure a
+        // cleared/silent range is never bridged or given an invented minimum height.
+        type EnvelopePoint = { x: number; y: number };
+        type EnvelopeRun = { upper: EnvelopePoint[]; lower: EnvelopePoint[] };
+        const envelopeRuns = (amplitudeAt: (bucket: number) => number): EnvelopeRun[] => {
+          const runs: EnvelopeRun[] = [];
+          let run: EnvelopeRun | null = null;
+          for (let bucket = startBucket; bucket <= endBucket; bucket++) {
+            const amplitude = Math.max(0, Math.min(1, amplitudeAt(bucket) || 0));
+            if (amplitude <= 0) {
+              run = null;
+              continue;
+            }
+            if (!run) {
+              run = { upper: [], lower: [] };
+              runs.push(run);
+            }
+            const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
+            const halfHeight = amplitude * maxHalfH;
+            run.upper.push({ x, y: centerY - halfHeight });
+            run.lower.push({ x, y: centerY + halfHeight });
+          }
+          return runs;
+        };
 
-        const drawEnvelope = (colour: string | CanvasGradient, alpha = 1) => {
-          if (upper.length < 2) return;
+        const drawEnvelope = (runs: EnvelopeRun[], colour: string | CanvasGradient, alpha = 1) => {
           ctx.save();
           ctx.globalAlpha = alpha;
-          ctx.beginPath();
-          ctx.moveTo(upper[0].x, centerY);
-          upper.forEach((point) => ctx.lineTo(point.x, point.y));
-          for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
-          ctx.closePath();
           ctx.fillStyle = colour;
-          ctx.fill();
+          for (const { upper, lower } of runs) {
+            if (upper.length === 1) {
+              const halfHeight = centerY - upper[0].y;
+              ctx.fillRect(upper[0].x - 0.5, centerY - halfHeight, 1, halfHeight * 2);
+              continue;
+            }
+            ctx.beginPath();
+            ctx.moveTo(upper[0].x, centerY);
+            upper.forEach((point) => ctx.lineTo(point.x, point.y));
+            for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
+            ctx.closePath();
+            ctx.fill();
+          }
           ctx.restore();
         };
 
+        const peakRuns = envelopeRuns((bucket) => analysis.peaks[bucket]);
         if (waveformMode === 'BLUE') {
-          drawEnvelope('#159fe8');
-          drawEnvelope('#b8e9ff', 0.34);
+          drawEnvelope(peakRuns, '#159fe8');
+          drawEnvelope(peakRuns, '#b8e9ff', 0.34);
         } else if (waveformMode === '3BAND') {
-          // Bands share the same continuous silhouette; only their colour is layered.
-          drawEnvelope('#ff3b45', 0.72);
-          drawEnvelope('#18d8df', 0.48);
-          drawEnvelope('#effcff', 0.30);
+          // Each continuous layer follows its actual recorded frequency band.
+          drawEnvelope(envelopeRuns((bucket) => analysis.lowEnergy[bucket] * 0.85), '#ff3b45', 0.72);
+          drawEnvelope(envelopeRuns((bucket) => analysis.midEnergy[bucket] * 0.70), '#18d8df', 0.48);
+          drawEnvelope(envelopeRuns((bucket) => analysis.highEnergy[bucket] * 0.55), '#effcff', 0.30);
         } else {
-          // RGB remains the default source-like waveform, with a restrained
-          // frequency-colour gradient rather than one bar per analysis bucket.
           const gradient = ctx.createLinearGradient(0, centerY - maxHalfH, 0, centerY + maxHalfH);
           gradient.addColorStop(0, '#86d8ff');
           gradient.addColorStop(0.48, '#21a8e8');
           gradient.addColorStop(0.52, '#21a8e8');
           gradient.addColorStop(1, '#ff4655');
-          drawEnvelope(gradient);
+          drawEnvelope(peakRuns, gradient);
         }
 
-        // Fine centre trace restores the characteristic original waveform detail
-        // without exposing the boundaries of edited regions.
+        // Fine centre traces retain visual detail without manufacturing audio in
+        // zero-valued analysis buckets.
         ctx.strokeStyle = waveformMode === 'RGB' ? 'rgba(255,255,255,.42)' : 'rgba(220,245,255,.38)';
         ctx.lineWidth = 0.7;
-        ctx.beginPath();
-        upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-        ctx.stroke();
-        ctx.beginPath();
-        lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-        ctx.stroke();
+        for (const { upper, lower } of peakRuns) {
+          if (upper.length < 2) continue;
+          ctx.beginPath();
+          upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+          ctx.stroke();
+          ctx.beginPath();
+          lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+          ctx.stroke();
+        }
+      } else {
+        // Never invent a rhythmic waveform from BPM metadata. Until real
+        // ANLZ/audio analysis exists, expose an honest empty lane.
+        ctx.fillStyle = '#606578';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Keine native Rekordbox-Wellenform geladen', width / 2, centerY + 4);
+        ctx.textAlign = 'left';
+
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
