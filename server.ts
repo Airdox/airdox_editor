@@ -8,12 +8,52 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import demucsRunner from './electron/demucsRunner.cjs';
+
+const { separateWav } = demucsRunner as {
+  separateWav: (
+    bytes: Uint8Array,
+    options?: { repoRoot?: string; model?: string; onProgress?: (text: string) => void }
+  ) => Promise<{ model: string; stems: Record<string, Buffer> }>;
+};
 
 dotenv.config();
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Real Stem-Separation: the request body is the finished stereo song mix.
+  // Demucs never receives or has access to reference/ground-truth stems.
+  app.post(
+    '/api/stems/separate',
+    express.raw({ type: ['audio/wav', 'application/octet-stream'], limit: '1gb' }),
+    async (req, res) => {
+      try {
+        if (!Buffer.isBuffer(req.body) || req.body.length < 44) {
+          return res.status(400).json({ error: 'Eine gültige PCM-WAV-Mixdatei ist erforderlich.' });
+        }
+        const result = await separateWav(req.body, {
+          repoRoot: process.cwd(),
+          model: process.env.DEMUCS_MODEL || 'htdemucs_ft',
+          onProgress: (text) => console.info(`[Demucs] ${text.trimEnd()}`),
+        });
+        // One response keeps all four files from the exact same model pass aligned.
+        // Base64 is intentionally used only on the local API/desktop path.
+        return res.json({
+          engine: 'demucs',
+          model: result.model,
+          stems: Object.fromEntries(
+            Object.entries(result.stems).map(([name, bytes]) => [name, bytes.toString('base64')])
+          ),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[Demucs] Separation failed:', message);
+        return res.status(503).json({ error: message });
+      }
+    }
+  );
 
   app.use(express.json({ limit: '10mb' }));
 

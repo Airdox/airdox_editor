@@ -1,8 +1,10 @@
 node_modules/
+.venv/
 build/
 dist/
 coverage/
 .DS_Store
 *.log
+stem-test-output/
 .env*
 !.env.example

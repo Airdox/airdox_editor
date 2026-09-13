@@ -84,6 +84,47 @@ export interface StemSeparationProgress {
 
 export type StemProgressCallback = (progress: StemSeparationProgress) => void;
 
+interface DemucsResponse {
+  engine: 'demucs';
+  model: string;
+  stems: Record<StemType, string | Uint8Array>;
+}
+
+function encodeStereoPcmWav(buffer: AudioBuffer): Uint8Array {
+  const channels = 2;
+  const bytesPerSample = 2;
+  const dataSize = buffer.length * channels * bytesPerSample;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  const write = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  write(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); write(8, 'WAVE');
+  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true); view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * channels * bytesPerSample, true);
+  view.setUint16(32, channels * bytesPerSample, true); view.setUint16(34, 16, true);
+  write(36, 'data'); view.setUint32(40, dataSize, true);
+  const left = buffer.getChannelData(0);
+  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (const sample of [left[i], right[i]]) {
+      const value = Math.max(-1, Math.min(1, sample));
+      view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return bytes;
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /**
  * Environment-independent AudioBuffer allocation. The Node test harness has no
  * Web Audio API, so a plain Float32-backed double is used there.
@@ -166,11 +207,84 @@ class StemEngine {
   }
 
   /**
-   * Separates an AudioBuffer into 4 isolated stems: Vocals, Drums, Bass, Other.
-   * Runs in non-blocking async chunks to keep UI responsive.
-   *
-   * The separation is strictly read-only with regard to `sourceBuffer`: it only
-   * reads channel data and allocates fresh output buffers.
+   * Production-quality separation using the trained Demucs htdemucs_ft model.
+   * Only a single finished song mix is sent to inference. This method fails
+   * explicitly when the model is unavailable; it never disguises the old
+   * frequency splitter as AI separation.
+   */
+  public async separateAudioBufferWithModel(
+    sourceBuffer: AudioBuffer,
+    trackId: string,
+    originalSha256: string = 'sha256-unverified',
+    onProgress?: StemProgressCallback
+  ): Promise<TrackStems> {
+    const cached = this.getCachedStems(trackId, originalSha256);
+    if (cached) return cached;
+
+    this.isProcessing = true;
+    const duration = sourceBuffer.duration;
+    try {
+      onProgress?.({ percent: 2, phaseText: 'Songmix für Demucs vorbereiten…', processedSeconds: 0, totalSeconds: duration });
+      const wav = encodeStereoPcmWav(sourceBuffer);
+      let response: DemucsResponse;
+
+      if (window.rekordboxDesktop?.separateStems) {
+        response = await window.rekordboxDesktop.separateStems(wav);
+      } else {
+        onProgress?.({ percent: 5, phaseText: 'Demucs htdemucs_ft analysiert den vollständigen Mix…', processedSeconds: 0, totalSeconds: duration });
+        const request = await fetch('/api/stems/separate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'audio/wav' },
+          body: wav,
+        });
+        const payload = await request.json();
+        if (!request.ok) throw new Error(payload.error || `Stem-Service antwortet mit HTTP ${request.status}`);
+        response = payload as DemucsResponse;
+      }
+
+      if (response.engine !== 'demucs') throw new Error('Ungültige Antwort des Demucs Stem-Service.');
+      onProgress?.({ percent: 94, phaseText: `${response.model}: vier WAV-Stems dekodieren…`, processedSeconds: duration, totalSeconds: duration });
+
+      const AudioCtx = window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) throw new Error('Web Audio API ist für das Dekodieren der Demucs-Ausgabe erforderlich.');
+      const context = new AudioCtx();
+      try {
+        const decoded = {} as Record<StemType, AudioBuffer>;
+        for (const stem of STEM_TYPES) {
+          const encoded = response.stems[stem];
+          if (!encoded) throw new Error(`Demucs hat keinen ${stem}-Stem geliefert.`);
+          const bytes = typeof encoded === 'string' ? decodeBase64(encoded) : new Uint8Array(encoded);
+          const exact = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+          decoded[stem] = await context.decodeAudioData(exact);
+        }
+        const result: TrackStems = {
+          trackId,
+          originalSha256,
+          duration: decoded.vocals.duration,
+          sampleRate: decoded.vocals.sampleRate,
+          channels: decoded.vocals.numberOfChannels,
+          vocals: decoded.vocals,
+          drums: decoded.drums,
+          bass: decoded.bass,
+          other: decoded.other,
+          separatedAt: Date.now(),
+        };
+        this.cacheStems(trackId, result, originalSha256);
+        onProgress?.({ percent: 100, phaseText: `Echte KI-Stems mit ${response.model} fertig`, processedSeconds: duration, totalSeconds: duration });
+        return result;
+      } finally {
+        await context.close();
+      }
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  /**
+   * Legacy deterministic frequency splitter retained for low-level DSP tests.
+   * It is NOT suitable for production vocal extraction. The application UI
+   * deliberately uses separateAudioBufferWithModel instead.
    */
   public async separateAudioBuffer(
     sourceBuffer: AudioBuffer,

@@ -73,6 +73,7 @@ import {
   DEFAULT_STEMS_MIXER_STATE,
   STEM_TYPES,
 } from './audio/stemEngine';
+import { applyStemMixDuringPlayback, isCustomStemMix } from './audio/stemPlayback';
 import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
@@ -762,7 +763,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
     setIsSeparatingStems(true);
     try {
-      const separated = await stemEngine.separateAudioBuffer(
+      const separated = await stemEngine.separateAudioBufferWithModel(
         workingAudioBuffer,
         activeTrack.id,
         activeTrack.originalSha256,
@@ -874,9 +875,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   const applyStemsMixerState = useCallback((next: StemsMixerState) => {
     setStemsMixerState(next);
-    audioEngine.updateStemMixer(next);
     midiManager.updateStemPadLeds(next);
-  }, []);
+
+    // Switch from an already-running master source to the four stem sources at
+    // the exact playhead position. Updating inactive gain nodes was the reason
+    // Acapella previously sounded unchanged until playback was restarted.
+    applyStemMixDuringPlayback(
+      audioEngine,
+      activeTrackStems,
+      workingAudioBuffer,
+      next,
+      loopActive,
+      loopActive && selection ? selection.start : 0,
+      loopActive && selection ? selection.end : 0
+    );
+  }, [activeTrackStems, workingAudioBuffer, loopActive, selection]);
 
   const handleSetAcapella = useCallback(() => {
     applyStemsMixerState({
@@ -907,11 +920,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   /** Stems playback is only engaged when the mixer actually deviates from the full mix. */
   const stemsMixIsCustom = useMemo(
-    () =>
-      activeTrackStems !== null &&
-      STEM_TYPES.some(
-        (s) => stemsMixerState[s].muted || stemsMixerState[s].solo || stemsMixerState[s].volume !== 1.0
-      ),
+    () => activeTrackStems !== null && isCustomStemMix(stemsMixerState),
     [activeTrackStems, stemsMixerState]
   );
 
