@@ -13,6 +13,30 @@ export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 
 export const STEM_TYPES: StemType[] = ['vocals', 'drums', 'bass', 'other'];
 
+/**
+ * Guard rails for the sum-preserving normalization.
+ *
+ * `sample / rawSum` is mathematically exact but numerically unbounded: whenever the
+ * four masks nearly cancel each other (rawSum -> 0 while sample stays finite) the
+ * factor explodes and every individual stem is blown far past the source amplitude.
+ * The four stems still add back up to the mix — which is why the full mix (Reset)
+ * sounds mostly fine — but as soon as one stem is soloed or another muted, the
+ * cancellation partner is gone and the overshoot becomes audible digital clipping.
+ *
+ * Therefore the factor is only trusted inside a sane window; outside of it the
+ * sample is distributed by mask *energy*, which is bounded by construction.
+ */
+export const NORM_FACTOR_MIN = 0.25;
+export const NORM_FACTOR_MAX = 4.0;
+
+/**
+ * No single stem may ever exceed the peak of the source material. Stems are
+ * allowed to be louder than the *instantaneous* mix sample (that is physically
+ * normal — partials cancel in the sum), but never louder than the loudest point
+ * of the track itself.
+ */
+export const STEM_PEAK_CEILING = 1.0;
+
 export interface TrackStems {
   trackId: string;
   originalSha256: string;
@@ -24,6 +48,11 @@ export interface TrackStems {
   bass: AudioBuffer;
   other: AudioBuffer;
   separatedAt: number;
+  /** Number of samples where `normFactor` left its trusted window and the
+   *  energy-weighted split was used instead. Purely diagnostic. */
+  normalizationFallbacks?: number;
+  /** Absolute peak of the source material used as per-stem ceiling. */
+  sourcePeak?: number;
 }
 
 export interface StemChannelState {
@@ -187,6 +216,19 @@ class StemEngine {
         sourceData.push(sourceBuffer.getChannelData(ch));
       }
 
+      // Absolute peak of the source material. No stem is allowed to exceed it,
+      // because a stem that is louder than the loudest point of the track can
+      // only be an artefact of the normalization, never real content.
+      let sourcePeak = 0;
+      for (let ch = 0; ch < channels; ch++) {
+        const data = sourceData[ch];
+        for (let i = 0; i < length; i++) {
+          const a = Math.abs(data[i]);
+          if (a > sourcePeak) sourcePeak = a;
+        }
+      }
+      const peakCeiling = sourcePeak > 0 ? sourcePeak : STEM_PEAK_CEILING;
+
       // Processing parameters
       const chunkSize = 16384; // ~370ms per chunk at 44.1kHz
       const totalChunks = Math.max(1, Math.ceil(length / chunkSize));
@@ -214,6 +256,9 @@ class StemEngine {
       const transientEnv = new Float32Array(channels);
 
       const isStereo = channels >= 2;
+
+      // Diagnostics: how many samples had to fall back to the energy split.
+      let normalizationFallbacks = 0;
 
       for (let c = 0; c < totalChunks; c++) {
         const start = c * chunkSize;
@@ -285,9 +330,59 @@ class StemEngine {
             }
 
             const normFactor = sample / rawSum;
-            const v = vocalVal * normFactor;
-            const d = drumVal * normFactor;
-            const b = bassVal * normFactor;
+
+            let v: number;
+            let d: number;
+            let b: number;
+            let useEnergySplit =
+              !Number.isFinite(normFactor) ||
+              Math.abs(normFactor) < NORM_FACTOR_MIN ||
+              Math.abs(normFactor) > NORM_FACTOR_MAX ||
+              normFactor < 0;
+
+            if (!useEnergySplit) {
+              v = vocalVal * normFactor;
+              d = drumVal * normFactor;
+              b = bassVal * normFactor;
+
+              // Even inside the trusted window a single mask can overshoot the
+              // material. Clamp, and if the residual stem would then have to
+              // absorb more than the source peak, reject the factor entirely.
+              if (v > peakCeiling) v = peakCeiling;
+              else if (v < -peakCeiling) v = -peakCeiling;
+              if (d > peakCeiling) d = peakCeiling;
+              else if (d < -peakCeiling) d = -peakCeiling;
+              if (b > peakCeiling) b = peakCeiling;
+              else if (b < -peakCeiling) b = -peakCeiling;
+
+              if (Math.abs(sample - v - d - b) > peakCeiling) {
+                useEnergySplit = true;
+              }
+            }
+
+            if (useEnergySplit) {
+              // Energy-weighted allocation: each stem receives the share of the
+              // sample that matches its mask energy. Every stem is bounded by
+              // |sample| by construction, so this can never clip — while the
+              // four shares still add up to exactly the source sample.
+              const ev = vocalVal * vocalVal;
+              const ed = drumVal * drumVal;
+              const eb = bassVal * bassVal;
+              const eo = otherVal * otherVal;
+              const energySum = ev + ed + eb + eo;
+
+              if (energySum > 0 && Number.isFinite(energySum)) {
+                v = (sample * ev) / energySum;
+                d = (sample * ed) / energySum;
+                b = (sample * eb) / energySum;
+              } else {
+                const quarter = sample / 4;
+                v = quarter;
+                d = quarter;
+                b = quarter;
+              }
+              normalizationFallbacks++;
+            }
 
             vocalsData[ch][i] = v;
             drumsData[ch][i] = d;
@@ -323,6 +418,8 @@ class StemEngine {
         bass: bassBuffer,
         other: otherBuffer,
         separatedAt: Date.now(),
+        normalizationFallbacks,
+        sourcePeak: peakCeiling,
       };
 
       this.cacheStems(trackId, result, originalSha256);
