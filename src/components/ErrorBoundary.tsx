@@ -59,10 +59,12 @@ export class ErrorBoundary extends Component<Props, State> {
       componentStack: this.state.errorInfo?.componentStack,
     });
 
-    navigator.clipboard.writeText(report).then(() => {
-      this.setState({ copied: true });
-      setTimeout(() => this.setState({ copied: false }), 2500);
-    });
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(report).then(() => {
+        this.setState({ copied: true });
+        setTimeout(() => this.setState({ copied: false }), 2500);
+      }).catch(() => {});
+    }
   };
 
   private handleDownloadReport = () => {

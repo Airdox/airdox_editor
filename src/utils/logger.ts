@@ -57,6 +57,20 @@ class LoggerService {
 
     // Capture uncaught JavaScript runtime errors
     window.addEventListener('error', (event) => {
+      const msg = typeof event.message === 'string' ? event.message : '';
+      // Ignore benign browser events that do not represent application crashes
+      if (
+        msg.includes('ResizeObserver') ||
+        msg.includes('Script error.') ||
+        msg.includes('Extension context invalidated')
+      ) {
+        return;
+      }
+      // If it's a resource load failure (<img>, <audio>, etc.), event is an Event, not an ErrorEvent
+      if (typeof ErrorEvent !== 'undefined' && !(event instanceof ErrorEvent)) {
+        return;
+      }
+
       this.fatal(
         'SYSTEM',
         `Uncaught Global Error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
@@ -75,6 +89,19 @@ class LoggerService {
       const reason = event.reason;
       const message = reason instanceof Error ? reason.message : String(reason);
       const stack = reason instanceof Error ? reason.stack : undefined;
+
+      // Ignore benign rejections like user aborts, autoplay restrictions, or clipboard permissions
+      if (
+        message.includes('AudioContext') ||
+        message.includes('user gesture') ||
+        message.includes('The play() request was interrupted') ||
+        message.includes('AbortError') ||
+        message.includes('ResizeObserver') ||
+        message.includes('clipboard')
+      ) {
+        return;
+      }
+
       this.fatal(
         'SYSTEM',
         `Unhandled Promise Rejection: ${message}`,
@@ -91,50 +118,64 @@ class LoggerService {
     message: string,
     details?: any
   ): LogEntry {
-    const now = new Date();
-    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
-      .getMinutes()
-      .toString()
-      .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now
-      .getMilliseconds()
-      .toString()
-      .padStart(3, '0')}`;
+    try {
+      const now = new Date();
+      const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
+        .getMinutes()
+        .toString()
+        .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now
+        .getMilliseconds()
+        .toString()
+        .padStart(3, '0')}`;
 
-    let stack: string | undefined;
-    if (level === 'ERROR' || level === 'FATAL') {
-      if (details instanceof Error) {
-        stack = details.stack;
-      } else {
-        stack = new Error().stack;
+      let stack: string | undefined;
+      if (level === 'ERROR' || level === 'FATAL') {
+        if (details instanceof Error) {
+          stack = details.stack;
+        } else if (details && typeof details === 'object' && typeof details.stack === 'string') {
+          stack = details.stack;
+        } else {
+          stack = new Error().stack;
+        }
       }
+
+      const entry: LogEntry = {
+        // Kein Date.now() als Identität: zwei Einträge im selben Millisekunden-tick
+        // bekämen dieselbe Id, und die Liste verliert ihre React-keys. Der Zähler aus
+        // utils/ids ist pro Prozess monoton und damit eindeutig.
+        id: nextId('log'),
+        timestamp: now.getTime(),
+        timeString,
+        level,
+        category,
+        message,
+        details: details !== undefined ? this.sanitizeDetails(details) : undefined,
+        stack,
+      };
+
+      this.entries.push(entry);
+      if (this.entries.length > this.maxEntries) {
+        this.entries.shift();
+      }
+
+      // Console output with Pioneer DJ-styled coloring
+      this.printToConsole(entry);
+
+      // Notify active listeners (e.g., live log modals)
+      this.notifyListeners(entry);
+
+      return entry;
+    } catch {
+      // Failsafe: logger must never throw
+      return {
+        id: 'log-failsafe',
+        timestamp: Date.now(),
+        timeString: '',
+        level,
+        category,
+        message,
+      };
     }
-
-    const entry: LogEntry = {
-      // Kein Date.now() als Identität: zwei Einträge im selben Millisekunden-tick
-      // bekämen dieselbe Id, und die Liste verliert ihre React-keys. Der Zähler aus
-      // utils/ids ist pro Prozess monoton und damit eindeutig.
-      id: nextId('log'),
-      timestamp: now.getTime(),
-      timeString,
-      level,
-      category,
-      message,
-      details: details !== undefined ? this.sanitizeDetails(details) : undefined,
-      stack,
-    };
-
-    this.entries.push(entry);
-    if (this.entries.length > this.maxEntries) {
-      this.entries.shift();
-    }
-
-    // Console output with Pioneer DJ-styled coloring
-    this.printToConsole(entry);
-
-    // Notify active listeners (e.g., live log modals)
-    this.notifyListeners(entry);
-
-    return entry;
   }
 
   private sanitizeDetails(details: any): any {

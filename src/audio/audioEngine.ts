@@ -48,7 +48,7 @@ class AudioEngine {
       this.splitter.connect(this.analyserR, 1);
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
     return this.ctx;
   }

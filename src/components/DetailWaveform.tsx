@@ -216,18 +216,25 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
     if (!canvas || !host) return;
+    let rafId: number | null = null;
     const fit = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = host.getBoundingClientRect();
-      const w = Math.max(1, Math.round(rect.width * dpr));
-      const h = Math.max(1, Math.round(rect.height * dpr));
-      if (canvas.width !== w) canvas.width = w;
-      if (canvas.height !== h) canvas.height = h;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = host.getBoundingClientRect();
+        const w = Math.max(1, Math.round(rect.width * dpr));
+        const h = Math.max(1, Math.round(rect.height * dpr));
+        if (canvas.width !== w) canvas.width = w;
+        if (canvas.height !== h) canvas.height = h;
+      });
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(host);
-    return () => ro.disconnect();
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
   }, []);
 
   // Time to pixel / pixel to time conversions

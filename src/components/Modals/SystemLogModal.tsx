@@ -76,10 +76,12 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
     const text = filteredLogs
       .map((l) => `[${l.timeString}] [${l.level}] [${l.category}] ${l.message}`)
       .join('\n');
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {});
+    }
   };
 
   const handleDownload = () => {

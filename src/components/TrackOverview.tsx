@@ -44,21 +44,28 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
     if (!canvas || !host) return;
+    let rafId: number | null = null;
     const fit = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = host.getBoundingClientRect();
-      const w = Math.max(1, Math.round(rect.width * dpr));
-      const h = Math.max(1, Math.round(rect.height * dpr));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-        setFitTick((t) => t + 1);
-      }
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = host.getBoundingClientRect();
+        const w = Math.max(1, Math.round(rect.width * dpr));
+        const h = Math.max(1, Math.round(rect.height * dpr));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+          setFitTick((t) => t + 1);
+        }
+      });
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(host);
-    return () => ro.disconnect();
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
   }, []);
 
   // Draw overview canvas

@@ -201,7 +201,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
       }
       const ctx = previewAudioContextRef.current;
       if (ctx.state === 'suspended') {
-        ctx.resume();
+        ctx.resume().catch(() => {});
       }
 
       const source = ctx.createBufferSource();
