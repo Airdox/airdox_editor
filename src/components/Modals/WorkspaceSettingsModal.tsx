@@ -2,6 +2,9 @@ import React from 'react';
 import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves } from 'lucide-react';
 import { WaveformMode } from '../../types/rekordbox';
 
+export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
+export type RecordingFormat = 'WAV' | 'FLAC';
+
 interface WorkspaceSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -18,6 +21,22 @@ interface WorkspaceSettingsModalProps {
   onSetAutoScroll: (val: boolean) => void;
   highQualityRendering: boolean;
   onSetHighQualityRendering: (val: boolean) => void;
+  recordingSource: RecordingSource;
+  onSetRecordingSource: (source: RecordingSource) => void;
+  recordingFormat: RecordingFormat;
+  onSetRecordingFormat: (format: RecordingFormat) => void;
+  recordingSampleRate: 44100 | 48000;
+  onSetRecordingSampleRate: (rate: 44100 | 48000) => void;
+  recordingBitDepth: 16 | 24 | 32;
+  onSetRecordingBitDepth: (depth: 16 | 24 | 32) => void;
+  recordingChannels: 'STEREO' | 'MONO';
+  onSetRecordingChannels: (channels: 'STEREO' | 'MONO') => void;
+  recordingLimiter: boolean;
+  onSetRecordingLimiter: (value: boolean) => void;
+  confirmDestructiveEdits: boolean;
+  onSetConfirmDestructiveEdits: (value: boolean) => void;
+  autoSaveProject: boolean;
+  onSetAutoSaveProject: (value: boolean) => void;
 }
 
 export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
@@ -36,6 +55,22 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onSetAutoScroll,
   highQualityRendering,
   onSetHighQualityRendering,
+  recordingSource,
+  onSetRecordingSource,
+  recordingFormat,
+  onSetRecordingFormat,
+  recordingSampleRate,
+  onSetRecordingSampleRate,
+  recordingBitDepth,
+  onSetRecordingBitDepth,
+  recordingChannels,
+  onSetRecordingChannels,
+  recordingLimiter,
+  onSetRecordingLimiter,
+  confirmDestructiveEdits,
+  onSetConfirmDestructiveEdits,
+  autoSaveProject,
+  onSetAutoSaveProject,
 }) => {
   if (!isOpen) return null;
 
@@ -123,6 +158,36 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                   <input type="checkbox" className="sr-only peer" checked={highQualityRendering} onChange={(e) => onSetHighQualityRendering(e.target.checked)} />
                   <div className="w-8 h-4 bg-[#0f1015] border border-[#22242d] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-neutral-400 peer-checked:after:bg-[#8b5cf6] after:border-neutral-500 after:border after:rounded-full after:h-3 after:w-3 after:transition-all"></div>
                 </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Recording / Capture */}
+          <div className="space-y-3">
+            <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center space-x-1.5 border-b border-[#1f222d] pb-1">
+              <Waves size={12} />
+              <span>Aufnahme & Signalquelle</span>
+            </h3>
+            <div className="bg-[#161820] border border-[#22242d] rounded-xs p-3 space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-white block mb-1">Aufnahmequelle</label>
+                <select value={recordingSource} onChange={(e) => onSetRecordingSource(e.target.value as RecordingSource)} className="w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5">
+                  <option value="EDITOR_MASTER">Editor-Master (intern)</option>
+                  <option value="AUDIO_INPUT">Mikrofon / Line-In</option>
+                  <option value="SYSTEM_LOOPBACK">Windows / Rekordbox Master (Loopback)</option>
+                </select>
+                <div className="text-[10px] text-neutral-500 mt-1">Die Quelle wird für die künftige Aufnahmefunktion gespeichert; Rekordbox wird über WASAPI-Loopback aufgenommen, nicht über den Editor-Master.</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-[10px] text-neutral-400">Format<select value={recordingFormat} onChange={(e) => onSetRecordingFormat(e.target.value as RecordingFormat)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="WAV">WAV (PCM)</option><option value="FLAC">FLAC</option></select></label>
+                <label className="text-[10px] text-neutral-400">Samplerate<select value={recordingSampleRate} onChange={(e) => onSetRecordingSampleRate(Number(e.target.value) as 44100 | 48000)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option></select></label>
+                <label className="text-[10px] text-neutral-400">Bit-Tiefe<select value={recordingBitDepth} onChange={(e) => onSetRecordingBitDepth(Number(e.target.value) as 16 | 24 | 32)} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="16">16 Bit</option><option value="24">24 Bit</option><option value="32">32 Bit Float</option></select></label>
+                <label className="text-[10px] text-neutral-400">Kanäle<select value={recordingChannels} onChange={(e) => onSetRecordingChannels(e.target.value as 'STEREO' | 'MONO')} className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"><option value="STEREO">Stereo</option><option value="MONO">Mono</option></select></label>
+              </div>
+              <div className="space-y-2 border-t border-[#252834] pt-2">
+                <label className="flex items-center justify-between text-xs text-neutral-200"><span>Soft-Limiter gegen Clipping</span><input type="checkbox" checked={recordingLimiter} onChange={(e) => onSetRecordingLimiter(e.target.checked)} /></label>
+                <label className="flex items-center justify-between text-xs text-neutral-200"><span>Vor destruktiven Befehlen bestätigen</span><input type="checkbox" checked={confirmDestructiveEdits} onChange={(e) => onSetConfirmDestructiveEdits(e.target.checked)} /></label>
+                <label className="flex items-center justify-between text-xs text-neutral-200"><span>Projekt automatisch sichern</span><input type="checkbox" checked={autoSaveProject} onChange={(e) => onSetAutoSaveProject(e.target.checked)} /></label>
               </div>
             </div>
           </div>

@@ -380,10 +380,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
+  // Recording is configured here, not hard-coded: the eventual recorder can use
+  // the editor master, a microphone/line input, or Windows/Rekordbox loopback.
+  const [recordingSource, setRecordingSource] = useState<'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK'>(() => {
+    if (typeof window === 'undefined') return 'EDITOR_MASTER';
+    return (window.localStorage.getItem('airdox.recordingSource') as 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK') || 'EDITOR_MASTER';
+  });
+  const [recordingFormat, setRecordingFormat] = useState<'WAV' | 'FLAC'>('WAV');
+  const [recordingSampleRate, setRecordingSampleRate] = useState<44100 | 48000>(48000);
+  const [recordingBitDepth, setRecordingBitDepth] = useState<16 | 24 | 32>(24);
+  const [recordingChannels, setRecordingChannels] = useState<'STEREO' | 'MONO'>('STEREO');
+  const [recordingLimiter, setRecordingLimiter] = useState<boolean>(true);
+  const [confirmDestructiveEdits, setConfirmDestructiveEdits] = useState<boolean>(true);
+  const [autoSaveProject, setAutoSaveProject] = useState<boolean>(false);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const [highQualityRendering, setHighQualityRendering] = useState<boolean>(true);
   const [snapToBeatgrid, setSnapToBeatgrid] = useState<boolean>(true);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    window.localStorage?.setItem('airdox.settings', JSON.stringify({
+      recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth,
+      recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject,
+    }));
+  }, [recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth, recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject]);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
   const [isGlobalDragging, setIsGlobalDragging] = useState<boolean>(false);
@@ -3059,6 +3079,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSetAutoScroll={setAutoScroll}
         highQualityRendering={highQualityRendering}
         onSetHighQualityRendering={setHighQualityRendering}
+        recordingSource={recordingSource}
+        onSetRecordingSource={setRecordingSource}
+        recordingFormat={recordingFormat}
+        onSetRecordingFormat={setRecordingFormat}
+        recordingSampleRate={recordingSampleRate}
+        onSetRecordingSampleRate={setRecordingSampleRate}
+        recordingBitDepth={recordingBitDepth}
+        onSetRecordingBitDepth={setRecordingBitDepth}
+        recordingChannels={recordingChannels}
+        onSetRecordingChannels={setRecordingChannels}
+        recordingLimiter={recordingLimiter}
+        onSetRecordingLimiter={setRecordingLimiter}
+        confirmDestructiveEdits={confirmDestructiveEdits}
+        onSetConfirmDestructiveEdits={setConfirmDestructiveEdits}
+        autoSaveProject={autoSaveProject}
+        onSetAutoSaveProject={setAutoSaveProject}
       />
       {activeTrack && (
         <>
