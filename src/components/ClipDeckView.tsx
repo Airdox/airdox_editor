@@ -17,6 +17,7 @@ import {
   WaveformMode,
   SelectionRange,
 } from '../types/rekordbox';
+import { writePaletteClipDrag } from '../utils/paletteDrag';
 import {
   Play,
   Square,
@@ -560,8 +561,18 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
                 return (
                   <div
                     key={clip.id}
+                    draggable={Boolean(clip.audioBuffer)}
+                    onDragStart={(event) => {
+                      if (!clip.audioBuffer) {
+                        event.preventDefault();
+                        return;
+                      }
+                      onSelectClip(clip);
+                      writePaletteClipDrag(event.dataTransfer, clip.id);
+                    }}
                     onClick={() => onSelectClip(clip)}
-                    className={`p-1.5 rounded-xs border cursor-pointer transition-all ${
+                    title={clip.audioBuffer ? 'Clip auf die Wellenform von Deck A ziehen' : 'Clip besitzt keine Audiodaten'}
+                    className={`p-1.5 rounded-xs border transition-all ${clip.audioBuffer ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed opacity-60'} ${
                       isSelected
                         ? 'bg-[#181d29] border-[#0088ff] shadow-sm'
                         : 'bg-[#12141a] border-[#22242f] hover:border-[#313545]'
