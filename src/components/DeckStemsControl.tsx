@@ -155,7 +155,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             ) : (
               <span
                 className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#3a2410] border border-[#f59e0b]/60 text-[#fbbf24] animate-pulse"
-                title={`Nur Vorschau-Qualität: lokaler Spektral-Fallback (Frequenz-/Stereo-Split), NICHT performancetauglich.${stems.fallbackReason ? ` Grund: ${stems.fallbackReason}` : ''} Für KI-Qualität "npm run stems:setup" ausführen.`}
+                title={`Nur Vorschau-Qualität: lokaler STFT-Fallback (HPSS + Spektralmasken), NICHT performancetauglich.${stems.fallbackReason ? ` Grund: ${stems.fallbackReason}` : ''} Für KI-Qualität "npm run stems:setup" ausführen.`}
               >
                 ⚠ FALLBACK-QUALITÄT
               </span>

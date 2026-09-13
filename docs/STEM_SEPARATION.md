@@ -90,11 +90,25 @@ Source Separation ist eine Schätzung. Auch ein hochwertiges Modell kann Hall,
 Backing-Vocals oder stark verzerrte Instrumente teilweise dem falschen Stem
 zuordnen.
 
-## Kein stiller Qualitäts-Downgrade mehr
+## Lokaler Fallback: STFT-HPSS statt Ein-Pol-Splitter
 
-Der lokale Spektral-Separator ist ein reiner Frequenz-/Stereo-Splitter. Seine
-Stems enthalten prinzipbedingt deutliche Übersprecher und sind **nicht für
-Club-/Performance-Einsatz geeignet**. Deshalb gilt seit dieser Version:
+Der frühere Ein-Pol-Filter-Fallback hatte auf realem Material (MUSDB
+Falcon 69) eine gemessene Qualität von SI-SDR **-6,6 dB (Vocals) bis
+-10,8 dB (Drums)** — der Fehler war lauter als das Nutzsignal. Er wurde
+durch einen STFT-Separator ersetzt (Hann 4096/Hop 1024, Median-Filter-HPSS
+nach Fitzgerald 2010, weiche Mid/Side-Spektralmasken, exakter
+Zeitbereichs-Rest für OTHER). Gemessene Qualität auf demselben Material:
+Vocals **-4,5 dB**, Drums **+1,7 dB**, Bass **-2,6 dB**, Other **-5,1 dB**.
+Diese Werte sind als SI-SDR-Mindestgrenzen im Test
+`stem-real-mixed-track.test.ts` festgeschrieben — eine Qualitätsregression
+kann CI nicht mehr passieren. Da alle Masken pro Bin in [0,1] liegen und
+auf 1 summieren, ist der frühere Normalisierungs-Blowup (Knacksen bei
+Solo/Mute) konstruktiv ausgeschlossen.
+
+## Kein stiller Qualitäts-Downgrade
+
+Auch der verbesserte STFT-Fallback bleibt deutlich unter Demucs-Qualität
+und ist **nicht für Club-/Performance-Einsatz geeignet**. Deshalb gilt:
 
 1. Vor jeder Separation prüft der Editor die Demucs-Verfügbarkeit
    (Desktop-IPC-Preflight bzw. `GET /api/stems/status` im Browser).
@@ -108,7 +122,8 @@ Club-/Performance-Einsatz geeignet**. Deshalb gilt seit dieser Version:
    der Stems-Leiste und der Abschluss-Dialog spricht von
    „NUR VORSCHAU-QUALITÄT“, nie von Erfolg in Performance-Qualität.
 
-Der reale MUSDB-Test stellt beides sicher: Der Standardpfad lehnt bei
-fehlendem Demucs mit einer erklärenden Fehlermeldung ab, und der ausdrücklich
-angeforderte Fallback erzeugt weiterhin vier hörbare, unterscheidbare
-Ausgabedateien, bei denen Vocal Solo nicht stumm ist.
+Der reale MUSDB-Test stellt alles zusammen sicher: Der Standardpfad lehnt bei
+fehlendem Demucs mit einer erklärenden Fehlermeldung ab; der ausdrücklich
+angeforderte Fallback erzeugt vier hörbare, unterscheidbare Ausgabedateien,
+Vocal Solo ist nicht stumm, und jede Stem-Ausgabe muss ihre
+SI-SDR-Mindestgrenze gegen die echten Referenzspuren erreichen.

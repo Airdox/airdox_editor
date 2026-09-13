@@ -75,10 +75,11 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
               </span>
               <p className="text-[11.5px] text-neutral-300 leading-relaxed">
                 Vocals, Synths und Snares überlappen sich im Frequenzbereich. Der lokale
-                Spektral-Fallback ist nur ein Frequenz-/Stereo-Splitter — seine Stems
-                enthalten deutliche Übersprecher und sind <span className="text-white font-semibold">
-                nicht für Club-/Live-Einsatz geeignet</span>. Echte Trennqualität liefert
-                ausschließlich das trainierte KI-Modell <span className="font-mono text-[#00c8ff]">htdemucs_ft</span>.
+                STFT-Fallback (Median-HPSS + Spektralmasken) trennt Drums brauchbar,
+                lässt aber hörbare Übersprecher zwischen Vocals und Instrumenten — er ist{' '}
+                <span className="text-white font-semibold">nicht für Club-/Live-Einsatz geeignet</span>.
+                Echte Trennqualität liefert ausschließlich das trainierte KI-Modell{' '}
+                <span className="font-mono text-[#00c8ff]">htdemucs_ft</span>.
               </p>
             </div>
           </div>

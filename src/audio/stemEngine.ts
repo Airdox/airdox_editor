@@ -8,6 +8,7 @@
  */
 
 import { BufferFactory } from './editingEngine';
+import { separateChannelsStft } from './stftSeparator';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 
@@ -392,8 +393,10 @@ class StemEngine {
   }
 
   /**
-   * Deterministic local spectral fallback. It is less accurate than Demucs but
-   * always produces four playable, sum-preserving stems without external tools.
+   * Deterministic local spectral fallback (STFT median-filter HPSS + soft
+   * masks). Less accurate than Demucs, but measurably better than the former
+   * one-pole splitter and free of the normalization blow-up by construction:
+   * all masks live in [0,1] per bin, so no stem can exceed the mix spectrum.
    */
   public async separateAudioBuffer(
     sourceBuffer: AudioBuffer,
@@ -420,28 +423,13 @@ class StemEngine {
       const length = sourceBuffer.length;
       const duration = sourceBuffer.duration;
 
-      const vocalsBuffer = createStemBuffer(channels, length, sampleRate, factory);
-      const drumsBuffer = createStemBuffer(channels, length, sampleRate, factory);
-      const bassBuffer = createStemBuffer(channels, length, sampleRate, factory);
-      const otherBuffer = createStemBuffer(channels, length, sampleRate, factory);
-
-      const vocalsData: Float32Array[] = [];
-      const drumsData: Float32Array[] = [];
-      const bassData: Float32Array[] = [];
-      const otherData: Float32Array[] = [];
       const sourceData: Float32Array[] = [];
-
       for (let ch = 0; ch < channels; ch++) {
-        vocalsData.push(vocalsBuffer.getChannelData(ch));
-        drumsData.push(drumsBuffer.getChannelData(ch));
-        bassData.push(bassBuffer.getChannelData(ch));
-        otherData.push(otherBuffer.getChannelData(ch));
-        sourceData.push(sourceBuffer.getChannelData(ch));
+        // Copy: the separator must stay strictly read-only on the source.
+        sourceData.push(sourceBuffer.getChannelData(ch).slice());
       }
 
-      // Absolute peak of the source material. No stem is allowed to exceed it,
-      // because a stem that is louder than the loudest point of the track can
-      // only be an artefact of the normalization, never real content.
+      // Absolute peak of the source material, kept as diagnostic ceiling.
       let sourcePeak = 0;
       for (let ch = 0; ch < channels; ch++) {
         const data = sourceData[ch];
@@ -452,186 +440,30 @@ class StemEngine {
       }
       const peakCeiling = sourcePeak > 0 ? sourcePeak : STEM_PEAK_CEILING;
 
-      // Processing parameters
-      const chunkSize = 16384; // ~370ms per chunk at 44.1kHz
-      const totalChunks = Math.max(1, Math.ceil(length / chunkSize));
+      const separated = await separateChannelsStft(sourceData, sampleRate, (fraction) => {
+        const percent = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+        onProgress?.({
+          percent,
+          phaseText: `STFT Spektral-Separation (${percent}%)...`,
+          processedSeconds: Math.min(duration, fraction * duration),
+          totalSeconds: duration,
+        });
+      });
 
-      // Multi-band filter corner frequencies
-      // Bass: 0 - ~240 Hz (sub & low fundamental)
-      // Vocals: ~260 - 4200 Hz band-pass, weighted by stereo centrality
-      // Drums: transients + air above ~4800 Hz
-      // Other: harmonic residual and stereo side content
-      const bassCutoff = 240; // Hz
-      const vocalLow = 260; // Hz
-      const vocalHigh = 4200; // Hz
-      const drumAir = 4800; // Hz
-
-      const bAlpha = Math.exp((-2.0 * Math.PI * bassCutoff) / sampleRate);
-      const vLowAlpha = Math.exp((-2.0 * Math.PI * vocalLow) / sampleRate);
-      const vHighAlpha = Math.exp((-2.0 * Math.PI * vocalHigh) / sampleRate);
-      const dHighAlpha = Math.exp((-2.0 * Math.PI * drumAir) / sampleRate);
-
-      // Filter states for continuous filtering across chunks
-      const bassLp = new Float32Array(channels);
-      const vocalLpLow = new Float32Array(channels);
-      const vocalLpHigh = new Float32Array(channels);
-      const drumLpHigh = new Float32Array(channels);
-      const transientEnv = new Float32Array(channels);
-
-      const isStereo = channels >= 2;
-
-      // Diagnostics: how many samples had to fall back to the energy split.
-      let normalizationFallbacks = 0;
-
-      for (let c = 0; c < totalChunks; c++) {
-        const start = c * chunkSize;
-        const end = Math.min(length, start + chunkSize);
-
-        for (let i = start; i < end; i++) {
-          const leftSamp = sourceData[0][i];
-          const rightSamp = isStereo ? sourceData[1][i] : leftSamp;
-
-          // Stereo Mid / Side calculations for Vocal Centrality.
-          // Lead vocals in standard mix engineering sit strictly center.
-          const mid = 0.5 * (leftSamp + rightSamp);
-          const side = 0.5 * (leftSamp - rightSamp);
-          const centerWeight = Math.max(
-            0,
-            1.0 - Math.min(1.0, Math.abs(side) / (Math.abs(mid) + 1e-4))
-          );
-
-          for (let ch = 0; ch < channels; ch++) {
-            const sample = sourceData[ch][i];
-
-            // 1. Bass Extraction (sub & low fundamental low-pass)
-            bassLp[ch] = bAlpha * bassLp[ch] + (1 - bAlpha) * sample;
-            const rawBass = bassLp[ch];
-
-            // 2. Vocal Band-Pass Filter (260Hz - 4200Hz). Both low-passes
-            // must operate on the source; LP(4200) - LP(260) is the band.
-            // The previous cascaded/reversed subtraction nearly cancelled the
-            // complete vocal range and made Vocal Solo effectively silent.
-            vocalLpLow[ch] = vLowAlpha * vocalLpLow[ch] + (1 - vLowAlpha) * sample;
-            vocalLpHigh[ch] = vHighAlpha * vocalLpHigh[ch] + (1 - vHighAlpha) * sample;
-            const midBand = vocalLpHigh[ch] - vocalLpLow[ch];
-
-            // 3. Drum High Band (air / cymbals above ~4800Hz)
-            drumLpHigh[ch] = dHighAlpha * drumLpHigh[ch] + (1 - dHighAlpha) * sample;
-            const highAir = sample - drumLpHigh[ch];
-
-            // 4. Transient / percussive envelope detection
-            const absSamp = Math.abs(sample);
-            const diff = Math.max(0, absSamp - transientEnv[ch]);
-            transientEnv[ch] = 0.92 * transientEnv[ch] + 0.08 * absSamp;
-            const isTransient = Math.min(1.0, diff * 6.0);
-
-            // Spectral / spatial source separation masks
-            const bassRatio = Math.min(1.0, Math.abs(rawBass) / (absSamp + 1e-5));
-            const bassVal = rawBass * 0.92 + sample * 0.08 * bassRatio;
-
-            // Drum stem: sharp transients + high air + punch
-            const drumVal = highAir * 0.75 + isTransient * (sample - rawBass) * 0.65;
-
-            // Vocal stem: center-panned mid-range harmonic presence
-            const vocalCoeff = centerWeight * (1.0 - isTransient * 0.65);
-            const vocalVal = midBand * vocalCoeff * 0.95;
-
-            // Other / instruments: residual harmonic material
-            const allocatedSum = bassVal + drumVal + vocalVal;
-            const residualVal = sample - allocatedSum;
-            const otherVal = residualVal + side * 0.7;
-
-            // Exact sum-preserving normalization so that
-            // vocals + drums + bass + other === sample (sample-exact).
-            const rawSum = vocalVal + drumVal + bassVal + otherVal;
-            if (rawSum === 0 || !Number.isFinite(rawSum)) {
-              // Degenerate allocation: distribute the sample evenly so the sum
-              // contract still holds exactly.
-              const quarter = sample / 4;
-              vocalsData[ch][i] = quarter;
-              drumsData[ch][i] = quarter;
-              bassData[ch][i] = quarter;
-              otherData[ch][i] = sample - 3 * quarter;
-              continue;
-            }
-
-            const normFactor = sample / rawSum;
-
-            let v: number;
-            let d: number;
-            let b: number;
-            let useEnergySplit =
-              !Number.isFinite(normFactor) ||
-              Math.abs(normFactor) < NORM_FACTOR_MIN ||
-              Math.abs(normFactor) > NORM_FACTOR_MAX ||
-              normFactor < 0;
-
-            if (!useEnergySplit) {
-              v = vocalVal * normFactor;
-              d = drumVal * normFactor;
-              b = bassVal * normFactor;
-
-              // Even inside the trusted window a single mask can overshoot the
-              // material. Clamp, and if the residual stem would then have to
-              // absorb more than the source peak, reject the factor entirely.
-              if (v > peakCeiling) v = peakCeiling;
-              else if (v < -peakCeiling) v = -peakCeiling;
-              if (d > peakCeiling) d = peakCeiling;
-              else if (d < -peakCeiling) d = -peakCeiling;
-              if (b > peakCeiling) b = peakCeiling;
-              else if (b < -peakCeiling) b = -peakCeiling;
-
-              if (Math.abs(sample - v - d - b) > peakCeiling) {
-                useEnergySplit = true;
-              }
-            }
-
-            if (useEnergySplit) {
-              // Energy-weighted allocation: each stem receives the share of the
-              // sample that matches its mask energy. Every stem is bounded by
-              // |sample| by construction, so this can never clip — while the
-              // four shares still add up to exactly the source sample.
-              const ev = vocalVal * vocalVal;
-              const ed = drumVal * drumVal;
-              const eb = bassVal * bassVal;
-              const eo = otherVal * otherVal;
-              const energySum = ev + ed + eb + eo;
-
-              if (energySum > 0 && Number.isFinite(energySum)) {
-                v = (sample * ev) / energySum;
-                d = (sample * ed) / energySum;
-                b = (sample * eb) / energySum;
-              } else {
-                const quarter = sample / 4;
-                v = quarter;
-                d = quarter;
-                b = quarter;
-              }
-              normalizationFallbacks++;
-            }
-
-            vocalsData[ch][i] = v;
-            drumsData[ch][i] = d;
-            bassData[ch][i] = b;
-            // The residual stem absorbs floating point error so the four stems
-            // always reconstruct the source sample exactly.
-            otherData[ch][i] = sample - v - d - b;
-          }
-        }
-
-        // Yield event loop every few chunks for smooth UI updates
-        if (c % 8 === 0 || c === totalChunks - 1) {
-          const percent = Math.min(100, Math.round(((c + 1) / totalChunks) * 100));
-          const processedSec = ((c + 1) * chunkSize) / sampleRate;
-          onProgress?.({
-            percent,
-            phaseText: `Multi-Band Stem-Separation (${percent}%)...`,
-            processedSeconds: Math.min(duration, processedSec),
-            totalSeconds: duration,
-          });
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
+      const vocalsBuffer = createStemBuffer(channels, length, sampleRate, factory);
+      const drumsBuffer = createStemBuffer(channels, length, sampleRate, factory);
+      const bassBuffer = createStemBuffer(channels, length, sampleRate, factory);
+      const otherBuffer = createStemBuffer(channels, length, sampleRate, factory);
+      for (let ch = 0; ch < channels; ch++) {
+        vocalsBuffer.getChannelData(ch).set(separated.vocals[ch]);
+        drumsBuffer.getChannelData(ch).set(separated.drums[ch]);
+        bassBuffer.getChannelData(ch).set(separated.bass[ch]);
+        otherBuffer.getChannelData(ch).set(separated.other[ch]);
       }
+
+      // The mask construction cannot blow up, so no per-sample energy-split
+      // rescue is required anymore. Kept at 0 for diagnostic compatibility.
+      const normalizationFallbacks = 0;
 
       const result: TrackStems = {
         trackId,
