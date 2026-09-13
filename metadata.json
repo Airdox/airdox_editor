@@ -1,6 +1,6 @@
 {
   "name": "airdox_SMART_Editor",
-  "description": "Professioneller DJ-Audio-Editor mit Rekordbox-Import, Wellenform-Analyse, Beatgrid-Synchronisation und Audio-Aufnahme.",
-  "requestFramePermissions": ["microphone"],
+  "description": "Professioneller Rekordbox-DJ-Audio-Editor mit Beatgrid-Synchronisation, nicht-destruktivem Import, Echtzeit-Audio-Engine, ANLZ-Parsing und Multi-Track.",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

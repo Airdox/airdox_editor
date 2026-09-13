@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -7,21 +7,7 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
-const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
-const { formatLogLine, createLogWriter } = require('./logWriter.cjs');
-
-// Durable diagnostic log: <userData>/airdox-smart-editor.log (+ .prev.log
-// rotation). Created lazily because app.getPath('userData') is only valid
-// once the app is ready; writes never throw back into the app.
-let logWriter = null;
-function getLogWriter() {
-  if (!logWriter) {
-    logWriter = createLogWriter(
-      path.join(app.getPath('userData'), 'airdox-smart-editor.log')
-    );
-  }
-  return logWriter;
-}
+const { isProtectedTarget } = require('./pathGuard.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -152,8 +138,26 @@ function registerAppProtocol() {
   });
 }
 
+function toLocalPath(location) {
+  if (typeof location !== 'string' || !location.trim()) return null;
+
+  try {
+    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
+      return path.resolve(location);
+    }
+
+    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
+      const url = new URL(location);
+      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
+    }
+
+    return path.resolve(location);
+  } catch {
+    return null;
+  }
+}
+
 // --- IPC-Handler bleiben unverändert ---
-// (toLocalPath lives in pathGuard.cjs so it stays unit-testable.)
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);
@@ -174,6 +178,18 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   } catch {
     return { validLocation: true, exists: false, path: localPath, accessMode: 'READ_ONLY' };
   }
+});
+
+ipcMain.handle('rekordbox:choose-analysis-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Rekordbox-Analysequelle auswählen',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Rekordbox Analysis', extensions: ['DAT', 'EXT', '2EX', 'dat', 'ext', '2ex'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
@@ -299,51 +315,7 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
-// --- Log-File bridge: durable diagnostics for all decisive pipeline params ---
-
-ipcMain.handle('airdox:append-log', async (_event, entry) => {
-  try {
-    if (!entry || typeof entry.message !== 'string') return false;
-    return getLogWriter().append(formatLogLine(entry));
-  } catch {
-    return false;
-  }
-});
-
-ipcMain.handle('airdox:get-log-path', async () => {
-  try {
-    return getLogWriter().filePath;
-  } catch {
-    return null;
-  }
-});
-
-ipcMain.handle('airdox:reveal-log', async () => {
-  try {
-    shell.showItemInFolder(getLogWriter().filePath);
-    return true;
-  } catch {
-    return false;
-  }
-});
-
 app.whenReady().then(() => {
-  const writer = getLogWriter();
-  writer.append(formatLogLine({
-    ts: Date.now(),
-    level: 'INFO',
-    category: 'SYSTEM',
-    message: `Session gestartet — Log-Datei: ${writer.filePath}`,
-    data: {
-      app: APP_NAME,
-      appVersion: app.getVersion(),
-      electron: process.versions.electron,
-      chrome: process.versions.chrome,
-      node: process.versions.node,
-      platform: process.platform,
-      arch: process.arch,
-    },
-  }));
   registerAppProtocol();
   createWindow();
   app.on('activate', () => {

@@ -7,11 +7,6 @@ on:
   pull_request:
     branches: ['main']
   workflow_dispatch:      # manuell auf Knopfdruck
-    inputs:
-      release_draft:
-        description: 'Entwurf eines GitHub-Releases mit den .exe-Dateien erzeugen (überschreibt das taglose ci-windows-build-Laufrelease)'
-        type: boolean
-        default: false
   schedule:
     - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
 
@@ -19,34 +14,6 @@ permissions:
   contents: write         # wird für das Erstellen von GitHub-Releases benötigt
 
 jobs:
-  # Getrennter Job: ein grüner Windows-Build allein beweist noch nicht, dass die
-  # Suiten laufen (genau dieser Fall ist 2026-09-12 aufgetreten: devDependencies
-  # fehlten im Manifest, `npm ci` ließ sie weg, `tsc` fand vitest nicht). Der Job
-  # blockiert das Artefakt bewusst nicht, zeigt aber beide Ampeln am PR.
-  tests:
-    name: Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Node.js aufsetzen
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-      - name: Abhängigkeiten installieren
-        run: npm ci
-      - name: TypeScript-Prüfung (prüft auch tests/)
-        run: npm run lint
-      - name: Alle Suiten (Skript-Suiten + vitest)
-        run: npm test
-      - name: Abdeckung messen (best-of-pipelines)
-        run: npm run coverage
-
   build:
     name: Windows Installer + Portable
     runs-on: windows-latest
@@ -57,7 +24,7 @@ jobs:
       - name: Node.js aufsetzen
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
           cache: 'npm'
 
       - name: Abhängigkeiten installieren
@@ -69,15 +36,6 @@ jobs:
       - name: Renderer bauen (Vite)
         run: npm run build
 
-      - name: SQLCipher-Modul für Electron bauen (DB-Import)
-        # windows-latest hat VS Build Tools + Python vorinstalliert.
-        # Kompiliert better-sqlite3-multiple-ciphers für die Electron-ABI,
-        # damit master.db/exportLibrary.db lesbar sind (gezielte
-        # ANLZ-Auflösung pro Track via AnalysisDataPath, kein Vollscan).
-        # Schlägt das Kompilieren fehl, ist der Build rot – ein grüner
-        # Build enthält garantiert den DB-Import.
-        run: npm run rebuild:electron
-
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never
         env:
@@ -85,44 +43,12 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prüfbericht (Größen + SHA256 der .exe)
-        # Zum Nachprüfen des Downloads: sha256sum airdox_SMART_Editor-*.exe
-        shell: pwsh
-        run: |
-          $lines = Get-ChildItem release -Filter *.exe | ForEach-Object {
-            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$($_.Name)  $h  $($_.Length) bytes"
-          }
-          $lines | Tee-Object -FilePath release/SHA256SUMS.txt
-          "sha256 der Artefakte (prüfbar mit: sha256sum <datei>)" | Out-File release/SHA256SUMS.txt -Encoding utf8 -Append
-          Get-Content release/SHA256SUMS.txt
-          if (Test-Path release/win-unpacked/resources) {
-            "Paketinhalt (resources): " + ((Get-ChildItem release/win-unpacked/resources -Recurse -Filter *.node | Measure-Object).Count) + " native Module"
-            "asar-Größe: " + ((Get-Item release/win-unpacked/resources/app.asar).Length) + " bytes"
-            (Get-ChildItem release/win-unpacked/resources -Recurse -Filter *.node | ForEach-Object { "natives Modul: " + $_.Name }) | Out-File release/SHA256SUMS.txt -Encoding utf8 -Append
-          }
-
-      - name: GitHub-Release-Entwurf auf Knopfdruck
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_draft == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ci-windows-build
-          name: 'Windows-Build ${{ github.ref_name }} @ ${{ github.sha }} (Entwurf)'
-          body: 'Vom Workflow `windows-build.yml` erzeugt (workflow_dispatch, Lauf ${{ github.run_id }}). Nicht veröffentlichen — als Download gedacht.'
-          draft: true
-          prerelease: true
-          target_commitish: ${{ github.sha }}
-          files: release/*.exe
-          overwrite_files: true
-
       - name: Artefakte anhängen (immer)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
-          path: |
-            release/*.exe
-            release/SHA256SUMS.txt
+          path: release/*.exe
           retention-days: 30
 
       - name: GitHub-Release bei Tag

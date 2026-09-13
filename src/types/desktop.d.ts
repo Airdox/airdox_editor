@@ -13,39 +13,26 @@ declare global {
         accessMode: 'READ_ONLY';
       }>;
       readOriginalAudio(location: string): Promise<{
-        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
-        data: ArrayBuffer | Uint8Array;
+        data: ArrayBuffer;
         path: string;
         size: number;
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
+      chooseAnalysisFile(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       readAnalysisFile(filePath: string): Promise<{
-        /** Binary payload: Uint8Array over IPC (Buffer), ArrayBuffer in mocks. Normalize with ensureArrayBuffer. */
-        data: ArrayBuffer | Uint8Array;
+        data: ArrayBuffer;
         path: string;
         size: number;
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       }>;
-      /** Durable diagnostic log: appends one structured entry to the desktop log file (append-only, never throws). */
-      appendLog(entry: {
-        ts?: number;
-        level?: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
-        category?: string;
-        message: string;
-        data?: unknown;
-      }): Promise<boolean>;
-      /** Absolute path of the durable desktop log file (null when unavailable). */
-      getLogFilePath(): Promise<string | null>;
-      /** Reveals the durable desktop log file in the OS file manager. */
-      revealLogFile(): Promise<boolean>;
       chooseRekordboxDatabase(): Promise<{ path: string; accessMode: 'READ_ONLY' } | null>;
       locateRekordboxDatabases(): Promise<
-        Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string; appVer?: string | null }>
+        Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
-            saveExportFile(payload: {
+      saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
         defaultName: string;

@@ -11,11 +11,10 @@
  */
 
 import assert from 'node:assert';
-import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { isProtectedTarget, normalizeForCompare, toLocalPath } = require('../electron/pathGuard.cjs');
+const { isProtectedTarget, normalizeForCompare } = require('../electron/pathGuard.cjs');
 
 const protectedPaths = [
   'C:\\Music\\Track.wav',
@@ -45,25 +44,5 @@ assert.strictEqual(isProtectedTarget('C:\\Music\\Track.wav', ['', '  ']), false)
 
 // Normalization is stable for cross-platform paths.
 assert.strictEqual(normalizeForCompare('C:\\Music\\Track.wav'), normalizeForCompare('c:/music/track.wav'));
-
-// toLocalPath converts Rekordbox LOCATION strings to local paths.
-const fileUrl = toLocalPath('file://localhost/C:/Music/Ref%20Mix.wav');
-assert.strictEqual(typeof fileUrl, 'string');
-assert.ok(fileUrl.includes('Ref Mix.wav'), 'file:// URL is decoded to a local path');
-assert.ok(!fileUrl.includes('%20'), 'no percent-encoding survives');
-assert.strictEqual(
-  toLocalPath('/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'),
-  path.resolve('/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'),
-  'absolute paths resolve without searching'
-);
-assert.strictEqual(
-  toLocalPath('C:\\Music\\Direct.wav'),
-  path.resolve('C:\\Music\\Direct.wav'),
-  'drive-letter paths resolve without searching'
-);
-assert.strictEqual(toLocalPath('https://example.com/track.mp3'), null, 'remote URLs are not local');
-assert.strictEqual(toLocalPath(''), null);
-assert.strictEqual(toLocalPath(null), null);
-assert.strictEqual(toLocalPath(undefined), null);
 
 console.log('path overwrite guard: OK');

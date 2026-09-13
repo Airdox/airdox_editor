@@ -23,16 +23,12 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  public override state: State = {
+  public state: State = {
     hasError: false,
     error: null,
     errorInfo: null,
     copied: false,
   };
-
-  constructor(props: Props) {
-    super(props);
-  }
 
   public static getDerivedStateFromError(error: Error): State {
     return {
@@ -59,12 +55,10 @@ export class ErrorBoundary extends Component<Props, State> {
       componentStack: this.state.errorInfo?.componentStack,
     });
 
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(report).then(() => {
-        this.setState({ copied: true });
-        setTimeout(() => this.setState({ copied: false }), 2500);
-      }).catch(() => {});
-    }
+    navigator.clipboard.writeText(report).then(() => {
+      this.setState({ copied: true });
+      setTimeout(() => this.setState({ copied: false }), 2500);
+    });
   };
 
   private handleDownloadReport = () => {

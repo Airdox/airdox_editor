@@ -7,8 +7,6 @@
 
 import { TrackModel, PhraseSection, DataOrigin, CuePoint } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
-import { logger } from '../utils/logger';
-import { nextId } from '../utils/ids';
 
 export type MixInType =
   | 'PRIMARY_BLEND'      // Optimal standard 16-32 bar mix-in (kicks lock in, low clash)
@@ -160,7 +158,7 @@ export function analyzeTrackForMixIn(track: TrackModel): MixInAnalysisReport {
     try {
       analysis = analyzeAudioBuffer(track.audioBuffer);
     } catch (err) {
-      logger.warn('AUDIO_ENGINE', `[MixAnalysis] AudioBuffer analysis failed: ${err instanceof Error ? err.message : String(err)}`, { error: err });
+      console.warn('[MixAnalysis] AudioBuffer analysis failed:', err);
     }
   }
 
@@ -514,7 +512,7 @@ export function createCueForMixIn(
   const hotCueMap: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
 
   return {
-    id: nextId('cue-mixin'),
+    id: `cue-mixin-${Date.now()}-${candidate.barNumber}`,
     name: `MIX-IN ${candidate.barNumber}.${candidate.beatNumber}`,
     type,
     hotCueNum: type === 'HOT_CUE' ? hotCueMap[slotLetter] ?? 0 : undefined,
@@ -526,5 +524,162 @@ export function createCueForMixIn(
     comment: `Mix-In (${candidate.energyPercent}% Energy | ${candidate.transitionLengthBars} Bars)`,
     color: '#10b981', // Rekordbox Emerald Green Cue
     origin: DataOrigin.USER_EDIT,
+  };
+}
+
+export interface CamelotMatch {
+  code: string;
+  musicalKey: string;
+  type: 'EXACT' | 'RELATIVE' | 'ENERGY_UP' | 'ENERGY_DOWN' | 'POWER_BOOST';
+  badgeColor: string;
+  label: string;
+  description: string;
+}
+
+export interface CamelotInfo {
+  code: string;
+  musicalKey: string;
+  isMinor: boolean;
+  matches: CamelotMatch[];
+}
+
+const CAMELOT_MAP: Record<string, { code: string; musicalKey: string; num: number; letter: 'A' | 'B' }> = {
+  // Minor (A)
+  '1a': { code: '1A', musicalKey: 'Abm / G#m', num: 1, letter: 'A' },
+  'abm': { code: '1A', musicalKey: 'Abm', num: 1, letter: 'A' },
+  'g#m': { code: '1A', musicalKey: 'G#m', num: 1, letter: 'A' },
+  '2a': { code: '2A', musicalKey: 'Ebm / D#m', num: 2, letter: 'A' },
+  'ebm': { code: '2A', musicalKey: 'Ebm', num: 2, letter: 'A' },
+  'd#m': { code: '2A', musicalKey: 'D#m', num: 2, letter: 'A' },
+  '3a': { code: '3A', musicalKey: 'Bbm / A#m', num: 3, letter: 'A' },
+  'bbm': { code: '3A', musicalKey: 'Bbm', num: 3, letter: 'A' },
+  'a#m': { code: '3A', musicalKey: 'A#m', num: 3, letter: 'A' },
+  '4a': { code: '4A', musicalKey: 'Fm', num: 4, letter: 'A' },
+  'fm': { code: '4A', musicalKey: 'Fm', num: 4, letter: 'A' },
+  '5a': { code: '5A', musicalKey: 'Cm', num: 5, letter: 'A' },
+  'cm': { code: '5A', musicalKey: 'Cm', num: 5, letter: 'A' },
+  '6a': { code: '6A', musicalKey: 'Gm', num: 6, letter: 'A' },
+  'gm': { code: '6A', musicalKey: 'Gm', num: 6, letter: 'A' },
+  '7a': { code: '7A', musicalKey: 'Dm', num: 7, letter: 'A' },
+  'dm': { code: '7A', musicalKey: 'Dm', num: 7, letter: 'A' },
+  '8a': { code: '8A', musicalKey: 'Am', num: 8, letter: 'A' },
+  'am': { code: '8A', musicalKey: 'Am', num: 8, letter: 'A' },
+  '9a': { code: '9A', musicalKey: 'Em', num: 9, letter: 'A' },
+  'em': { code: '9A', musicalKey: 'Em', num: 9, letter: 'A' },
+  '10a': { code: '10A', musicalKey: 'Bm', num: 10, letter: 'A' },
+  'bm': { code: '10A', musicalKey: 'Bm', num: 10, letter: 'A' },
+  '11a': { code: '11A', musicalKey: 'F#m', num: 11, letter: 'A' },
+  'f#m': { code: '11A', musicalKey: 'F#m', num: 11, letter: 'A' },
+  '12a': { code: '12A', musicalKey: 'Dbm / C#m', num: 12, letter: 'A' },
+  'dbm': { code: '12A', musicalKey: 'Dbm', num: 12, letter: 'A' },
+  'c#m': { code: '12A', musicalKey: 'C#m', num: 12, letter: 'A' },
+
+  // Major (B)
+  '1b': { code: '1B', musicalKey: 'B', num: 1, letter: 'B' },
+  'b': { code: '1B', musicalKey: 'B', num: 1, letter: 'B' },
+  '2b': { code: '2B', musicalKey: 'F# / Gb', num: 2, letter: 'B' },
+  'f#': { code: '2B', musicalKey: 'F#', num: 2, letter: 'B' },
+  'gb': { code: '2B', musicalKey: 'Gb', num: 2, letter: 'B' },
+  '3b': { code: '3B', musicalKey: 'Db / C#', num: 3, letter: 'B' },
+  'db': { code: '3B', musicalKey: 'Db', num: 3, letter: 'B' },
+  'c#': { code: '3B', musicalKey: 'C#', num: 3, letter: 'B' },
+  '4b': { code: '4B', musicalKey: 'Ab / G#', num: 4, letter: 'B' },
+  'ab': { code: '4B', musicalKey: 'Ab', num: 4, letter: 'B' },
+  'g#': { code: '4B', musicalKey: 'G#', num: 4, letter: 'B' },
+  '5b': { code: '5B', musicalKey: 'Eb / D#', num: 5, letter: 'B' },
+  'eb': { code: '5B', musicalKey: 'Eb', num: 5, letter: 'B' },
+  'd#': { code: '5B', musicalKey: 'D#', num: 5, letter: 'B' },
+  '6b': { code: '6B', musicalKey: 'Bb / A#', num: 6, letter: 'B' },
+  'bb': { code: '6B', musicalKey: 'Bb', num: 6, letter: 'B' },
+  'a#': { code: '6B', musicalKey: 'A#', num: 6, letter: 'B' },
+  '7b': { code: '7B', musicalKey: 'F', num: 7, letter: 'B' },
+  'f': { code: '7B', musicalKey: 'F', num: 7, letter: 'B' },
+  '8b': { code: '8B', musicalKey: 'C', num: 8, letter: 'B' },
+  'c': { code: '8B', musicalKey: 'C', num: 8, letter: 'B' },
+  '9b': { code: '9B', musicalKey: 'G', num: 9, letter: 'B' },
+  'g': { code: '9B', musicalKey: 'G', num: 9, letter: 'B' },
+  '10b': { code: '10B', musicalKey: 'D', num: 10, letter: 'B' },
+  'd': { code: '10B', musicalKey: 'D', num: 10, letter: 'B' },
+  '11b': { code: '11B', musicalKey: 'A', num: 11, letter: 'B' },
+  'a': { code: '11B', musicalKey: 'A', num: 11, letter: 'B' },
+  '12b': { code: '12B', musicalKey: 'E', num: 12, letter: 'B' },
+  'e': { code: '12B', musicalKey: 'E', num: 12, letter: 'B' },
+};
+
+const CODE_TO_KEY: Record<string, string> = {
+  '1A': 'Abm', '2A': 'Ebm', '3A': 'Bbm', '4A': 'Fm', '5A': 'Cm', '6A': 'Gm',
+  '7A': 'Dm', '8A': 'Am', '9A': 'Em', '10A': 'Bm', '11A': 'F#m', '12A': 'Dbm',
+  '1B': 'B', '2B': 'F#', '3B': 'Db', '4B': 'Ab', '5B': 'Eb', '6B': 'Bb',
+  '7B': 'F', '8B': 'C', '9B': 'G', '10B': 'D', '11B': 'A', '12B': 'E',
+};
+
+export function getCamelotInfo(rawKey?: string): CamelotInfo {
+  const norm = (rawKey || '8A').toLowerCase().replace(/\s+/g, '').replace('minor', 'm').replace('maj', '');
+  const entry = CAMELOT_MAP[norm] || CAMELOT_MAP['8a'];
+
+  const n = entry.num;
+  const l = entry.letter;
+  const oppL: 'A' | 'B' = l === 'A' ? 'B' : 'A';
+
+  const wrap = (val: number) => {
+    let r = val % 12;
+    if (r <= 0) r += 12;
+    return r;
+  };
+
+  const codeExact = `${n}${l}`;
+  const codeRelative = `${n}${oppL}`;
+  const codeEnergyUp = `${wrap(n + 1)}${l}`;
+  const codeEnergyDown = `${wrap(n - 1)}${l}`;
+  const codePowerBoost = `${wrap(n + 2)}${l}`;
+
+  const matches: CamelotMatch[] = [
+    {
+      code: codeExact,
+      musicalKey: CODE_TO_KEY[codeExact] || entry.musicalKey,
+      type: 'EXACT',
+      badgeColor: '#10b981',
+      label: 'Identisch (100% Match)',
+      description: 'Nahtlose, harmonisch unsichtbare Mischung ohne Tonart-Reibung.',
+    },
+    {
+      code: codeRelative,
+      musicalKey: CODE_TO_KEY[codeRelative] || '',
+      type: 'RELATIVE',
+      badgeColor: '#00a2ff',
+      label: l === 'A' ? 'Relativ Dur' : 'Relativ Moll',
+      description: 'Stimmungswechsel (heller/dunkler) bei gleichen Tonstufen.',
+    },
+    {
+      code: codeEnergyUp,
+      musicalKey: CODE_TO_KEY[codeEnergyUp] || '',
+      type: 'ENERGY_UP',
+      badgeColor: '#f59e0b',
+      label: 'Energy Boost (+1)',
+      description: 'Erhöht die musikalische Spannung auf der Tanzfläche spürbar.',
+    },
+    {
+      code: codeEnergyDown,
+      musicalKey: CODE_TO_KEY[codeEnergyDown] || '',
+      type: 'ENERGY_DOWN',
+      badgeColor: '#6366f1',
+      label: 'Warm Down (-1)',
+      description: 'Beruhigender, entspannter Übergang mit tieferer Resonanz.',
+    },
+    {
+      code: codePowerBoost,
+      musicalKey: CODE_TO_KEY[codePowerBoost] || '',
+      type: 'POWER_BOOST',
+      badgeColor: '#ec4899',
+      label: 'Power Step (+2)',
+      description: 'Starker, euphorisierender Energiesprung für Peak-Time Momente.',
+    },
+  ];
+
+  return {
+    code: entry.code,
+    musicalKey: entry.musicalKey,
+    isMinor: l === 'A',
+    matches,
   };
 }

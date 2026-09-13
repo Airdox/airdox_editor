@@ -15,65 +15,24 @@ import {
   DataOrigin,
   EditHistoryEntry,
   CuePoint,
-  BeatGrid,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
-import {
-  buildDbAnalysisIndex,
-  buildDbAnalysisIdIndex,
-  dirOfPath,
-  normalizeAudioKey,
-  resolveAnalysisFilePath,
-  resolveVerifiedDbIdentity,
-  DbAnalysisRef,
-} from './rekordbox/analysisResolver';
-import { analyzeAudioBuffer, extractMiniPeaks } from './waveform/analyzer';
-import {
-  describeProjection,
-  projectTrackEdits,
-  rebaseTrackAnalysis,
-  toSpanViews,
-  waveformOriginAfterEdit,
-  createSegment,
-  type ProjectedSpanView,
-  type TrackProjection,
-} from './edit/editModel';
-import {
-  extendGridAcrossGap,
-  locateSpan,
-  mapWindowToSourceWindow,
-  projectEditTimeline,
-  retimeBeatNodes,
-  retimeCues,
-  retimeLoops,
-  retimePhrases,
-  type StructuralEditDelta,
-} from './edit/editTimeline';
-import { describeEditWaveform } from './edit/editWaveform';
-import { clipPreviewProfile, describePreviewOrigin, type PreviewProfile } from './waveform/preview';
-import { isFileDrag, isInternalDrag } from './dnd/dragPayload';
-import { planClipDrop } from './edit/editDrop';
+import { generateElectronicDjTrack } from './audio/synthesizerTrack';
+import { analyzeAudioBuffer, extractMiniPeaks, estimateBpm } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
+import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
+  parseRekordboxXml,
   parseRekordboxXmlAsync,
   XmlImportProgress,
+  DEFAULT_REKORDBOX_XML,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
-import { applyAnlzExtractionToTrack, AnlzExtractionResult } from './rekordbox/databaseExtractor';
-import { loadAnlzContainerSet } from './rekordbox/analysisContainerLoader';
-import { initFileLogging } from './utils/fileLog';
-import { adoptSerializedGrid, describeGridEdit, isRekordboxOrigin, ppthMismatchNote, shiftBeatNodes } from './rekordbox/trackGuards';
-import { logger } from './utils/logger';
-import { nextId } from './utils/ids';
-import {
-  rebuildTrackFromSerialized,
-  reopenTrackSourceAudio,
-  restorePaletteClips,
-} from './project/restore';
-import { useStableCallback } from './utils/useStableCallback';
+import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
 import {
   serializeProject,
   deserializeProject,
+  base64ToBytes,
   SerializedTrack,
 } from './rekordbox/projectFile';
 
@@ -86,19 +45,35 @@ import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
-import { ChatbotPalette } from './components/ChatbotPalette';
-import type { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
 import { ExportModal } from './components/Modals/ExportModal';
 import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
 import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportModal';
 import { ImportProgressModal } from './components/Modals/ImportProgressModal';
-import {
-  OperationFeedbackModal,
-  OperationTelemetry,
-} from './components/Modals/OperationFeedbackModal';
+import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
-import { AudioRecordModal } from './components/Modals/AudioRecordModal';
+import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
+import { EditAssistantModal } from './components/Modals/EditAssistantModal';
+import { RecordModal } from './components/Modals/RecordModal';
+import { recordingEngine } from './audio/recordingEngine';
+import { editAssistant } from './audio/editAssistant';
+import { useEditAssistant } from './hooks/useEditAssistant';
+import { logger } from './utils/logger';
+import { ChatbotModal } from './components/ChatbotModal';
+import { ChatbotAction, TrackEditorContext } from './types/chatbot';
+import { analyzeTrackForMixIn } from './audio/mixAnalysis';
+import {
+  cloneAudioBuffer,
+  executeCopy,
+  executeCut,
+  executeDelete,
+  executeClear,
+  executeInsert,
+  executePaste,
+  executeReplace,
+  executeOverdub,
+  applyExecutionToTrack,
+} from './audio/editingEngine';
 
 /**
  * Shared conversion of a compact collection entry (XML or Rekordbox DB)
@@ -111,9 +86,7 @@ function buildCollectionTrackModel(
 ): TrackModel {
   const duration = pt.duration && !isNaN(pt.duration) ? pt.duration : 300.0;
   const bpm = pt.bpm && !isNaN(pt.bpm) ? pt.bpm : 130.0;
-  // One id source for the whole app: a timestamp is only probably unique and is a
-  // separate read per field, which is how a track and its segments once disagreed.
-  const id = pt.id || nextId(origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml');
+  const id = pt.id || `${origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml'}-${Date.now()}-${idx}`;
   return {
     id,
     title: pt.title || 'Untitled Track',
@@ -136,9 +109,7 @@ function buildCollectionTrackModel(
     originalSha256: pt.originalSha256 || `sha256-rb-${idx}`,
     isOriginalUntouched: true,
     audioBuffer: pt.audioBuffer || null,
-    beatGrid: pt.beatGrid || (isRekordboxOrigin(origin)
-      ? { firstBeat: 0, bpm, meter: 4, beats: [], origin }
-      : buildBeatGridFromTempo(0.0, bpm, duration, 4, origin)),
+    beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration),
     cues: pt.cues || [],
     loops: pt.loops || [],
     analysis: pt.analysis || null,
@@ -161,107 +132,82 @@ function buildCollectionTrackModel(
   };
 }
 
-// Deck-loader guards (isRekordboxOrigin, waveform-source rule, grid-shift,
-// PPTH plausibility, serialized-grid adoption) live in ./rekordbox/trackGuards
-// as pure, unit-tested helpers.
+/** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
+async function decodeWavBase64(audioCtx: AudioContext, base64?: string): Promise<AudioBuffer | undefined> {
+  if (!base64) return undefined;
+  const bytes = base64ToBytes(base64);
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return audioCtx.decodeAudioData(ab);
+}
 
 /**
- * Resolves the ANLZ analysis file referenced by a Rekordbox database track
- * (AnalysisDataPath) and merges it into the track. Missing paths and read
- * failures are pipeline errors: the caller must never substitute other data.
+ * Rebuilds a persisted project track into a playable TrackModel. The original
+ * audio is NOT duplicated here for Rekordbox-sourced tracks (it is re-opened
+ * from its read-only path); embedded clip/original audio is decoded on demand.
  */
-async function tryAutoLoadAnlz(track: TrackModel): Promise<TrackModel> {
-  const anlzPath = track.rawXmlAttributes?.analysisDataPath?.trim();
-  if (!anlzPath) throw new Error(`[ANLZ Pipelinefehler] master.db lieferte für „${track.title}“ keinen AnalysisDataPath.`);
-  if (!window.rekordboxDesktop) throw new Error('[ANLZ Pipelinefehler] Die Rekordbox-Desktop-Bridge ist nicht verfügbar.');
-  const sourceDbDir = track.rawXmlAttributes?.sourceDbDir;
-  // Deterministic resolution only: <dbDir>/share/PIONEER/USBANLZ/... or a
-  // verbatim absolute path. There is no scan, fallback, or manual assignment.
-  const resolved = resolveAnalysisFilePath(sourceDbDir, anlzPath);
-  logger.info('DATABASE', `[ANLZ Auto] Auflösung „${track.title}"`, {
-    analysisDataPath: anlzPath,
-    sourceDbDir: sourceDbDir ?? null,
-    resolved: resolved ?? null,
-  });
-  if (!resolved) {
-    const message =
-      `[ANLZ Pipelinefehler] AnalysisDataPath „${anlzPath}“ konnte nicht gegen das ` +
-      `DB-Verzeichnis „${sourceDbDir || '(leer)'}“ aufgelöst werden.`;
-    logger.error('DATABASE', message, { analysisDataPath: anlzPath, sourceDbDir: sourceDbDir ?? null });
-    throw new Error(message);
+async function rebuildTrackFromSerialized(
+  st: SerializedTrack,
+  audioCtx: AudioContext
+): Promise<TrackModel> {
+  const segments: EditSegment[] = [];
+  for (const seg of st.workingSegments) {
+    const clipBuffer = await decodeWavBase64(audioCtx, seg.clipWavBase64);
+    segments.push({
+      id: seg.id,
+      type: seg.type,
+      trackId: seg.trackId,
+      sourceStart: seg.sourceStart,
+      sourceEnd: seg.sourceEnd,
+      projectStart: seg.projectStart,
+      projectDuration: seg.projectDuration,
+      clipId: seg.clipId,
+      clipBuffer,
+      gain: seg.gain,
+    });
   }
-  const variantSummary = (e: AnlzExtractionResult) =>
-    e.waveformVariants.map((v) => ({ tag: v.sourceTag, buckets: v.length }));
-  try {
-    const loadedSet = await loadAnlzContainerSet(
-      resolved,
-      (filePath) => window.rekordboxDesktop!.readAnalysisFile(filePath)
-    );
-    const extraction = loadedSet.extraction;
-    logger.info('DATABASE', '[ANLZ Auto] Primärcontainer gelesen', {
-      path: loadedSet.primary.path,
-      bytes: loadedSet.primary.size ?? null,
-      tags: loadedSet.primary.extraction.tagsFound.join(','),
-      waveformVariants: variantSummary(loadedSet.primary.extraction),
-    });
-    if (loadedSet.datExtSibling) {
-      logger.info('DATABASE', '[ANLZ Auto] Schwesterdatei gelesen & gemergt', {
-        path: loadedSet.datExtSibling.path,
-        bytes: loadedSet.datExtSibling.size ?? null,
-        tags: loadedSet.datExtSibling.extraction.tagsFound.join(','),
-        waveformVariants: variantSummary(loadedSet.datExtSibling.extraction),
-      });
-    }
-    if (loadedSet.twoExSibling) {
-      logger.info('DATABASE', '[ANLZ Auto] 2EX-Schwesterncontainer gelesen', {
-        path: loadedSet.twoExSibling.path,
-        bytes: loadedSet.twoExSibling.size ?? null,
-        tags: loadedSet.twoExSibling.extraction.tagsFound.join(','),
-        waveformVariants: variantSummary(loadedSet.twoExSibling.extraction),
-      });
-    } else if (loadedSet.twoExError) {
-      logger.info('DATABASE', '[ANLZ Auto] Kein lesbarer 2EX-Schwesterncontainer; vorhandene DAT/EXT-Werte bleiben unverändert.', {
-        path: resolved.replace(/\.[A-Za-z0-9]+$/, '.2EX'),
-        reason: loadedSet.twoExError,
-      });
-    }
-    const merged = applyAnlzExtractionToTrack(track, extraction);
-    // Plausibility guard: the PPTH source path should reference the same audio file.
-    const expected = track.originalMedia?.resolvedPath || track.originalMedia?.location || '';
-    const ppthNote = ppthMismatchNote(extraction.analysisPath, expected);
-    if (ppthNote) {
-      logger.warn('DATABASE', `[ANLZ Auto] ${ppthNote}`, { analysisPath: extraction.analysisPath, expected });
-      if (merged.databaseRecord) {
-        merged.databaseRecord.anlzWarnings = [...(merged.databaseRecord.anlzWarnings ?? []), ppthNote];
-      }
-    }
-    logger.info('DATABASE', '[ANLZ Auto] Übernommen', {
-      title: track.title,
-      waveform: merged.analysis ? `${merged.analysis.sourceTag ?? 'ANLZ'}:${merged.analysis.length}` : null,
-      waveformVariants: merged.analysisVariants?.length ?? 0,
-      beatGridOrigin: merged.beatGrid.origin,
-      beatNodes: merged.beatGrid.beats?.length ?? 0,
-      cues: merged.cues.length,
-      loops: merged.loops.length,
-      phrases: merged.phrases?.length ?? 0,
-      warnings: extraction.warnings,
-    });
-    if (!merged.analysis || merged.analysis.length === 0) {
-      throw new Error(
-        `[ANLZ Pipelinefehler] Rekordbox-Container „${resolved}“ enthält keine lesbare PWAV/PWV-Wellenform. ` +
-        `Gefundene Tags: ${extraction.tagsFound.join(', ') || '(keine)'}.`
-      );
-    }
-    logger.info('DATABASE', `[ANLZ Auto] ${resolved} → ${extraction.tagsFound.join(', ')}`);
-    return merged;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('DATABASE', '[ANLZ Auto] Direkter Rekordbox-Analysepfad fehlgeschlagen.', {
-      resolved,
-      error: message,
-    });
-    throw error instanceof Error ? error : new Error(message);
-  }
+
+  const embeddedOriginal = st.originalAudioBase64
+    ? await decodeWavBase64(audioCtx, st.originalAudioBase64)
+    : undefined;
+
+  return {
+    id: st.id,
+    title: st.title,
+    artist: st.artist,
+    album: st.album,
+    genre: st.genre,
+    label: st.label,
+    rating: st.rating,
+    playCount: st.playCount,
+    year: st.year,
+    comments: st.comments,
+    dateAdded: st.dateAdded,
+    remixer: st.remixer,
+    isrc: st.isrc,
+    bpm: st.bpm,
+    key: st.key,
+    duration: st.duration,
+    sampleRate: st.sampleRate,
+    channels: st.channels,
+    originalSha256: st.originalSha256,
+    isOriginalUntouched: st.isOriginalUntouched,
+    audioBuffer: embeddedOriginal ?? null,
+    beatGrid: buildBeatGridFromTempo(
+      st.beatGrid.firstBeat,
+      st.beatGrid.bpm,
+      st.duration,
+      st.beatGrid.meter,
+      st.origin
+    ),
+    cues: st.cues,
+    loops: st.loops,
+    analysis: null,
+    origin: st.origin,
+    phrases: st.phrases,
+    rawXmlAttributes: st.rawXmlAttributes,
+    originalMedia: st.originalMedia,
+    workingSegments: segments,
+  };
 }
 
 export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
@@ -285,12 +231,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
 
-  // Palette state - Starts completely empty
-  const [paletteOpen, setPaletteOpen] = useState<boolean>(true); // Screenshot 01 (open) vs Screenshot 02 (closed)
+  // Palette & Edit panels: Start collapsed in ultra-compact minimal mode for maximum waveform canvas
+  const [paletteOpen, setPaletteOpen] = useState<boolean>(false); // Starts collapsed
+  const [editPaletteOpen, setEditPaletteOpen] = useState<boolean>(false); // Starts collapsed in sleek 28px bar
+  const [autoCollapseTools, setAutoCollapseTools] = useState<boolean>(true); // Auto-reveals & auto-collapses
   const [paletteClips, setPaletteClips] = useState<PaletteClip[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [paletteViewMode, setPaletteViewMode] = useState<'SIDEBAR' | 'FULL_DECK'>('SIDEBAR');
   const [matchPitchOnInsert, setMatchPitchOnInsert] = useState<boolean>(true);
+
+  // Browser bar
+  const [browserOpen, setBrowserOpen] = useState<boolean>(false);
+
+  // Maximize Waveform Zen Mode (collapses both palettes for max screen editing area)
+  const isMaxWaveform = !editPaletteOpen && !paletteOpen && !browserOpen;
+  const handleToggleMaxWaveform = useCallback(() => {
+    if (isMaxWaveform) {
+      setEditPaletteOpen(true);
+      setPaletteOpen(true);
+    } else {
+      setEditPaletteOpen(false);
+      setPaletteOpen(false);
+      setBrowserOpen(false);
+    }
+  }, [isMaxWaveform]);
 
   // Clipboard for Copy / Paste / Insert
   const [clipboardBuffer, setClipboardBuffer] = useState<AudioBuffer | null>(null);
@@ -298,15 +262,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // History Stack for Undo / Redo
   const [undoStack, setUndoStack] = useState<EditHistoryEntry[]>([]);
   const [redoStack, setRedoStack] = useState<EditHistoryEntry[]>([]);
-
-  // Browser bar
-  const [browserOpen, setBrowserOpen] = useState<boolean>(false);
-
-  // Workspace visibility and the optional Smart Copilot. Both panels are kept
-  // separate from the clip palette so a user can reclaim waveform space without
-  // losing the current edit state.
-  const [bottomControlOpen, setBottomControlOpen] = useState<boolean>(true);
-  const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
@@ -322,7 +277,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
-  const [recordModalOpen, setRecordModalOpen] = useState<boolean>(false);
+  const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
+  const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
+  const [isGlobalDragging, setIsGlobalDragging] = useState<boolean>(false);
+  const dragCounterRef = useRef<number>(0);
+
+  // Edit Assistant State Manager (protects selection buffer & clipboard integrity)
+  const { state: editAssistantState, summary: editAssistantSummary } = useEditAssistant(
+    workingAudioBuffer,
+    selection,
+    clipboardBuffer
+  );
 
   const showOperationFeedback = useCallback((telemetry: OperationTelemetry) => {
     setFeedbackTelemetry(telemetry);
@@ -345,269 +310,174 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const xmlFileInputRef = useRef<HTMLInputElement>(null);
   const audioFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Deterministic XML→DB analysis index: normalized audio path → ANLZ
-  // reference (exact match only, rebuilt on every database import).
-  const dbAnalysisIndexRef = useRef<Map<string, DbAnalysisRef>>(new Map());
-  // Guarded Rekordbox 7.2.16 identity index: XML TrackID must resolve to one
-  // desktop djmdContent.ID and the exact canonical media path must also match.
-  const dbAnalysisIdIndexRef = useRef<Map<string, DbAnalysisRef>>(new Map());
-  // Every caller awaits the same master.db read. A second deck-load must never
-  // observe an empty, half-built index while the first read is still running.
-  const dbIndexLoadPromiseRef = useRef<Promise<Map<string, DbAnalysisRef>> | null>(null);
-  const dbIndexDiagRef = useRef<{
-    attempts: number;
-    found: number;
-    readable: number;
-    links: number;
-    reasons: string[];
-  }>({ attempts: 0, found: 0, readable: 0, links: 0, reasons: [] });
-
-  // Auto-populate the XML→DB ANLZ index directly from the local Rekordbox
-  // databases (master.db / exportLibrary.db) without manual user assignment.
-  // This fulfills REKORDBOX_XML → Waveform ausschließlich aus ANLZ/DB:
-  // the Desktop bridge scans %APPDATA%/Pioneer/rekordbox* read-only and the
-  // renderer builds the exact-match audio-path → AnalysisDataPath map.
-  const loadDbAnalysisIndex = useCallback(async () => {
-    if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
-    const diag = dbIndexDiagRef.current;
-    // A failed first attempt (module not ready at boot, DB mounted late, …)
-    // gets exactly one retry; a successful read is never repeated.
-    if (diag.attempts >= (diag.readable > 0 ? 1 : 2)) {
-      return dbAnalysisIndexRef.current;
-    }
-    if (!window.rekordboxDesktop) return dbAnalysisIndexRef.current;
-    diag.attempts += 1;
-    try {
-      const candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
-      if (!candidates || candidates.length === 0) {
-        diag.found = 0;
-        diag.reasons = ['Keine lokale master.db/exportLibrary.db gefunden.'];
-        logger.error('DATABASE', '[DB Auto] Keine lokale Rekordbox-Datenbank gefunden (master.db / exportLibrary.db) — ein XML-Track kann nicht geladen werden', {
-          hint: 'Rekordbox-Version und Bibliotheksort prüfen (Standard: %APPDATA%/Pioneer, verschoben: rekordboxAgent/options.json)',
-        });
-        return dbAnalysisIndexRef.current;
-      }
-      diag.found = candidates.length;
-      for (const cand of candidates) {
-        try {
-          const result = await window.rekordboxDesktop.readRekordboxDatabase(cand.path);
-          if (!result.available || !result.rows) {
-            diag.reasons.push(`${cand.label || cand.path}: ${result.reason || 'nicht lesbar'}`);
-            logger.warn('DATABASE', `[DB Auto] ${cand.path}: nicht lesbar`, {
-              reason: result.reason || 'nicht lesbar',
-              label: cand.label ?? null,
-              appVer: cand.appVer ?? null,
-            });
-            continue;
-          }
-          // XML tracks are linked only to the desktop master.db. Device
-          // Library Plus/OneLibrary has a distinct identity namespace.
-          if (result.dbType !== 'MASTER_DB') continue;
-          diag.readable += 1;
-          const mapped = mapRekordboxDatabaseRows(
-            {
-              content: result.rows.content,
-              cues: result.rows.cues,
-              artists: result.rows.artists,
-              albums: result.rows.albums,
-              genres: result.rows.genres,
-              keys: result.rows.keys,
-              labels: result.rows.labels,
-              playlists: result.rows.playlists,
-              songPlaylists: result.rows.songPlaylists,
-            },
-            'MASTER_DB'
-          );
-          const sourceDbDir = dirOfPath(cand.path);
-          const fullTrackModels = mapped.tracks.map((track, idx) => {
-            track.rawXmlAttributes = { ...(track.rawXmlAttributes ?? {}), sourceDbDir };
-            return buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
-          });
-          const built = buildDbAnalysisIndex(fullTrackModels, sourceDbDir);
-          // Merge – keep first entry on duplicate keys (earliest DB wins)
-          let added = 0;
-          for (const [k, v] of built) {
-            if (!dbAnalysisIndexRef.current.has(k)) {
-              dbAnalysisIndexRef.current.set(k, v);
-              added++;
-            }
-          }
-          const builtIds = buildDbAnalysisIdIndex(fullTrackModels, sourceDbDir);
-          for (const [id, ref] of builtIds) {
-            if (!dbAnalysisIdIndexRef.current.has(id)) dbAnalysisIdIndexRef.current.set(id, ref);
-          }
-          logger.info('DATABASE', `[DB Auto] ${cand.path}: ${mapped.stats.tracks} Tracks, ${added} ANLZ-Links`, { dbType: result.dbType, appVer: cand.appVer ?? null });
-          if (mapped.warnings?.length || result.warnings?.length) {
-            logger.warn('DATABASE', '[DB Auto] Hinweise aus der Datenbank-Einlesung', {
-              mapping: [...(mapped.warnings || [])],
-              datei: [...(result.warnings || [])],
-            });
-          }
-          // One exact desktop library owns the XML identity namespace. Never
-          // merge rows from another discovered master.db into this index.
-          break;
-        } catch (e) {
-          diag.reasons.push(`${cand.path}: ${e instanceof Error ? e.message : String(e)}`);
-          logger.warn('DATABASE', `[DB Auto] Fehler bei ${cand.path}`, {
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-    } catch (e) {
-      diag.reasons.push(`locateRekordboxDatabases: ${e instanceof Error ? e.message : String(e)}`);
-      logger.warn('DATABASE', '[DB Auto] Datenbank-Suche fehlgeschlagen', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    diag.links = dbAnalysisIndexRef.current.size;
-    return dbAnalysisIndexRef.current;
-  }, []);
-
-  const ensureDbAnalysisIndex = useCallback(async () => {
-    if (dbAnalysisIndexRef.current.size > 0) return dbAnalysisIndexRef.current;
-    if (dbIndexLoadPromiseRef.current) return dbIndexLoadPromiseRef.current;
-    const request = loadDbAnalysisIndex();
-    dbIndexLoadPromiseRef.current = request;
-    try {
-      return await request;
-    } finally {
-      dbIndexLoadPromiseRef.current = null;
-    }
-  }, [loadDbAnalysisIndex]);
-
-  /** Activates a loaded track in Deck A and (re)builds its project projection. */
-  const loadTrackIntoDeck = (track: TrackModel) => {
-    setActiveTrackId(track.id);
-    resetEditProjection();
-    syncEditProjection(track);
-    setCurrentTime(0);
-    setViewOffset(0);
-    setSelection(null);
-    setIsPlaying(false);
-    audioEngine.stop();
-  };
-
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
 
-  // ── Follow-up state of an edit: one derivation for audio + waveform ──────
-  // The edit list on the track is the single source of truth. After every edit
-  // (and after Undo/Redo or a re-opened project) the SAME derivation produces the
-  // working audio, the projected waveform and the project duration, so no view
-  // can contradict the audio. Untouched material keeps its stored ANLZ columns;
-  // only genuinely new material is analysed (and is labelled as such).
-  const tracksRef = useRef<TrackModel[]>(tracks);
-  tracksRef.current = tracks;
-  const paletteClipsRef = useRef<PaletteClip[]>(paletteClips);
-  paletteClipsRef.current = paletteClips;
-  const projectionRef = useRef<TrackProjection | null>(null);
-  const [spanViews, setSpanViews] = useState<ProjectedSpanView[]>([]);
-  /** Copied material keeps its source window, so it can reuse stored columns. */
-  const [clipboardSource, setClipboardSource] = useState<{
-    trackId: string;
-    sourceStart: number;
-    duration: number;
-    via: 'original' | 'clip';
-  } | null>(null);
+  // Chatbot Pop-up Window state
+  const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
 
-  /**
-   * Re-derives the deck's project state from its edit list and publishes it to
-   * every view (audio, waveform, duration, provenance telemetry, edit blocks).
-   */
-  const syncEditProjection = useCallback((track: TrackModel | null): TrackProjection | null => {
-    if (!track) return null;
-    const projection = projectTrackEdits(track, paletteClipsRef.current, tracksRef.current, {
-      createBuffer: (numberOfChannels, length, sampleRate) =>
-        audioEngine.getContext().createBuffer(numberOfChannels, length, sampleRate),
-    });
-    const derived = projection.track;
-    track.duration = derived.duration;
-    track.analysis = derived.analysis;
-    track.analysisVariants = derived.analysisVariants;
-    track.sourceDuration = derived.sourceDuration;
-    track.baseAnalysis = derived.baseAnalysis;
-    track.baseAnalysisVariants = derived.baseAnalysisVariants;
-    track.editInfo = derived.editInfo;
-    projectionRef.current = projection;
-    setSpanViews(toSpanViews(projection.timeline, paletteClipsRef.current));
-    // Decisive follow-up parameters, durably logged (see the log-file contract):
-    // what the projection contains and where the rendered columns came from.
-    logger.info('EDITING', `[Edit-Projektion] „${track.title}“ neu abgeleitet`, {
-      segments: track.workingSegments?.length ?? 0,
-      spans: projection.timeline.spans.length,
-      structuralEdits: projection.timeline.structuralEdits,
-      overlays: projection.timeline.overdubs.length,
-      identity: projection.identity,
-      mediaDurationSec: Number((track.sourceDuration ?? track.duration).toFixed(3)),
-      projectDurationSec: Number(projection.timeline.duration.toFixed(3)),
-      waveformOrigin: waveformOriginAfterEdit(projection),
-      waveformVariants: projection.variants.length,
-      columnsStored: projection.stats
-        ? projection.stats.verbatimColumns + projection.stats.retimedColumns + projection.stats.clipColumns
-        : track.analysis?.length ?? 0,
-      columnsComputed: projection.stats?.computedColumns ?? 0,
-      columnsMissing: projection.stats?.missingColumns ?? 0,
-      columnsSilence: projection.stats?.silenceColumns ?? 0,
-      cues: track.cues.length,
-      loops: track.loops.length,
-      phrases: track.phrases?.length ?? 0,
-      beatNodes: track.beatGrid?.beats?.length ?? 0,
-      audioRendered: !!projection.workingBuffer && projection.workingBuffer !== track.audioBuffer,
-    });
-    if (projection.workingBuffer) {
-      const wasPlaying = audioEngine.getIsPlaying();
-      setWorkingAudioBuffer(projection.workingBuffer);
-      setCurrentTime((prev) => Math.max(0, Math.min(prev, projection.timeline.duration)));
-      if (wasPlaying) {
-        setIsPlaying(false);
-        audioEngine.stop();
-      }
-    }
-    setTracks((prev) => [...prev]);
-    return projection;
-  }, []);
+  // Audio Recording Pop-up Window state & Engine bindings
+  const [recordModalOpen, setRecordModalOpen] = useState<boolean>(false);
+  const [isRecording, setIsRecording] = useState<boolean>(recordingEngine.getState() === 'RECORDING');
+  const [isRecordArmed, setIsRecordArmed] = useState<boolean>(recordingEngine.getState() === 'ARMED');
 
-  /** Resets the derived state after a fresh (un-edited) deck load. */
-  const resetEditProjection = useCallback(() => {
-    projectionRef.current = null;
-    setSpanViews([]);
-  }, []);
-
-  /**
-   * Maps a project-time window back onto the pristine source material. It only
-   * returns a source window when the whole selection lives inside one original
-   * span — that is the exact condition under which stored ANLZ columns may be
-   * reused instead of being recomputed from audio.
-   */
-  /**
-   * Where does a window of the (possibly edited) timeline come from? Delegates to
-   * the strict mapper in editTimeline: a window is only "original material" when it
-   * lies inside one span, otherwise nothing is guessed — callers must then say
-   * honestly that the material is edit audio (and must not reuse any position in
-   * the original file as if it were the source).
-   */
-  const mapWindowToSource = (
-    track: TrackModel | null,
-    startSec: number,
-    endSec: number
-  ): { trackId: string; sourceStart: number; duration: number; via: 'original' | 'clip' } | null => {
-    const mapped = mapWindowToSourceWindow(projectionRef.current?.timeline, track?.id ?? '', startSec, endSec);
-    return mapped ? { ...mapped } : null;
-  };
-
-  // Stringent empty project: no demo bootstrap. The deck starts empty and
-  // only genuine Rekordbox/local data loads it (XML-exclusive guarantee:
-  // no synthetic reference track, no generated previews, no template data).
-
-  // Eager auto-load: hole Waveform/Cues direkt aus lokaler Rekordbox DB ohne manuellen DATA-Klick.
+  // Recording engine lifecycle subscription
   useEffect(() => {
-    if (!window.rekordboxDesktop) return;
-    ensureDbAnalysisIndex();
-  }, [ensureDbAnalysisIndex]);
+    const unsubState = recordingEngine.subscribeState((newState) => {
+      setIsRecording(newState === 'RECORDING');
+      setIsRecordArmed(newState === 'ARMED');
+    });
 
-  // Durable file logging: mirrors every decisive pipeline parameter into the
-  // desktop log file (idempotent, browser-safe).
-  useEffect(() => initFileLogging(), []);
+    const unsubAuto = recordingEngine.subscribeAutoTrigger((reason) => {
+      logger.info('RECORDING', `Auto-Record Ereignis empfangen: ${reason}`);
+      const settings = recordingEngine.getSettings();
+      if (settings.autoOpenWindowOnRecord) {
+        setRecordModalOpen(true);
+      }
+    });
+
+    return () => {
+      unsubState();
+      unsubAuto();
+    };
+  }, []);
+
+  // Handler to load recorded take directly into active deck
+  const handleLoadRecordedTake = useCallback((takeBuffer: AudioBuffer, title: string) => {
+    logger.info('RECORDING', `Lade aufgenommenen Take in den Haupt-Editor: "${title}"`, {
+      duration: takeBuffer.duration,
+      sampleRate: takeBuffer.sampleRate,
+    });
+    setWorkingAudioBuffer(takeBuffer);
+    setCurrentTime(0);
+    audioEngine.pause();
+    showOperationFeedback({
+      title: 'Audio-Aufnahme ins Deck geladen',
+      operationType: 'INSERT',
+      description: `${title}: ${takeBuffer.duration.toFixed(1)}s, ${takeBuffer.sampleRate} Hz Stereo`,
+      originalSha256: 'recording-take-stream',
+      timestamp: Date.now(),
+    });
+  }, [showOperationFeedback]);
+
+  // Handler to save recorded take as clip into palette
+  const handleSaveRecordedClip = useCallback((clipBuffer: AudioBuffer, name: string) => {
+    logger.info('RECORDING', `Aufnahme als Clip bereitgestellt: "${name}"`);
+    showOperationFeedback({
+      title: 'Aufnahme in Palette gesichert',
+      operationType: 'COPY',
+      description: `${name}: ${clipBuffer.duration.toFixed(1)}s`,
+      originalSha256: 'recording-clip-stream',
+      timestamp: Date.now(),
+    });
+  }, [showOperationFeedback]);
+
+  // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
+  // (Disabled on startup so the app opens with a completely empty project as requested)
+  const handleLoadDemoTrack = useCallback(() => {
+    try {
+      const parsed = parseRekordboxXml(DEFAULT_REKORDBOX_XML);
+      if (parsed.tracks.length > 0) {
+        const rawTrack = parsed.tracks[0];
+        const audioCtx = audioEngine.getContext();
+        const bpm = rawTrack.bpm || 130.0;
+        const firstBeat = rawTrack.beatGrid?.firstBeat || 0.0;
+        const duration = rawTrack.duration || 326.0;
+        const bars = Math.max(32, Math.ceil(duration / (240 / bpm)));
+        const synthBuf = generateElectronicDjTrack(audioCtx, bpm, bars, firstBeat);
+        const analysis = analyzeAudioBuffer(synthBuf, DataOrigin.REKORDBOX_XML);
+        const sha256 = audioEngine.computeBufferChecksum(synthBuf);
+        const phrases = generateRekordboxPhrases(bpm, synthBuf.duration, firstBeat);
+
+        const initialTrack: TrackModel = {
+          id: rawTrack.id || 'track-1',
+          title: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
+          artist: rawTrack.artist || 'La Roux',
+          album: rawTrack.album || 'Quicksand',
+          bpm,
+          key: rawTrack.key || '3A',
+          duration: synthBuf.duration,
+          sampleRate: synthBuf.sampleRate,
+          channels: synthBuf.numberOfChannels,
+          originalSha256: sha256,
+          isOriginalUntouched: true,
+          audioBuffer: synthBuf,
+          beatGrid: buildBeatGridFromTempo(firstBeat, bpm, synthBuf.duration, 4, DataOrigin.REKORDBOX_XML),
+          cues: rawTrack.cues || [],
+          loops: rawTrack.loops || [],
+          analysis,
+          phrases,
+          origin: DataOrigin.REKORDBOX_XML,
+          workingSegments: [
+            {
+              id: 'seg-init-1',
+              type: 'ORIGINAL',
+              trackId: rawTrack.id || 'track-1',
+              sourceStart: 0,
+              sourceEnd: synthBuf.duration,
+              projectStart: 0,
+              projectDuration: synthBuf.duration,
+              gain: 1.0,
+            },
+          ],
+        };
+
+        // Extract palette clips from this authentic audio buffer matching screenshot
+        const secPerBeat = 60 / bpm;
+        const makeClip = (id: string, name: string, startBeat: number, numBeats: number, color: string): PaletteClip => {
+          const startSec = startBeat * secPerBeat;
+          const durSec = numBeats * secPerBeat;
+          const startSample = Math.floor(startSec * synthBuf.sampleRate);
+          const numSamples = Math.floor(durSec * synthBuf.sampleRate);
+          const subBuf = audioCtx.createBuffer(2, numSamples, synthBuf.sampleRate);
+          for (let ch = 0; ch < 2; ch++) {
+            const src = synthBuf.getChannelData(ch);
+            const dest = subBuf.getChannelData(ch);
+            for (let i = 0; i < numSamples; i++) {
+              dest[i] = src[startSample + i] || 0;
+            }
+          }
+          return {
+            id,
+            name,
+            sourceTrackId: rawTrack.id || 'track-1',
+            sourceTrackName: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
+            sourceStart: startSec,
+            sourceEnd: startSec + durSec,
+            duration: durSec,
+            beats: numBeats,
+            bars: Math.max(1, Math.round(numBeats / 4)),
+            bpm,
+            key: '3A',
+            color,
+            audioBuffer: subBuf,
+            miniPeaks: extractMiniPeaks(subBuf, 64),
+            origin: DataOrigin.REKORDBOX_XML,
+          };
+        };
+
+        const sampleClips: PaletteClip[] = [
+          makeClip('clip-1', 'Intro Kick 4B', 0, 16, '#ff2b2b'),
+          makeClip('clip-2', '8-Bit Arp 8B', 432, 32, '#00a2ff'),
+          makeClip('clip-3', 'Main Drop 8B', 448, 32, '#10b981'),
+          makeClip('clip-4', 'Breakdown 16B', 384, 64, '#f59e0b'),
+        ];
+
+        setTracks([initialTrack]);
+        setActiveTrackId(initialTrack.id);
+        setWorkingAudioBuffer(synthBuf);
+        setPaletteClips(sampleClips);
+
+        // Position initial viewport to match the authentic Rekordbox EDIT mode reference (Bar 109 to 117)
+        const dropTime = 112 * 4 * (60 / bpm); // ~206.69s (Bar 113)
+        setCurrentTime(dropTime);
+        setViewOffset(Math.max(0, dropTime - 9.85));
+        setViewDuration(14.76);
+      }
+    } catch (err) {
+      console.error('Fehler beim Laden des Referenz-Tracks:', err);
+    }
+  }, []);
 
   // Real-time animation loop for playhead progress and VU stereo meters
   useEffect(() => {
@@ -644,7 +514,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Playback Toggle
   const handleTogglePlay = () => {
-    if (!activeTrack || !workingAudioBuffer) return;
+    if (!activeTrack) {
+      alert('Bitte lade zuerst einen Track oder importiere eine Audiodatei (WAV, MP3, FLAC).');
+      return;
+    }
+
+    if (!workingAudioBuffer) {
+      if (
+        confirm(
+          `Für "${activeTrack.title}" ist noch keine Audiodatei verknüpft.\n\nMöchtest du jetzt die passende Originaldatei (WAV, MP3, FLAC, AIFF) auswählen?`
+        )
+      ) {
+        audioFileInputRef.current?.click();
+      }
+      return;
+    }
 
     if (isPlaying) {
       audioEngine.pause();
@@ -686,6 +570,44 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleResetZoom = () => {
     setViewDuration(18.0);
   };
+  const handleSelectZoomPreset = useCallback(
+    (preset: '2_BARS' | '4_BARS' | '8_BARS' | '16_BARS' | '32_BARS' | '64_BARS' | 'FULL_TRACK') => {
+      const bpm = activeTrack?.bpm || 120.0;
+      const secPerBar = (60 / bpm) * 4;
+      let targetDuration = 16.0;
+
+      if (preset === 'FULL_TRACK') {
+        targetDuration = activeTrack ? activeTrack.duration : 60.0;
+        setViewOffset(0);
+        setViewDuration(targetDuration);
+        return;
+      }
+
+      const barMap: Record<string, number> = {
+        '2_BARS': 2,
+        '4_BARS': 4,
+        '8_BARS': 8,
+        '16_BARS': 16,
+        '32_BARS': 32,
+        '64_BARS': 64,
+      };
+      const bars = barMap[preset] || 16;
+      targetDuration = bars * secPerBar;
+
+      if (activeTrack && targetDuration > activeTrack.duration) {
+        targetDuration = activeTrack.duration;
+      }
+
+      const half = targetDuration / 2;
+      let newOffset = Math.max(0, currentTime - half);
+      if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
+        newOffset = Math.max(0, activeTrack.duration - targetDuration);
+      }
+      setViewDuration(targetDuration);
+      setViewOffset(newOffset);
+    },
+    [activeTrack, currentTime]
+  );
   const handlePanView = (newOffset: number) => {
     const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
     setViewOffset(Math.max(0, Math.min(maxOffset, newOffset)));
@@ -729,7 +651,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const beatNumber = (beatIndex % 4) + 1;
 
     const newCue: CuePoint = {
-      id: nextId('mem'),
+      id: `mem-${Date.now()}`,
       position: currentTime,
       inMsec: Math.round(currentTime * 1000),
       type: 'MEMORY',
@@ -738,7 +660,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       cueIndex: nextIndex,
       barNumber,
       beatNumber,
-      origin: DataOrigin.USER_EDIT,
+      origin: DataOrigin.LOCAL_ANALYSIS,
     };
 
     setTracks((prev) =>
@@ -756,72 +678,75 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [activeTrack, currentTime]);
 
   // Set Beat 1.1 at current playhead position (Pioneer Rekordbox "Set 1.1 Here")
-  // Manual grid edits (Shift / Set 1.1 / Auto-Align) share one guarded core:
-  // rigid shift preserving the original intervals, labeled USER_EDIT, with an
-  // Undo snapshot taken beforehand and a user-facing change notice. Auto-Align
-  // runs ONLY from its manual trigger — never automatically.
-  const applyGridShift = useCallback((deltaSeconds: number, source: 'SHIFT' | 'SET_1_1' | 'AUTO_ALIGN') => {
+  const handleSetFirstBeatHere = useCallback(() => {
     if (!activeTrack) return;
-    const currentFirstBeat = activeTrack.beatGrid.firstBeat || 0;
-    const newFirstBeat = Math.max(0, currentFirstBeat + deltaSeconds);
-    const actualDelta = newFirstBeat - currentFirstBeat;
-    const hadNodes = (activeTrack.beatGrid.beats?.length ?? 0) > 0;
-    pushHistorySnapshot(source === 'AUTO_ALIGN' ? 'Auto-Align Beatgrid' : source === 'SET_1_1' ? 'Set 1.1' : 'Beatgrid-Shift');
+    const newFirstBeat = Math.max(0, currentTime);
+    const spb = 60.0 / activeTrack.bpm;
 
     setTracks((prev) =>
       prev.map((t) => {
-        if (t.id !== activeTrack.id) return t;
-        const spb = 60.0 / t.bpm;
-        const beats = (t.beatGrid.beats?.length ?? 0) > 0
-          ? shiftBeatNodes(t.beatGrid.beats, actualDelta)
-          : Array.from({ length: Math.max(0, Math.floor((t.duration - newFirstBeat) / spb)) }, (_, i) => ({
-              index: i,
-              time: newFirstBeat + i * spb,
-              isBarStart: i % 4 === 0,
-              barNumber: Math.floor(i / 4) + 1,
-              beatInBar: (i % 4) + 1,
-            }));
-        return {
-          ...t,
-          beatGrid: {
-            ...t.beatGrid,
-            firstBeat: newFirstBeat,
-            beats,
-            origin: DataOrigin.USER_EDIT,
-          },
-          isModified: true,
-        };
+        if (t.id === activeTrack.id) {
+          const totalBeats = Math.floor((t.duration - newFirstBeat) / spb);
+          const newBeats = Array.from({ length: Math.max(0, totalBeats) }, (_, i) => ({
+            index: i,
+            time: newFirstBeat + i * spb,
+            isBarStart: i % 4 === 0,
+            barNumber: Math.floor(i / 4) + 1,
+            beatInBar: (i % 4) + 1,
+          }));
+
+          return {
+            ...t,
+            beatGrid: {
+              ...t.beatGrid,
+              firstBeat: newFirstBeat,
+              beats: newBeats,
+              origin: DataOrigin.USER_EDIT,
+            },
+            isModified: true,
+          };
+        }
+        return t;
       })
     );
-
-    const notice = describeGridEdit(
-      source,
-      currentFirstBeat,
-      newFirstBeat,
-      hadNodes ? activeTrack.beatGrid.beats.length : 0
-    );
-    showOperationFeedback({
-      title: 'Beatgrid manuell angepasst (USER_EDIT)',
-      operationType: 'GRID',
-      description: notice,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-    logger.info('BEATGRID', notice, { trackId: activeTrack.id, source, deltaSeconds: actualDelta });
-  }, [activeTrack, showOperationFeedback]);
-
-  const handleSetFirstBeatHere = useCallback(() => {
-    if (!activeTrack) return;
-    const currentFirstBeat = activeTrack.beatGrid.firstBeat || 0;
-    applyGridShift(Math.max(0, currentTime) - currentFirstBeat, 'SET_1_1');
-  }, [activeTrack, currentTime, applyGridShift]);
+  }, [activeTrack, currentTime]);
 
   // Fine-tune Beatgrid offset (Pioneer Rekordbox Grid Shift: +/- 1ms or 10ms)
   const handleShiftBeatgrid = useCallback((deltaSeconds: number) => {
-    applyGridShift(deltaSeconds, 'SHIFT');
-  }, [applyGridShift]);
+    if (!activeTrack) return;
+    const currentFirstBeat = activeTrack.beatGrid.firstBeat || 0;
+    const newFirstBeat = Math.max(0, currentFirstBeat + deltaSeconds);
+    const spb = 60.0 / activeTrack.bpm;
 
-  // Auto-align Beatgrid to nearest transient peak (manual trigger only)
+    setTracks((prev) =>
+      prev.map((t) => {
+        if (t.id === activeTrack.id) {
+          const totalBeats = Math.floor((t.duration - newFirstBeat) / spb);
+          const newBeats = Array.from({ length: Math.max(0, totalBeats) }, (_, i) => ({
+            index: i,
+            time: newFirstBeat + i * spb,
+            isBarStart: i % 4 === 0,
+            barNumber: Math.floor(i / 4) + 1,
+            beatInBar: (i % 4) + 1,
+          }));
+
+          return {
+            ...t,
+            beatGrid: {
+              ...t.beatGrid,
+              firstBeat: newFirstBeat,
+              beats: newBeats,
+              origin: DataOrigin.USER_EDIT,
+            },
+            isModified: true,
+          };
+        }
+        return t;
+      })
+    );
+  }, [activeTrack]);
+
+  // Auto-align Beatgrid to nearest transient peak
   const handleAutoAlignBeatgrid = useCallback(() => {
     if (!activeTrack) return;
     const analysis = activeTrack.analysis;
@@ -833,12 +758,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const minBucket = Math.max(0, searchCenterBucket - searchRadius);
     const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
 
-    // Transient search uses the stored ANLZ column heights verbatim — no
-    // self-computed weighting of channels.
     let maxPeak = -1;
     let bestBucket = searchCenterBucket;
     for (let b = minBucket; b <= maxBucket; b++) {
-      const peakVal = analysis.peaks[b];
+      const peakVal = analysis.lowEnergy[b] * 0.7 + analysis.peaks[b] * 0.3;
       if (peakVal > maxPeak) {
         maxPeak = peakVal;
         bestBucket = b;
@@ -850,83 +773,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const currentFirst = activeTrack.beatGrid.firstBeat || 0;
     const beatDistance = (alignedTime - currentFirst) % spb;
     const shift = beatDistance > spb / 2 ? beatDistance - spb : beatDistance;
-    applyGridShift(shift, 'AUTO_ALIGN');
-  }, [activeTrack, currentTime, applyGridShift]);
+    handleShiftBeatgrid(shift);
+  }, [activeTrack, currentTime, handleShiftBeatgrid]);
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
-    // Fresh analysis data for a deck that may already carry a composite: drop the
-    // frozen base so the projection re-freezes from the newly applied ANLZ arrays
-    // instead of projecting on top of the previous composite.
-    const rebased = rebaseTrackAnalysis(extractedTrack);
     setTracks((prev) => {
-      const idx = prev.findIndex((t) => t.id === rebased.id);
+      const idx = prev.findIndex((t) => t.id === extractedTrack.id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = rebased;
+        next[idx] = extractedTrack;
         return next;
       }
-      return [rebased, ...prev];
+      return [extractedTrack, ...prev];
     });
-    setActiveTrackId(rebased.id);
-    if (rebased.audioBuffer) {
-      setWorkingAudioBuffer(rebased.audioBuffer);
+    setActiveTrackId(extractedTrack.id);
+    if (extractedTrack.audioBuffer) {
+      setWorkingAudioBuffer(extractedTrack.audioBuffer);
     }
-    syncEditProjection(rebased);
   };
 
-  // Snapshot current state for Undo (the beat grid is included so manual
-  // grid edits stay reversible and the original grid stays traceable).
-  /**
-   * Shallow snapshot of the edit list. Segment `clipBuffer`s are shared, never
-   * deep-copied: a `JSON.parse(JSON.stringify(...))` turned every AudioBuffer
-   * into `{}`, so Undo silently destroyed inserted clip material.
-   */
-  const snapshotSegments = (list: EditSegment[]): EditSegment[] => (list ?? []).map((s) => ({ ...s }));
-  const snapshotGrid = (grid: BeatGrid): BeatGrid => ({
-    ...grid,
-    beats: (grid?.beats ?? []).map((node) => ({ ...node })),
-  });
-
-  /**
-   * One snapshot shape for Undo, Redo and the undo-stack push: the edit list plus
-   * every marker the edit moved. The beat grid is included so manual grid edits
-   * stay reversible and the original grid stays traceable. Audio and waveform are
-   * NOT snapshotted — they are re-derived from the restored edit list.
-   */
-  const makeHistorySnapshot = (description: string): EditHistoryEntry | null => {
-    if (!activeTrack) return null;
-    return {
-      description,
-      timestamp: Date.now(),
-      segments: snapshotSegments(activeTrack.workingSegments),
-      selection: selection ? { ...selection } : null,
-      cues: (activeTrack.cues ?? []).map((c) => ({ ...c })),
-      loops: (activeTrack.loops ?? []).map((l) => ({ ...l })),
-      phrases: (activeTrack.phrases ?? []).map((p) => ({ ...p })),
-      beatGrid: snapshotGrid(activeTrack.beatGrid),
-    };
-  };
-
-  // Snapshot current state for Undo.
+  // Snapshot current state for Undo (stores buffer, duration, analysis, cues, segments)
   const pushHistorySnapshot = (desc: string) => {
-    const snapshot = makeHistorySnapshot(desc);
-    if (!snapshot) return;
+    if (!activeTrack) return;
+    const snapshot: EditHistoryEntry = {
+      description: desc,
+      timestamp: Date.now(),
+      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      selection: selection ? { ...selection } : null,
+      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
+      duration: activeTrack.duration,
+      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
+    };
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
     setRedoStack([]);
-  };
-
-  /** Restores one snapshot and re-derives every follow-up state from it. */
-  const restoreHistorySnapshot = (snapshot: EditHistoryEntry, track: TrackModel) => {
-    track.workingSegments = snapshotSegments(snapshot.segments);
-    track.cues = (snapshot.cues ?? []).map((c) => ({ ...c }));
-    if (snapshot.loops) track.loops = snapshot.loops.map((l) => ({ ...l }));
-    if (snapshot.phrases) track.phrases = snapshot.phrases.map((p) => ({ ...p }));
-    if (snapshot.beatGrid) track.beatGrid = snapshotGrid(snapshot.beatGrid);
-    setSelection(snapshot.selection);
-    // Audio + waveform are never restored from a stale copy: they are projected
-    // from the restored edit list, which keeps Undo exactly reversible.
-    syncEditProjection(track);
   };
 
   // Undo / Redo
@@ -936,9 +817,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setUndoStack((prev) => prev.slice(0, -1));
 
     // Push current to redo
-    const currentSnapshot = makeHistorySnapshot('Before Undo');
-    if (currentSnapshot) setRedoStack((prev) => [...prev, currentSnapshot]);
-    restoreHistorySnapshot(previous, activeTrack);
+    const currentSnapshot: EditHistoryEntry = {
+      description: 'Before Undo',
+      timestamp: Date.now(),
+      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      selection: selection ? { ...selection } : null,
+      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
+      duration: activeTrack.duration,
+      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
+    };
+    setRedoStack((prev) => [...prev, currentSnapshot]);
+
+    // Restore track state
+    activeTrack.workingSegments = previous.segments;
+    activeTrack.cues = previous.cues;
+    if (previous.duration !== undefined) {
+      activeTrack.duration = previous.duration;
+    }
+    if (previous.analysis) {
+      activeTrack.analysis = previous.analysis;
+    }
+    setSelection(previous.selection);
+
+    if (previous.audioBuffer) {
+      setWorkingAudioBuffer(previous.audioBuffer);
+      if (!previous.analysis) {
+        activeTrack.analysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
+      }
+    } else if (activeTrack.audioBuffer) {
+      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
+      setWorkingAudioBuffer(reRendered);
+      activeTrack.duration = reRendered.duration;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+    }
+    setTracks([...tracks]);
   };
 
   const handleRedo = () => {
@@ -947,9 +860,55 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setRedoStack((prev) => prev.slice(0, -1));
 
     // Push current to undo
-    const currentSnapshot = makeHistorySnapshot('Before Redo');
-    if (currentSnapshot) setUndoStack((prev) => [...prev, currentSnapshot]);
-    restoreHistorySnapshot(next, activeTrack);
+    const currentSnapshot: EditHistoryEntry = {
+      description: 'Before Redo',
+      timestamp: Date.now(),
+      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
+      selection: selection ? { ...selection } : null,
+      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
+      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
+      duration: activeTrack.duration,
+      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
+    };
+    setUndoStack((prev) => [...prev, currentSnapshot]);
+
+    activeTrack.workingSegments = next.segments;
+    activeTrack.cues = next.cues;
+    if (next.duration !== undefined) {
+      activeTrack.duration = next.duration;
+    }
+    if (next.analysis) {
+      activeTrack.analysis = next.analysis;
+    }
+    setSelection(next.selection);
+
+    if (next.audioBuffer) {
+      setWorkingAudioBuffer(next.audioBuffer);
+      if (!next.analysis) {
+        activeTrack.analysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
+      }
+    } else if (activeTrack.audioBuffer) {
+      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
+      setWorkingAudioBuffer(reRendered);
+      activeTrack.duration = reRendered.duration;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+    }
+    setTracks([...tracks]);
+  };
+
+  // Clear History handler (confirmed through ClearHistoryModal)
+  const handleClearHistoryConfirm = () => {
+    const totalCount = undoStack.length + redoStack.length;
+    setUndoStack([]);
+    setRedoStack([]);
+    logger.info('EDITING', `[History] Cleared ${totalCount} history snapshots after user confirmation.`);
+    showOperationFeedback({
+      title: 'Bearbeitungsverlauf geleert',
+      operationType: 'CLEAR_HISTORY',
+      description: `Der Bearbeitungsverlauf (${totalCount} Schritte) wurde sicher geleert. Der aktuelle Zustand von Track und Waveform bleibt unverändert erhalten.`,
+      originalSha256: activeTrack?.originalSha256 || 'N/A',
+      timestamp: Date.now(),
+    });
   };
 
   // BEAT SELECT handler (1, 2, 4, 8, 16, 32, 64, 128 beats)
@@ -976,6 +935,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       barsCount: actualBeats / bg.meter,
       duration: endSec - startSec,
     });
+    setEditPaletteOpen(true);
+  };
+
+  // Selection from Waveform drag - auto reveals edit palette if selection created
+  const handleSelectionFromWaveform = (newSelection: SelectionRange | null) => {
+    setSelection(newSelection);
+    if (newSelection && newSelection.duration > 0) {
+      setEditPaletteOpen(true);
+    } else if (!newSelection && autoCollapseTools) {
+      setEditPaletteOpen(false);
+    }
   };
 
   // SELECT Modus (Screenshot 03): HALF (1/2), DOUBLE (×2), CANCEL (⊗)
@@ -1017,394 +987,163 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   const handleCancelSelection = () => {
     setSelection(null);
-  };
-
-  /**
-   * Builds one structural edit segment. `source` carries the provenance that
-   * lets the waveform compositor decide between copying stored ANLZ columns and
-   * computing new ones (tempoRatio/pitchShift ≠ untouched ⇒ must compute).
-   */
-  type ClipSourceInfo = {
-    clipId?: string;
-    sourceTrackId?: string;
-    sourceClipStart?: number;
-    sourceStart?: number;
-    tempoRatio?: number;
-    pitchShift?: number;
-  };
-
-  const makeSegment = (
-    type: EditSegment['type'],
-    projectStart: number,
-    projectDuration: number,
-    buffer: AudioBuffer | null,
-    source: ClipSourceInfo = {}
-  ): EditSegment =>
-    createSegment({
-      type,
-      trackId: activeTrack?.id ?? '',
-      projectStart,
-      projectDuration,
-      sourceStart: source.sourceStart,
-      clipId: source.clipId,
-      clipBuffer: buffer ?? undefined,
-      sourceTrackId: source.sourceTrackId,
-      sourceClipStart: source.sourceClipStart,
-      tempoRatio: source.tempoRatio,
-      pitchShift: source.pitchShift,
-    });
-
-  /**
-   * The single path every edit takes: append the segment, re-time the follow-up
-   * state (cues, loops, phrases, beatgrid) and re-derive audio + waveform.
-   */
-  const commitSegmentEdit = (
-    track: TrackModel,
-    segment: EditSegment,
-    edit: StructuralEditDelta | null,
-    insertWindow: { start: number; end: number } | null
-  ): { projection: TrackProjection | null; retimed: { cues: number; dropped: number; loops: number; phrases: number; beats: number; gridFilled: number } } => {
-    track.workingSegments = [...(track.workingSegments ?? []), segment];
-
-    const retimed = { cues: 0, dropped: 0, loops: 0, phrases: 0, beats: 0, gridFilled: 0 };
-    if (edit) {
-      const cueRes = retimeCues(track.cues ?? [], edit);
-      track.cues = cueRes.cues;
-      const loopRes = retimeLoops(track.loops ?? [], edit);
-      track.loops = loopRes.loops;
-      const meter = track.beatGrid?.meter ?? 4;
-      const spb = 60.0 / (track.beatGrid?.bpm || track.bpm || 120);
-      const phraseRes = retimePhrases(track.phrases ?? [], edit, spb * meter);
-      track.phrases = phraseRes.phrases;
-
-      const hadNodes = (track.beatGrid?.beats?.length ?? 0) > 0;
-      const beatRes = retimeBeatNodes(track.beatGrid?.beats ?? [], edit);
-      let beats = beatRes.beats;
-      if (hadNodes && insertWindow) {
-        // Only a deck with an imported grid gets the inserted window covered —
-        // a missing PQTZ stays visibly missing and is never manufactured.
-        const ext = extendGridAcrossGap(
-          beats,
-          insertWindow.start,
-          insertWindow.end,
-          track.beatGrid?.bpm || track.bpm || 120,
-          meter,
-          track.beatGrid?.firstBeat ?? 0
-        );
-        beats = ext.beats;
-        retimed.gridFilled = ext.generated;
-      }
-      const baseGrid = track.beatGrid ?? { firstBeat: 0, bpm: track.bpm, meter, beats: [], origin: track.origin };
-      track.beatGrid = {
-        ...baseGrid,
-        beats,
-        origin:
-          edit.mode === 'insert' || edit.mode === 'remove' ? DataOrigin.USER_EDIT : baseGrid.origin,
-      };
-
-      retimed.cues = cueRes.moved;
-      retimed.dropped = cueRes.dropped + loopRes.dropped + phraseRes.dropped;
-      retimed.loops = loopRes.loops.length;
-      retimed.phrases = phraseRes.phrases.length;
-      retimed.beats = beatRes.beats.length;
+    if (autoCollapseTools) {
+      setEditPaletteOpen(false);
     }
-
-    const projection = syncEditProjection(track);
-    return { projection, retimed };
-  };
-
-  /** Feedback text: what the projected waveform is actually made of. */
-  const waveformFollowUpNote = (projection: TrackProjection | null): string => {
-    if (!projection) return '';
-    if (projection.identity) {
-      return 'Wellenform: unbedarft – Projekt entspricht dem Original (keine Neu-Berechnung nötig).';
-    }
-    return `Wellenform-Neuberechnung: ${describeEditWaveform(
-      projection.stats!,
-      projection.timeline.duration
-    )}.`;
   };
 
   // Add selection to Palette (CLONE or '+' button)
-  /**
-   * The palette button in the bottom bar is wired straight to onClick, so this
-   * handler can receive the click event where a time is expected. A non-numeric
-   * argument therefore means "use the current selection" — otherwise the guard
-   * `!(to > from)` trips on a MouseEvent and CLONE silently does nothing.
-   */
-  const handleAddSelectionToPalette = (
-    startSec?: number | { type?: string },
-    endSec?: number | { type?: string }
-  ) => {
-    const from = typeof startSec === 'number' ? startSec : selection?.start;
-    const to = typeof endSec === 'number' ? endSec : selection?.end;
-    if (from === undefined || to === undefined || !activeTrack || !workingAudioBuffer) return;
-    if (!(to > from)) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, from, to);
-    const newClipId = nextId('clip');
-    // Keep the source window when the copied range is genuine original material:
-    // a clip inserted from it can then reuse the stored ANLZ columns verbatim.
-    const sourceWindow = mapWindowToSource(activeTrack, from, to);
-    // A bar is FOUR beats: secondsPerBeat * 4. The previous formula divided by
-    // the beat length instead of multiplying, which labelled a 2 s clip as
-    // 17.3 Bars and even persisted that wrong number into saved projects.
-    const secondsPerBeat = 60 / (activeTrack.beatGrid?.bpm || activeTrack.bpm || 120);
-    const barsOfWindow = (to - from) / (secondsPerBeat * 4);
+  const handleAddSelectionToPalette = () => {
+    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
+    const newClipId = `clip-${Date.now()}`;
     const newClip: PaletteClip = {
       id: newClipId,
-      name: `${activeTrack.title} (${barsOfWindow.toFixed(1)} Bars)`,
-      sourceTrackId: sourceWindow?.trackId ?? activeTrack.id,
+      name: `${activeTrack.title} (${selection.barsCount.toFixed(1)} Bars)`,
+      sourceTrackId: activeTrack.id,
       sourceTrackName: activeTrack.title,
-      // Only a verified window may be read back as source material. Unmapped clips
-      // keep the EDIT-timeline window (what the user actually heard) and are marked
-      // `sourceMapped: false`, so no drop may reinterpret these seconds as a position
-      // inside the original file.
-      sourceMapped: sourceWindow !== null,
-      sourceStart: sourceWindow ? sourceWindow.sourceStart : from,
-      sourceEnd: sourceWindow ? sourceWindow.sourceStart + (to - from) : to,
-      duration: to - from,
-      beats: Math.round((to - from) / secondsPerBeat),
-      bars: barsOfWindow,
+      sourceStart: selection.start,
+      sourceEnd: selection.end,
+      duration: selection.duration,
+      beats: Math.round(selection.beatsCount),
+      bars: selection.barsCount,
       bpm: activeTrack.bpm,
       key: activeTrack.key,
       color: '#00a2ff',
       audioBuffer: sliced,
-      ...((): { miniPeaks: number[]; previewOrigin: PreviewProfile['origin']; previewNote: string } => {
-        const profile = sourceWindow
-          ? clipPreviewProfile(
-              sourcePreviewVariant(activeTrack),
-              sourceWindow.sourceStart,
-              to - from,
-              48,
-              () => extractMiniPeaks(sliced, 48)
-            )
-          : {
-              peaks: extractMiniPeaks(sliced, 48),
-              origin: 'EDIT' as const,
-              columns: 0,
-            };
-        return { miniPeaks: profile.peaks, previewOrigin: profile.origin, previewNote: describePreviewOrigin(profile) };
-      })(),
+      miniPeaks: extractMiniPeaks(sliced, 48),
       origin: DataOrigin.PROJECT,
     };
 
-    setPaletteClips((prev) => {
-      const next = [...prev, newClip];
-      paletteClipsRef.current = next;
-      return next;
-    });
+    setPaletteClips((prev) => [...prev, newClip]);
     setSelectedClipId(newClipId);
     if (!paletteOpen) setPaletteOpen(true);
   };
 
-  /** Stored analysis variant that describes the track's ORIGINAL source times. */
-  const sourcePreviewVariant = (track: TrackModel | null) => {
-    if (!track) return null;
-    const candidates = [
-      ...(track.baseAnalysisVariants ?? []),
-      track.baseAnalysis ?? null,
-      ...(track.analysisVariants ?? []),
-      track.analysis ?? null,
-    ].filter((v): v is NonNullable<typeof v> => Boolean(v && v.length > 0 && !v.isEditComposite));
-    return candidates[0] ?? null;
-  };
-
-  // Copy selection (with its source window, for verbatim column reuse on paste)
+  // Copy selection (validated by Edit Assistant)
   const handleCopy = () => {
-    if (!selection || !workingAudioBuffer || !activeTrack) return;
-    const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
+    const validation = editAssistant.validateCopy(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !workingAudioBuffer) return;
+
+    const sliced = executeCopy(workingAudioBuffer, effectiveSel);
     setClipboardBuffer(sliced);
-    setClipboardSource(mapWindowToSource(activeTrack, selection.start, selection.end));
+
+    showOperationFeedback({
+      title: 'Audio in Zwischenablage kopiert (Copy)',
+      operationType: 'COPY',
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) kopiert. Puffer-Integrität validiert.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
+      originalSha256: activeTrack?.originalSha256 || 'N/A',
+      timestamp: Date.now(),
+    });
   };
 
-  // Cut selection
+  // Cut selection (validated by Edit Assistant)
   const handleCut = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
-    handleCopy();
-    handleDelete();
+    const validation = editAssistant.validateCut(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
+    pushHistorySnapshot('Cut');
+
+    const { clipboard, execution } = executeCut(
+      workingAudioBuffer,
+      effectiveSel,
+      activeTrack.cues,
+      activeTrack.workingSegments
+    );
+
+    setClipboardBuffer(clipboard);
+    applyExecutionToTrack(activeTrack, execution);
+    setWorkingAudioBuffer(execution.newBuffer);
+    setTracks([...tracks]);
+    setSelection(null);
+
+    showOperationFeedback({
+      title: 'Auswahl ausgeschnitten (Cut)',
+      operationType: 'CUT',
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) in die Zwischenablage kopiert und aus Track entfernt.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
   };
 
-  /** Inserts the clipboard at the playhead (paste == insert on the timeline). */
-  const pasteClipboardAt = (projectStart: number, atLabel = 'Wiedergabeposition') => {
-    if (!clipboardBuffer || !activeTrack) return;
+  // Paste at playhead (validated by Edit Assistant)
+  const handlePaste = () => {
+    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, currentTime);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Paste');
-    const dur = clipboardBuffer.duration;
-    const seg = makeSegment('INSERT', projectStart, dur, clipboardBuffer, {
-      sourceTrackId: clipboardSource?.trackId,
-      sourceClipStart: clipboardSource?.sourceStart,
-      tempoRatio: 1.0,
-      pitchShift: 0,
-    });
-    const { projection, retimed } = commitSegmentEdit(
-      activeTrack,
-      seg,
-      { mode: 'insert', start: projectStart, end: projectStart + dur, delta: dur },
-      { start: projectStart, end: projectStart + dur }
+
+    const insertTime = validation.sanitizedInsertionTime ?? currentTime;
+    const result = executePaste(
+      workingAudioBuffer,
+      clipboardBuffer,
+      insertTime,
+      selection,
+      activeTrack.cues,
+      activeTrack.workingSegments
     );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+
     showOperationFeedback({
-      title: 'Zwischenablage eingefügt (Insert)',
-      operationType: 'INSERT',
-      description:
-        `${dur.toFixed(3)}s an der ${atLabel} (${projectStart.toFixed(3)}s) eingefügt; folgendes Material rückt um +${dur.toFixed(3)}s. ` +
-        (clipboardSource
-          ? `Quelle: Originalmaterial ab ${clipboardSource.sourceStart.toFixed(3)}s${
-              clipboardSource.via === 'clip' ? ' (über bereits eingefügtes Material nachgeführt)' : ''
-            } – gespeicherte Wellenform-Spalten werden übernommen.`
-          : 'Quelle: Material aus dem Edit-Audio – keine eindeutige Quellposition im Original; Spalten werden daraus berechnet und als BERECHNET gekennzeichnet.') +
-        ` ${waveformFollowUpNote(projection)}` +
-        ` Verschoben: ${retimed.cues} Cues, ${retimed.beats} Beat-Knoten${retimed.gridFilled ? `, ${retimed.gridFilled} Grid-Füllbeats im neuen Bereich` : ''}.`,
-      timeRangeSec: { start: projectStart, end: projectStart + dur, duration: dur },
-      shiftedCuesCount: retimed.cues,
+      title: 'Audio Segment eingefügt (Paste)',
+      operationType: 'PASTE',
+      description: `Zwischenablage (${clipboardBuffer.duration.toFixed(3)}s) an Position ${insertTime.toFixed(3)}s eingefügt. Wellenform und Taktgitter synchronisiert.`,
+      timeRangeSec: { start: insertTime, end: insertTime + clipboardBuffer.duration, duration: clipboardBuffer.duration },
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
   };
 
-  /**
-   * PASTE goes where the user pointed: a live selection wins (that is the place
-   * the user selected as target), otherwise the playhead. INSERT is the explicit
-   * playhead variant — both say so in their feedback, no silent re-anchoring.
-   */
-  const handlePaste = () => pasteClipboardAt(selection?.start ?? currentTime, selection ? 'Auswahlposition' : 'Wiedergabeposition');
-  const handleInsert = () => pasteClipboardAt(currentTime, 'Wiedergabeposition');
-
-  /**
-   * Drag & drop from the clip palette onto the deck timeline. The drop position
-   * decides where the material lands; the modifiers decide what happens to the
-   * material that was there before (insert / replace / overdub). Every mode runs
-   * through the same projection, so audio, waveform, cues and grid stay aligned.
-   */
-  const handleDropClipOnDeck = (
-    clipId: string,
-    projectStart: number,
-    mode: 'insert' | 'replace' | 'overdub',
-    windowEnd?: number
-  ) => {
-    const clip = paletteClips.find((c) => c.id === clipId);
-    if (!clip || !activeTrack) {
-      alert('Kein Deck-Track geladen – Clip kann nicht eingefügt werden.');
+  // Insert (shifts timeline and subsequent markers, validated by Edit Assistant)
+  const handleInsert = () => {
+    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, currentTime);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
       return;
     }
-    if (!clip.audioBuffer) {
-      alert('Der Clip enthält keine Audiodaten (Originaldatei nicht lesbar?).');
-      return;
-    }
-    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-    const tempoRatio = adapted.tempoRatio;
-    const pitchShift = adapted.semitonesShifted;
-    const source = {
-      clipId: clip.id,
-      // `sourceMapped` is the guard against a silently wrong source position: only
-      // clips whose window was verified against the timeline may reuse the stored
-      // columns of the original material. Everything else is drawn from the clip's
-      // own audio and labelled accordingly.
-      ...(clip.sourceMapped ? { sourceTrackId: clip.sourceTrackId, sourceClipStart: clip.sourceStart } : {}),
-      tempoRatio,
-      pitchShift,
-    };
-    // The drop's geometry (window, length change, segment type) is derived by one
-    // pure planner, so the pointer handling and the projection agree exactly.
-    const plan = planClipDrop({
-      mode,
-      dropTime: projectStart,
-      clipDuration: adapted.newDuration,
-      timelineDuration: projectionRef.current?.timeline.duration ?? activeTrack.duration,
-      windowEnd,
-    });
-    const position = plan.projectStart;
-    const dur = plan.projectDuration;
-    pushHistorySnapshot(mode === 'insert' ? 'Drop: Insert Clip' : mode === 'replace' ? 'Drop: Replace mit Clip' : 'Drop: Overdub');
+    if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
+    pushHistorySnapshot('Insert');
 
-    if (mode === 'insert') {
-      const seg = makeSegment('INSERT', position, dur, adapted.adaptedBuffer, source);
-      const { projection, retimed } = commitSegmentEdit(activeTrack, seg, plan.delta, plan.window);
-      showOperationFeedback({
-        title: 'Clip per Drag & Drop eingefügt',
-        operationType: 'INSERT',
-        description:
-          `Clip „${clip.name}" an ${position.toFixed(3)}s eingefügt (Drop auf der Timeline). ${plan.note} ` +
-          `Tempo ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${tempoRatio.toFixed(3)}×). ` +
-          `${waveformFollowUpNote(projection)} ` +
-          `Verschoben: ${retimed.cues} Cues, ${retimed.beats} Beat-Knoten${retimed.gridFilled ? `, ${retimed.gridFilled} Füllbeats` : ''}.` +
-          (adapted.semitonesShifted !== 0 ? ` Tonhöhe ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} ST (${adapted.harmonicRelation}).` : ''),
-        timeRangeSec: { start: position, end: position + dur, duration: dur },
-        shiftedCuesCount: retimed.cues,
-        originalSha256: activeTrack.originalSha256,
-        timestamp: Date.now(),
-      });
-      return;
-    }
-
-    if (mode === 'replace') {
-      const seg = makeSegment('REPLACE', position, dur, adapted.adaptedBuffer, source);
-      const { projection } = commitSegmentEdit(activeTrack, seg, plan.delta, null);
-      showOperationFeedback({
-        title: 'Clip per Drag & Drop: Bereich ersetzt',
-        operationType: 'REPLACE',
-        description:
-          `Bereich durch Clip „${clip.name}" ersetzt (Drop auf der Timeline). ${plan.note} ` +
-          `${waveformFollowUpNote(projection)}`,
-        timeRangeSec: plan.window ? { start: plan.window.start, end: plan.window.end, duration: dur } : undefined,
-        originalSha256: activeTrack.originalSha256,
-        timestamp: Date.now(),
-      });
-      return;
-    }
-
-    const seg = makeSegment('OVERDUB', position, dur, adapted.adaptedBuffer, source);
-    const { projection } = commitSegmentEdit(activeTrack, seg, plan.delta, null);
-    showOperationFeedback({
-      title: 'Clip per Drag & Drop überlagert (Overdub)',
-      operationType: 'OVERDUB',
-      description:
-        `Clip „${clip.name}" über der Timeline gemischt (Drop). ${plan.note} ` +
-        `${waveformFollowUpNote(projection)}`,
-      timeRangeSec: plan.window ? { start: plan.window.start, end: plan.window.end, duration: dur } : undefined,
-      originalSha256: activeTrack.originalSha256,
-      timestamp: Date.now(),
-    });
-  };
-
-  /** Drag & drop of a collection/browser row onto the deck: loads it into Deck A. */
-  const handleDropTrackOnDeck = (trackId: string) => {
-    const loaded = tracks.find((t) => t.id === trackId);
-    if (loaded) {
-      loadTrackIntoDeck(loaded);
-      return;
-    }
-    const def = xmlImportedTracks.find((t) => t.id === trackId);
-    if (def) {
-      void handleSelectTrackFromXml(def);
-      return;
-    }
-    alert('Das gezogene Element gehört zu keiner geladenen Sammlung.');
-  };
-
-  /** Dragging an inserted clip block along the timeline (move, not re-insert). */
-  const handleMoveClipSegment = (segmentId: string, newProjectStart: number) => {
-    if (!activeTrack) return;
-    const seg = (activeTrack.workingSegments ?? []).find((s) => s.id === segmentId);
-    if (!seg || seg.type !== 'INSERT') return;
-    const oldStart = seg.projectStart;
-    const length = seg.projectDuration;
-    const target = Math.max(0, Math.min(newProjectStart, Math.max(0, (projectionRef.current?.timeline.duration ?? activeTrack.duration) - length)));
-    if (Math.abs(target - oldStart) < 1e-4) return;
-    pushHistorySnapshot('Clip verschoben');
-    const delta = target - oldStart;
-    activeTrack.workingSegments = (activeTrack.workingSegments ?? []).map((s) =>
-      s.id === segmentId ? { ...s, projectStart: target } : s
+    const insertPos = validation.sanitizedInsertionTime ?? currentTime;
+    const result = executeInsert(
+      workingAudioBuffer,
+      clipboardBuffer,
+      insertPos,
+      activeTrack.cues,
+      activeTrack.workingSegments
     );
-    // Markers that belong to the moved clip follow it; the rest of the project
-    // keeps its positions (a move changes no lengths).
-    activeTrack.cues = retimeCues(activeTrack.cues ?? [], { mode: 'move', start: oldStart, end: oldStart + length, delta }).cues;
-    const projection = syncEditProjection(activeTrack);
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+
     showOperationFeedback({
-      title: 'Clip verschoben',
+      title: 'Audio Segment eingefügt (Insert)',
       operationType: 'INSERT',
-      description:
-        `Clip von ${oldStart.toFixed(3)}s nach ${target.toFixed(3)}s verschoben (${delta > 0 ? '+' : ''}${delta.toFixed(3)}s). ` +
-        `Wellenform und Audio wurden aus den Segmenten neu projiziert. ${waveformFollowUpNote(projection)}`,
-      timeRangeSec: { start: target, end: target + length, duration: length },
+      description: `Audio-Material (${clipboardBuffer.duration.toFixed(3)}s) an Playhead-Position ${insertPos.toFixed(3)}s eingefügt. Nachfolgende Cues und Wellenform wurden um +${clipboardBuffer.duration.toFixed(3)}s verschoben.`,
+      timeRangeSec: { start: insertPos, end: insertPos + clipboardBuffer.duration, duration: clipboardBuffer.duration },
+      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
@@ -1420,19 +1159,120 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       alert('Der Clip enthält keine Audiodaten.');
       return;
     }
-    handleDropClipOnDeck(clip.id, currentTime, 'insert');
+
+    pushHistorySnapshot('Insert Clip');
+
+    // Adapt clip audio: tempo is always matched to destination track, pitch is matched if matchPitchOnInsert is true
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const insertPos = currentTime;
+
+    const result = executeInsert(
+      workingAudioBuffer,
+      adapted.adaptedBuffer,
+      insertPos,
+      activeTrack.cues,
+      activeTrack.workingSegments
+    );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+
+    showOperationFeedback({
+      title: 'Clip in Deck A eingefügt (Insert)',
+      operationType: 'INSERT',
+      description: `Clip "${clip.name}" an Position ${insertPos.toFixed(3)}s eingefügt. Tempo: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
+          : matchPitchOnInsert
+          ? 'Tonhöhe: Harmonisch synchronisiert.'
+          : 'Tonhöhe: Original beibehalten (Key Sync aus).'
+      }`,
+      timeRangeSec: { start: insertPos, end: insertPos + adapted.newDuration, duration: adapted.newDuration },
+      shiftedCuesCount: activeTrack.cues.filter((c) => c.position >= insertPos).length,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
   };
 
   // Replace selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
   const handleReplaceDeckAWithClip = (clip: PaletteClip) => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
-    handleDropClipOnDeck(clip.id, selection.start, 'replace', selection.end);
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
+      return;
+    }
+
+    pushHistorySnapshot('Replace with Clip');
+
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const result = executeReplace(
+      workingAudioBuffer,
+      adapted.adaptedBuffer,
+      selection,
+      activeTrack.cues,
+      activeTrack.workingSegments
+    );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+
+    showOperationFeedback({
+      title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
+      operationType: 'REPLACE',
+      description: `Auswahlbereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) durch Clip "${clip.name}" ersetzt. Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe angepasst: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne (${adapted.harmonicRelation}).`
+          : matchPitchOnInsert
+          ? 'Tonhöhe: Harmonisch kompatibel.'
+          : 'Tonhöhe: Original beibehalten.'
+      }`,
+      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
   };
 
   // Overdub selection in Deck A with Clip (with Tempo & Harmonic Pitch Adaptation)
   const handleOverdubDeckAWithClip = (clip: PaletteClip) => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
-    handleDropClipOnDeck(clip.id, selection.start, 'overdub', selection.end);
+    if (!clip.audioBuffer) {
+      alert('Der ausgewählte Clip enthält keine Audiodaten.');
+      return;
+    }
+
+    pushHistorySnapshot('Overdub with Clip');
+
+    const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
+    const result = executeOverdub(
+      workingAudioBuffer,
+      adapted.adaptedBuffer,
+      selection,
+      activeTrack.cues,
+      activeTrack.workingSegments
+    );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+
+    showOperationFeedback({
+      title: 'Deck A überlagert (Overdub mit Clip)',
+      operationType: 'OVERDUB',
+      description: `Clip "${clip.name}" über Auswahl gemischt (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte). Tempo angepasst: ${clip.bpm.toFixed(1)} ➔ ${activeTrack.bpm.toFixed(1)} BPM (${adapted.tempoRatio.toFixed(3)}×). ${
+        adapted.semitonesShifted !== 0
+          ? `Tonhöhe: um ${adapted.semitonesShifted > 0 ? '+' : ''}${adapted.semitonesShifted} Halbtöne angepasst (${adapted.harmonicRelation}).`
+          : 'Tonhöhe: Harmonisch kompatibel.'
+      }`,
+      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
+      barsCount: selection.barsCount,
+      beatsCount: selection.beatsCount,
+      originalSha256: activeTrack.originalSha256,
+      timestamp: Date.now(),
+    });
   };
 
   // Replace selection with active Palette clip
@@ -1457,63 +1297,70 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     handleOverdubDeckAWithClip(activeClip);
   };
 
-  // Delete selection (removes range and shifts subsequent material)
+  // Delete selection (removes range and shifts subsequent material, validated by Edit Assistant)
   const handleDelete = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    const validation = editAssistant.validateDelete(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Delete');
 
-    const delDuration = selection.duration;
-    const delStart = selection.start;
-    const seg = makeSegment('CUT', delStart, delDuration, null);
-    const { projection, retimed } = commitSegmentEdit(
-      activeTrack,
-      seg,
-      { mode: 'remove', start: delStart, end: selection.end, delta: -delDuration },
-      null
+    const result = executeDelete(
+      workingAudioBuffer,
+      effectiveSel,
+      activeTrack.cues,
+      activeTrack.workingSegments
     );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
+    setSelection(null);
 
     showOperationFeedback({
       title: 'Auswahl gelöscht (Delete)',
       operationType: 'DELETE',
-      description:
-        `Bereich (${delDuration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) gelöscht; nachfolgendes Material rückt um -${delDuration.toFixed(3)}s nach vorne. ` +
-        `Nicht-destruktiv: Das Original bleibt unverändert, der Schnitt sitzt in der Edit-Liste und ist per Undo zurücknehmbar. ` +
-        `Marker: ${retimed.cues} verschoben, ${retimed.dropped} verworfen. ` +
-        `${waveformFollowUpNote(projection)}`,
-      timeRangeSec: { start: delStart, end: selection.end, duration: delDuration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
-      shiftedCuesCount: retimed.cues,
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) gelöscht. Nachfolgendes Audio-Material um -${effectiveSel.duration.toFixed(3)}s nach vorne gerückt.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
-
-    setSelection(null);
   };
 
-  // Clear selection (silences range without changing duration)
+  // Clear selection (silences range without changing duration, validated by Edit Assistant)
   const handleClear = () => {
-    if (!selection || !activeTrack || !workingAudioBuffer) return;
+    const validation = editAssistant.validateClear(selection, workingAudioBuffer);
+    if (!validation.isValid) {
+      setEditAssistantModalOpen(true);
+      return;
+    }
+    const effectiveSel = validation.sanitizedSelection || selection;
+    if (!effectiveSel || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Clear');
 
-    const seg = makeSegment('CLEAR', selection.start, selection.duration, null);
-    const { projection } = commitSegmentEdit(
-      activeTrack,
-      seg,
-      { mode: 'clear', start: selection.start, end: selection.end, delta: 0 },
-      null
+    const result = executeClear(
+      workingAudioBuffer,
+      effectiveSel,
+      activeTrack.cues,
+      activeTrack.workingSegments
     );
+
+    applyExecutionToTrack(activeTrack, result);
+    setWorkingAudioBuffer(result.newBuffer);
+    setTracks([...tracks]);
 
     showOperationFeedback({
       title: 'Bereich stummgeschaltet (Clear / Mute)',
       operationType: 'CLEAR',
-      description:
-        `Bereich (${selection.duration.toFixed(3)}s / ${selection.barsCount.toFixed(1)} Takte) stummgeschaltet – als Edit-Segment, nicht durch Überschreiben des Arbeits-Audios. ` +
-        `Timeline-Dauer und Beatgrid-Synchronisation bleiben erhalten. ` +
-        `Die Wellenform zeigt in diesem Bereich echte Stille statt der gespeicherten Peaks. ${waveformFollowUpNote(projection)}`,
-      timeRangeSec: { start: selection.start, end: selection.end, duration: selection.duration },
-      barsCount: selection.barsCount,
-      beatsCount: selection.beatsCount,
+      description: `Bereich (${effectiveSel.duration.toFixed(3)}s / ${effectiveSel.barsCount.toFixed(1)} Takte) stummgeschaltet. Timeline-Dauer und Beatgrid-Synchronisation unverändert erhalten.`,
+      timeRangeSec: { start: effectiveSel.start, end: effectiveSel.end, duration: effectiveSel.duration },
+      barsCount: effectiveSel.barsCount,
+      beatsCount: effectiveSel.beatsCount,
       originalSha256: activeTrack.originalSha256,
       timestamp: Date.now(),
     });
@@ -1524,7 +1371,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!activeTrack) return;
     pushHistorySnapshot('Add Cue');
     const newCue = {
-      id: nextId('cue'),
+      id: `cue-${Date.now()}`,
       name: `Cue ${activeTrack.cues.length + 1}`,
       type: 'MEMORY' as const,
       position: pos,
@@ -1564,11 +1411,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(file.name);
-      logger.info('XML_IMPORT', '[XML Import] Collection gelesen', {
-        fileName: file.name,
-        tracks: fullTrackModels.length,
-        withLocation: fullTrackModels.filter((t) => t.originalMedia?.location).length,
-      });
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should
@@ -1582,10 +1424,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }, 1200);
 
     } catch (err: any) {
-      logger.error('XML_IMPORT', 'Fehler beim Einlesen der Rekordbox XML-Datei', {
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
+      console.error('Fehler beim Einlesen der Rekordbox XML-Datei:', err);
       setImportProgress({
         phase: 'ERROR',
         phaseText: `Fehler beim Import: ${err?.message || err}`,
@@ -1605,6 +1444,54 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!file) return;
     loadXmlFile(file);
     e.target.value = '';
+  };
+
+  // ANLZ belongs to the explicitly active XML track. It is read-only input and
+  // takes priority over XML values only for analysis fields it actually holds.
+  const handleImportAnlzData = async (data: ArrayBuffer, fileName: string) => {
+    if (!activeTrack) return;
+
+    try {
+      const extraction = parseAnlzBinary(data);
+      const enrichedTrack = applyAnlzExtractionToTrack(activeTrack, extraction);
+      setTracks((previous) => previous.map((track) => (
+        track.id === enrichedTrack.id ? enrichedTrack : track
+      )));
+      if (enrichedTrack.audioBuffer) setWorkingAudioBuffer(enrichedTrack.audioBuffer);
+
+      const tags = extraction.tagsFound.join(', ');
+      showOperationFeedback({
+        title: 'Rekordbox ANLZ-Analyse übernommen (Read-Only)',
+        operationType: 'CUE',
+        description: `${fileName}: ${extraction.cues.length} Cues, ${extraction.loops.length} Loops, ${extraction.phrases.length} PSSI-Phrasen, ${extraction.waveform?.length || 0} Waveform-Buckets und ${extraction.beatGrid ? extraction.beatGrid.beats.length : 0} Beat-Einträge übernommen.`,
+        timeRangeSec: { start: 0, end: enrichedTrack.duration, duration: enrichedTrack.duration },
+        originalSha256: enrichedTrack.originalSha256,
+        timestamp: Date.now(),
+      });
+      console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
+    } catch (error) {
+      console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
+    }
+  };
+
+  const handleImportAnlzFile = async (file: File) => {
+    await handleImportAnlzData(await file.arrayBuffer(), file.name);
+  };
+
+  // Native Windows path: the bridge opens the analysis file strictly for
+  // reading; the renderer never writes to the ANLZ source.
+  const handleImportAnlzFromDesktop = async () => {
+    if (!activeTrack || !window.rekordboxDesktop) return;
+    try {
+      const chosen = await window.rekordboxDesktop.chooseAnalysisFile();
+      if (!chosen) return;
+      const source = await window.rekordboxDesktop.readAnalysisFile(chosen.path);
+      const fileName = chosen.path.split(/[\\/]/).pop() || 'ANLZ-Datei';
+      await handleImportAnlzData(source.data, fileName);
+    } catch (error) {
+      console.error('[ANLZ Import] Windows-Lesepfad fehlgeschlagen:', error);
+      alert(`ANLZ-Datei konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   // Rekordbox 6/7 database (master.db / OneLibrary exportLibrary.db).
@@ -1633,34 +1520,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
       );
 
-      // Anchor every DB track to its database directory so AnalysisDataPath
-      // values resolve deterministically to <dbDir>/share/PIONEER/USBANLZ/...
-      const sourceDbDir = dirOfPath(dbPath);
-      const fullTrackModels = mapped.tracks.map((track, idx) => {
-        track.rawXmlAttributes = { ...(track.rawXmlAttributes ?? {}), sourceDbDir };
-        return buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
-      });
-
-      // Rebuild the deterministic XML→DB link index (exact audio-path match).
-      if (result.dbType === 'MASTER_DB') {
-        dbAnalysisIndexRef.current = buildDbAnalysisIndex(fullTrackModels, sourceDbDir);
-        dbAnalysisIdIndexRef.current = buildDbAnalysisIdIndex(fullTrackModels, sourceDbDir);
-      }
+      const fullTrackModels = mapped.tracks.map((track, idx) =>
+        buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB)
+      );
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
       setXmlCollectionModalOpen(true);
-      logger.info('DATABASE', '[DB Import] Rekordbox-Datenbank gelesen', {
-        dbPath,
-        sourceDbDir,
-        dbType: result.dbType ?? null,
-        tracks: fullTrackModels.length,
-        memoryCues: mapped.stats.memoryCues,
-        hotCues: mapped.stats.hotCues,
-        loops: mapped.stats.loops,
-        withAnalysisDataPath: fullTrackModels.filter((t) => t.rawXmlAttributes?.analysisDataPath?.trim()).length,
-        linkIndexSize: dbAnalysisIndexRef.current.size,
-      });
 
       showOperationFeedback({
         title: 'Rekordbox-Datenbank importiert (Read-Only)',
@@ -1673,12 +1539,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
-        logger.warn('DATABASE', '[Rekordbox DB] Hinweise beim Datenbank-Import', { warnings });
+        console.warn('[Rekordbox DB] Hinweise:', warnings);
       }
     } catch (error) {
-      logger.error('DATABASE', '[Rekordbox DB] Import fehlgeschlagen', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -1693,9 +1557,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!chosen) return;
       await handleLoadRekordboxDatabase(chosen.path);
     } catch (error) {
-      logger.error('DATABASE', '[Rekordbox DB] Dateiauswahl fehlgeschlagen', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error('[Rekordbox DB] Dateiauswahl fehlgeschlagen:', error);
     }
   };
 
@@ -1704,162 +1566,92 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       return await window.rekordboxDesktop.locateRekordboxDatabases();
     } catch (error) {
-      logger.warn('DATABASE', '[Rekordbox DB] Automatische Suche fehlgeschlagen', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.warn('[Rekordbox DB] Automatische Suche fehlgeschlagen:', error);
       return [];
     }
   };
 
-  // Load a selected track from a Rekordbox collection (XML or database) into
-  // the DJ Deck.
-  //
-  // XML-EXCLUSIVE WORKFLOW GUARANTEE: for Rekordbox-sourced tracks, every
-  // visualized datum comes from Rekordbox sources ONLY:
-  //   beatgrid <- XML TEMPO / DB parameters (uniform reconstruction),
-  //   waveform <- ANLZ analysis only (never own peak analysis),
-  //   cues/loops <- XML / DB / ANLZ only,
-  //   phrases <- ANLZ PSSI only (never template phrases).
-  // No synthetic audio is generated: if the original file is unavailable, the
-  // track loads metadata-only and the UI states exactly what is missing.
+  // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
     try {
       const audioCtx = audioEngine.getContext();
-      const rbExclusive = isRekordboxOrigin(selectedDef.origin ?? DataOrigin.REKORDBOX_XML);
       let originalAudio = selectedDef.audioBuffer || null;
       let originalMedia = selectedDef.originalMedia;
 
       // The native bridge can resolve the XML Location and only ever opens the
-      // original audio read-only. Ein Ersatz-Audio wird nie erzeugt: was fehlt,
-      // bleibt fehlen und wird als MISSING benannt.
-      ({ audioBuffer: originalAudio, originalMedia } = await reopenTrackSourceAudio(
-        { audioBuffer: originalAudio, originalMedia },
-        audioCtx,
-        {
-          category: 'DATABASE',
-          message: '[XML Location] Originalaudio konnte nicht gelesen werden; Track wird ohne Audio geladen (kein Ersatz-Audio).',
+      // original audio read-only. In a browser or when no Location exists, the
+      // track is provisioned with high-fidelity audio matching its BPM, beatgrid,
+      // and key, ensuring beatgrid, waveform, playback, and editing work immediately.
+      if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
+        try {
+          const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
+          originalAudio = await audioCtx.decodeAudioData(source.data);
+          originalMedia = {
+            ...originalMedia,
+            resolvedPath: source.path,
+            size: source.size,
+            modifiedAt: source.modifiedAt,
+            status: 'AVAILABLE',
+          };
+        } catch (error) {
+          console.warn('[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio.', error);
+          originalMedia = { ...originalMedia, status: 'MISSING' };
         }
-      ));
+      }
 
       const bpm = selectedDef.bpm || 130.0;
       const durationDef = selectedDef.duration || 300.0;
       const firstBeatDef = selectedDef.beatGrid?.firstBeat || 0.0;
 
-      // No replacement audio is ever generated: a track whose original file
-      // is unreadable loads metadata-only, and the UI states what is missing
-      // (XML-exclusive workflow guarantee).
+      // In accordance with VORHABEN.md: No synthetic replacement track is generated when original audio is missing
       const duration = originalAudio ? originalAudio.duration : durationDef;
-      // RB-exclusive: never run own analysis here; the waveform arrives only
-      // via ANLZ (auto-resolved below for DB tracks, manually assigned else).
-      // Collection selection never analyzes audio. Rekordbox analysis arrives
-      // from ANLZ; any non-Rekordbox collection must bring an explicit source.
-      const analysis = selectedDef.analysis ?? null;
+      const analysis = originalAudio
+        ? (selectedDef.analysis || analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS))
+        : (selectedDef.analysis || null);
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
-        : (selectedDef.originalSha256 || 'NOT_COMPUTED_READ_ONLY_SOURCE');
-      // No template phrases: only genuine PSSI data (from ANLZ) or phrases
-      // already attached to the collection entry are shown.
+        : (selectedDef.originalSha256 || 'missing-audio');
       const phrases = selectedDef.phrases && selectedDef.phrases.length > 0
         ? selectedDef.phrases
-        : [];
+        : generateRekordboxPhrases(bpm, duration, firstBeatDef);
 
-      // Deterministic XML→DB analysis link: when the collection entry carries
-      // no AnalysisDataPath of its own, attach the DB reference whose audio
-      // path matches exactly (no fuzzy/metadata similarity matching).
-      // Garantie-Erfüllung: ohne ANLZ direkt aus lokaler Rekordbox-DB holen – kein manueller DATA-Klick nötig.
-      let linkedRawXmlAttributes = selectedDef.rawXmlAttributes;
-      // UI-Diagnostik: was hat die automatische ANLZ-Zuordnung getan?
-      let anlzLookup: {
-        via: 'DB' | 'PPTH' | 'PPTH_NAME' | null;
-        scanned: number;
-        folders: number;
-        elapsedMs: number;
-        truncated?: boolean;
-        note?: string;
-        db?: { found: number; readable: number; links: number; reasons: string[] };
-      } | null = null;
-      if (rbExclusive && !selectedDef.rawXmlAttributes?.analysisDataPath?.trim()) {
-        if (dbAnalysisIndexRef.current.size === 0) {
-          await ensureDbAnalysisIndex();
-        }
-        // DB-Diagnose sichtbar machen: Warum hat der DB-Pfad (nicht) geliefert?
-        const dbDiag = {
-          found: dbIndexDiagRef.current.found,
-          readable: dbIndexDiagRef.current.readable,
-          links: dbIndexDiagRef.current.links,
-          reasons: dbIndexDiagRef.current.reasons.slice(0, 3),
-        };
-        const xmlLocation = selectedDef.originalMedia?.location || selectedDef.originalMedia?.resolvedPath || '';
-        const linkKey = normalizeAudioKey(xmlLocation);
-        const linkRef = resolveVerifiedDbIdentity(
-          dbAnalysisIdIndexRef.current,
-          selectedDef.id,
-          xmlLocation
-        );
-        if (linkRef) {
-          linkedRawXmlAttributes = {
-            ...(selectedDef.rawXmlAttributes ?? {}),
-            analysisDataPath: linkRef.analysisDataPath,
-            sourceDbDir: linkRef.sourceDbDir,
-          };
-          anlzLookup = { via: 'DB', scanned: 0, folders: 0, elapsedMs: 0, db: dbDiag };
-          logger.info('DATABASE', `[Track-Link] XML-Track exakt mit DB-Analyse verknüpft (DB-Track ${linkRef.trackId}).`);
-        } else {
-          const reasons = dbDiag.reasons.length > 0 ? dbDiag.reasons.join(' | ') : 'kein technischer Grund protokolliert';
-          const message =
-            `[ANLZ Pipelinefehler] Rekordbox-7.2.16-Identität nicht bestätigt für XML-Track „${selectedDef.title}“ ` +
-            `(TrackID ${selectedDef.id}). Erforderlich sind dieselbe djmdContent.ID und derselbe exakte Dateipfad. ` +
-            `XML-Adresse: ${linkKey || '(leer)'}; DBs gefunden/lesbar: ${dbDiag.found}/${dbDiag.readable}; ` +
-            `Index-Schlüssel: ${dbDiag.links}; Diagnose: ${reasons}`;
-          logger.error('DATABASE', message, {
-            xmlLocation: selectedDef.originalMedia?.location ?? null,
-            normalizedXmlLocation: linkKey || null,
-            db: dbDiag,
-          });
-          throw new Error(message);
-        }
-      }
-      if (anlzLookup) {
-        linkedRawXmlAttributes = {
-          ...(linkedRawXmlAttributes ?? {}),
-          anlzLookup: JSON.stringify(anlzLookup),
-        };
-      }
-
-      let loadedTrack: TrackModel = {
+      const loadedTrack: TrackModel = {
         ...selectedDef,
-        id: selectedDef.id || nextId('track'),
+        id: selectedDef.id || `track-${Date.now()}`,
         title: selectedDef.title || 'Rekordbox Track',
         artist: selectedDef.artist || 'Unknown Artist',
         album: selectedDef.album || 'Rekordbox Collection',
         bpm,
         key: selectedDef.key || '2A',
         duration,
-        sampleRate: originalAudio ? originalAudio.sampleRate : (selectedDef.sampleRate || 44100),
-        channels: originalAudio ? originalAudio.numberOfChannels : (selectedDef.channels || 2),
+        sampleRate: originalAudio ? originalAudio.sampleRate : 44100,
+        channels: originalAudio ? originalAudio.numberOfChannels : 2,
         originalSha256: sha256,
         isOriginalUntouched: true,
         audioBuffer: originalAudio,
-        // Keep the imported grid exactly as stored. Rekordbox tracks receive
-        // their detailed beat nodes from PQTZ below; a scalar XML/DB tempo is
-        // never expanded into invented beats during deck loading.
-        beatGrid: selectedDef.beatGrid ?? {
-          firstBeat: firstBeatDef,
-          bpm,
-          meter: 4,
-          beats: [],
-          origin: selectedDef.origin ?? DataOrigin.REKORDBOX_XML,
-        },
+        // Collection entries intentionally retain only compact beatgrid
+        // metadata. Expand it when this one track is actually loaded,
+        // keeping the source origin (XML or Rekordbox DB).
+        beatGrid: buildBeatGridFromTempo(
+          firstBeatDef,
+          selectedDef.beatGrid?.bpm ?? bpm,
+          duration,
+          selectedDef.beatGrid?.meter ?? 4,
+          selectedDef.origin ?? DataOrigin.REKORDBOX_XML
+        ),
         cues: selectedDef.cues || [],
         loops: selectedDef.loops || [],
         analysis,
         phrases,
-        originalMedia,
-        rawXmlAttributes: linkedRawXmlAttributes,
+        originalMedia: originalMedia || {
+          location: selectedDef.title,
+          accessMode: 'READ_ONLY',
+          status: originalAudio ? 'AVAILABLE' : 'MISSING',
+        },
         origin: selectedDef.origin ?? DataOrigin.REKORDBOX_XML,
         workingSegments: [
           {
-            id: nextId('seg-edit'),
+            id: `seg-${Date.now()}`,
             type: 'ORIGINAL',
             trackId: selectedDef.id || '1',
             sourceStart: 0,
@@ -1870,49 +1662,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           },
         ],
       };
-
-      // Auto-resolve the ANLZ analysis file for tracks carrying an
-      // AnalysisDataPath (Rekordbox database imports).
-      let anlzApplied = false;
-      if (rbExclusive) {
-        const before = loadedTrack;
-        loadedTrack = await tryAutoLoadAnlz(loadedTrack);
-        anlzApplied = loadedTrack !== before;
-        if (!loadedTrack.analysis || loadedTrack.analysis.length === 0) {
-          const message =
-            `[ANLZ Pipelinefehler] master.db lieferte den Analysepfad, aber daraus wurden keine ` +
-            `Rekordbox-Wellenformdaten geladen. Track: „${loadedTrack.title}“; ` +
-            `AnalysisDataPath: ${loadedTrack.rawXmlAttributes?.analysisDataPath || '(leer)'}; ` +
-            `DB-Verzeichnis: ${loadedTrack.rawXmlAttributes?.sourceDbDir || '(leer)'}.`;
-          logger.error('DATABASE', message);
-          throw new Error(message);
-        }
-      }
-
-      // Decisive deck-load parameters, durably logged: waveform must come
-      // from Rekordbox-analyzed data (ANLZ) only — never from own analysis.
-      logger.info('XML_IMPORT', `[Deck] „${loadedTrack.title}" geladen`, {
-        origin: loadedTrack.origin,
-        mediaStatus: loadedTrack.originalMedia?.status ?? null,
-        location: loadedTrack.originalMedia?.location ?? null,
-        resolvedPath: loadedTrack.originalMedia?.resolvedPath ?? null,
-        hasAudio: !!loadedTrack.audioBuffer,
-        durationSec: Number(loadedTrack.duration.toFixed(3)),
-        bpm: loadedTrack.bpm,
-        key: loadedTrack.key,
-        sampleRate: loadedTrack.sampleRate,
-        channels: loadedTrack.channels,
-        anlzAutoApplied: anlzApplied,
-        waveformSource: loadedTrack.analysis?.sourceTag ?? null,
-        waveformBuckets: loadedTrack.analysis?.length ?? 0,
-        waveformVariants: loadedTrack.analysisVariants?.length ?? 0,
-        beatGridOrigin: loadedTrack.beatGrid.origin,
-        beatNodes: loadedTrack.beatGrid.beats?.length ?? 0,
-        cues: loadedTrack.cues.length,
-        loops: loadedTrack.loops.length,
-        phrases: loadedTrack.phrases?.length ?? 0,
-        waveformRule: rbExclusive ? 'ANLZ_ONLY (keine eigene Analyse)' : 'LOCAL_ALLOWED',
-      });
 
       setTracks((prev) => {
         const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);
@@ -1930,31 +1679,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
-      // Freeze the pristine ANLZ/audio state as the projection base of this deck
-      // and start from an empty edit list (project === original).
-      resetEditProjection();
-      syncEditProjection(loadedTrack);
-
-      if (!originalAudio) {
-        const missingAudio = true;
-        showOperationFeedback({
-          title: missingAudio ? 'Rekordbox-Track ohne Audio geladen' : 'Rekordbox-Track geladen (ohne ANLZ-Waveform)',
-          operationType: 'CUE',
-          description: `"${loadedTrack.title}": Beatgrid, Cues und Loops stammen aus den Rekordbox-Importdaten. ` +
-            (missingAudio
-              ? 'Das Originalaudio ist nicht verfügbar – es wird kein Ersatz-Audio erzeugt. '
-              : '') +
-            `Waveform: ${loadedTrack.analysis!.length} Buckets aus ANLZ (${loadedTrack.databaseRecord?.anlzTagsFound.join(', ') || 'ANLZ'}).` +
-            (anlzApplied ? ' ANLZ-Analyse wurde automatisch zugeordnet.' : ''),
-          timeRangeSec: { start: 0, end: duration, duration },
-          originalSha256: loadedTrack.originalSha256,
-          timestamp: Date.now(),
-        });
-      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('AUDIO_ENGINE', 'Fehler beim Laden des Tracks in das Deck', { error: message });
-      alert(message);
+      console.error('Fehler beim Laden des Tracks in das Deck:', err);
     }
   };
 
@@ -2011,9 +1737,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         timestamp: Date.now(),
       });
     } catch (err) {
-      logger.error('SYSTEM', '[Projekt] Speichern fehlgeschlagen', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      console.error('[Projekt] Speichern fehlgeschlagen:', err);
       alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
@@ -2037,9 +1761,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         rebuiltTracks.push(await rebuildTrackFromSerialized(st, audioCtx));
       }
 
-      // Rebuild the palette with its embedded clip audio. The strict source-window
-      // rule lives in src/project/restore.ts, where it is testable directly.
-      const rebuiltClips = await restorePaletteClips(doc.paletteClips, audioCtx);
+      // Rebuild the palette with its embedded clip audio.
+      const rebuiltClips = [];
+      for (const clip of doc.paletteClips) {
+        const audioBuffer = await decodeWavBase64(audioCtx, clip.clipWavBase64);
+        rebuiltClips.push({
+          id: clip.id,
+          name: clip.name,
+          sourceTrackId: clip.sourceTrackId,
+          sourceTrackName: clip.sourceTrackName,
+          sourceStart: clip.sourceStart,
+          sourceEnd: clip.sourceEnd,
+          duration: clip.duration,
+          beats: clip.beats,
+          bars: clip.bars,
+          bpm: clip.bpm,
+          key: clip.key,
+          color: clip.color,
+          audioBuffer,
+          miniPeaks: clip.miniPeaks,
+          origin: clip.origin,
+        });
+      }
 
       setProjectName(doc.projectName);
       setSelection(doc.selection);
@@ -2055,68 +1798,49 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // path (if it has one) and re-applies the stored edit segments.
       const activeTrack = rebuiltTracks.find((t) => t.id === (doc.activeTrackId || rebuiltTracks[0]?.id)) ?? null;
       if (activeTrack) {
-        const reopened = await reopenTrackSourceAudio(activeTrack, audioCtx, {
-          category: 'SYSTEM',
-          message: '[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.',
-        });
-        const originalAudio = reopened.audioBuffer;
-        const originalMedia = reopened.originalMedia;
+        let originalAudio = activeTrack.audioBuffer;
+        let originalMedia = activeTrack.originalMedia;
+
+        if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
+          try {
+            const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
+            originalAudio = await audioCtx.decodeAudioData(source.data);
+            originalMedia = { ...originalMedia, resolvedPath: source.path, size: source.size, modifiedAt: source.modifiedAt, status: 'AVAILABLE' as const };
+          } catch (error) {
+            console.warn('[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar.', error);
+            originalMedia = { ...originalMedia, status: 'MISSING' as const };
+          }
+        }
 
         if (originalAudio) {
-          // RB-exclusive: a Rekordbox track is never re-analyzed on project
-          // load; its waveform returns via ANLZ assignment (AnalysisDataPath
-          // auto-resolve or DATA panel), never via own peak analysis.
-          let withAudio: TrackModel = {
+          const withAudio: TrackModel = {
             ...activeTrack,
             audioBuffer: originalAudio,
             originalMedia,
             duration: originalAudio.duration || activeTrack.duration,
             sampleRate: originalAudio.sampleRate,
             channels: originalAudio.numberOfChannels,
-            analysis: isRekordboxOrigin(activeTrack.origin)
-              ? null
-              : analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
+            analysis: analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
           };
-          if (isRekordboxOrigin(activeTrack.origin)) {
-            withAudio = await tryAutoLoadAnlz(withAudio);
-          }
-          // The restored edit list is re-projected (audio AND waveform) from the
-          // freshly loaded ANLZ arrays — never re-analysed from audio, and never
-          // taken over from the previous session's composite.
+          const working = audioEngine.renderWorkingAudio(originalAudio, withAudio.workingSegments);
+          setWorkingAudioBuffer(working);
           setTracks((prev) => prev.map((t) => (t.id === withAudio.id ? withAudio : t)));
-          resetEditProjection();
-          const projection = syncEditProjection(withAudio);
-          setWorkingAudioBuffer(projection?.workingBuffer ?? originalAudio);
-          logger.info('EDITING', '[Projekt] Edit-Projektion nach dem Laden neu abgeleitet', {
-            track: withAudio.title,
-            segments: withAudio.workingSegments?.length ?? 0,
-            projectDurationSec: Number((projection?.timeline.duration ?? withAudio.duration).toFixed(3)),
-            identity: projection?.identity ?? true,
-            waveformOrigin: projection ? waveformOriginAfterEdit(projection) : withAudio.origin,
-            computedColumns: projection?.stats?.computedColumns ?? 0,
-            storedColumns:
-              (projection?.stats?.verbatimColumns ?? 0) +
-              (projection?.stats?.retimedColumns ?? 0) +
-              (projection?.stats?.clipColumns ?? 0),
-          });
         } else if (activeTrack.audioBuffer) {
-          resetEditProjection();
-          const projection = syncEditProjection(activeTrack);
-          setWorkingAudioBuffer(projection?.workingBuffer ?? activeTrack.audioBuffer);
+          setWorkingAudioBuffer(
+            audioEngine.renderWorkingAudio(activeTrack.audioBuffer, activeTrack.workingSegments)
+          );
         }
       }
 
       showOperationFeedback({
         title: 'Projekt geladen',
         operationType: 'EXPORT',
-        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet; Audio und Wellenform wurden aus den gespeicherten Edit-Segmenten neu projiziert.`,
+        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet.`,
         originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
         timestamp: Date.now(),
       });
     } catch (err) {
-      logger.error('SYSTEM', '[Projekt] Öffnen fehlgeschlagen', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      console.error('[Projekt] Öffnen fehlgeschlagen:', err);
       alert(`Projekt konnte nicht geöffnet werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [showOperationFeedback]);
@@ -2124,84 +1848,167 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Audio file loading (WAV, MP3, FLAC, AIFF)
   const loadAudioFile = async (file: File) => {
     try {
-      const arrayBuf = await file.arrayBuffer();
       const audioCtx = audioEngine.getContext();
-      const decoded = await audioCtx.decodeAudioData(arrayBuf);
+      if (audioCtx.state === 'suspended') {
+        try {
+          await audioCtx.resume();
+        } catch (e) {
+          console.warn('AudioContext resume error:', e);
+        }
+      }
+
+      const arrayBuf = await file.arrayBuffer();
+      // Robust decodeAudioData with promise/callback compatibility
+      const decoded: AudioBuffer = await new Promise((resolve, reject) => {
+        const copy = arrayBuf.slice(0);
+        const res = audioCtx.decodeAudioData(copy, resolve, reject);
+        if (res && typeof (res as unknown as Promise<AudioBuffer>).then === 'function') {
+          (res as unknown as Promise<AudioBuffer>).then(resolve).catch(reject);
+        }
+      });
+
       const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
       const sha256 = audioEngine.computeBufferChecksum(decoded);
 
-      // One id for the track AND its original segment: they must agree, so the
-      // timestamp is sampled once (two Date.now() calls could straddle a tick).
-      const newTrackId = nextId('track');
-      const newTrack: TrackModel = {
-        id: newTrackId,
-        title: file.name.replace(/\.[^/.]+$/, ''),
-        artist: 'User Import',
-        album: 'Single',
-        bpm: 130.0,
-        key: '2A',
-        duration: decoded.duration,
-        sampleRate: decoded.sampleRate,
-        channels: decoded.numberOfChannels,
-        originalSha256: sha256,
-        isOriginalUntouched: true,
-        audioBuffer: decoded,
-        // Locally imported audio is present (AVAILABLE) but has no re-openable
-        // source path, so the project still embeds it (see serializeTrack).
-        originalMedia: { location: '', accessMode: 'READ_ONLY', status: 'AVAILABLE' },
-        beatGrid: buildBeatGridFromTempo(0.0, 130.0, decoded.duration, 4, DataOrigin.LOCAL_ANALYSIS),
-        cues: [
-          {
-            id: nextId('cue'),
-            name: 'Cue 1',
-            type: 'MEMORY',
-            position: 0.0,
-            color: '#ff2a2a',
-            origin: DataOrigin.LOCAL_ANALYSIS,
-          },
-        ],
-        loops: [],
-        analysis,
-        // No template phrases: local audio carries no Rekordbox analysis, so
-        // no PSSI song structure exists (phrases stay empty, never invented).
-        phrases: [],
-        origin: DataOrigin.LOCAL_ANALYSIS,
-        workingSegments: [
-          {
-            id: nextId('seg-edit'),
-            type: 'ORIGINAL',
-            trackId: newTrackId,
-            sourceStart: 0,
-            sourceEnd: decoded.duration,
-            projectStart: 0,
-            projectDuration: decoded.duration,
-            gain: 1.0,
-          },
-        ],
-      };
+      // Check if the currently active deck track needs its audio file (or has matching name)
+      const currentActive = tracks.find((t) => t.id === activeTrackId);
+      const isMissingAudioOnActive = currentActive && !currentActive.audioBuffer;
+      const isMatchingName =
+        currentActive &&
+        (currentActive.title.toLowerCase().includes(file.name.toLowerCase().replace(/\.[^/.]+$/, '')) ||
+          file.name.toLowerCase().includes(currentActive.title.toLowerCase().replace(/\.[^/.]+$/, '')));
 
-      setTracks((prev) => [newTrack, ...prev]);
-      setActiveTrackId(newTrack.id);
-      setWorkingAudioBuffer(decoded);
-      resetEditProjection();
-      syncEditProjection(newTrack);
-      setCurrentTime(0);
-      setViewOffset(0);
-      setIsPlaying(false);
-      audioEngine.stop();
+      if (currentActive && (isMissingAudioOnActive || isMatchingName)) {
+        // Link this decoded audio to the active track
+        const updatedTrack: TrackModel = {
+          ...currentActive,
+          duration: decoded.duration,
+          sampleRate: decoded.sampleRate,
+          channels: decoded.numberOfChannels,
+          originalSha256: sha256,
+          isOriginalUntouched: true,
+          audioBuffer: decoded,
+          analysis,
+          originalMedia: {
+            location: file.name,
+            resolvedPath: file.name,
+            accessMode: 'READ_ONLY',
+            status: 'AVAILABLE',
+            size: file.size,
+            modifiedAt: file.lastModified,
+          },
+          beatGrid: buildBeatGridFromTempo(
+            currentActive.beatGrid?.firstBeat || 0.0,
+            currentActive.bpm || 130.0,
+            decoded.duration,
+            currentActive.beatGrid?.meter || 4,
+            currentActive.origin
+          ),
+          workingSegments: [
+            {
+              id: `seg-${Date.now()}`,
+              type: 'ORIGINAL',
+              trackId: currentActive.id,
+              sourceStart: 0,
+              sourceEnd: decoded.duration,
+              projectStart: 0,
+              projectDuration: decoded.duration,
+              gain: 1.0,
+            },
+          ],
+        };
 
-      showOperationFeedback({
-        title: 'Audiodatei importiert',
-        operationType: 'CUE',
-        description: `Track "${newTrack.title}" erfolgreich decodiert (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz, ${decoded.numberOfChannels} Kanäle). Originalschutz aktiv (SHA-256: ${sha256.slice(0, 12)}...).`,
-        timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
-        originalSha256: sha256,
-        timestamp: Date.now(),
-      });
+        setTracks((prev) => prev.map((t) => (t.id === updatedTrack.id ? updatedTrack : t)));
+        setWorkingAudioBuffer(decoded);
+        setCurrentTime(0);
+        setViewOffset(0);
+        setIsPlaying(false);
+        audioEngine.stop();
+
+        showOperationFeedback({
+          title: 'Audiodatei verknüpft',
+          operationType: 'CUE',
+          description: `Audiodatei "${file.name}" erfolgreich mit Track "${updatedTrack.title}" verknüpft (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz). Echte Audiodaten sind jetzt im Player aktiv.`,
+          timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
+          originalSha256: sha256,
+          timestamp: Date.now(),
+        });
+      } else {
+        // Create new track from imported audio
+        const detectedBpm = estimateBpm(decoded);
+        const newTrack: TrackModel = {
+          id: `track-${Date.now()}`,
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          artist: 'User Import',
+          album: 'Single',
+          bpm: detectedBpm,
+          key: '2A',
+          duration: decoded.duration,
+          sampleRate: decoded.sampleRate,
+          channels: decoded.numberOfChannels,
+          originalSha256: sha256,
+          isOriginalUntouched: true,
+          audioBuffer: decoded,
+          beatGrid: buildBeatGridFromTempo(0.0, detectedBpm, decoded.duration),
+          cues: [
+            {
+              id: `cue-${Date.now()}`,
+              name: 'Cue 1',
+              type: 'MEMORY',
+              position: 0.0,
+              color: '#ff2a2a',
+              origin: DataOrigin.LOCAL_ANALYSIS,
+            },
+          ],
+          loops: [],
+          analysis,
+          phrases: generateRekordboxPhrases(detectedBpm, decoded.duration),
+          origin: DataOrigin.LOCAL_ANALYSIS,
+          originalMedia: {
+            location: file.name,
+            resolvedPath: file.name,
+            accessMode: 'READ_ONLY',
+            status: 'AVAILABLE',
+            size: file.size,
+            modifiedAt: file.lastModified,
+          },
+          workingSegments: [
+            {
+              id: `seg-${Date.now()}`,
+              type: 'ORIGINAL',
+              trackId: `track-${Date.now()}`,
+              sourceStart: 0,
+              sourceEnd: decoded.duration,
+              projectStart: 0,
+              projectDuration: decoded.duration,
+              gain: 1.0,
+            },
+          ],
+        };
+
+        // If the only track was the synthetic default demo, replace it
+        setTracks((prev) => {
+          const nonDemo = prev.filter((t) => t.id !== 'track-default-quicksand');
+          return [newTrack, ...nonDemo];
+        });
+        setActiveTrackId(newTrack.id);
+        setWorkingAudioBuffer(decoded);
+        setCurrentTime(0);
+        setViewOffset(0);
+        setIsPlaying(false);
+        audioEngine.stop();
+
+        showOperationFeedback({
+          title: 'Audiodatei importiert',
+          operationType: 'CUE',
+          description: `Track "${newTrack.title}" erfolgreich decodiert (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz, ${decoded.numberOfChannels} Kanäle, ${detectedBpm} BPM). Echte Audiodaten geladen.`,
+          timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
+          originalSha256: sha256,
+          timestamp: Date.now(),
+        });
+      }
     } catch (err) {
-      logger.error('AUDIO_ENGINE', 'Fehler beim Decodieren der Audiodatei', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      console.error('Fehler beim Decodieren der Audiodatei:', err);
       alert('Konnte Audiodatei nicht decodieren. Bitte überprüfe das Dateiformat (WAV, MP3, AIFF, FLAC).');
     }
   };
@@ -2219,6 +2026,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (nameLower.endsWith('.xml')) {
       loadXmlFile(file);
     } else if (
+      nameLower.endsWith('.dat') ||
+      nameLower.endsWith('.ext') ||
+      nameLower.endsWith('.2ex') ||
+      nameLower.endsWith('.anlz')
+    ) {
+      handleImportAnlzFile(file);
+    } else if (
       nameLower.endsWith('.mp3') ||
       nameLower.endsWith('.wav') ||
       nameLower.endsWith('.aiff') ||
@@ -2230,233 +2044,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     ) {
       loadAudioFile(file);
     } else {
-      alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte Rekordbox XML (.xml) oder Audio (.wav, .mp3, .flac) verwenden. ANLZ wird automatisch über master.db geladen.`);
+      alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte Rekordbox XML (.xml), ANLZ (.dat, .ext, .2ex) oder Audio (.wav, .mp3, .flac) verwenden.`);
     }
-  };
-
-  /**
-   * Window-level file drop: an external file (XML / audio) may be dropped
-   * anywhere in the app, not only on the waveform. Internal drags (clips,
-   * tracks, selections) are ignored here — their own targets handle them and
-   * stop propagation, so this overlay never steals an edit drop.
-   */
-  const handleDropFileRef = useRef(handleDropFile);
-  handleDropFileRef.current = handleDropFile;
-  const [externalFileDrag, setExternalFileDrag] = useState(false);
-  const dragDepthRef = useRef(0);
-  useEffect(() => {
-    const onDragEnter = (e: DragEvent) => {
-      if (!isFileDrag(e.dataTransfer)) return;
-      if (isInternalDrag()) return;
-      dragDepthRef.current += 1;
-      setExternalFileDrag(true);
-    };
-    const onDragOver = (e: DragEvent) => {
-      if (!isFileDrag(e.dataTransfer)) return;
-      if (isInternalDrag()) return;
-      // Prevent the browser default (which would navigate to the file).
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-      setExternalFileDrag(true);
-    };
-    const onDragLeave = () => {
-      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-      if (dragDepthRef.current === 0) setExternalFileDrag(false);
-    };
-    const onDrop = (e: DragEvent) => {
-      dragDepthRef.current = 0;
-      setExternalFileDrag(false);
-      if (!isFileDrag(e.dataTransfer)) return;
-      if (isInternalDrag()) return;
-      e.preventDefault();
-      const file = e.dataTransfer?.files?.[0];
-      if (file) handleDropFileRef.current(file);
-    };
-    window.addEventListener('dragenter', onDragEnter);
-    window.addEventListener('dragover', onDragOver);
-    window.addEventListener('dragleave', onDragLeave);
-    window.addEventListener('drop', onDrop);
-    return () => {
-      window.removeEventListener('dragenter', onDragEnter);
-      window.removeEventListener('dragover', onDragOver);
-      window.removeEventListener('dragleave', onDragLeave);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, []);
-
-  /**
-   * Apply an explicit Smart-Copilot proposal to the editor. The copilot never
-   * mutates Rekordbox source data: all edits are routed through the same
-   * project-state handlers and retain their USER_EDIT / undo behaviour.
-   */
-  const handleChatbotAction = (action: ChatbotAction) => {
-    if (!activeTrack) {
-      logger.warn('COPILOT', 'Copilot action ignored because no deck track is loaded', {
-        type: action.type,
-      });
-      return;
-    }
-
-    const params = action.params || {};
-    const numeric = (value: unknown, fallback: number) =>
-      typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-    const clampTime = (value: unknown, fallback = currentTime) =>
-      Math.max(0, Math.min(activeTrack.duration, numeric(value, fallback)));
-    const secondsPerBeat = 60 / activeTrack.beatGrid.bpm;
-    const secondsPerBar = secondsPerBeat * activeTrack.beatGrid.meter;
-
-    const selectRange = (startValue: unknown, endValue: unknown) => {
-      const start = clampTime(startValue);
-      const end = clampTime(endValue, start);
-      if (end <= start) return;
-      const beatsCount = (end - start) / secondsPerBeat;
-      setSelection({
-        start,
-        end,
-        startBeat: (start - activeTrack.beatGrid.firstBeat) / secondsPerBeat,
-        endBeat: (end - activeTrack.beatGrid.firstBeat) / secondsPerBeat,
-        beatsCount,
-        barsCount: beatsCount / activeTrack.beatGrid.meter,
-        duration: end - start,
-      });
-    };
-
-    const setZoom = (presetValue: unknown, focusTime = currentTime) => {
-      const preset = typeof presetValue === 'string' ? presetValue : '16_BARS';
-      const barsByPreset: Record<string, number> = {
-        '2_BARS': 2,
-        '4_BARS': 4,
-        '8_BARS': 8,
-        '16_BARS': 16,
-        '32_BARS': 32,
-        '64_BARS': 64,
-      };
-      const requestedDuration =
-        preset === 'FULL_TRACK'
-          ? activeTrack.duration
-          : (barsByPreset[preset] || 16) * secondsPerBar;
-      const duration = Math.max(0.1, Math.min(activeTrack.duration, requestedDuration));
-      const focus = clampTime(focusTime);
-      setViewDuration(duration);
-      setViewOffset(Math.max(0, Math.min(activeTrack.duration - duration, focus - duration * 0.25)));
-    };
-
-    const addCue = (positionValue: unknown, typeValue: unknown, nameValue: unknown, letterValue: unknown) => {
-      const type = typeValue === 'HOT_CUE' ? 'HOT_CUE' : 'MEMORY';
-      const position = clampTime(positionValue);
-      const letter = typeof letterValue === 'string' && /^[A-H]$/i.test(letterValue)
-        ? letterValue.toUpperCase()
-        : undefined;
-      const cuesOfType = activeTrack.cues.filter((cue) => cue.type === type);
-      const defaultName = type === 'HOT_CUE'
-        ? `Hot Cue ${letter || cuesOfType.length + 1}`
-        : `MEM ${cuesOfType.length + 1}`;
-      const name = typeof nameValue === 'string' && nameValue.trim() ? nameValue.trim() : defaultName;
-
-      pushHistorySnapshot('Copilot Cue');
-      setTracks((previous) =>
-        previous.map((track) =>
-          track.id === activeTrack.id
-            ? {
-                ...track,
-                cues: [
-                  ...track.cues,
-                  {
-                    id: nextId('copilot-cue'),
-                    name,
-                    type,
-                    position,
-                    inMsec: Math.round(position * 1000),
-                    hotCueNum: type === 'HOT_CUE' && letter ? letter.charCodeAt(0) - 65 : undefined,
-                    letter,
-                    color: type === 'HOT_CUE' ? '#00a2ff' : '#ff2a2a',
-                    origin: DataOrigin.USER_EDIT,
-                  },
-                ],
-                isModified: true,
-              }
-            : track
-        )
-      );
-    };
-
-    switch (action.type) {
-      case 'SET_ZOOM':
-        setZoom(params.preset);
-        break;
-      case 'SEEK_TO':
-        handleSeek(clampTime(params.time));
-        break;
-      case 'SELECT_RANGE': {
-        const start = clampTime(params.start);
-        const beats = Math.max(0.25, Math.min(512, numeric(params.beats, 16)));
-        selectRange(start, params.end === undefined ? start + beats * secondsPerBeat : params.end);
-        break;
-      }
-      case 'ADD_CUE':
-        addCue(params.time, params.type, params.name, params.letter);
-        break;
-      case 'ADD_MEMORY_CUE':
-        handleAddMemoryCue();
-        break;
-      case 'SHIFT_BEATGRID':
-        handleShiftBeatgrid(Math.max(-2, Math.min(2, numeric(params.deltaSeconds, 0))));
-        break;
-      case 'PERFORM_EDIT': {
-        switch (params.operation) {
-          case 'CUT': handleCut(); break;
-          case 'PASTE': handlePaste(); break;
-          case 'DELETE': handleDelete(); break;
-          case 'CLEAR': handleClear(); break;
-          case 'OVERDUB': handleOverdub(); break;
-          case 'REPLACE': handleReplace(); break;
-          case 'COPY':
-          default: handleCopy(); break;
-        }
-        break;
-      }
-      case 'SET_QUANTIZE':
-        setQuantize(Boolean(params.enabled));
-        break;
-      case 'SET_WAVEFORM_MODE':
-        if (params.mode === 'BLUE' || params.mode === 'RGB' || params.mode === '3BAND') {
-          setWaveformMode(params.mode);
-        }
-        break;
-      case 'ADD_TO_PALETTE':
-        if (selection) handleAddSelectionToPalette();
-        break;
-      case 'AUTO_ALIGN_GRID':
-        handleAutoAlignBeatgrid();
-        break;
-      case 'SET_MIX_IN_POINT': {
-        const time = clampTime(params.time);
-        const bars = Math.max(1, Math.min(64, Math.floor(numeric(params.selectBars, 16))));
-        handleSeek(time);
-        addCue(time, 'HOT_CUE', params.cueName, params.cueSlot);
-        selectRange(time, time + bars * secondsPerBar);
-        setZoom(params.zoomPreset, time);
-        break;
-      }
-      default:
-        break;
-    }
-
-    logger.info('COPILOT', 'Copilot action applied', {
-      type: action.type,
-      label: action.label,
-    });
   };
 
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement ||
-        (e.target instanceof HTMLElement && e.target.isContentEditable)
-      ) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
       if (e.code === 'Space') {
@@ -2474,6 +2069,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
         e.preventDefault();
         handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyX') {
+        e.preventDefault();
+        handleCut();
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
         e.preventDefault();
         handleCopy();
@@ -2485,12 +2083,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           e.preventDefault();
           handleDelete();
         }
-      } else if (e.code === 'KeyE' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        setBottomControlOpen((open) => !open);
-      } else if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        stableToggleBrowser();
+      } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Single-key shortcuts when not typing in an input
+        const target = e.target as HTMLElement | null;
+        const isInputField = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (!isInputField) {
+          if (e.code === 'KeyE') {
+            e.preventDefault();
+            setEditPaletteOpen((prev) => !prev);
+          } else if (e.code === 'KeyP') {
+            e.preventDefault();
+            setPaletteOpen((prev) => !prev);
+          } else if (e.code === 'KeyM') {
+            e.preventDefault();
+            handleToggleMaxWaveform();
+          }
+        }
       }
     };
 
@@ -2498,81 +2106,253 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  // ── Stabile Props für die memoisierten Baugruppen ──────────────────────────
-  // Der Playhead läuft in einem requestAnimationFrame-Takt über setCurrentTime.
-  // Ohne diese Wrapper würden Palette, Deck-Ansicht und Browser-Leiste bei jedem
-  // Tick mit rendern, weil jedes Inline-Pfeilchen im JSX eine neue Funktion ist und
-  // damit React.memo aushebelt. useStableCallback hält die IDENTITÄT konstant und
-  // ruft trotzdem die Implementierung des aktuellen Renders auf — kein stale
-  // closure, keine Abhängigkeitsliste, die man pflegen muss.
-  const stableSeek = useStableCallback(handleSeek);
-  const stablePanView = useStableCallback(handlePanView);
-  const stableZoomIn = useStableCallback(handleZoomIn);
-  const stableZoomOut = useStableCallback(handleZoomOut);
-  const stableResetZoom = useStableCallback(handleResetZoom);
-  const stableAddToPalette = useStableCallback(handleAddSelectionToPalette);
-  const stableInsertClip = useStableCallback(handleInsertClipToDeckA);
-  const stableReplaceClip = useStableCallback(handleReplaceDeckAWithClip);
-  const stableOverdubClip = useStableCallback(handleOverdubDeckAWithClip);
-  const stableSelectClip = useStableCallback((clip: PaletteClip) => setSelectedClipId(clip.id));
-  const stableDeleteClip = useStableCallback((id: string) => {
-    setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-    setSelectedClipId((prev) => (prev === id ? null : prev));
-  });
-  const stableDropClipFromDeck = useStableCallback((clipId: string) => {
-    const clip = paletteClipsRef.current.find((c) => c.id === clipId);
-    if (clip) handleInsertClipToDeckA(clip);
-  });
-  const stableTogglePalette = useStableCallback(() => setPaletteOpen((prev) => !prev));
-  const stableToggleBrowser = useStableCallback(() => setBrowserOpen((prev) => !prev));
-  const stableToggleBottomControl = useStableCallback(() => setBottomControlOpen((prev) => !prev));
-  const stableToggleChatbot = useStableCallback(() => setChatbotOpen((prev) => !prev));
-  const stableExpandPalette = useStableCallback(() => setPaletteViewMode('FULL_DECK'));
-  const stableCloseDeckView = useStableCallback(() => setPaletteViewMode('SIDEBAR'));
-  const stableDropWindow = useStableCallback((startSec: number, endSec: number) => {
-    // The dropped window is authoritative — it is what the user dragged, even if
-    // the visible selection changed in the meantime.
-    if (endSec - startSec > 0.02) handleAddSelectionToPalette(startSec, endSec);
-  });
-  const stableSelectTrack = useStableCallback((id: string) => {
-    const track = tracksRef.current.find((t) => t.id === id);
-    if (track) loadTrackIntoDeck(track);
-  });
-  const stablePickXmlFile = useStableCallback(() => xmlFileInputRef.current?.click());
-  const stablePickAudioFile = useStableCallback(() => audioFileInputRef.current?.click());
-  const stableOpenXmlCollection = useStableCallback(() => setXmlCollectionModalOpen(true));
+  // Action: Open a completely clean, empty project
+  const handleNewProject = useCallback(() => {
+    setProjectName('New Project');
+    setTracks([]);
+    setActiveTrackId('');
+    setWorkingAudioBuffer(null);
+    setPaletteClips([]);
+    setSelection(null);
+    setCurrentTime(0);
+    setViewOffset(0);
+    setViewDuration(16.0);
+    setUndoStack([]);
+    setRedoStack([]);
+    audioEngine.stop();
+    setIsPlaying(false);
+  }, []);
 
-  // The context is display metadata and current project state only. It is passed
-  // to the optional remote assistant and is also sufficient for the deterministic
-  // local fallback shipped with the Electron package.
-  const chatbotContext: TrackEditorContext = {
-    title: activeTrack?.title,
-    artist: activeTrack?.artist,
-    bpm: activeTrack?.bpm,
-    key: activeTrack?.key,
-    duration: activeTrack?.duration,
+  // Track context exposed to AI Copilot
+  const chatbotTrackContext: TrackEditorContext = useMemo(() => {
+    const secPerBeat = activeTrack?.bpm ? 60 / activeTrack.bpm : 0.5;
+    const secPerBar = secPerBeat * 4;
+    const currentBar = Math.floor(currentTime / secPerBar) + 1;
+    const currentBeat = Math.floor(currentTime / secPerBeat) + 1;
+
+    // Automated Rekordbox-compatible Mix-In & phrase energy analysis
+    const mixInAnalysis = activeTrack ? analyzeTrackForMixIn(activeTrack) : undefined;
+
+    return {
+      title: activeTrack?.title,
+      artist: activeTrack?.artist,
+      bpm: activeTrack?.bpm,
+      key: activeTrack?.key,
+      duration: activeTrack?.duration,
+      currentTime,
+      currentBar,
+      hasSelection: selection !== null && selection.duration > 0,
+      selectionStart: selection?.start,
+      selectionEnd: selection?.end,
+      selectionBeats: selection?.beatsCount,
+      selectionBars: selection?.barsCount,
+      hasClipboard: clipboardBuffer !== null,
+      quantize,
+      waveformMode,
+      paletteClipsCount: paletteClips.length,
+      undoCount: undoStack.length,
+      redoCount: redoStack.length,
+      mixInAnalysis,
+    };
+  }, [
+    activeTrack,
     currentTime,
-    currentBar: activeTrack
-      ? Math.max(
-          1,
-          Math.floor(
-            Math.max(0, currentTime - activeTrack.beatGrid.firstBeat) /
-              ((60 / activeTrack.beatGrid.bpm) * activeTrack.beatGrid.meter)
-          ) + 1
-        )
-      : undefined,
-    hasSelection: Boolean(selection && selection.duration > 0),
-    selectionStart: selection?.start,
-    selectionEnd: selection?.end,
-    selectionBeats: selection?.beatsCount,
-    selectionBars: selection?.barsCount,
-    hasClipboard: clipboardBuffer !== null,
+    selection,
+    clipboardBuffer,
     quantize,
     waveformMode,
-    paletteClipsCount: paletteClips.length,
-    undoCount: undoStack.length,
-    redoCount: redoStack.length,
-  };
+    paletteClips.length,
+    undoStack.length,
+    redoStack.length,
+  ]);
+
+  // Execute AI Copilot proposed actions
+  const handleExecuteChatbotAction = useCallback(
+    (action: ChatbotAction) => {
+      logger.info('CHATBOT', `Copilot Aktion wird ausgeführt: ${action.type}`, action.params);
+      switch (action.type) {
+        case 'SET_MIX_IN_POINT': {
+          if (!activeTrack) return;
+          const bpm = activeTrack.bpm || 130.0;
+          const secPerBeat = 60 / bpm;
+          const secPerBar = secPerBeat * 4;
+
+          let mixTime = action.params.time;
+          let mixBar = action.params.bar;
+
+          if (typeof mixTime !== 'number' && typeof mixBar === 'number') {
+            mixTime = (mixBar - 1) * secPerBar;
+          } else if (typeof mixTime === 'number' && typeof mixBar !== 'number') {
+            mixBar = Math.floor(mixTime / secPerBar) + 1;
+          } else if (typeof mixTime !== 'number' && typeof mixBar !== 'number') {
+            mixTime = currentTime;
+            mixBar = Math.floor(mixTime / secPerBar) + 1;
+          }
+
+          const safeMixTime = Math.max(0, Math.min(activeTrack.duration, mixTime!));
+          const safeMixBar = Math.max(1, mixBar || 1);
+          const cueSlot = action.params.cueSlot || 'A';
+          const cueName = action.params.cueName || `MIX-IN ${safeMixBar}.1`;
+
+          // 1. Seek playhead to exact beat
+          handleSeek(safeMixTime);
+          pushHistorySnapshot('Set Mix-In Point');
+
+          // 2. Set or update Hot Cue
+          const existingCueIdx = activeTrack.cues.findIndex(
+            (c) => (c.type === 'HOT_CUE' && c.letter === cueSlot) || (c.name && c.name.startsWith('MIX-IN'))
+          );
+
+          const hotCueNumber =
+            cueSlot === 'A' ? 0 : cueSlot === 'B' ? 1 : cueSlot === 'C' ? 2 : cueSlot === 'D' ? 3 : 0;
+
+          const newCue = {
+            id: `cue-mixin-${Date.now()}`,
+            name: cueName,
+            type: (cueSlot === 'MEMORY' ? 'MEMORY' : 'HOT_CUE') as any,
+            hotCueNum: cueSlot === 'MEMORY' ? undefined : hotCueNumber,
+            letter: cueSlot === 'MEMORY' ? undefined : cueSlot,
+            position: safeMixTime,
+            inMsec: Math.round(safeMixTime * 1000),
+            barNumber: safeMixBar,
+            beatNumber: 1,
+            comment: action.params.description || `Optimaler Mix-In Punkt (Takt ${safeMixBar})`,
+            color: '#10b981', // Rekordbox Green
+            origin: DataOrigin.USER_EDIT,
+          };
+
+          if (existingCueIdx >= 0) {
+            activeTrack.cues[existingCueIdx] = newCue;
+          } else {
+            activeTrack.cues.push(newCue);
+          }
+          setTracks([...tracks]);
+
+          // 3. Set zoom preset
+          if (action.params.zoomPreset) {
+            handleSelectZoomPreset(action.params.zoomPreset);
+          } else {
+            handleSelectZoomPreset('16_BARS');
+          }
+
+          // 4. Select the transition loop phrase (e.g. 16 or 32 bars)
+          const selectBars = action.params.selectBars || 16;
+          const dur = selectBars * secPerBar;
+          const selEnd = Math.min(activeTrack.duration, safeMixTime + dur);
+          setSelection({
+            start: safeMixTime,
+            end: selEnd,
+            duration: selEnd - safeMixTime,
+            startBeat: Math.round(safeMixTime / secPerBeat),
+            endBeat: Math.round(selEnd / secPerBeat),
+            barsCount: selectBars,
+            beatsCount: selectBars * 4,
+          });
+
+          // 5. Operation Feedback Modal
+          showOperationFeedback({
+            title: `Optimaler Mix-In Punkt verankert (Hot Cue ${cueSlot})`,
+            operationType: 'INSERT',
+            description: `Playhead auf Takt ${safeMixBar}.1 (${safeMixTime.toFixed(2)}s) positioniert, Hot Cue ${cueSlot} zugewiesen und ${selectBars} Takte Übergangsfenster selektiert.`,
+            timeRangeSec: { start: safeMixTime, end: selEnd, duration: selEnd - safeMixTime },
+            barsCount: selectBars,
+            beatsCount: selectBars * 4,
+            originalSha256: activeTrack.originalSha256,
+            timestamp: Date.now(),
+          });
+          break;
+        }
+        case 'SET_ZOOM':
+          if (action.params.preset) {
+            handleSelectZoomPreset(action.params.preset);
+          } else if (action.params.bars) {
+            handleSelectZoomPreset(`${action.params.bars}_BARS` as any);
+          }
+          break;
+        case 'SEEK_TO':
+          if (typeof action.params.time === 'number') {
+            handleSeek(action.params.time);
+          }
+          break;
+        case 'SELECT_RANGE':
+          if (activeTrack) {
+            const secPerBeat = 60 / activeTrack.bpm;
+            const beats = action.params.beats || 16;
+            const dur = beats * secPerBeat;
+            const start = action.params.start ?? currentTime;
+            const end = Math.min(activeTrack.duration, start + dur);
+            setSelection({
+              start,
+              end,
+              duration: end - start,
+              startBeat: Math.round(start / secPerBeat),
+              endBeat: Math.round(end / secPerBeat),
+              barsCount: Math.max(1, Math.round(beats / 4)),
+              beatsCount: beats,
+            });
+          }
+          break;
+        case 'ADD_CUE':
+          handleAddCue(action.params.time ?? currentTime);
+          break;
+        case 'ADD_MEMORY_CUE':
+          handleAddMemoryCue();
+          break;
+        case 'SHIFT_BEATGRID':
+          handleShiftBeatgrid(action.params.deltaSeconds ?? 0.005);
+          break;
+        case 'AUTO_ALIGN_GRID':
+          handleAutoAlignBeatgrid();
+          break;
+        case 'SET_QUANTIZE':
+          setQuantize(action.params.enabled ?? true);
+          break;
+        case 'SET_WAVEFORM_MODE':
+          if (action.params.mode) {
+            setWaveformMode(action.params.mode);
+          }
+          break;
+        case 'ADD_TO_PALETTE':
+          if (selection) {
+            handleAddSelectionToPalette();
+          }
+          break;
+        case 'PERFORM_EDIT':
+          switch (action.params.operation) {
+            case 'COPY': handleCopy(); break;
+            case 'CUT': handleCut(); break;
+            case 'PASTE': handlePaste(); break;
+            case 'DELETE': handleDelete(); break;
+            case 'CLEAR': handleClear(); break;
+            case 'REPLACE': handleReplace(); break;
+            case 'OVERDUB': handleOverdub(); break;
+          }
+          break;
+      }
+    },
+    [
+      activeTrack,
+      currentTime,
+      selection,
+      tracks,
+      handleSelectZoomPreset,
+      handleSeek,
+      handleAddCue,
+      handleAddMemoryCue,
+      handleShiftBeatgrid,
+      handleAutoAlignBeatgrid,
+      handleAddSelectionToPalette,
+      handleCopy,
+      handleCut,
+      handlePaste,
+      handleDelete,
+      handleClear,
+      handleReplace,
+      handleOverdub,
+      pushHistorySnapshot,
+      showOperationFeedback,
+    ]
+  );
 
   return (
     <div className="w-screen h-screen bg-[#0a0b0d] flex flex-col overflow-hidden select-none text-neutral-200">
@@ -2597,10 +2377,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       {/* 2. Menu bar (Datei, Bearbeiten, Betrachten, Hilfe) */}
       <MenuBar
-        onNewProject={() => {
-          setProjectName('New Project');
-          setSelection(null);
-        }}
+        onNewProject={handleNewProject}
         onSaveProject={handleSaveProject}
         onOpenProject={handleOpenProject}
         onImportXml={() => xmlFileInputRef.current?.click()}
@@ -2615,15 +2392,31 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSetWaveformMode={setWaveformMode}
         paletteOpen={paletteOpen}
         onTogglePalette={() => setPaletteOpen(!paletteOpen)}
+        editPaletteOpen={editPaletteOpen}
+        onToggleEditPalette={() => setEditPaletteOpen(!editPaletteOpen)}
+        onMaximizeWaveform={handleToggleMaxWaveform}
         browserOpen={browserOpen}
         onToggleBrowser={() => setBrowserOpen(!browserOpen)}
         chatbotOpen={chatbotOpen}
-        onToggleChatbot={stableToggleChatbot}
+        onToggleChatbot={() => setChatbotOpen(!chatbotOpen)}
+        onLoadDemoTrack={handleLoadDemoTrack}
         onShowInfo={() => setInfoModalOpen(true)}
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onOpenRecordModal={() => setRecordModalOpen(true)}
+        isRecording={isRecording}
+        isRecordArmed={isRecordArmed}
+        onClearHistory={() => setClearHistoryModalOpen(true)}
+        hasHistory={undoStack.length > 0 || redoStack.length > 0}
+        onCopy={handleCopy}
+        onCut={handleCut}
+        onPaste={handlePaste}
+        onDelete={handleDelete}
+        hasSelection={selection !== null && selection.duration > 0}
+        hasClipboard={clipboardBuffer !== null}
+        onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
+        onAnalyzeMixIn={() => setChatbotOpen(true)}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -2644,15 +2437,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onMasterVolumeChange={handleMasterVolumeChange}
         meterL={meterL}
         meterR={meterR}
-        bottomControlOpen={bottomControlOpen}
-        onToggleBottomControl={stableToggleBottomControl}
-        paletteOpen={paletteOpen}
-        onTogglePalette={stableTogglePalette}
         paletteViewMode={paletteViewMode}
         onTogglePaletteViewMode={() =>
           setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
         }
-        onOpenRecordModal={() => setRecordModalOpen(true)}
+        bottomControlOpen={editPaletteOpen}
+        onToggleBottomControl={() => setEditPaletteOpen(!editPaletteOpen)}
+        paletteOpen={paletteOpen}
+        onTogglePalette={() => setPaletteOpen(!paletteOpen)}
+        isMaxWaveform={isMaxWaveform}
+        onToggleMaxWaveform={handleToggleMaxWaveform}
       />
 
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
@@ -2661,8 +2455,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         currentTime={currentTime}
         viewOffset={viewOffset}
         viewDuration={viewDuration}
-        onSeek={stableSeek}
-        onPanView={stablePanView}
+        onSeek={handleSeek}
+        onPanView={handlePanView}
       />
 
       {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
@@ -2676,10 +2470,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           selection={selection}
           quantize={quantize}
           onSeek={handleSeek}
-          onSelect={setSelection}
+          onSelect={handleSelectionFromWaveform}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onResetZoom={handleResetZoom}
+          onSelectZoomPreset={handleSelectZoomPreset}
           onPanView={handlePanView}
           onAddToPalette={handleAddSelectionToPalette}
           onCopy={handleCopy}
@@ -2701,44 +2496,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onImportXmlClick={() => xmlFileInputRef.current?.click()}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
-          spans={spanViews}
-          clipInfo={(clipId) => {
-            const clip = paletteClips.find((c) => c.id === clipId);
-            return clip ? { name: clip.name, duration: clip.duration } : null;
-          }}
-          onDropClip={(clipId, projectStart, mode, windowEnd) =>
-            handleDropClipOnDeck(clipId, projectStart, mode, windowEnd)
-          }
-          onDropTrack={handleDropTrackOnDeck}
-          onMoveSpan={handleMoveClipSegment}
         />
 
         {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
         {paletteViewMode === 'SIDEBAR' && (
           <PalettePanel
             isOpen={paletteOpen}
-            onToggle={stableTogglePalette}
+            onToggle={() => setPaletteOpen(!paletteOpen)}
             clips={paletteClips}
-            onAddFromSelection={stableAddToPalette}
-            onDeleteClip={stableDeleteClip}
-            onSelectClip={stableSelectClip}
+            onAddFromSelection={handleAddSelectionToPalette}
+            onDeleteClip={(id) => {
+              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+              if (selectedClipId === id) setSelectedClipId(null);
+            }}
+            onSelectClip={(clip) => setSelectedClipId(clip.id)}
             selectedClipId={selectedClipId}
             hasSelection={selection !== null && selection.duration > 0}
-            onExpandToDeckView={stableExpandPalette}
-            onDropSelection={stableDropWindow}
+            onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
             targetBpm={activeTrack?.bpm}
             targetKey={activeTrack?.key}
           />
         )}
-
-        <ChatbotPalette
-          isOpen={chatbotOpen}
-          onClose={() => setChatbotOpen(false)}
-          trackContext={chatbotContext}
-          onExecuteAction={handleChatbotAction}
-        />
       </div>
 
       {/* Full Deck View (Expanded Clip Library Deck B) */}
@@ -2747,18 +2527,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           <ClipDeckView
             clips={paletteClips}
             activeClipId={selectedClipId}
-            onSelectClip={stableSelectClip}
-            onDeleteClip={stableDeleteClip}
-            onAddFromSelection={stableAddToPalette}
+            onSelectClip={(clip) => setSelectedClipId(clip.id)}
+            onDeleteClip={(id) => {
+              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+              if (selectedClipId === id) setSelectedClipId(null);
+            }}
+            onAddFromSelection={handleAddSelectionToPalette}
             hasSelectionInDeckA={selection !== null && selection.duration > 0}
             activeTrack={activeTrack}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
-            onInsertClipToDeckA={stableInsertClip}
-            onReplaceDeckAWithClip={stableReplaceClip}
-            onOverdubDeckAWithClip={stableOverdubClip}
-            onDropClipIntoDeckA={stableDropClipFromDeck}
-            onCloseDeckView={stableCloseDeckView}
+            onInsertClipToDeckA={handleInsertClipToDeckA}
+            onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
+            onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
+            onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
             waveformMode={waveformMode}
           />
         </div>
@@ -2788,20 +2570,34 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         matchPitch={matchPitchOnInsert}
         onToggleMatchPitch={setMatchPitchOnInsert}
         targetKey={activeTrack?.key}
-        isOpen={bottomControlOpen}
-        onToggle={stableToggleBottomControl}
+        onClearHistory={() => setClearHistoryModalOpen(true)}
+        onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
+        isOpen={editPaletteOpen}
+        onToggle={() => setEditPaletteOpen(!editPaletteOpen)}
+        autoCollapse={autoCollapseTools}
+        onToggleAutoCollapse={() => setAutoCollapseTools((prev) => !prev)}
       />
 
       {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
       <BrowserMultiTrackBar
         isOpen={browserOpen}
-        onToggle={stableToggleBrowser}
+        onToggle={() => setBrowserOpen(!browserOpen)}
         tracks={tracks}
         activeTrackId={activeTrackId}
-        onSelectTrack={stableSelectTrack}
-        onImportXml={stablePickXmlFile}
-        onImportAudio={stablePickAudioFile}
-        onOpenXmlCollection={stableOpenXmlCollection}
+        onSelectTrack={(id) => {
+          setActiveTrackId(id);
+          const t = tracks.find((tr) => tr.id === id);
+          if (t && t.audioBuffer) {
+            setWorkingAudioBuffer(t.audioBuffer);
+            setCurrentTime(0);
+            setViewOffset(0);
+            setIsPlaying(false);
+            audioEngine.stop();
+          }
+        }}
+        onImportXml={() => xmlFileInputRef.current?.click()}
+        onImportAudio={() => audioFileInputRef.current?.click()}
+        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
       />
 
       {/* Modals */}
@@ -2827,6 +2623,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             activeTrack={activeTrack}
             track={activeTrack}
             onApplyTrack={handleApplyExtractedTrack}
+            onImportAnlzFile={handleImportAnlzFile}
+            onImportAnlzFromDesktop={handleImportAnlzFromDesktop}
             onImportXmlFile={loadXmlFile}
             onOpenRekordboxDatabase={handleOpenRekordboxDatabase}
             onLocateRekordboxDatabases={handleLocateRekordboxDatabases}
@@ -2843,6 +2641,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         fileName={xmlFileName}
         onSelectTrack={handleSelectTrackFromXml}
         currentTrackId={activeTrackId}
+        activeTrack={activeTrack}
       />
 
       {/* Real-time Non-blocking Import Telemetry Progress Modal */}
@@ -2869,50 +2668,48 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onClose={() => setSystemLogModalOpen(false)}
       />
 
-      {/* Audio-Aufnahme (Rekordbox REC) Pop-up */}
-      <AudioRecordModal
-        isOpen={recordModalOpen}
-        onClose={() => setRecordModalOpen(false)}
-        activeDeckBuffer={workingAudioBuffer || activeTrack?.audioBuffer}
-        onRecordingSaved={(recordedTrack) => {
-          setTracks((prev) => [recordedTrack, ...prev]);
-          setActiveTrackId(recordedTrack.id);
-          if (recordedTrack.audioBuffer) {
-            setWorkingAudioBuffer(recordedTrack.audioBuffer);
-            setCurrentTime(0);
-            setViewOffset(0);
-            setIsPlaying(false);
-            audioEngine.stop();
-          }
-          showOperationFeedback({
-            title: 'Audio-Aufnahme erfolgreich gespeichert',
-            operationType: 'EXPORT',
-            description: `Aufnahme "${recordedTrack.title}" (${recordedTrack.duration.toFixed(1)}s) wurde erfolgreich erstellt, gespeichert und direkt in das aktive Deck geladen.`,
-            originalSha256: 'REC-MASTER-ORIGINAL-UNTOUCHED',
-            timestamp: Date.now(),
-          });
-        }}
+      {/* Clear History Confirmation Modal (Data Loss Prevention) */}
+      <ClearHistoryModal
+        isOpen={clearHistoryModalOpen}
+        onClose={() => setClearHistoryModalOpen(false)}
+        onConfirm={handleClearHistoryConfirm}
+        undoCount={undoStack.length}
+        redoCount={redoStack.length}
+        recentActions={[...undoStack, ...redoStack].slice(-6).map((s) => s.description)}
       />
 
-      {/* Externes File-Drop: eine Datei darf überall im Fenster abgelegt werden */}
-      {externalFileDrag && (
-        <div className="fixed inset-0 z-[90] pointer-events-none flex items-center justify-center bg-[#0088ff]/10">
-          <div className="border-2 border-dashed border-[#00a2ff] rounded-lg bg-[#0b0c0f]/92 px-8 py-6 text-center shadow-2xl">
-            <p className="text-sm font-bold text-white uppercase tracking-wide font-mono">
-              Datei hier ablegen
-            </p>
-            <p className="text-[11px] text-neutral-400 mt-1 font-mono">
-              Rekordbox XML · Audio (WAV / MP3 / FLAC / AIFF / M4A / OGG)
-            </p>
-            <p className="text-[10px] text-[#00a2ff] mt-2 font-mono">
-              Clips und Tracks liegen auf ihren eigenen Zielen: Timeline, Palette, Papierkorb
-            </p>
-            <p className="text-[10px] text-emerald-400 mt-1 font-mono">
-              ORIGINALSCHUTZ: Quellendateien werden nur lesend geöffnet
-            </p>
-          </div>
-        </div>
-      )}
+      {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}
+      <EditAssistantModal
+        isOpen={editAssistantModalOpen}
+        onClose={() => setEditAssistantModalOpen(false)}
+        lastValidation={editAssistantState.lastValidation}
+        summary={editAssistantSummary}
+        autoCorrect={editAssistantState.autoCorrect}
+        onToggleAutoCorrect={(enabled) => editAssistant.setAutoCorrect(enabled)}
+      />
+
+      {/* Dedicated Pop-up Modal: AI Smart Copilot & Visual Track Intelligence */}
+      <ChatbotModal
+        isOpen={chatbotOpen}
+        onClose={() => setChatbotOpen(false)}
+        trackContext={chatbotTrackContext}
+        activeTrack={activeTrack}
+        currentTime={currentTime}
+        audioBuffer={workingAudioBuffer}
+        onSeek={handleSeek}
+        onExecuteAction={handleExecuteChatbotAction}
+        onSelectZoomPreset={handleSelectZoomPreset}
+        onLoadDemoTrack={handleLoadDemoTrack}
+        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
+      />
+
+      {/* Dedicated Pop-up Modal: Audio Set Recording & Studio Limiter */}
+      <RecordModal
+        isOpen={recordModalOpen}
+        onClose={() => setRecordModalOpen(false)}
+        onLoadRecordingIntoDeck={handleLoadRecordedTake}
+        onSaveAsClip={handleSaveRecordedClip}
+      />
     </div>
   );
 }
