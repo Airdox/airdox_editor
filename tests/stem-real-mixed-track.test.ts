@@ -93,8 +93,17 @@ async function run() {
 
   let stems: TrackStems;
   try {
+    // Strict default first: the production path must refuse a silent quality
+    // downgrade when Demucs is missing.
+    await assert.rejects(
+      () => stemEngine.separateAudioBufferWithModel(source, 'musdb-falcon69-strict', 'fixture-strict'),
+      /nicht verfügbar/,
+      'missing Demucs must be surfaced as an error by default, not silently degraded'
+    );
+    // The fallback still has to work when the user explicitly opts in.
     stems = await stemEngine.separateAudioBufferWithModel(
-      source, 'musdb-falcon69-blind-mix', 'fixture-mixture-only'
+      source, 'musdb-falcon69-blind-mix', 'fixture-mixture-only', undefined,
+      { allowFallback: true }
     );
   } finally {
     if (originalWindow === undefined) delete (globalThis as unknown as { window?: Window }).window;

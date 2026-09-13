@@ -55,6 +55,20 @@ export interface TrackStems {
   sourcePeak?: number;
   /** Actual engine used, surfaced so tests/UI never confuse fallback DSP with Demucs. */
   separationMethod?: 'DEMUCS_HTDEMUCS_FT' | 'LOCAL_SPECTRAL_FALLBACK';
+  /** Why Demucs was unavailable when the local fallback produced this result. */
+  fallbackReason?: string;
+}
+
+/**
+ * Availability of the real AI separation engine (Demucs htdemucs_ft).
+ * `available: false` means any separation will use the local spectral
+ * fallback, whose quality is NOT sufficient for club/performance use.
+ */
+export interface StemEngineAvailability {
+  available: boolean;
+  engine: 'DEMUCS_HTDEMUCS_FT' | 'LOCAL_SPECTRAL_FALLBACK';
+  model?: string;
+  reason?: string;
 }
 
 export interface StemChannelState {
@@ -210,6 +224,53 @@ class StemEngine {
   }
 
   /**
+   * Checks BEFORE any separation whether the real AI engine (Demucs
+   * htdemucs_ft) is usable. The UI must call this to warn the user honestly
+   * that only the low-quality local fallback is available — instead of
+   * running the fallback silently and reporting "success".
+   */
+  public async checkAvailability(): Promise<StemEngineAvailability> {
+    try {
+      const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop : undefined;
+      if (desktop?.getStemEngineStatus) {
+        const status = await desktop.getStemEngineStatus();
+        if (status.available) {
+          return { available: true, engine: 'DEMUCS_HTDEMUCS_FT', model: 'htdemucs_ft' };
+        }
+        return {
+          available: false,
+          engine: 'LOCAL_SPECTRAL_FALLBACK',
+          reason: status.reason || 'Demucs/Python ist nicht einsatzbereit.',
+        };
+      }
+      // Browser/dev server path: probe the local API without sending audio.
+      const response = await fetch('/api/stems/status');
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload.available) {
+          return { available: true, engine: 'DEMUCS_HTDEMUCS_FT', model: payload.model || 'htdemucs_ft' };
+        }
+        return {
+          available: false,
+          engine: 'LOCAL_SPECTRAL_FALLBACK',
+          reason: payload.reason || 'Demucs ist auf dem lokalen Server nicht installiert.',
+        };
+      }
+      return {
+        available: false,
+        engine: 'LOCAL_SPECTRAL_FALLBACK',
+        reason: `Stem-Service antwortet mit HTTP ${response.status}.`,
+      };
+    } catch (error) {
+      return {
+        available: false,
+        engine: 'LOCAL_SPECTRAL_FALLBACK',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
    * Production-quality separation using the trained Demucs htdemucs_ft model.
    * Only a single finished song mix is sent to inference. This method fails
    * explicitly when the model is unavailable; it never disguises the old
@@ -219,7 +280,14 @@ class StemEngine {
     sourceBuffer: AudioBuffer,
     trackId: string,
     originalSha256: string = 'sha256-unverified',
-    onProgress?: StemProgressCallback
+    onProgress?: StemProgressCallback,
+    options?: {
+      /**
+       * When false, a missing Demucs installation aborts with an error instead
+       * of silently degrading to the low-quality local spectral fallback.
+       */
+      allowFallback?: boolean;
+    }
   ): Promise<TrackStems> {
     const cached = this.getCachedStems(trackId, originalSha256);
     if (cached) return cached;
@@ -288,10 +356,21 @@ class StemEngine {
         await context.close();
       }
     } catch (modelError) {
-      // A model download, Python installation or local service must never leave
-      // the Stem controls completely unusable. Fall back visibly to the bounded
-      // local separator. The result is tagged so it cannot be mistaken for AI.
       const reason = modelError instanceof Error ? modelError.message : String(modelError);
+      // Default is now to FAIL honestly: a missing Demucs installation is an
+      // actionable setup problem, not something to paper over with a
+      // frequency splitter whose output is unusable for real DJ sets.
+      if (options?.allowFallback !== true) {
+        throw new Error(
+          `Demucs (htdemucs_ft) ist nicht verfügbar: ${reason}. ` +
+            'Die Stems wurden NICHT erzeugt, weil der lokale Spektral-Fallback ' +
+            'keine performancetaugliche Qualität liefert. Installiere die ' +
+            'KI-Engine mit "npm run stems:setup" (Windows: "npm run stems:setup:win") ' +
+            'oder starte die Trennung ausdrücklich im Fallback-Modus.'
+        );
+      }
+      // Explicitly requested fallback: run the bounded local separator and tag
+      // the result so it can never be mistaken for AI separation.
       console.warn('[Stems] Demucs unavailable, using local spectral fallback:', reason);
       onProgress?.({
         percent: 8,
@@ -299,12 +378,14 @@ class StemEngine {
         processedSeconds: 0,
         totalSeconds: duration,
       });
-      return this.separateAudioBuffer(
+      const fallback = await this.separateAudioBuffer(
         sourceBuffer,
         trackId,
         originalSha256,
         onProgress
       );
+      fallback.fallbackReason = reason;
+      return fallback;
     } finally {
       this.isProcessing = false;
     }

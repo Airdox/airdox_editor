@@ -10,11 +10,14 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 
-const { separateWav } = demucsRunner as {
+const { separateWav, inspectDemucsEnvironment } = demucsRunner as {
   separateWav: (
     bytes: Uint8Array,
     options?: { repoRoot?: string; model?: string; onProgress?: (text: string) => void }
   ) => Promise<{ model: string; stems: Record<string, Buffer> }>;
+  inspectDemucsEnvironment: (
+    repoRoot: string
+  ) => Promise<{ available: boolean; model: string; reason?: string; weightsReady?: boolean }>;
 };
 
 dotenv.config();
@@ -22,6 +25,23 @@ dotenv.config();
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Preflight: report honestly whether the real Demucs engine is usable, so
+  // the UI can warn BEFORE separating instead of silently degrading quality.
+  app.get('/api/stems/status', async (_req, res) => {
+    try {
+      const status = await inspectDemucsEnvironment(process.cwd());
+      return res.json({
+        available: Boolean(status.available),
+        model: status.model || 'htdemucs_ft',
+        weightsReady: Boolean(status.weightsReady),
+        reason: status.available ? undefined : status.reason || 'Demucs nicht gefunden.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.json({ available: false, model: 'htdemucs_ft', reason: message });
+    }
+  });
 
   // Real Stem-Separation: the request body is the finished stereo song mix.
   // Demucs never receives or has access to reference/ground-truth stems.

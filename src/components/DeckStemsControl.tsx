@@ -143,6 +143,25 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             <span>DECK A • STEMS</span>
           </div>
 
+          {/* Engine/Quality badge: never let fallback stems pose as AI stems */}
+          {stems && (
+            stems.separationMethod === 'DEMUCS_HTDEMUCS_FT' ? (
+              <span
+                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#002f1d] border border-[#00c853]/60 text-[#00e676]"
+                title="Diese Stems wurden mit dem trainierten KI-Modell Demucs htdemucs_ft erzeugt (Performance-Qualität)."
+              >
+                KI: DEMUCS
+              </span>
+            ) : (
+              <span
+                className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#3a2410] border border-[#f59e0b]/60 text-[#fbbf24] animate-pulse"
+                title={`Nur Vorschau-Qualität: lokaler Spektral-Fallback (Frequenz-/Stereo-Split), NICHT performancetauglich.${stems.fallbackReason ? ` Grund: ${stems.fallbackReason}` : ''} Für KI-Qualität "npm run stems:setup" ausführen.`}
+              >
+                ⚠ FALLBACK-QUALITÄT
+              </span>
+            )
+          )}
+
           {/* Quick Presets: Acapella / Instrumental / Reset */}
           {stems && (
             <div className="flex items-center space-x-1 text-[10px]">
@@ -203,7 +222,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
                 Stem-Separation bereit
               </span>
               <span className="text-neutral-400 text-[10px]">
-                Demucs Max-Qualität, bei fehlendem Modell automatisch lokaler Separator.
+                KI-Modell Demucs htdemucs_ft. Fehlt die Installation, wirst du vor dem Start gewarnt.
               </span>
             </div>
           </div>

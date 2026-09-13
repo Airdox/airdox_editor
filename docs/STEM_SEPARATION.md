@@ -88,9 +88,27 @@ sie werden erst nach dem Modelllauf für SI-SDR geöffnet.
 
 Source Separation ist eine Schätzung. Auch ein hochwertiges Modell kann Hall,
 Backing-Vocals oder stark verzerrte Instrumente teilweise dem falschen Stem
-zuordnen. Falls Demucs oder seine Modellgewichte nicht verfügbar sind, bleibt
-die Funktion benutzbar: Der Editor verwendet den lokalen, summentreuen
-Spektral-Separator und weist ihn im Ergebnis ausdrücklich als
-`lokaler Spektral-Fallback` aus. Der reale MUSDB-Test stellt sicher, dass auch
-dieser Pfad vier hörbare und unterscheidbare Ausgabedateien erzeugt und Vocal
-Solo nicht stumm ist.
+zuordnen.
+
+## Kein stiller Qualitäts-Downgrade mehr
+
+Der lokale Spektral-Separator ist ein reiner Frequenz-/Stereo-Splitter. Seine
+Stems enthalten prinzipbedingt deutliche Übersprecher und sind **nicht für
+Club-/Performance-Einsatz geeignet**. Deshalb gilt seit dieser Version:
+
+1. Vor jeder Separation prüft der Editor die Demucs-Verfügbarkeit
+   (Desktop-IPC-Preflight bzw. `GET /api/stems/status` im Browser).
+2. Fehlt Demucs, wird die Trennung **nicht still** mit dem Fallback
+   ausgeführt. Stattdessen erscheint ein Warn-Dialog mit der genauen
+   Diagnose (fehlendes Python, fehlendes Modul, fehlende Gewichte) und der
+   Installationsanleitung.
+3. Nur wenn der Nutzer den Fallback ausdrücklich bestätigt
+   (`allowFallback: true` in der Engine-API), läuft der lokale Separator.
+   Das Ergebnis trägt dann dauerhaft das Badge **„⚠ FALLBACK-QUALITÄT“** in
+   der Stems-Leiste und der Abschluss-Dialog spricht von
+   „NUR VORSCHAU-QUALITÄT“, nie von Erfolg in Performance-Qualität.
+
+Der reale MUSDB-Test stellt beides sicher: Der Standardpfad lehnt bei
+fehlendem Demucs mit einer erklärenden Fehlermeldung ab, und der ausdrücklich
+angeforderte Fallback erzeugt weiterhin vier hörbare, unterscheidbare
+Ausgabedateien, bei denen Vocal Solo nicht stumm ist.
