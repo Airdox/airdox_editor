@@ -10,6 +10,15 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 
+import stemInstaller from './electron/stemInstaller.cjs';
+
+const { installStemEngine } = stemInstaller as {
+  installStemEngine: (
+    repoRoot: string,
+    onProgress?: (p: { step: number; totalSteps: number; percent: number; label: string; logLine?: string }) => void
+  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string }>;
+};
+
 const { separateWav, inspectDemucsEnvironment } = demucsRunner as {
   separateWav: (
     bytes: Uint8Array,
@@ -40,6 +49,33 @@ async function startServer() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return res.json({ available: false, model: 'htdemucs_ft', reason: message });
+    }
+  });
+
+  // One-click installer with Server-Sent-Events progress stream. The browser
+  // UI triggers this; the actual work happens locally on this machine.
+  let installRunning = false;
+  app.post('/api/stems/install', async (_req, res) => {
+    if (installRunning) {
+      res.status(409).json({ ok: false, error: 'Die Installation läuft bereits.' });
+      return;
+    }
+    installRunning = true;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress));
+      send('done', result);
+    } catch (error) {
+      send('done', { ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      installRunning = false;
+      res.end();
     }
   });
 

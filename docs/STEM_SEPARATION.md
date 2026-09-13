@@ -11,7 +11,16 @@ nicht mehr als Stem-Separation angeboten.
 
 ## Installation
 
-Linux/macOS:
+**Empfohlener Weg: direkt in der App.** Wenn Demucs fehlt, zeigt der Editor
+vor jeder Trennung den Qualitäts-Warndialog mit dem Button
+**„KI-Engine jetzt installieren“**. Ein Klick richtet lokal alles ein
+(Python-venv, PyTorch, Demucs 4.0.1, htdemucs_ft-Gewichte) und zeigt den
+Fortschritt der sechs Schritte live an. Einzige Voraussetzung: Python
+3.9–3.13 (64-Bit) ist auf dem System vorhanden. Nach erfolgreicher
+Installation startet „Fertig — jetzt in KI-Qualität trennen“ die Separation
+sofort mit Demucs.
+
+Alternativ manuell — Linux/macOS:
 
 ```bash
 npm run stems:setup

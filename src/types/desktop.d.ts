@@ -69,7 +69,25 @@ declare global {
         model: string;
         stems: Record<'vocals' | 'drums' | 'bass' | 'other', Uint8Array>;
       }>;
+      installStemEngine(): Promise<{
+        ok: boolean;
+        error?: string;
+        python?: string;
+        model?: string;
+        weightsReady?: boolean;
+      }>;
+      onStemInstallProgress(
+        callback: (progress: StemInstallProgress) => void
+      ): () => void;
     };
+  }
+
+  interface StemInstallProgress {
+    step: number;
+    totalSteps: number;
+    percent: number;
+    label: string;
+    logLine?: string;
   }
 
   interface RekordboxAnalysisPathLookup {

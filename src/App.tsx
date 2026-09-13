@@ -3642,6 +3642,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           setStemQualityWarning(null);
           void runStemSeparation(true);
         }}
+        onEngineInstalled={() => {
+          logger.info('EDITING', 'KI-Stem-Engine (Demucs) wurde in-App installiert und verifiziert.');
+        }}
+        onRunWithInstalledEngine={() => {
+          setStemQualityWarning(null);
+          // Cache leeren, damit die vorhandenen Fallback-Stems nicht die neue
+          // Demucs-Trennung verdecken, dann direkt in KI-Qualität trennen.
+          stemEngine.clearCache();
+          setActiveTrackStems(null);
+          void runStemSeparation(false);
+        }}
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}

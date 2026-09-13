@@ -10,6 +10,7 @@ const {
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
+const { installStemEngine } = require('./stemInstaller.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -181,6 +182,27 @@ function toLocalPath(location) {
 ipcMain.handle('stems:get-status', async () =>
   inspectDemucsEnvironment(path.join(__dirname, '..'))
 );
+
+// One-click in-app installation of the complete Demucs environment
+// (Python venv, torch, demucs, htdemucs_ft weights) with progress events.
+let stemInstallRunning = false;
+ipcMain.handle('stems:install-engine', async (event) => {
+  if (stemInstallRunning) {
+    return { ok: false, error: 'Die Installation läuft bereits.' };
+  }
+  stemInstallRunning = true;
+  try {
+    return await installStemEngine(path.join(__dirname, '..'), (progress) => {
+      try {
+        event.sender.send('stems:install-progress', progress);
+      } catch { /* window may be closing */ }
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    stemInstallRunning = false;
+  }
+});
 
 // High-quality local AI separation. The renderer sends one finished WAV mix;
 // Demucs returns newly inferred stems and never receives reference sources.
