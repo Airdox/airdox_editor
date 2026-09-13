@@ -93,9 +93,19 @@ function ok(cond: unknown, msg: string) {
     loops: [{ id: 'l1', name: 'Loop', start: 10, end: 20, length: 10, color: '#ff9500', origin: DataOrigin.REKORDBOX_XML }],
     analysis: null,
     origin: DataOrigin.LOCAL_ANALYSIS,
+    // Browser imports expose a filename but not a re-openable filesystem path.
+    originalMedia: { location: 'local-import.wav', accessMode: 'READ_ONLY', status: 'UNVERIFIED' },
     workingSegments: [
       { id: 's0', type: 'ORIGINAL', trackId: 't1', sourceStart: 0, sourceEnd: 120, projectStart: 0, projectDuration: 120, gain: 1 },
-      { id: 's1', type: 'INSERT', trackId: 't1', sourceStart: 0, sourceEnd: 0.5, projectStart: 60, projectDuration: 0.5, clipBuffer, gain: 0.9 },
+      {
+        id: 's1', type: 'INSERT', trackId: 't1', sourceStart: 0, sourceEnd: 0.5,
+        projectStart: 60, projectDuration: 0.5, clipBuffer, gain: 0.9,
+        analysisSource: {
+          path: 'C:\\Rekordbox\\share\\ANLZ0000.DAT', accessMode: 'READ_ONLY',
+          status: 'AVAILABLE', sourceDuration: 120, format: 'DAT',
+        },
+        analysisSourceTrackId: 't1', analysisSourceStart: 20, analysisSourceEnd: 20.5,
+      },
     ],
   };
 
@@ -128,9 +138,12 @@ function ok(cond: unknown, msg: string) {
   ok(!st.workingSegments[0].clipWavBase64, 'ORIGINAL segment has no embedded clip');
   ok(st.workingSegments[1].clipWavBase64, 'INSERT segment embeds clip audio');
   assert.strictEqual(st.workingSegments[1].gain, 0.9);
+  assert.strictEqual(st.workingSegments[1].analysisSource?.sourceDuration, 120, 'native source duration persists');
+  assert.strictEqual(st.workingSegments[1].analysisSourceStart, 20, 'native source start persists');
+  assert.strictEqual(st.workingSegments[1].analysisSourceEnd, 20.5, 'native source end persists');
 
-  // Local import without a source path embeds its original audio.
-  ok(st.originalAudioBase64, 'track without source path embeds original audio');
+  // A browser-local basename is not a re-openable source path, so it embeds audio.
+  ok(st.originalAudioBase64, 'track with a basename-only source embeds original audio');
 
   // Embedded clip decodes back to the exact 16-bit sample.
   const clipBytes = base64ToBytes(st.workingSegments[1].clipWavBase64!);

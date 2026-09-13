@@ -95,6 +95,20 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   });
 
   const analysis = currentTrack.analysis;
+  const waveformSourceText = (() => {
+    if (!analysis) return 'Für diesen Track liegt noch keine Waveform-Analyse vor.';
+    const provenance = analysis.provenance;
+    if (analysis.origin === DataOrigin.REKORDBOX_ANLZ && !provenance) {
+      return 'Die Waveform stammt direkt aus der read-only Rekordbox-ANLZ-Datei.';
+    }
+    if (provenance?.nativeCoverage && provenance.projectCoverage) {
+      return `${Math.round(provenance.nativeCoverage * 100)}% der Timeline verwendet originale Rekordbox-ANLZ-Buckets; ${Math.round(provenance.projectCoverage * 100)}% sind nach einer tatsächlichen Projektänderung lokal aus dem gerenderten Audio analysiert.`;
+    }
+    if (provenance?.nativeCoverage) {
+      return 'Die sichtbaren Audio-Bereiche verwenden originale Rekordbox-ANLZ-Buckets; explizit stummgeschaltete Bereiche bleiben leer.';
+    }
+    return 'Die Waveform ist als lokale Projekt-Audioanalyse gekennzeichnet; es wird keine BPM-/Template-Ersatzgrafik angezeigt.';
+  })();
   const dbRecord = currentTrack.databaseRecord;
   const anlzTags = new Set<string>(dbRecord?.anlzTagsFound ?? []);
   const hasAnlzTag = (tag: string) => anlzTags.has(tag);
@@ -399,11 +413,10 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
               <div className="bg-[#161720] border border-[#262838] p-3 rounded">
                 <h4 className="text-white font-semibold text-xs mb-1 flex items-center space-x-1.5">
                   <Activity size={14} className="text-[#00a2ff]" />
-                  <span>Extrahiertes Multi-Band Rekordbox Waveform Profil</span>
+                  <span>{analysis?.origin === DataOrigin.REKORDBOX_ANLZ ? 'Extrahiertes Multi-Band Rekordbox Waveform Profil' : 'Multi-Band Waveform-Profil mit Quellenstatus'}</span>
                 </h4>
                 <p className="text-[11px] text-neutral-400">
-                  Die Waveform wird 1:1 aus der Datenbank / ANLZ-Dateistruktur geladen. 
-                  Drei spektrale Bänder definieren die visuelle Darstellung:
+                  {waveformSourceText} Drei spektrale Bänder definieren die visuelle Darstellung.
                 </p>
 
                 {/* Energy bars */}
@@ -468,7 +481,13 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-400">Auflösung:</span>
-                    <span className="text-white font-mono">180 Buckets/Sekunde</span>
+                    <span className="text-white font-mono">
+                      {analysis?.secPerBucket
+                        ? `${(1 / analysis.secPerBucket).toFixed(1)} Buckets/Sekunde`
+                        : analysis?.origin === DataOrigin.REKORDBOX_ANLZ
+                        ? 'Originale ANLZ-Containerauflösung'
+                        : 'Nicht verfügbar'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-400">Audio Sample Rate:</span>

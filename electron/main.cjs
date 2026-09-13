@@ -8,6 +8,7 @@ const {
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
 const { isProtectedTarget } = require('./pathGuard.cjs');
+const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -31,6 +32,21 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow;
+let analysisPathRegistry;
+
+/**
+ * The local index is deliberately outside the Rekordbox folders. It contains
+ * only our read-only path associations and is never written back to Pioneer
+ * files or databases.
+ */
+function getAnalysisPathRegistry() {
+  if (!analysisPathRegistry) {
+    analysisPathRegistry = new AnalysisPathRegistry(
+      path.join(app.getPath('userData'), 'rekordbox-analysis-path-index.json')
+    );
+  }
+  return analysisPathRegistry;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -213,6 +229,25 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
   return readRekordboxDatabase(dbPath);
+});
+
+// Persistent, app-owned association index. It intentionally stores neither
+// decrypted master.db rows nor audio/waveform bytes: only read-only paths and
+// compact track identifiers required to reopen an already known ANLZ file.
+ipcMain.handle('rekordbox:cache-analysis-mappings', async (_event, mappings) => {
+  if (!Array.isArray(mappings)) {
+    throw new Error('Analyse-Zuordnungen müssen als Liste übergeben werden.');
+  }
+  return getAnalysisPathRegistry().registerMany(mappings);
+});
+
+ipcMain.handle('rekordbox:find-analysis-mapping', async (_event, query) => {
+  if (!query || typeof query !== 'object') return null;
+  return getAnalysisPathRegistry().find(query);
+});
+
+ipcMain.handle('rekordbox:analysis-mapping-stats', async () => {
+  return getAnalysisPathRegistry().stats();
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {

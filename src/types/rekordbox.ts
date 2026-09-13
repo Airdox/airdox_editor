@@ -18,6 +18,42 @@ export enum DataOrigin {
 
 export type WaveformMode = 'BLUE' | 'RGB' | '3BAND';
 
+/**
+ * Explains how a displayed waveform was assembled.  In particular, a project
+ * edit can retain original Rekordbox ANLZ buckets for all untouched material
+ * instead of silently replacing the complete view with a browser analysis.
+ */
+export interface WaveformProvenance {
+  sourceOrigins: DataOrigin[];
+  /** Fraction of the visible timeline backed by original ANLZ values. */
+  nativeCoverage: number;
+  /** Fraction that required project/local analysis (e.g. an overdub). */
+  projectCoverage: number;
+  operation: 'DIRECT' | 'SPLICED' | 'MIXED' | 'CLEAR' | 'INSERT' | 'DELETE' | 'REPLACE' | 'OVERDUB';
+}
+
+/**
+ * Read-only reference to an actual Rekordbox ANLZ container.  The file is
+ * never modified; its path is kept so the native waveform can be reopened
+ * without querying master.db again.
+ */
+export interface AnalysisFileReference {
+  path: string;
+  accessMode: 'READ_ONLY';
+  status: 'AVAILABLE' | 'MISSING' | 'UNVERIFIED';
+  size?: number;
+  modifiedAt?: number;
+  /** Audio path reported by PPTH, when available. */
+  sourceMediaPath?: string;
+  /**
+   * Duration of the unedited source audio represented by the ANLZ buckets.
+   * It keeps an edited project timeline from accidentally stretching the
+   * original native waveform after a project reload.
+   */
+  sourceDuration?: number;
+  format?: 'DAT' | 'EXT' | '2EX' | 'ANLZ';
+}
+
 export interface SourcedValue<T> {
   value: T;
   origin: DataOrigin;
@@ -112,10 +148,19 @@ export interface PaletteClip {
   color: string;
   audioBuffer?: AudioBuffer;
   miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
+  /** Native Rekordbox waveform range carried with the clip when available. */
+  analysis?: WaveformAnalysisData;
+  /** Beat times relative to sourceStart; used to preserve an ANLZ beat grid. */
+  beatOffsets?: number[];
+  /** Read-only ANLZ source used for this clip's native analysis. */
+  analysisSource?: AnalysisFileReference;
+  analysisSourceTrackId?: string;
+  analysisSourceStart?: number;
+  analysisSourceEnd?: number;
   origin: DataOrigin;
 }
 
-export type EditOperationType = 'ORIGINAL' | 'INSERT' | 'REPLACE' | 'OVERDUB' | 'CUT';
+export type EditOperationType = 'ORIGINAL' | 'INSERT' | 'REPLACE' | 'OVERDUB' | 'CUT' | 'SILENCE';
 
 export interface EditSegment {
   id: string;
@@ -126,6 +171,16 @@ export interface EditSegment {
   projectStart: number;
   projectDuration: number;
   clipId?: string;
+  /**
+   * Optional native source identity for this timeline region. It contains only
+   * a read-only ANLZ reference and source coordinates, never waveform bytes.
+   * This lets project reload reconstruct original ANLZ buckets for an inserted
+   * clip when it came from the same known Rekordbox source.
+   */
+  analysisSource?: AnalysisFileReference;
+  analysisSourceTrackId?: string;
+  analysisSourceStart?: number;
+  analysisSourceEnd?: number;
   clipBuffer?: AudioBuffer;
   gain: number;
 }
@@ -142,6 +197,8 @@ export interface WaveformAnalysisData {
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
+  /** Optional coverage information for a native/project composite waveform. */
+  provenance?: WaveformProvenance;
 }
 
 /**
@@ -188,6 +245,8 @@ export interface TrackModel {
   phrases?: PhraseSection[];
   rawXmlAttributes?: Record<string, string>;
   originalMedia?: OriginalMediaReference;
+  /** Optional persistent, read-only pointer to the native Rekordbox analysis. */
+  analysisSource?: AnalysisFileReference;
   workingSegments: EditSegment[];
 }
 

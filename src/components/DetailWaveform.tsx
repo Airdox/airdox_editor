@@ -327,16 +327,20 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           const mid = analysis.midEnergy[b];
           const high = analysis.highEnergy[b];
 
+          // A zero bucket is true silence. Do not draw a decorative minimum
+          // height here: that made a muted/empty range look like invented audio.
+          if (peak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
+
           if (waveformMode === 'BLUE') {
             // High-contrast electric blue waveform
-            const barH = Math.max(2, peak * maxHalfH);
+            const barH = peak * maxHalfH;
             ctx.fillStyle = '#00a2ff';
             ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
             ctx.fillStyle = '#b3e5fc';
             ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
           } else if (waveformMode === 'RGB') {
             // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
-            const barH = Math.max(2, peak * maxHalfH);
+            const barH = peak * maxHalfH;
             const r = Math.min(255, Math.floor(low * 270 + mid * 35));
             const g = Math.min(255, Math.floor(mid * 240 + high * 60));
             const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
@@ -349,9 +353,9 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
             ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
           } else {
             // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.85);
-            const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.55);
+            const lowH = low * maxHalfH * 0.85;
+            const midH = mid * maxHalfH * 0.7;
+            const highH = high * maxHalfH * 0.55;
 
             // Lows (Red)
             ctx.fillStyle = '#ff2b2b';
@@ -365,48 +369,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           }
         }
       } else {
-        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
-        const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
-          const isBreak = (barIndex >= 96 && barIndex < 112);
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
-
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            // 3BAND
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
-        }
+        // Never fake a rhythmic waveform from BPM metadata. Until an actual
+        // ANLZ/audio analysis is available, show an honest empty lane.
+        ctx.fillStyle = '#606578';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Keine native Rekordbox-Wellenform geladen', width / 2, centerY + 4);
+        ctx.textAlign = 'left';
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)

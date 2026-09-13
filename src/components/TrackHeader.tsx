@@ -36,6 +36,17 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${tenths}`;
   };
 
+  const waveformSourceLabel = (() => {
+    if (!track?.analysis) return 'KEINE WAVEFORM-ANALYSE';
+    const provenance = track.analysis.provenance;
+    if (track.analysis.origin === 'REKORDBOX_ANLZ' && !provenance) return 'REKORDBOX ANLZ (ORIGINAL)';
+    if (provenance?.nativeCoverage && provenance.projectCoverage) {
+      return `ANLZ ${Math.round(provenance.nativeCoverage * 100)}% + PROJEKT ${Math.round(provenance.projectCoverage * 100)}%`;
+    }
+    if (provenance?.nativeCoverage) return `REKORDBOX ANLZ ${Math.round(provenance.nativeCoverage * 100)}%`;
+    return track.analysis.origin === 'PROJECT' ? 'PROJEKT-AUDIOANALYSE' : track.analysis.origin;
+  })();
+
   return (
     <div className="bg-[#0b0c0f] border-b border-[#1a1b22] px-3 py-1.5 flex flex-col select-none">
       {/* Upper info row: Artwork, Title, Metadata (Time, Key, BPM) */}
@@ -84,6 +95,17 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   ? 'REKORDBOX XML'
                   : 'EDIT WORKING COPY'}
               </span>
+              {track && (
+                <>
+                  <span>•</span>
+                  <span
+                    className="max-w-[250px] truncate text-emerald-400 font-mono text-[9.5px]"
+                    title="Anzeigequelle der Wellenform; ANLZ-Werte stammen direkt aus der read-only Rekordbox-Analyse."
+                  >
+                    {waveformSourceLabel}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

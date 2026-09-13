@@ -88,7 +88,10 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const mid = count > 0 ? sumMid / count : 0;
         const high = count > 0 ? sumHigh / count : 0;
 
-        const barH = Math.max(2, maxPeak * (height - 4));
+        // Do not turn a zero-energy (CLEAR/silence) bucket into a cosmetic
+        // waveform column. The neutral baseline above remains visible instead.
+        if (maxPeak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
+        const barH = maxPeak * (height - 4);
         const yTop = (height - barH) / 2;
 
         // Color based on spectral density (Rekordbox RGB spectral styling)
@@ -101,58 +104,9 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         ctx.fillRect(col, yTop, 1, barH);
       }
     } else {
-      // Natural organic DJ energy contour (intro, verse, drop, breakdown, main drop, outro)
-      // Never a rigid, symmetric mathematical sine wave!
-      const bpm = track.bpm || 130;
-      const beatsTotal = (duration / 60) * bpm;
-      for (let col = 0; col < targetCols; col++) {
-        const progress = col / targetCols;
-        const beatAtCol = progress * beatsTotal;
-        const barAtCol = beatAtCol / 4;
-
-        // Realistic 64-bar DJ electronic song structure:
-        // 0-16 bars: Intro build
-        // 16-32 bars: Drop 1
-        // 32-44 bars: Breakdown (lower bass, airy synths)
-        // 44-48 bars: Build-up snare roll
-        // 48-60 bars: Main Peak Drop
-        // 60+ bars: Outro
-        let baseEnergy = 0.5;
-        let isBreak = false;
-        const normBar = barAtCol % 64;
-        if (normBar < 16) {
-          baseEnergy = 0.35 + (normBar / 16) * 0.35;
-        } else if (normBar < 32) {
-          baseEnergy = 0.85;
-        } else if (normBar < 44) {
-          baseEnergy = 0.3; // Breakdown
-          isBreak = true;
-        } else if (normBar < 48) {
-          baseEnergy = 0.5 + ((normBar - 44) / 4) * 0.45; // Buildup
-        } else if (normBar < 60) {
-          baseEnergy = 0.95; // Main drop
-        } else {
-          baseEnergy = 0.8 - ((normBar - 60) / 4) * 0.4; // Outro
-        }
-
-        // Add transient kick spikes every beat
-        const beatFract = beatAtCol % 1;
-        const kickTransient = Math.exp(-beatFract * 12) * (isBreak ? 0.1 : 0.35);
-        const noise = (Math.sin(col * 13.7) * 0.5 + 0.5) * 0.12;
-
-        const peak = Math.min(1.0, Math.max(0.12, baseEnergy * 0.65 + kickTransient + noise));
-        const barH = Math.max(2, peak * (height - 4));
-        const yTop = (height - barH) / 2;
-
-        if (isBreak) {
-          ctx.fillStyle = '#00c3ff';
-        } else if (kickTransient > 0.15) {
-          ctx.fillStyle = '#ff2b2b';
-        } else {
-          ctx.fillStyle = '#00a2ff';
-        }
-        ctx.fillRect(col, yTop, 1, barH);
-      }
+      // Intentionally leave the neutral baseline visible. A waveform must come
+      // from ANLZ or an explicitly labeled local analysis, never from a visual
+      // BPM/template approximation.
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview

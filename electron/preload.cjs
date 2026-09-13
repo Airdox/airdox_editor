@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  // Small app-owned index of track ↔ ANLZ paths. This never writes to
+  // Rekordbox's master.db or source files.
+  cacheAnalysisMappings: (mappings) => ipcRenderer.invoke('rekordbox:cache-analysis-mappings', mappings),
+  findAnalysisMapping: (query) => ipcRenderer.invoke('rekordbox:find-analysis-mapping', query),
+  getAnalysisMappingStats: () => ipcRenderer.invoke('rekordbox:analysis-mapping-stats'),
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
