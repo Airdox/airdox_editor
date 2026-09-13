@@ -41,7 +41,7 @@ declare global {
       findAnalysisMapping(query: RekordboxAnalysisPathLookup): Promise<RekordboxAnalysisPathMapping | null>;
       getAnalysisMappingStats(): Promise<{ version: number; entries: number; filePath: string }>;
       saveExportFile(payload: {
-        kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
+        kind: 'WAV' | 'AUDIO' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
         defaultName: string;
         protectedPaths?: string[];

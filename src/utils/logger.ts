@@ -36,7 +36,8 @@ export type LogCategory =
   | 'PROJECT'
   | 'WAVEFORM'
   | 'PERFORMANCE'
-  | 'EXPORT';
+  | 'EXPORT'
+  | 'RECORDER';
 
 export interface LogEntry {
   id: string;

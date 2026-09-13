@@ -432,6 +432,7 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
   }
   const kindFilters = {
     WAV: { name: 'WAV Audio', extensions: ['wav'] },
+    AUDIO: { name: 'Audioaufnahme (WAV, FLAC, MP3)', extensions: ['wav', 'flac', 'mp3'] },
     XML: { name: 'Rekordbox XML', extensions: ['xml'] },
     JSON: { name: 'JSON', extensions: ['json'] },
     PROJECT: { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
