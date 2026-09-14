@@ -51,8 +51,8 @@ export function bandLimitedSaw(freq: number, t: number, sampleRate: number, harm
   return value * (2 / Math.PI);
 }
 
-/** Deterministic PRNG (mulberry32). */
-function prng(seed: number): () => number {
+/** Deterministic PRNG (mulberry32). Exported so other generators (§3: gold standard) use the same, seeded, reproducible source of randomness. */
+export function prng(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
     state = (state + 0x6d2b79f5) >>> 0;
@@ -63,7 +63,7 @@ function prng(seed: number): () => number {
   };
 }
 
-function addKick(target: Float32Array, frames: number, sampleRate: number, start: number, gain: number): void {
+export function addKick(target: Float32Array, frames: number, sampleRate: number, start: number, gain: number): void {
   const length = Math.floor(sampleRate * 0.28);
   for (let i = 0; i < length && start + i < frames; i++) {
     const t = i / sampleRate;
@@ -75,7 +75,7 @@ function addKick(target: Float32Array, frames: number, sampleRate: number, start
   }
 }
 
-function addNoiseBurst(target: Float32Array, frames: number, sampleRate: number, start: number, length: number, gain: number, highPass: number, random: () => number): void {
+export function addNoiseBurst(target: Float32Array, frames: number, sampleRate: number, start: number, length: number, gain: number, highPass: number, random: () => number): void {
   let previousLeft = 0;
   let previousRight = 0;
   let lastRawLeft = 0;
@@ -97,7 +97,7 @@ function addNoiseBurst(target: Float32Array, frames: number, sampleRate: number,
   }
 }
 
-function addSupersaw(target: Float32Array, frames: number, sampleRate: number, freq: number, start: number, length: number, gain: number, width: number): void {
+export function addSupersaw(target: Float32Array, frames: number, sampleRate: number, freq: number, start: number, length: number, gain: number, width: number): void {
   const voices = 7;
   for (let i = 0; i < length && start + i < frames; i++) {
     const t = i / sampleRate;
@@ -118,7 +118,7 @@ function addSupersaw(target: Float32Array, frames: number, sampleRate: number, f
   }
 }
 
-function addVocal(target: Float32Array, frames: number, sampleRate: number, freq: number, start: number, length: number, gain: number): void {
+export function addVocal(target: Float32Array, frames: number, sampleRate: number, freq: number, start: number, length: number, gain: number): void {
   const harmonics = [1, 2, 3, 4, 5];
   const weights = [1, 0.55, 0.34, 0.2, 0.12];
   for (let i = 0; i < length && start + i < frames; i++) {
