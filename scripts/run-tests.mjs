@@ -213,6 +213,8 @@ function parseArgs(argv) {
     list: false,
     serial: false,
     failOnSkip: false,
+    /** Umgebungsvariablen für die Kindprozesse (--set-env KEY=WERT). */
+    env: {},
     includeManual: false,
     jobs: Math.max(1, Math.min(8, os.cpus().length - 1 || 1)),
     timeoutMs: 30 * 60 * 1000,
@@ -236,6 +238,13 @@ function parseArgs(argv) {
     if (arg === '--list') { options.list = true; continue; }
     if (arg === '--serial') { options.serial = true; continue; }
     if (arg === '--fail-on-skip') { options.failOnSkip = true; continue; }
+    if (arg === '--set-env') {
+      const value = next();
+      const split = value ? value.indexOf('=') : -1;
+      if (split <= 0) throw new Error('--set-env erwartet KEY=WERT');
+      options.env[value.slice(0, split)] = value.slice(split + 1);
+      continue;
+    }
     if (arg === '--include-manual') { options.includeManual = true; continue; }
     if (arg === '--help' || arg === '-h') {
       console.log(
@@ -248,7 +257,9 @@ function parseArgs(argv) {
         `  --serial            ein Test nach dem anderen\n` +
         `  --jobs <n>          Parallelität (Default ${Math.max(1, os.cpus().length - 1)})\n` +
         `  --timeout <ms>      Abbruchzeit je Test (Default ${30 * 60 * 1000})\n` +
-        `  --fail-on-skip      ein SKIP gilt als Fehler (Freigabe-Läufe)\n`
+        `  --fail-on-skip      ein SKIP gilt als Fehler (Freigabe-Läufe)\n` +
+        `  --set-env KEY=WERT  Umgebung für die Tests (wiederholbar) – plattformneutral,\n` +
+        `                      weil 'KEY=WERT cmd' unter Windows-cmd nicht funktioniert\n`
       );
       process.exit(0);
     }
@@ -285,7 +296,7 @@ function commandFor(file) {
   return { command: path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx'), args: [path.join(ROOT, file)] };
 }
 
-function runTest(file, timeoutMs) {
+function runTest(file, timeoutMs, extraEnv = {}) {
   const { command, args } = commandFor(file);
   return new Promise((resolve) => {
     const started = Date.now();
@@ -294,7 +305,7 @@ function runTest(file, timeoutMs) {
       child = spawn(command, args, {
         cwd: ROOT,
         windowsHide: true,
-        env: { ...process.env, AIRDOX_TEST_SUITE: '1', NODE_OPTIONS: process.env.NODE_OPTIONS || '' },
+        env: { ...process.env, ...extraEnv, AIRDOX_TEST_SUITE: '1', NODE_OPTIONS: process.env.NODE_OPTIONS || '' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -380,7 +391,7 @@ async function main() {
       const entry = queue[current];
       const label = `[${String(current + 1).padStart(width, '0')}/${String(queue.length).padStart(width, '0')}]`;
       process.stdout.write(`${label} … ${entry.file}\n`);
-      const result = await runTest(entry.file, options.timeoutMs);
+      const result = await runTest(entry.file, options.timeoutMs, options.env);
       results.push(result);
       const seconds = (result.durationMs / 1000).toFixed(1);
       if (result.ok) {

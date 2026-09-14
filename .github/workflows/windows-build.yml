@@ -34,6 +34,12 @@ jobs:
       - name: Manifest prüfen (package.json)
         run: npm run test:package
 
+      # Das Colab-Notebook wird aus colab/*.md gebaut. Würde jemand nur die
+      # .ipynb anfassen, misst das Notebook irgendwann etwas anderes als das
+      # Repo dokumentiert – dieser Schritt hält beide Dateien zusammen.
+      - name: Notebook-Manifest prüfen (colab/*.ipynb aus colab/*.md)
+        run: npm run stems:gate:notebook -- --check
+
       - name: Abhängigkeiten installieren
         run: npm ci
 

@@ -10,3 +10,5 @@ stem-test-output/
 !.env.example
 logs/
 stem-engine-data/
+stem-gate-run/
+stem-gate-colab.tar.gz

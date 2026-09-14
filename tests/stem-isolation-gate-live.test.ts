@@ -39,6 +39,8 @@
  *   AIRODOX_STEM_GATE_DEVICE=auto      auto|cpu|cuda  (an das Backend durchgereicht)
  *   AIRODOX_STEM_GATE_PRECISION=f32    f32|f16|bf16   (f16 nur auf CUDA sinnvoll)
  *   AIRODOX_STEM_GATE_VARIANT=A_clean  Mix-Variante (§10)
+ *   AIRODOX_STEM_GATE_OVERLAP=4        numOverlap übersteuern (Schnelllauf = 1;
+ *                                      dann ist das ein Rauchtest, keine Freigabe)
  *   AIRODOX_STEM_GATE_SDR_TOLERANCE=4  erlaubte Abweichung (dB) vom publizierten
  *                                      SDR-Wert je Stem – plausibler Bereich, kein
  *                                      Qualitätsurteil
@@ -128,7 +130,18 @@ async function run() {
       await mkdir(out, { recursive: true });
       await writeFile(
         path.join(out, 'model-hash-patch.json'),
-        JSON.stringify({ modelId: MODEL_ID, file: descriptor.checkpoint!.file, modelHash: actualHash, source: 'stem-isolation-gate-live' }, null, 2) + '\n'
+        JSON.stringify(
+          {
+            modelId: MODEL_ID,
+            file: descriptor.checkpoint!.file,
+            modelHash: actualHash,
+            measuredAt: new Date().toISOString(),
+            source: 'tests/stem-isolation-gate-live.test.ts',
+            applyTo: 'src/stems/modelCatalog.json → models[id=' + MODEL_ID + '].modelHash',
+          },
+          null,
+          2
+        ) + '\n'
       );
       console.log(`  ✓ Vorschlag geschrieben: ${path.join(out, 'model-hash-patch.json')}`);
     }
@@ -161,12 +174,17 @@ async function run() {
   console.log(`  Report: ${outRoot}`);
   console.log(`  Profil ${profile} · Gerät ${device} · Präzision ${precision}`);
 
+  // Overlap ist der teuerste Hebel (je mehr Übergänge, desto mehr Modell-Läufe).
+  // Default: der vom Modell-Deskriptor empfohlene Wert – nur explizit verändern,
+  // wenn man einen bewussten Schnelllauf fahren will (dann NICHT als Freigabe
+  // protokollieren, sondern als Rauchtest).
+  const overlap = process.env.AIRODOX_STEM_GATE_OVERLAP ? Number(process.env.AIRODOX_STEM_GATE_OVERLAP) : undefined;
   const startedAt = Date.now();
   const report = await runStemIsolationGate({
     engine,
     outputRoot: path.join(outRoot, 'test_run'),
     variant: (process.env.AIRODOX_STEM_GATE_VARIANT as never) || 'A_clean',
-    request: { profile, modelId: MODEL_ID, device, precision },
+    request: { profile, modelId: MODEL_ID, device, precision, ...(overlap ? { numOverlap: overlap } : {}) },
     writeAllVariants: true,
     onLog: (line) => console.log(`  ${line}`),
   });

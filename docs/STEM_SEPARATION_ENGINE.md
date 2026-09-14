@@ -418,6 +418,50 @@ test_run/
 Transient | Stereo | Recombination | PASS/FAIL) sowie alle Gate-Checks und
 die Release-Entscheidung als Badge.
 
+### 14.4 Qualitätsfreigabe außerhalb der Sandbox (Google Colab)
+
+Wo Release-Assets unerreichbar sind, wird die Messung nicht weggelassen oder
+weichgerechnet, sondern **derselbe Code auf einer Maschine mit Netzwerk**
+ausgeführt. Dafür liegt `colab/airdox-stem-gate.ipynb` im Repo (gebaut aus
+`colab/airdox-stem-gate.md`, Prüfung in CI):
+
+```bash
+npm run stems:gate:archive             # stem-gate-colab.tar.gz (Quellcode, ~0,5 MB)
+# → Datei nach Google Drive, Notebook in Colab öffnen (Laufzeit: T4), Zellen laufen lassen
+npm run test:stems:gate                # derselbe Lauf, lokal, wenn Gewichte erreichbar sind
+npm run test:stems:gate:strict         # wie oben, aber QUALITY_FAIL = Exit-Code != 0
+npm run stems:gate:notebook -- --check # .ipynb passt zu .md (CI)
+```
+
+Der Freigabe-Lauf ist `tests/stem-isolation-gate-live.test.ts` und läuft über
+den Produktionspfad (`StemSeparationEngine` → `BSRoFormerSeparator` →
+`python/bsroformer_inference.py`). Seine Invarianten:
+
+* **Opt-in:** ohne `AIRODOX_STEM_ALLOW_QUALITY_RUN=1` bricht die Suite ab, bevor
+  Audio ein Backend erreicht – ein aufwändiger Lauf (GPU-Stunde) kann nicht
+  versehentlich anspringen. Der Runner setzt das Flag für `test:stems:gate*`.
+* **Identität:** sha256 des Checkpoints gegen `modelCatalog.json`; bei
+  `modelHash: "unverified"` wird der gemessene Hash als `model-hash-patch.json`
+  ausgegeben, damit er gepinnt werden kann. Ein gemessener Hash != gepinnter
+  Hash bricht ab.
+* **Kein Qualitäts-Autor:** Bestehen oder Nichtbestehen entscheidet
+  `runStemIsolationGate()`. Die Suite prüft nur die Bedingungen, ohne die das
+  Ergebnis wertlos wäre (`fromTrainedModel`, `weights != random`, Original-Hash
+  unverändert, alle Stems technisch valide, Bericht vollständig) und meldet
+  `TECHNICAL_PASS_QUALITY_FAIL` als gültiges Protokoll, nicht als Testfehler.
+* **Plausibilität:** gemessenes SI-SDR je Stem muss innerhalb
+  `AIRODOX_STEM_GATE_SDR_TOLERANCE` (Default 4 dB) um die publizierten
+  Referenzwerte liegen – ein Checkpoint mit anderer Config/Stem-Reihenfolge
+  fällt dadurch auf, statt einen schönen Mittelwert zu liefern.
+* **Nachweis:** `stem-gate-summary.json` + `test_run/` (Entscheidung, Scores,
+  Hashes, Gerät/Profil/Präzision, Laufzeit). Freigabe gilt nur für den
+  dokumentierten Stand **und** den dokumentierten `modelHash`.
+
+Ein Colab-Lauf ersetzt ausdrücklich nicht den Windows-Packaging-Build und nicht
+Punkt 6 (natives C++-Runtime, GGUF/SafeTensors); er beantwortet nur die Frage
+„trennt das trainierte Modell gut genug, über die gesamte Kette, ohne das
+Original anzufassen“.
+
 ---
 
 ## 15. Offene Punkte / bekannte Grenzen
@@ -427,7 +471,10 @@ die Release-Entscheidung als Badge.
   in dieser Umgebung (kein `cmake`). Der Python-Pfad ist Entwicklungswerkzeug.
 * `modelHash` steht im Katalog auf `"unverified"`, solange die Gewichte nicht
   geladen und geprüft wurden; das Setup-Skript liefert den zu hinterlegenden
-  sha256.
+  sha256. Wo Release-Assets nicht erreichbar sind, erledigt das
+  `colab/airdox-stem-gate.ipynb` Download, Hash-Berechnung und Freigabemessung
+  (§14.4) – der daraus entstehende Patch-Vorschlag muss ins Repo, sonst bleibt
+  der Lauf unbeweisbar.
 * **Anbindung an den Editor ist erfolgt** (Schritt 3 aus Teil 1 → jetzt):
   `src/stems/stemJobService.ts` ist die job-orientierte Schicht über der Engine,
   `src/stems/nodeBridge.ts` wird per `npm run build:stems-bridge` nach
