@@ -18,10 +18,13 @@
  * der beiden Dateien ändert).
  */
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import process from 'node:process';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// fileURLToPath statt URL.pathname: auf Windows liefert pathname `/C:/…` und der
+// Repo-Pfad existiert nicht – der CI-Schritt lief genau dort ins Leere.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function parse(markdown) {
   const lines = markdown.split('\n');
