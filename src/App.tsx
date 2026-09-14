@@ -74,6 +74,8 @@ import {
   TrackStems,
   StemsMixerState,
   StemSeparationProgress,
+  StemEngineInfo,
+  StemQualityProfile,
   DEFAULT_STEMS_MIXER_STATE,
   STEM_TYPES,
 } from './audio/stemEngine';
@@ -462,6 +464,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
   const [stemQualityWarning, setStemQualityWarning] = useState<string | null>(null);
   const [separationProgress, setSeparationProgress] = useState<StemSeparationProgress | null>(null);
+  // Qualitätsprofil der neuen Engine (`src/stems`). `null` heißt: automatisch –
+  // HIGH_QUALITY, wenn trainierte Gewichte installiert sind, sonst PREVIEW.
+  const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
+  const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
@@ -1016,26 +1022,59 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrackId, activeTrack]);
 
+  // Engine-Status beim Start abfragen: die UI baut daraus Profil-Auswahl UND
+  // die Stem-Liste (die kommt aus dem Deskriptor, nicht aus einer Konstanten).
+  useEffect(() => {
+    let cancelled = false;
+    void stemEngine.getEngineInfo().then((info) => {
+      if (!cancelled) setStemEngineInfo(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const resolvedStemProfile: StemQualityProfile =
+    stemProfile ?? (stemEngineInfo?.usable ? 'HIGH_QUALITY' : 'PREVIEW');
+
   // Stem separation & mixer handlers.
   // Runs the separation with the given fallback policy. With allowFallback=false
   // (default flow) a missing Demucs installation opens the quality warning
   // modal instead of silently producing low-quality frequency-splitter stems.
-  const runStemSeparation = useCallback(async (allowFallback: boolean) => {
+  const runStemSeparation = useCallback(async (allowFallback: boolean, profile: StemQualityProfile = 'PREVIEW') => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
     }
     setIsSeparatingStems(true);
     try {
-      const separated = await stemEngine.separateAudioBufferWithModel(
-        workingAudioBuffer,
-        activeTrack.id,
-        activeTrack.originalSha256,
-        (prog) => setSeparationProgress(prog),
-        { allowFallback }
-      );
+      // HIGH_QUALITY / MAXIMUM_QUALITY laufen über den Engine-Kern (Job, Cache,
+      // Job-Metadaten, Abbruch). PREVIEW bleibt der bewährte Demucs-Pfad – er ist
+      // ausdrücklich als Vorschau gekennzeichnet.
+      const separated = profile === 'PREVIEW'
+        ? await stemEngine.separateAudioBufferWithModel(
+            workingAudioBuffer,
+            activeTrack.id,
+            activeTrack.originalSha256,
+            (prog) => setSeparationProgress(prog),
+            { allowFallback }
+          )
+        : await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
+            profile,
+            onProgress: (prog) => setSeparationProgress(prog),
+          });
       setActiveTrackStems(separated);
-      if (separated.separationMethod === 'DEMUCS_HTDEMUCS_FT') {
+      if (separated.separationMethod === 'STEM_ENGINE_MODEL') {
+        const stemList = (separated.stemIds ?? STEM_TYPES).join(', ');
+        showOperationFeedback({
+          title: `Stems getrennt (${separated.profile})`,
+          operationType: 'CUE',
+          description: `Track "${activeTrack.title}" mit ${separated.modelId} in ${separated.stemIds?.length ?? 4} Stems aufgeteilt: ${stemList}. Validierung: ${separated.validationPass ? 'bestanden' : 'mit Hinweisen'}. Die Originaldatei bleibt unverändert; der Lauf ist als Job mit job.json reproduzierbar.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.info('EDITING', `Stem-Separation: ${separated.modelId} (${separated.profile}) für "${activeTrack.title}" abgeschlossen.`);
+      } else if (separated.separationMethod === 'DEMUCS_HTDEMUCS_FT') {
         showOperationFeedback({
           title: 'Stems erfolgreich getrennt (KI-Qualität)',
           operationType: 'CUE',
@@ -1064,25 +1103,58 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
 
+  /** Bricht einen laufenden Engine-Job ab (UI-Button "Abbrechen"). */
+  const handleCancelStemSeparation = useCallback(() => {
+    const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
+    logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
+    setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
+  }, []);
+
   const handleSeparateStems = useCallback(async () => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
     }
-    // Preflight: check the real AI engine BEFORE any processing. If Demucs is
-    // missing, the user decides explicitly — no silent quality downgrade.
+    const profile = resolvedStemProfile;
     setIsSeparatingStems(true);
-    setSeparationProgress({ percent: 1, phaseText: 'KI-Engine (Demucs) wird geprüft…', processedSeconds: 0, totalSeconds: workingAudioBuffer.duration });
-    const availability = await stemEngine.checkAvailability();
-    if (!availability.available) {
+    setSeparationProgress({
+      percent: 1,
+      phaseText: profile === 'PREVIEW' ? 'KI-Engine (Demucs) wird geprüft…' : `Stem-Engine (Profil ${profile}) wird geprüft…`,
+      processedSeconds: 0,
+      totalSeconds: workingAudioBuffer.duration,
+    });
+    if (profile === 'PREVIEW') {
+      // Preflight: check the real AI engine BEFORE any processing. If Demucs is
+      // missing, the user decides explicitly — no silent quality downgrade.
+      const availability = await stemEngine.checkAvailability();
       setIsSeparatingStems(false);
       setSeparationProgress(null);
-      logger.warn('EDITING', `Stem-Preflight: Demucs nicht verfügbar — ${availability.reason || 'unbekannter Grund'}. Nutzer wird gefragt.`);
-      setStemQualityWarning(availability.reason || 'Demucs/Python wurde nicht gefunden.');
+      if (!availability.available) {
+        logger.warn('EDITING', `Stem-Preflight: Demucs nicht verfügbar — ${availability.reason || 'unbekannter Grund'}. Nutzer wird gefragt.`);
+        setStemQualityWarning(availability.reason || 'Demucs/Python wurde nicht gefunden.');
+        return;
+      }
+      await runStemSeparation(false, 'PREVIEW');
       return;
     }
-    await runStemSeparation(false);
-  }, [activeTrack, workingAudioBuffer, runStemSeparation]);
+    // HQ-Profile: der Kern meldet, welches Profil nutzbar ist. Fehlt das
+    // Modell, bleibt die Warnung ehrlich – kein stiller Rückfall auf den
+    // Frequenz-Splitter.
+    const info = await stemEngine.getEngineInfo();
+    setStemEngineInfo(info);
+    const chosen = info.profiles.find((entry) => entry.profile === profile);
+    setIsSeparatingStems(false);
+    setSeparationProgress(null);
+    if (!info.ok || !chosen?.available) {
+      logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}.`);
+      setStemQualityWarning(
+        `Profil ${profile} ist nicht verfügbar: ${chosen?.reason || info.reason || 'Stem-Engine nicht erreichbar'}. ` +
+          'Installation: npm run stems:setup:bsroformer – oder für eine Vorschau das Profil "Vorschau" wählen.'
+      );
+      return;
+    }
+    await runStemSeparation(false, profile);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -3708,6 +3780,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isSeparating={isSeparatingStems}
         separationProgress={separationProgress}
         onSeparateStems={handleSeparateStems}
+        onCancelSeparation={handleCancelStemSeparation}
+        profiles={stemEngineInfo?.profiles ?? []}
+        selectedProfile={resolvedStemProfile}
+        onProfileChange={setStemProfile}
         onToggleStemMute={handleToggleStemMute}
         onToggleStemSolo={handleToggleStemSolo}
         onStemVolumeChange={handleStemVolumeChange}

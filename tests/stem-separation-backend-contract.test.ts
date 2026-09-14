@@ -75,10 +75,29 @@ async function run() {
 
   // ---- 1. progress + stem protocol ----------------------------------------
   console.log('\n[ TEST ] #1 JSONL-Protokoll: Fortschritt, Stems, done-Report');
-  const backend = new BSRoFormerSeparator({
+  // Der Protokoll-Stub braucht kein torch – die Produktionsprüfung aber sehr
+  // wohl. Beides wird hier festgehalten, damit die Suite auf einem Runner ohne
+  // PyTorch das echte Transportprotokoll fahren kann, statt komplett zu
+  // überspringen, die strengen Availability-Regeln aber trotzdem geprüft bleiben.
+  const strictBackend = new BSRoFormerSeparator({
     transport: 'python-torch',
     pythonCommand: python,
     adapterScript: STUB,
+    modelStoreDir: store,
+  });
+  const torchPresent = await probeExecutable(python, ['-c', 'import torch; print(1)']).then((probe) => probe.found);
+  const strictAvailability = await strictBackend.isAvailable();
+  assert.equal(
+    strictAvailability.available,
+    torchPresent,
+    `Standardprüfung muss PyTorch verlangen (torch vorhanden=${torchPresent}, gemeldet=${strictAvailability.available})`
+  );
+  console.log(`  ✓ Availability-Standard: PyTorch erforderlich (vorhanden=${torchPresent})`);
+
+  const backend = new BSRoFormerSeparator({
+    transport: 'python-torch',
+    pythonCommand: python,
+    adapterScript: STUB, requireTorch: false,
     modelStoreDir: store,
     env: { STUB_CHUNKS: '4' },
   });
@@ -128,7 +147,7 @@ async function run() {
   const mismatchBackend = new BSRoFormerSeparator({
     transport: 'python-torch',
     pythonCommand: python,
-    adapterScript: STUB,
+    adapterScript: STUB, requireTorch: false,
     modelStoreDir: store,
     // The checkpoint config declares the opposite order of the registry entry.
     env: { STUB_CHUNKS: '1', STUB_CONFIG_STEM_ORDER: 'other,vocals' },
@@ -162,7 +181,7 @@ async function run() {
   const cancelBackend = new BSRoFormerSeparator({
     transport: 'python-torch',
     pythonCommand: python,
-    adapterScript: STUB,
+    adapterScript: STUB, requireTorch: false,
     modelStoreDir: store,
     env: { STUB_CHUNKS: '50', STUB_SLEEP_MS: '120', STUB_CANCEL_AFTER_STEP: '2' },
   });
@@ -210,7 +229,7 @@ async function run() {
     const failing = new BSRoFormerSeparator({
       transport: 'python-torch',
       pythonCommand: python,
-      adapterScript: STUB,
+      adapterScript: STUB, requireTorch: false,
       modelStoreDir: store,
       env: { STUB_FAIL_CODE: stubCode },
     });
@@ -243,7 +262,7 @@ async function run() {
   const deviceBackend = new BSRoFormerSeparator({
     transport: 'python-torch',
     pythonCommand: python,
-    adapterScript: STUB,
+    adapterScript: STUB, requireTorch: false,
     modelStoreDir: store,
     env: { STUB_CHUNKS: '1' },
   });
@@ -283,7 +302,7 @@ async function run() {
               new BSRoFormerSeparator({
                 transport: 'python-torch',
                 pythonCommand: python,
-                adapterScript: STUB,
+                adapterScript: STUB, requireTorch: false,
                 modelStoreDir: store,
                 env: { STUB_CHUNKS: '2' },
               }),
@@ -391,7 +410,7 @@ async function run() {
 
   // ---- 10. other families keep the same contract ---------------------------
   console.log('\n[ TEST ] #10 Mel-Band RoFormer und HTDemucs behalten denselben Vertrag');
-  const mel = new MelBandRoFormerSeparator({ transport: 'python-torch', pythonCommand: python, adapterScript: STUB, modelStoreDir: store });
+  const mel = new MelBandRoFormerSeparator({ transport: 'python-torch', pythonCommand: python, adapterScript: STUB, requireTorch: false, modelStoreDir: store });
   assert.equal(mel.family, 'mel_band_roformer');
   assert.equal(mel.capabilities().trainedModel, true);
   const melDescriptor = ModelRegistry.fromBundledCatalog().require('melbandroformer-viperx-vocals-3005');

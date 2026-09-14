@@ -27,14 +27,52 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # package.json VOR der Installation prüfen: eine doppelt vorhandene
+      # „test“-Zeile (Kollisionsklasse aus parallelen Branches) macht das JSON
+      # ungültig, und `npm ci` scheitert dann mit einer kryptischen Meldung,
+      # bevor irgendein Build-Schritt läuft. Diese Prüfung nennt die Datei.
+      - name: Manifest prüfen (package.json)
+        run: npm run test:package
+
+      # Das Colab-Notebook wird aus colab/*.md gebaut. Würde jemand nur die
+      # .ipynb anfassen, misst das Notebook irgendwann etwas anderes als das
+      # Repo dokumentiert – dieser Schritt hält beide Dateien zusammen.
+      - name: Notebook-Manifest prüfen (colab/*.ipynb aus colab/*.md)
+        run: npm run stems:gate:notebook -- --check
+
       - name: Abhängigkeiten installieren
         run: npm ci
 
       - name: TypeScript-Prüfung
         run: npm run lint
 
+      # Die Stem-Engine ist reines TypeScript und läuft ohne Python: Registry-,
+      # Backend-Vertrags-, Technical-Gate- und Job-Service-Suite fangen
+      # Engine-Regressionen ab, bevor gebaut wird. Tests mit requirement-
+      # Direktive (@requires: python/torch/model) werden sauber übersprungen.
+      - name: Stem-Engine-Prüfung (Registry, Backend-Vertrag, Technical Gate, Job-Service)
+        run: npm run test:stems
+
+      # Ferndiagnose: die Job-Logs liegen auf externem Blob-Storage, das nicht
+      # von jeder Umgebung erreichbar ist. Der Runner schreibt die vollständige
+      # Ausgabe fehlender Tests in test-runner-failure.txt → hier als Artefakt.
+      - name: Test-Ausgabe bei Fehlschlag anhängen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-runner-failure-stems
+          path: test-runner-failure.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Renderer bauen (Vite)
         run: npm run build
+
+      # Volle Suite nur im Nachtlauf/manuell: sie enthält lang laufende
+      # Audio- und Import-Tests, die pro PR den Windows-Runner aufhalten.
+      - name: Komplette Test-Suite (Nachtlauf / manueller Lauf)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm test
 
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never

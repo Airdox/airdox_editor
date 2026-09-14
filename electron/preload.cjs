@@ -24,6 +24,31 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   getStemEngineStatus: () => ipcRenderer.invoke('stems:get-status'),
   separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
 
+  // --- Neue Stem-Engine (src/stems) als Jobs -------------------------------
+  // Verschachtelt als `stemEngine`, damit der Vertrag exakt
+  // `StemDesktopApi` aus src/stems/transportTypes.ts ist (Typ + Präsenz werden
+  // von tests/stem-engine-ipc-contract.test.ts geprüft).
+  // status() liefert Profile/Modelle/Stem-Listen aus dem Modell-Katalog,
+  // startStemJob() gibt sofort eine jobId zurück, Fortschritt kommt über
+  // onStemJobProgress, Stems werden einzeln geladen (kein 4-fach-Buffer-Payload).
+  stemEngine: {
+    getStemEngineStatus: () => ipcRenderer.invoke('stems:engine-status'),
+    startStemJob: (payload) => ipcRenderer.invoke('stems:job-start', payload),
+    waitStemJob: (jobId) => ipcRenderer.invoke('stems:job-wait', jobId),
+    getStemJob: (jobId) => ipcRenderer.invoke('stems:job-get', jobId),
+    listStemJobs: () => ipcRenderer.invoke('stems:job-list'),
+    cancelStemJob: (jobId, reason) => ipcRenderer.invoke('stems:job-cancel', jobId, reason),
+    pauseStemJob: (jobId) => ipcRenderer.invoke('stems:job-pause', jobId),
+    resumeStemJob: (jobId) => ipcRenderer.invoke('stems:job-resume', jobId),
+    readStemJobStem: (jobId, stemId) => ipcRenderer.invoke('stems:job-stem', jobId, stemId),
+    readStemJobMetadata: (jobId) => ipcRenderer.invoke('stems:job-metadata', jobId),
+    onStemJobProgress: (callback) => {
+      const listener = (_event, progress) => callback(progress);
+      ipcRenderer.on('stems:job-progress', listener);
+      return () => ipcRenderer.removeListener('stems:job-progress', listener);
+    },
+  },
+
   // --- Diagnostics / logging bridge -----------------------------------------
   // Fire-and-forget batched log stream from the renderer. send() (not invoke)
   // so the message is handed to the main process even during page hide/unload.

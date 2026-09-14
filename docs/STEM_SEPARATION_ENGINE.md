@@ -59,12 +59,15 @@ Ordner werden vom Engine-Aufruf konfiguriert (`workingRoot`, `outputRoot`,
 
 ---
 
-## 3. Modulübersicht (`src/stems/`, ~7.300 Zeilen inkl. Backends und Teil-2-Modulen)
+## 3. Modulübersicht (`src/stems/`, ~7.900 Zeilen inkl. Backends, Anbindung und Teil-2-Modulen)
 
 | Modul | Aufgabe |
 |---|---|
 | `types.ts` | Alle Verträge: `ModelDescriptor`, `Stem`, `SeparationSettings`, `BoundaryContinuityReport`, `StemErrorCode` (20 Codes) |
 | `stemSeparationEngine.ts` | `StemSeparationEngine`: Orchestrierung, Profile, Backend-Wahl, Abbruch, Cache, Historie |
+| `stemJobService.ts` | `StemJobService`: job-orientierte Schicht für den Editor (Job-Id sofort, Events, Einzel-Stem-Download, Staging) |
+| `transportTypes.ts` | Der einzige Datervertrag über IPC/HTTP (`StemJobView`, `StemServiceStatus`, `StemDesktopApi`) – frei von Node-Importen |
+| `nodeBridge.ts` | Einstiegspunkt für das CommonJS-Bundle des Main-Prozesses (`dist/stems/node-bridge.cjs`) |
 | `modelRegistry.ts` | `ModelRegistry` — lädt/validiert `modelCatalog.json`, Profil-Auflösung, `parametersFor()`, Content-Hash |
 | `modelCatalog.json` | Datengetriebener Modell-Katalog (URLs, Hashes, `stemOrder`, `qualityProfile`) |
 | `modelManager.ts` | `ModelManager` — Verfügbarkeit, sha256-Prüfung, Download-Freigabe, `listStatus()` |
@@ -297,11 +300,23 @@ enthält je Prüfung `pass`, Titel, Details und Messwerte.
 ## 13. Tests
 
 ```bash
-npm run test:stems          # Registry + Backend-Vertrag + Technical Gate + Stem Isolation Gate (Teil 2)
-npm run test:stems:live     # echte BS-RoFormer-Architektur über den Adapter
-npm run test:stems:all      # beides
+npm test                    # komplette Suite über scripts/run-tests.mjs (Fund + SKIP-Logik)
+npm run test:stems          # Gruppe `stems`: Registry + Backend-Vertrag + Technical Gate
+                            # + Stem Isolation Gate (Teil 2) + Job-Schicht + IPC-Vertrag
+npm run test:stems:release  # Gruppe `stems-release` mit --fail-on-skip (Freigabe-Lauf)
+npm run test:stems:live     # Gruppe `stems-live`: echte BS-RoFormer-Architektur + Live-Gate
+npm run test:stems:all      # alle Separations- und Gate-Suiten (SKIPs erlaubt)
 npm run lint                # tsc --noEmit
 ```
+
+`scripts/run-tests.mjs` sammelt die Tests per Dateisuche (`tests/**/*.test.*`) –
+neue Testdateien brauchen keinen Eintrag in `package.json` mehr. Eine Zeile, die
+von parallelen Branches umgeschrieben werden muss, war die Ursache für doppelt
+vorhandene `"test"`-Schlüssel und damit für ungültiges JSON (CI-Abbruch bereits
+bei `npm ci`). Umgebungsabhängige Suiten erklären sich im Dateikopf:
+`// @requires: python, torch, demucs, model, network` → ohne diese Voraussetzungen
+meldet der Runner SKIP statt Fehler; mit `--fail-on-skip` wird ein SKIP zum
+Freigabe-Hindernis (so läuft `test:stems:live`).
 
 | Suite | Gruppen | Belegt |
 |---|---|---|
@@ -310,6 +325,9 @@ npm run lint                # tsc --noEmit
 | `tests/stem-separation-engine-gate.test.ts` | 19 | Gesamtdurchlauf, Read-only-Nachweis, Resampling, Stereo, Grenzmetrik, harte Schnitte vs. Overlap-Add, Backend-Aufrufzählung, Job-Metadaten, Cache, Abbruch/Pause, Fehlermatrix, Profile, Historie, Recovery, Gate-Bericht |
 | `tests/stem-separation-bsroformer-live.test.ts` | 8 | echte Architektur + Protokoll, keine stillen Zufallsgewichte, `stem_order`-Widerspruch, Overlap-Add auf echter Modellausgabe, Abbruch des echten Prozesses, Original-Hash |
 | `tests/stem-isolation-gate.test.ts` (TEIL 2) | 18 | 30-s-Goldstandard-Track (deterministisch, 6 Stems, 6 Segmente), ≥15 Mix-Varianten, Frequenzüberlappungspaare, Stem-Group-Mapping, Metrik-Grundfunktionen (SI-SDR/Bleed/Transient/Stereo), Chunk-Boundary-A/B-Test, Determinismus, Original-Integrität, Crash-Recovery, Fehlerfälle, Stem-Isolation-Gate End-to-End (muss `TECHNICAL_PASS_QUALITY_FAIL` liefern, nie fabriziertes `RELEASE_READY`), Report-Verzeichnis (§26), Release-Entscheidung-Eindeutigkeit |
+| `tests/stem-job-service.test.ts` | 10 | Job-Ansicht sofort, Stem-Liste aus dem Deskriptor (3-Stem-Modell), monotones Progress, Einzel-Stem-Download, `job.json`, Cache, Abbruch, Pause/Fortsetzung, Bridge-Ergebnisse, Staging statt Original |
+| `tests/stem-engine-ipc-contract.test.ts` | 8 | Katalog→`STEM_NAMES`, preload↔Host-Kanaleindeutigkeit, `StemDesktopApi`↔preload 1:1, browser-sicherer Vertrag, Brücke ohne Build, Request-Filterung, End-to-End über das echte Bundle, UI-Routing |
+| `tests/stem-isolation-gate-live.test.ts` (opt-in) | 6 | **Qualitätsfreigabe** mit trainiertem Checkpoint über den Produktionspfad (`StemSeparationEngine` → Adapter → BS-RoFormer): `modelHash`-Prüfung gegen das Manifest, Gate-Entscheidung `RELEASE_READY`/`QUALITY_FAIL`, Messwerttabelle je Stem, Original-Hash vor/nach. Läuft nur mit `AIRODOX_STEM_ALLOW_QUALITY_RUN=1` und installiertem Checkpoint – sonst SKIP, nie ein erfundenes PASS |
 
 Alle Suiten überspringen sauber, wenn Python/PyTorch fehlen (nur
 `stem-separation-bsroformer-live.test.ts`; `stem-isolation-gate.test.ts` läuft
@@ -400,6 +418,50 @@ test_run/
 Transient | Stereo | Recombination | PASS/FAIL) sowie alle Gate-Checks und
 die Release-Entscheidung als Badge.
 
+### 14.4 Qualitätsfreigabe außerhalb der Sandbox (Google Colab)
+
+Wo Release-Assets unerreichbar sind, wird die Messung nicht weggelassen oder
+weichgerechnet, sondern **derselbe Code auf einer Maschine mit Netzwerk**
+ausgeführt. Dafür liegt `colab/airdox-stem-gate.ipynb` im Repo (gebaut aus
+`colab/airdox-stem-gate.md`, Prüfung in CI):
+
+```bash
+npm run stems:gate:archive             # stem-gate-colab.tar.gz (Quellcode, ~0,5 MB)
+# → Datei nach Google Drive, Notebook in Colab öffnen (Laufzeit: T4), Zellen laufen lassen
+npm run test:stems:gate                # derselbe Lauf, lokal, wenn Gewichte erreichbar sind
+npm run test:stems:gate:strict         # wie oben, aber QUALITY_FAIL = Exit-Code != 0
+npm run stems:gate:notebook -- --check # .ipynb passt zu .md (CI)
+```
+
+Der Freigabe-Lauf ist `tests/stem-isolation-gate-live.test.ts` und läuft über
+den Produktionspfad (`StemSeparationEngine` → `BSRoFormerSeparator` →
+`python/bsroformer_inference.py`). Seine Invarianten:
+
+* **Opt-in:** ohne `AIRODOX_STEM_ALLOW_QUALITY_RUN=1` bricht die Suite ab, bevor
+  Audio ein Backend erreicht – ein aufwändiger Lauf (GPU-Stunde) kann nicht
+  versehentlich anspringen. Der Runner setzt das Flag für `test:stems:gate*`.
+* **Identität:** sha256 des Checkpoints gegen `modelCatalog.json`; bei
+  `modelHash: "unverified"` wird der gemessene Hash als `model-hash-patch.json`
+  ausgegeben, damit er gepinnt werden kann. Ein gemessener Hash != gepinnter
+  Hash bricht ab.
+* **Kein Qualitäts-Autor:** Bestehen oder Nichtbestehen entscheidet
+  `runStemIsolationGate()`. Die Suite prüft nur die Bedingungen, ohne die das
+  Ergebnis wertlos wäre (`fromTrainedModel`, `weights != random`, Original-Hash
+  unverändert, alle Stems technisch valide, Bericht vollständig) und meldet
+  `TECHNICAL_PASS_QUALITY_FAIL` als gültiges Protokoll, nicht als Testfehler.
+* **Plausibilität:** gemessenes SI-SDR je Stem muss innerhalb
+  `AIRODOX_STEM_GATE_SDR_TOLERANCE` (Default 4 dB) um die publizierten
+  Referenzwerte liegen – ein Checkpoint mit anderer Config/Stem-Reihenfolge
+  fällt dadurch auf, statt einen schönen Mittelwert zu liefern.
+* **Nachweis:** `stem-gate-summary.json` + `test_run/` (Entscheidung, Scores,
+  Hashes, Gerät/Profil/Präzision, Laufzeit). Freigabe gilt nur für den
+  dokumentierten Stand **und** den dokumentierten `modelHash`.
+
+Ein Colab-Lauf ersetzt ausdrücklich nicht den Windows-Packaging-Build und nicht
+Punkt 6 (natives C++-Runtime, GGUF/SafeTensors); er beantwortet nur die Frage
+„trennt das trainierte Modell gut genug, über die gesamte Kette, ohne das
+Original anzufassen“.
+
 ---
 
 ## 15. Offene Punkte / bekannte Grenzen
@@ -409,7 +471,23 @@ die Release-Entscheidung als Badge.
   in dieser Umgebung (kein `cmake`). Der Python-Pfad ist Entwicklungswerkzeug.
 * `modelHash` steht im Katalog auf `"unverified"`, solange die Gewichte nicht
   geladen und geprüft wurden; das Setup-Skript liefert den zu hinterlegenden
-  sha256.
-* GUI/IPC-Anbindung des bestehenden Editors (`electron/demucsRunner.cjs`,
-  `src/audio/stemEngine.ts` mit hart kodierter 4-Stem-Liste und Demucs-Gewichten)
-  ist bewusst noch nicht umgestellt — Teil 1 bleibt kernfokussiert.
+  sha256. Wo Release-Assets nicht erreichbar sind, erledigt das
+  `colab/airdox-stem-gate.ipynb` Download, Hash-Berechnung und Freigabemessung
+  (§14.4) – der daraus entstehende Patch-Vorschlag muss ins Repo, sonst bleibt
+  der Lauf unbeweisbar.
+* **Anbindung an den Editor ist erfolgt** (Schritt 3 aus Teil 1 → jetzt):
+  `src/stems/stemJobService.ts` ist die job-orientierte Schicht über der Engine,
+  `src/stems/nodeBridge.ts` wird per `npm run build:stems-bridge` nach
+  `dist/stems/node-bridge.cjs` gebündelt, `electron/stemEngineBridge.cjs` registriert
+  die IPC-Kanäle (`stems:engine-status`, `stems:job-*`, `stems:job-progress`),
+  `server.ts` bedient dieselben Vorgänge über HTTP (`/api/stems/engine`,
+  `/api/stems/jobs…`). Der Renderer (`src/audio/stemEngine.ts`) wählt nach Profil:
+  `HIGH_QUALITY`/`MAXIMUM_QUALITY` über den Kern, `PREVIEW` bleibt der
+  Demucs-Pfad; die Stem-Liste kommt aus `stems.stemIds` (Deskriptor), die
+  htdemucs-Namen des Vorschau-Pfads aus `modelCatalog.json` statt aus einer
+  Konstanten. Fortschritt und „Abbrechen“ sitzen im Deck (`DeckStemsControl`).
+  Offen geblieben: Der Mischpult-Desk des Decks hat vier Slots
+  (vocals/drums/bass/other). Modelle mit anderen Stem-Mengen laufen durch die
+  Engine und werden als Job sauber validiert, aber `buildTrackStems` bricht mit
+  klarer Meldung ab, statt Stems still zu ignorieren – ein 6-Stem-oder
+  2-Stem-Mixer ist ein eigener UI-Schritt.

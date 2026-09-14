@@ -24,6 +24,8 @@ import {
   Radio,
 } from 'lucide-react';
 import {
+  StemEngineProfileInfo,
+  StemQualityProfile,
   StemType,
   StemsMixerState,
   TrackStems,
@@ -47,7 +49,20 @@ interface DeckStemsControlProps {
   onOpenMidiModal?: () => void;
   midiStatusLabel?: string;
   isMidiConnected?: boolean;
+  /** Bricht einen laufenden Separations-Job ab (nur Engine-Pfad möglich). */
+  onCancelSeparation?: () => void;
+  /** Profil-Auswahl der neuen Engine – Liste und Stems stammen aus dem Katalog. */
+  profiles?: StemEngineProfileInfo[];
+  selectedProfile?: StemQualityProfile;
+  onProfileChange?: (profile: StemQualityProfile) => void;
 }
+
+/** Labels der Qualitätsprofile (Kern-Profile, 1:1 aus `src/stems`). */
+const PROFILE_LABELS: Record<StemQualityProfile, string> = {
+  PREVIEW: 'Vorschau',
+  HIGH_QUALITY: 'HQ',
+  MAXIMUM_QUALITY: 'Max',
+};
 
 interface StemVisualConfig {
   id: StemType;
@@ -129,8 +144,33 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   onOpenMidiModal,
   midiStatusLabel = 'MIDI bereit',
   isMidiConnected = false,
+  onCancelSeparation,
+  profiles = [],
+  selectedProfile = 'PREVIEW',
+  onProfileChange,
 }) => {
-  const hasAnySolo = STEM_TYPES.some((s) => mixerState[s].solo);
+  // Die sichtbare Stem-Liste folgt dem Modell-Deskriptor (`stems.stemIds`);
+  // STEM_TYPES ist nur der Default, bevor getrennt wurde. Ein Modell mit zwei
+  // Stems zeigt also zwei Buttons – ohne dass hier eine Zahl stünde.
+  const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
+  const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
+    const known = STEM_CONFIGS.find((cfg) => cfg.id === id);
+    return (
+      known ?? {
+        id,
+        label: String(id).toUpperCase(),
+        sublabel: 'Stem aus dem Modell-Deskriptor (kein Legacy-Mixer-Slot)',
+        color: '#8b98b8',
+        activeBg: 'bg-[#1b2030]',
+        activeBorder: 'border-[#5b6a92]',
+        activeText: 'text-[#c8d4f0]',
+        glowClass: 'shadow-[0_0_12px_rgba(139,152,184,0.25)]',
+        icon: <Layers size={13} />,
+        padNumber: index + 1,
+      }
+    );
+  });
+  const hasAnySolo = stemIds.some((s) => mixerState[s]?.solo);
 
   return (
     <div className="bg-[#0e1015] border-b border-[#1c1e26] px-3 py-1.5 flex flex-col select-none z-20">
@@ -237,9 +277,12 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-4 gap-2">
-          {STEM_CONFIGS.map((cfg) => {
-            const state = mixerState[cfg.id];
+        <div
+          className="grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${visibleConfigs.length}, minmax(0, 1fr))` }}
+        >
+          {visibleConfigs.map((cfg) => {
+            const state = mixerState[cfg.id] ?? { muted: false, solo: false, volume: 1 };
             const isAudible = hasAnySolo ? state.solo : !state.muted;
 
             return (
@@ -340,6 +383,37 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
         </div>
       )}
 
+      {/* Qualitaetsprofil (nur die Profile, die der Kern meldet) */}
+      {profiles.length > 0 && (
+        <div className="mt-1.5 flex items-center space-x-1.5 text-[10px]">
+          <span className="uppercase tracking-wider text-neutral-500 font-bold">Profil</span>
+          {profiles.map((profile) => {
+            const active = profile.profile === selectedProfile;
+            return (
+              <button
+                key={profile.profile}
+                onClick={() => onProfileChange?.(profile.profile)}
+                disabled={!profile.available && isSeparating}
+                title={`${profile.description}
+Modell: ${profile.modelId}
+Stems: ${profile.stems.map((stem) => stem.displayName).join(', ') || '—'}${profile.available ? '' : `
+nicht nutzbar: ${profile.reason}`}`}
+                className={`px-2 py-0.5 rounded border font-semibold transition-colors ${
+                  active
+                    ? 'bg-[#00284a] border-[#00a2ff] text-[#00e5ff]'
+                    : profile.available
+                      ? 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#0088ff] hover:text-white'
+                      : 'bg-[#121419] border-[#1f222c] text-neutral-600'
+                }`}
+              >
+                {PROFILE_LABELS[profile.profile]}
+                {!profile.available && <span className="ml-1 text-[8.5px] text-neutral-500">keine Gewichte</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Separation Progress Bar (when active) */}
       {isSeparating && separationProgress && (
         <div className="mt-1.5 bg-[#12141c] p-2 rounded border border-[#0088ff]/40 flex flex-col space-y-1">
@@ -347,8 +421,19 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             <span className="text-[#00e5ff] font-medium animate-pulse">
               {separationProgress.phaseText}
             </span>
-            <span className="font-mono text-white font-bold">
-              {separationProgress.percent}%
+            <span className="flex items-center space-x-2">
+              <span className="font-mono text-white font-bold">
+                {separationProgress.percent}%
+              </span>
+              {onCancelSeparation && (
+                <button
+                  onClick={onCancelSeparation}
+                  className="px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] text-[10px] font-semibold transition-colors"
+                  title="Bricht den Separations-Job ab – das Original bleibt unverändert, kein halbfertiger Stem wird übernommen."
+                >
+                  Abbrechen
+                </button>
+              )}
             </span>
           </div>
           <div className="w-full h-1.5 bg-[#1a1c26] rounded-full overflow-hidden">

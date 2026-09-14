@@ -54,6 +54,14 @@ export interface RoFormerTransportConfig {
   /** Directory holding checkpoint/config files. */
   modelStoreDir?: string;
   env?: Record<string, string>;
+  /**
+   * Strictness of the availability probe. Default `true` (production): the
+   * runtime counts as available only when the interpreter can import `torch`,
+   * so a job is never started against a runtime that dies on the first import.
+   * Contract tests drive a protocol stub that needs no torch and set this to
+   * `false` – they still exercise the real transport code.
+   */
+  requireTorch?: boolean;
 }
 
 export interface RoFormerSeparatorOptions extends RoFormerTransportConfig {
@@ -116,12 +124,18 @@ export class RoFormerSeparator implements IStemSeparator {
       };
     }
     const python = this.config.pythonCommand ?? 'python3';
-    const probe = await probeExecutable(python, ['-c', 'import torch; print(torch.__version__)']);
+    const requiresTorch = this.config.requireTorch !== false;
+    const probe = await probeExecutable(
+      python,
+      requiresTorch ? ['-c', 'import torch; print(torch.__version__)'] : ['-c', 'print(1)']
+    );
     const adapter = this.config.adapterScript;
     return {
       available: probe.found && Boolean(adapter),
       reason: !probe.found
-        ? `Python/PyTorch-Laufzeit nicht verfügbar (${python})`
+        ? requiresTorch
+          ? `Python/PyTorch-Laufzeit nicht verfügbar (${python})`
+          : `Python-Laufzeit nicht verfügbar (${python})`
         : !adapter
           ? 'Adapter-Skript python/bsroformer_inference.py ist nicht konfiguriert'
           : undefined,

@@ -1,0 +1,31 @@
+# Zeilenenden fest auf LF.
+#
+# Grund: `npm run stems:gate:notebook -- --check` (CI) vergleicht das aus
+# colab/*.md gebaute .ipynb mit der eingecheckten Datei. Bei git-Checkout mit
+# core.autocrlf=true (auf Windows-Workstations häufig) bekommen beide Dateien
+# CRLF, der Builder schreibt aber LF – die Prüfung wäre dann rot, ohne dass
+# inhaltlich etwas falsch wäre. Ein `*.ipynb text eol=lf` allein reicht nicht,
+# weil auch die .md verglichen und eingebettet wird.
+* text=auto eol=lf
+
+# Binäres niemals textuell behandeln (sonst „korrigiert" Git Zeilenenden darin)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ckpt binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.node binary
+*.gz binary
+*.zip binary
+*.7z binary
+*.dll binary
+*.exe binary
+*.dylib binary
+*.so binary

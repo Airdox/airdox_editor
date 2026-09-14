@@ -1,5 +1,9 @@
 'use strict';
 
+// @requires: python, demucs
+// Läuft nur mit installierter Demucs-Umgebung (npm run stems:setup).
+// Der Test-Runner überspringt diese Datei sonst sauber statt rot.
+
 /**
  * Real-file Demucs acceptance test.
  * Input to production inference: ONE finished mixture.wav only.

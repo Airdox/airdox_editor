@@ -9,7 +9,47 @@ const { access, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const os = require('node:os');
 const path = require('node:path');
 
-const STEM_NAMES = ['vocals', 'drums', 'bass', 'other'];
+/**
+ * Stem-Namen des Vorschau-Pfads – NICHT mehr als Konstante hartgeschrieben.
+ *
+ * Die Liste kommt aus dem Model-Katalog (`src/stems/modelCatalog.json`,
+ * Eintrag der Familie `htdemucs`): `stemOrder` ist der einzige Ort, an dem
+ * festgelegt wird, welches Modell welche Stems liefert. Der Fallback unten ist
+ * nur die Notfall-Leine, wenn der Katalog nicht gelesen werden kann (z. B.
+ * unvollständiges Paket) – und er wird von
+ * `tests/stem-engine-ipc-contract.test.ts` gegen den Katalog geprüft, damit er
+ * nicht schleichend von dem abweicht, was das Modell tatsächlich schreibt.
+ */
+const FALLBACK_STEM_NAMES = ['drums', 'bass', 'other', 'vocals'];
+
+function readCatalog(repoRoot) {
+  const candidates = [
+    path.join(repoRoot || path.join(__dirname, '..'), 'src', 'stems', 'modelCatalog.json'),
+    path.join(__dirname, '..', 'src', 'stems', 'modelCatalog.json'),
+  ];
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(require('node:fs').readFileSync(file, 'utf8'));
+      if (Array.isArray(parsed?.models) && parsed.models.length) return parsed.models;
+    } catch {
+      /* nächster Kandidat */
+    }
+  }
+  return null;
+}
+
+/** `stemOrder` des Deskriptors, der ein Demucs-Modell bedient (nach `--name`). */
+function stemNamesForModel(model, repoRoot) {
+  const models = readCatalog(repoRoot);
+  if (!models) return [...FALLBACK_STEM_NAMES];
+  const byVersion = models.find((entry) => entry.family === 'htdemucs' && entry.version === model);
+  const byId = models.find((entry) => entry.family === 'htdemucs' && entry.id === model);
+  const entry = byVersion || byId || models.find((candidate) => candidate.family === 'htdemucs');
+  const order = Array.isArray(entry?.stemOrder) ? entry.stemOrder : null;
+  return order && order.length ? [...order] : [...FALLBACK_STEM_NAMES];
+}
+
+const STEM_NAMES = stemNamesForModel('htdemucs_ft', undefined);
 const FT_WEIGHT_FILES = [
   'f7e0c4bc-ba3fe64a.th',
   'd12395a8-e57c48e6.th',
@@ -249,7 +289,8 @@ async function separateWav(wavBytes, options = {}) {
     await run(python, buildDemucsArgs(inputPath, outputRoot, model), options.onProgress, onLog);
     const songDir = path.join(outputRoot, model, 'input-mix');
     const result = { model, stems: {} };
-    for (const stem of STEM_NAMES) {
+    const stemNames = stemNamesForModel(model, repoRoot);
+    for (const stem of stemNames) {
       const stemPath = path.join(songDir, `${stem}.wav`);
       if (!await exists(stemPath)) {
         onLog?.('error', 'STEMS', `Demucs-Ausgabe fehlt: ${stem}.wav`, { songDir });
@@ -278,6 +319,6 @@ async function separateWav(wavBytes, options = {}) {
 }
 
 module.exports = {
-  STEM_NAMES, FT_WEIGHT_FILES, buildDemucsArgs, defaultPythonCandidates,
+  STEM_NAMES, FALLBACK_STEM_NAMES, stemNamesForModel, readCatalog, FT_WEIGHT_FILES, buildDemucsArgs, defaultPythonCandidates,
   probePython, inspectDemucsEnvironment, resolvePython, separateWav,
 };

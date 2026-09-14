@@ -1,5 +1,7 @@
 export {};
 
+import type { StemDesktopApi } from '../stems/transportTypes';
+
 declare global {
   interface Window {
     rekordboxDesktop?: {
@@ -69,6 +71,13 @@ declare global {
         model: string;
         stems: Record<'vocals' | 'drums' | 'bass' | 'other', Uint8Array>;
       }>;
+      /**
+       * Job-basierte Stem-Engine (`src/stems`) – Profilwahl, Cache,
+       * Job-Metadaten, Abbruch/Pause. Optional: im Browser gibt es diesen
+       * Zweig nicht, dort übernimmt der HTTP-Transport (server.ts) mit
+       * demselben Vertrag.
+       */
+      stemEngine?: StemDesktopApi;
       // --- Diagnostics / logging bridge ---
       writeLogEntries(entries: unknown[]): void;
       getLogInfo(): Promise<{

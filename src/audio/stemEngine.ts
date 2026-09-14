@@ -10,6 +10,7 @@
 import { BufferFactory } from './editingEngine';
 import { logger } from '../utils/logger';
 import { separateChannelsStft } from './stftSeparator';
+import type { StemJobView, StemServiceStatus } from '../stems/transportTypes';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 
@@ -56,9 +57,74 @@ export interface TrackStems {
   /** Absolute peak of the source material used as per-stem ceiling. */
   sourcePeak?: number;
   /** Actual engine used, surfaced so tests/UI never confuse fallback DSP with Demucs. */
-  separationMethod?: 'DEMUCS_HTDEMUCS_FT' | 'LOCAL_SPECTRAL_FALLBACK';
+  separationMethod?: 'DEMUCS_HTDEMUCS_FT' | 'LOCAL_SPECTRAL_FALLBACK' | 'STEM_ENGINE_MODEL';
   /** Why Demucs was unavailable when the local fallback produced this result. */
   fallbackReason?: string;
+  /**
+   * Stem-Liste exakt so, wie das Modell-Deskriptor-`stemOrder` sie liefert.
+   * Die vier Legacy-Felder oben sind die Teilmenge, die der 4-Slot-Mixer des
+   * Decks darstellt; die UI rendert ihre Buttons anhand dieser Liste und
+   * eben nicht anhand einer Konstanten.
+   */
+  stemIds?: string[];
+  /** Vollständige Zuordnung Stem-Id → Buffer (Superset von `stemIds`). */
+  stemsById?: Record<string, AudioBuffer>;
+  /** Model id from the catalog that produced these stems. */
+  modelId?: string;
+  /** Quality profile of the run (new engine only). */
+  profile?: StemQualityProfile;
+  /** Engine job id – allows re-reading `job.json` and single stems later. */
+  jobId?: string;
+  /** Technical validation of the job (new engine only). */
+  validationPass?: boolean;
+  recombinationErrorDb?: number;
+  /** True only when a trained checkpoint produced the stems (never for doubles). */
+  trainedModel?: boolean;
+}
+
+/**
+ * Quality profiles of the new engine. `PREVIEW` intentionally stays on the
+ * proven Demucs path; the two HQ profiles run BS-RoFormer through the engine.
+ */
+export type StemQualityProfile = 'PREVIEW' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
+
+export const STEM_QUALITY_PROFILES: StemQualityProfile[] = ['PREVIEW', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+
+export interface StemEngineProfileInfo {
+  profile: StemQualityProfile;
+  modelId: string;
+  /** Display label per stem – always resolved from the model descriptor. */
+  stems: { id: string; displayName: string }[];
+  available: boolean;
+  reason?: string;
+  description: string;
+}
+
+export interface StemEngineInfo {
+  ok: boolean;
+  usable: boolean;
+  profiles: StemEngineProfileInfo[];
+  defaultProfile: StemQualityProfile;
+  transport: 'desktop-ipc' | 'http' | 'none';
+  reason?: string;
+  code?: string;
+}
+
+export interface EngineSeparationOptions {
+  profile?: StemQualityProfile;
+  modelId?: string;
+  onProgress?: StemProgressCallback;
+  /**
+   * Renderer-side abort handle. Auf dem HTTP-Pfad wird es ausgepollt und löst
+   * `POST /api/stems/jobs/:id/cancel` aus. Auf dem Desktop-Pfad läuft Abbruch
+   * über `stemEngine.cancelActiveEngineJob()` (der „Abbrechen"-Button im Deck),
+   * damit der Weg genau einer Quelle gehört. Abbruch beendet mit Status
+   * CANCELLED, lässt das Original unverändert und markiert keinen halbfertigen
+   * Stem als fertig.
+   */
+  signal?: { aborted: boolean };
+  /** Overridden by tests/CI: smaller chunks keep a run deterministic. */
+  chunkSizeSamples?: number;
 }
 
 /**
@@ -188,6 +254,8 @@ function createStemBuffer(
 class StemEngine {
   private stemsCache: Map<string, TrackStems> = new Map();
   private isProcessing: boolean = false;
+  /** Laufender Engine-Job (für Abbruch aus der UI). */
+  private activeJobId?: string;
 
   /**
    * Retrieves cached stems for a track by its unique checksum or track ID.
@@ -529,6 +597,223 @@ class StemEngine {
   }
 
   /**
+   * Status der neuen Engine (`src/stems`) über den jeweils verfügbaren
+   * Transport: IPC im Desktop, HTTP gegen den Dev-/API-Server im Browser.
+   * Liefert Profile, Modelle und – entscheidend – die Stem-Listen aus dem
+   * Modell-Katalog, damit die UI nichts über die Anzahl der Stems annimmt.
+   */
+  public async getEngineInfo(): Promise<StemEngineInfo> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (desktop?.getStemEngineStatus) {
+      const result = await desktop.getStemEngineStatus();
+      if (result.ok === false) {
+        return {
+          ok: false,
+          usable: false,
+          profiles: [],
+          defaultProfile: 'PREVIEW',
+          transport: 'desktop-ipc',
+          reason: result.message,
+          code: result.code,
+        };
+      }
+      return this.mapEngineStatus(result.data, 'desktop-ipc');
+    }
+    try {
+      const response = await fetch('/api/stems/engine');
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        data?: StemServiceStatus;
+      };
+      if (!response.ok || payload.ok !== true || !payload.data) {
+        return {
+          ok: false,
+          usable: false,
+          profiles: [],
+          defaultProfile: 'PREVIEW',
+          transport: 'http',
+          reason: payload.message ?? `Stem-Service antwortet mit HTTP ${response.status}.`,
+        };
+      }
+      return this.mapEngineStatus(payload.data, 'http');
+    } catch (error) {
+      return {
+        ok: false,
+        usable: false,
+        profiles: [],
+        defaultProfile: 'PREVIEW',
+        transport: 'none',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private mapEngineStatus(status: StemServiceStatus, transport: 'desktop-ipc' | 'http'): StemEngineInfo {
+    return {
+      ok: status.ok,
+      usable: status.usable,
+      defaultProfile: status.defaultProfile,
+      transport,
+      profiles: status.profiles.map((profile) => ({
+        profile: profile.profile,
+        modelId: profile.modelId,
+        stems: profile.stems.map((stem) => ({ id: stem.id, displayName: stem.displayName })),
+        available: profile.available,
+        reason: profile.reason,
+        description: profile.description,
+      })),
+    };
+  }
+
+  /**
+   * Separation über die neue Engine. Der Aufruf ist job-basiert: die Job-Id
+   * liegt sofort vor (Abbruch ist also möglich, bevor das erste Sample
+   * gerechnet ist), der Fortschritt läuft über den Callback mit, und ein
+   * Abbruch übernimmt bewusst keine halbfertigen Stems.
+   */
+  public async separateWithEngine(
+    sourceBuffer: AudioBuffer,
+    trackId: string,
+    originalSha256: string,
+    options: EngineSeparationOptions = {}
+  ): Promise<TrackStems> {
+    const cached = this.getCachedStems(trackId, originalSha256);
+    if (cached) {
+      options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
+      return cached;
+    }
+    if (this.isProcessing) throw new Error('Es läuft bereits eine Separation.');
+
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    const duration = sourceBuffer.duration;
+    const profile = options.profile ?? 'HIGH_QUALITY';
+    this.isProcessing = true;
+    const startedAt = Date.now();
+    try {
+      options.onProgress?.({ percent: 1, phaseText: `Arbeitskopie für Profil ${profile} vorbereiten…`, processedSeconds: 0, totalSeconds: duration });
+      const wav = encodeStereoFloatWav(sourceBuffer);
+      const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+
+      let job: StemJobView;
+      if (desktop?.startStemJob) {
+        const started = await desktop.startStemJob({ bytes: wav, trackName, profile, modelId: options.modelId });
+        if (started.ok === false) throw new Error(`${started.code}: ${started.message}`);
+        job = started.data;
+        this.activeJobId = job.jobId;
+        const detach = desktop.onStemJobProgress?.((event) => {
+          if (!event || event.job.jobId !== job.jobId) return;
+          options.onProgress?.({
+            percent: Math.round(event.job.percent),
+            phaseText: event.job.phase,
+            processedSeconds: event.job.processedSeconds,
+            totalSeconds: event.job.totalSeconds || duration,
+          });
+        });
+        try {
+          const waited = await desktop.waitStemJob(job.jobId);
+          if (waited.ok === false) throw new Error(`${waited.code}: ${waited.message}`);
+          job = waited.data;
+        } finally {
+          detach?.();
+        }
+      } else {
+        const response = await fetch('/api/stems/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bytes: base64FromBytes(wav), trackName, profile, modelId: options.modelId }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; data?: StemJobView };
+        if (!response.ok || !payload.ok || !payload.data) throw new Error(payload.message ?? `Stem-Service antwortet mit HTTP ${response.status}.`);
+        job = payload.data;
+        this.activeJobId = job.jobId;
+        // Kein Event-Kanal im Browser-Rundlauf: fortlaufend abfragen.
+        for (;;) {
+          if (options.signal?.aborted) {
+            await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}/cancel`, { method: 'POST' }).catch(() => undefined);
+          }
+          const poll = await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}`);
+          const polled = (await poll.json().catch(() => ({}))) as { ok?: boolean; data?: StemJobView; message?: string };
+          if (!poll.ok || !polled.ok || !polled.data) throw new Error(polled.message ?? `Stem-Job-Abfrage fehlgeschlagen (HTTP ${poll.status}).`);
+          job = polled.data;
+          options.onProgress?.({
+            percent: Math.round(job.percent),
+            phaseText: job.phase,
+            processedSeconds: job.processedSeconds,
+            totalSeconds: job.totalSeconds || duration,
+          });
+          if (job.status === 'COMPLETED' || job.status === 'CANCELLED' || job.status === 'FAILED') break;
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+      }
+
+      if (job.status === 'CANCELLED') {
+        throw new Error(job.error?.message ?? 'Die Separation wurde abgebrochen; es wurden keine Stems übernommen.');
+      }
+      if (job.status !== 'COMPLETED') {
+        throw new Error(`Stem-Job endete mit Status ${job.status}${job.error ? ` (${job.error.code}: ${job.error.message})` : ''}`);
+      }
+      const stemIds = job.stems;
+      if (!stemIds.length) throw new Error(`Modell ${job.modelId} meldet keine Stems – Deskriptor unvollständig?`);
+
+      options.onProgress?.({ percent: 96, phaseText: `${stemIds.length} Stems dekodieren…`, processedSeconds: duration, totalSeconds: duration });
+      const stemsById: Record<string, AudioBuffer> = {};
+      for (const stemId of stemIds) {
+        if (desktop) {
+          const read = await desktop.readStemJobStem!(job.jobId, stemId);
+          if (read.ok === false) throw new Error(`${read.code}: ${read.message}`);
+          stemsById[stemId] = await decodeWavToAudioBuffer(read.data.wav);
+        } else {
+          const response = await fetch(
+            `/api/stems/jobs/${encodeURIComponent(job.jobId)}/stems/${encodeURIComponent(stemId)}`
+          );
+          if (!response.ok) throw new Error(`Stem ${stemId} konnte nicht geladen werden (HTTP ${response.status}).`);
+          stemsById[stemId] = await decodeWavToAudioBuffer(new Uint8Array(await response.arrayBuffer()));
+        }
+      }
+
+      const result = buildTrackStems({ trackId, originalSha256, job, stemsById, profile });
+      this.cacheStems(trackId, result, originalSha256);
+      options.onProgress?.({
+        percent: 100,
+        phaseText: `${stemIds.length} Stems mit ${result.modelId} fertig`,
+        processedSeconds: duration,
+        totalSeconds: duration,
+      });
+      logger.info('STEMS', `Stem-Job ${job.jobId} fertig (${Date.now() - startedAt} ms)`, {
+        trackId,
+        profile,
+        model: result.modelId,
+        stems: stemIds,
+        cacheHit: job.cacheHit,
+        validation: result.validationPass,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } finally {
+      this.activeJobId = undefined;
+      this.isProcessing = false;
+    }
+  }
+
+  /** Bricht den aktuell laufenden Engine-Job ab (UI-Button „Abbrechen"). */
+  public cancelActiveEngineJob(reason = 'Abbruch durch Benutzer'): boolean {
+    const jobId = this.activeJobId;
+    if (!jobId) return false;
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (desktop?.cancelStemJob) {
+      void desktop.cancelStemJob(jobId, reason);
+      return true;
+    }
+    void fetch(`/api/stems/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    }).catch(() => undefined);
+    return true;
+  }
+
+  /**
    * Slices a sub-region across all 4 stems for creating palette clips.
    */
   public sliceStems(
@@ -571,6 +856,83 @@ class StemEngine {
       duration,
     };
   }
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** Decodes stem WAV bytes back into an AudioBuffer (Web Audio is the only renderer decoder). */
+async function decodeWavToAudioBuffer(bytes: Uint8Array): Promise<AudioBuffer> {
+  const AudioCtx =
+    typeof window !== 'undefined'
+      ? window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      : undefined;
+  if (!AudioCtx) throw new Error('Web Audio API ist für das Dekodieren der Stem-Ausgabe erforderlich.');
+  const context = new AudioCtx();
+  try {
+    const exact = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    return await context.decodeAudioData(exact);
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Maps a finished engine job onto the editor's stem model.
+ *
+ * The four deck slots stay the mixer's contract and the descriptor list is
+ * preserved in `stemIds`/`stemsById`. A model whose stems cannot be mapped onto
+ * those slots fails loudly here instead of silently dropping a stem – that
+ * silent drop is exactly what the hardcoded 4-stem constant used to hide.
+ */
+function buildTrackStems(input: {
+  trackId: string;
+  originalSha256: string;
+  job: StemJobView;
+  stemsById: Record<string, AudioBuffer>;
+  profile: StemQualityProfile;
+}): TrackStems {
+  const { trackId, originalSha256, job, stemsById, profile } = input;
+  const slots = ['vocals', 'drums', 'bass', 'other'];
+  const unmapped = job.stems.filter((stem) => !slots.includes(stem));
+  if (unmapped.length) {
+    throw new Error(
+      `Modell ${job.modelId} liefert Stems, die der Deck-Mixer nicht darstellen kann: ${unmapped.join(', ')}. ` +
+        'Der Mixer kennt aktuell die vier Slots vocals/drums/bass/other.'
+    );
+  }
+  const missing = slots.filter((stem) => !stemsById[stem]);
+  if (missing.length) {
+    throw new Error(`Modell ${job.modelId} liefert nicht die vier Stems des Deck-Mixers (es fehlen: ${missing.join(', ')}).`);
+  }
+  const first = stemsById[job.stems[0]];
+  return {
+    trackId,
+    originalSha256,
+    duration: first.duration,
+    sampleRate: first.sampleRate,
+    channels: first.numberOfChannels,
+    vocals: stemsById.vocals,
+    drums: stemsById.drums,
+    bass: stemsById.bass,
+    other: stemsById.other,
+    separatedAt: Date.now(),
+    separationMethod: 'STEM_ENGINE_MODEL',
+    stemIds: [...job.stems],
+    stemsById,
+    modelId: job.modelId,
+    profile,
+    jobId: job.jobId,
+    validationPass: job.result?.validationPass,
+    recombinationErrorDb: job.result?.recombinationErrorDb,
+    trainedModel: job.result?.trainedModel,
+  };
 }
 
 export const stemEngine = new StemEngine();

@@ -12,6 +12,7 @@ const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
 const { installStemEngine } = require('./stemInstaller.cjs');
+const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -314,6 +315,31 @@ ipcMain.handle('stems:separate', async (_event, wavBytes) => {
       Object.entries(result.stems).map(([name, bytes]) => [name, new Uint8Array(bytes)])
     ),
   };
+});
+
+// --- Neue Engine (src/stems) ──────────────────────────────────────────────
+// Job-basierte Separation mit Profilwahl, Cache, Abbruch/Pause und
+// Deskriptor-abhängiger Stem-Liste. Läuft im Main-Prozess, der Renderer
+// bekommt Fortschritt über `stems:job-progress` und lädt Stems einzeln.
+const stemEngineHost = registerStemEngineIpc({
+  repoRoot: path.join(__dirname, '..'),
+  // Dieselbe Lage wie der Log-Ordner: %APPDATA%/airdox_SMART_Editor/stems/…
+  userDataDir: path.join(app.getPath('appData'), app.getName()),
+  logger,
+  ipcMain,
+  broadcast: (channel, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload);
+      } catch {
+        /* Fenster schließt gerade */
+      }
+    }
+  },
+});
+logger.info('SYSTEM', stemEngineHost.available ? 'Stem-Engine (Teil-1-Kern) aktiv' : 'Stem-Engine-Kern nicht verfügbar', {
+  bundle: stemEngineHost.bundlePath,
+  reason: stemEngineHost.reason,
 });
 
 // --- IPC-Handler bleiben unverändert ---
