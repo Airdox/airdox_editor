@@ -9,6 +9,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
+import { StemJobService } from './src/stems/stemJobService';
 // Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
 // Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
 // und im esbuild-CJS-Bundle (dist/server.cjs).
@@ -190,6 +191,144 @@ async function startServer() {
       }
     }
   );
+
+  // --- Neue Stem-Engine (src/stems) ueber HTTP --------------------------------
+  // Derselbe StemJobService wie im Electron-Main-Prozess, nur anderer
+  // Transport: Browser/Dev-Server sprechen diese Endpunkte, der Desktop
+  // dieselbenKontrakt über IPC. Ein eigener Body-Parser, weil ein float32-Stereo-
+  // Mix schnell zweistellige MB-Zahlen erreicht und der globale Limit bei 10 MB
+  // liegt.
+  const stemsDataRoot = process.env.AIRDOX_STEMS_ROOT || path.join(process.cwd(), 'stem-engine-data');
+  const stemJobs = new StemJobService({
+    root: stemsDataRoot,
+    env: process.env as Record<string, string | undefined>,
+    // Dasselbe (und nur per Env gesetzte) Test-Double-Gate wie im
+    // Electron-Host: Produktionsläufe können es nicht erreichen.
+    allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    backend: {
+      pythonCommand: process.env.AIRODOX_STEM_PYTHON,
+      nativeCommand: process.env.AIRODOX_AUDIOCPP_CLI,
+      adapterScript: path.join(process.cwd(), 'python', 'bsroformer_inference.py'),
+      referenceSourceDir: process.env.AIRODOX_MSST_DIR,
+    },
+    logger: {
+      debug: (category, message, details) => logger.debug(category, message, details),
+      info: (category, message, details) => logger.info(category, message, details),
+      warn: (category, message, details) => logger.warn(category, message, details),
+      error: (category, message, details) => logger.error(category, message, details),
+    },
+  });
+  app.use('/api/stems/jobs', express.json({ limit: '500mb' }));
+
+  const stemErrorPayload = (error: unknown) => {
+    const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : 'INFERENCE_FAILED';
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false as const, code, message };
+  };
+
+  app.get('/api/stems/engine', async (_req, res) => {
+    try {
+      return res.json({ ok: true, data: await stemJobs.status() });
+    } catch (error) {
+      return res.status(500).json(stemErrorPayload(error));
+    }
+  });
+
+  app.post('/api/stems/jobs', async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as {
+        bytes?: string;
+        inputPath?: string;
+        trackName?: string;
+        profile?: 'PREVIEW' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
+        modelId?: string;
+        stems?: string[];
+        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
+        precision?: 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
+        overlap?: number;
+        chunkSizeSamples?: number;
+        clipMode?: 'none' | 'rescale';
+        dcRemoval?: boolean;
+      };
+      const bytes = typeof body.bytes === 'string' ? new Uint8Array(Buffer.from(body.bytes, 'base64')) : undefined;
+      const job = await stemJobs.start({
+        bytes,
+        inputPath: typeof body.inputPath === 'string' ? body.inputPath : undefined,
+        trackName: typeof body.trackName === 'string' ? body.trackName.slice(0, 120) : undefined,
+        profile: body.profile,
+        modelId: body.modelId,
+        stems: Array.isArray(body.stems) ? body.stems : undefined,
+        device: body.device,
+        precision: body.precision,
+        overlap: typeof body.overlap === 'number' ? body.overlap : undefined,
+        chunkSizeSamples: typeof body.chunkSizeSamples === 'number' ? body.chunkSizeSamples : undefined,
+        clipMode: body.clipMode,
+        dcRemoval: body.dcRemoval,
+      });
+      return res.status(202).json({ ok: true, data: job });
+    } catch (error) {
+      const payload = stemErrorPayload(error);
+      logger.error('STEMS', `HTTP Stem-Job abgelehnt: ${payload.message}`, { code: payload.code });
+      return res.status(400).json(payload);
+    }
+  });
+
+  app.get('/api/stems/jobs', (_req, res) => res.json({ ok: true, data: stemJobs.listJobs() }));
+
+  app.get('/api/stems/jobs/:id', (req, res) => {
+    const job = stemJobs.getJob(req.params.id);
+    if (!job) return res.status(404).json({ ok: false, code: 'INFERENCE_FAILED', message: `Unbekannter Stem-Job ${req.params.id}` });
+    return res.json({ ok: true, data: job });
+  });
+
+  app.get('/api/stems/jobs/:id/events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    const jobId = req.params.id;
+    const current = stemJobs.getJob(jobId);
+    if (current) res.write(`data: ${JSON.stringify({ type: 'progress', job: current })}\n\n`);
+    const detach = stemJobs.onEvent((event) => {
+      if (event.job.jobId !== jobId) return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (event.type !== 'progress') {
+        detach();
+        res.end();
+      }
+    });
+    req.on('close', detach);
+  });
+
+  app.post('/api/stems/jobs/:id/cancel', (req, res) => {
+    const reason = typeof (req.body as { reason?: unknown })?.reason === 'string' ? (req.body as { reason: string }).reason.slice(0, 200) : undefined;
+    return res.json({ ok: true, data: { accepted: stemJobs.cancel(req.params.id, reason) } });
+  });
+
+  app.post('/api/stems/jobs/:id/pause', (req, res) => res.json({ ok: true, data: { accepted: stemJobs.pause(req.params.id) } }));
+  app.post('/api/stems/jobs/:id/resume', (req, res) => res.json({ ok: true, data: { accepted: stemJobs.resume(req.params.id) } }));
+
+  app.get('/api/stems/jobs/:id/metadata', async (req, res) => {
+    try {
+      return res.json({ ok: true, data: { metadata: await stemJobs.jobMetadata(req.params.id) } });
+    } catch (error) {
+      return res.status(404).json(stemErrorPayload(error));
+    }
+  });
+
+  // Ein Stem pro Request: ein 4-Stem-Ergebnis sind bei 3 Minuten float32 schnell
+  // 250 MB – der Renderer holt sich die Dateien deshalb einzeln.
+  app.get('/api/stems/jobs/:id/stems/:stemId', async (req, res) => {
+    try {
+      const bytes = await stemJobs.stemBytes(req.params.id, req.params.stemId);
+      res.setHeader('Content-Type', 'audio/wav');
+      res.setHeader('Content-Length', String(bytes.byteLength));
+      return res.end(bytes);
+    } catch (error) {
+      const payload = stemErrorPayload(error);
+      return res.status(payload.code === 'STEM_CONFIG_INVALID' ? 409 : 404).json(payload);
+    }
+  });
 
   app.use(express.json({ limit: '10mb' }));
 

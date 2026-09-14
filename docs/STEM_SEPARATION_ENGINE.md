@@ -57,12 +57,15 @@ Ordner werden vom Engine-Aufruf konfiguriert (`workingRoot`, `outputRoot`,
 
 ---
 
-## 3. Modulübersicht (`src/stems/`, 5.080 Zeilen inkl. Backends)
+## 3. Modulübersicht (`src/stems/`, inkl. Backends)
 
 | Modul | Aufgabe |
 |---|---|
 | `types.ts` | Alle Verträge: `ModelDescriptor`, `Stem`, `SeparationSettings`, `BoundaryContinuityReport`, `StemErrorCode` (20 Codes) |
 | `stemSeparationEngine.ts` | `StemSeparationEngine`: Orchestrierung, Profile, Backend-Wahl, Abbruch, Cache, Historie |
+| `stemJobService.ts` | `StemJobService`: job-orientierte Schicht für den Editor (Job-Id sofort, Events, Einzel-Stem-Download, Staging) |
+| `transportTypes.ts` | Der einzige Datervertrag über IPC/HTTP (`StemJobView`, `StemServiceStatus`, `StemDesktopApi`) – frei von Node-Importen |
+| `nodeBridge.ts` | Einstiegspunkt für das CommonJS-Bundle des Main-Prozesses (`dist/stems/node-bridge.cjs`) |
 | `modelRegistry.ts` | `ModelRegistry` — lädt/validiert `modelCatalog.json`, Profil-Auflösung, `parametersFor()`, Content-Hash |
 | `modelCatalog.json` | Datengetriebener Modell-Katalog (URLs, Hashes, `stemOrder`, `qualityProfile`) |
 | `modelManager.ts` | `ModelManager` — Verfügbarkeit, sha256-Prüfung, Download-Freigabe, `listStatus()` |
@@ -288,11 +291,22 @@ enthält je Prüfung `pass`, Titel, Details und Messwerte.
 ## 13. Tests
 
 ```bash
-npm run test:stems          # Registry + Backend-Vertrag + Technical Gate
+npm test                    # komplette Suite über scripts/run-tests.mjs (Fund + SKIP-Logik)
+npm run test:stems:release  # wie test:stems, aber ein SKIP ist ein Fehler (Freigabe)
+npm run test:stems          # Registry + Backend-Vertrag + Technical Gate + Anbindung
 npm run test:stems:live     # echte BS-RoFormer-Architektur über den Adapter
 npm run test:stems:all      # beides
 npm run lint                # tsc --noEmit
 ```
+
+`scripts/run-tests.mjs` sammelt die Tests per Dateisuche (`tests/**/*.test.*`) –
+neue Testdateien brauchen keinen Eintrag in `package.json` mehr. Eine Zeile, die
+von parallelen Branches umgeschrieben werden muss, war die Ursache für doppelt
+vorhandene `"test"`-Schlüssel und damit für ungültiges JSON (CI-Abbruch bereits
+bei `npm ci`). Umgebungsabhängige Suiten erklären sich im Dateikopf:
+`// @requires: python, torch, demucs, model, network` → ohne diese Voraussetzungen
+meldet der Runner SKIP statt Fehler; mit `--fail-on-skip` wird ein SKIP zum
+Freigabe-Hindernis (so läuft `test:stems:live`).
 
 | Suite | Gruppen | Belegt |
 |---|---|---|
@@ -300,6 +314,8 @@ npm run lint                # tsc --noEmit
 | `tests/stem-separation-backend-contract.test.ts` | 10 | JSONL-Protokoll, `stem_order`-Prüfung, SIGTERM, Exit-Code-Map, GPU→CPU-Fallback, native Verträge, `BACKEND_UNAVAILABLE` |
 | `tests/stem-separation-engine-gate.test.ts` | 19 | Gesamtdurchlauf, Read-only-Nachweis, Resampling, Stereo, Grenzmetrik, harte Schnitte vs. Overlap-Add, Backend-Aufrufzählung, Job-Metadaten, Cache, Abbruch/Pause, Fehlermatrix, Profile, Historie, Recovery, Gate-Bericht |
 | `tests/stem-separation-bsroformer-live.test.ts` | 8 | echte Architektur + Protokoll, keine stillen Zufallsgewichte, `stem_order`-Widerspruch, Overlap-Add auf echter Modellausgabe, Abbruch des echten Prozesses, Original-Hash |
+| `tests/stem-job-service.test.ts` | 10 | Job-Ansicht sofort, Stem-Liste aus dem Deskriptor (3-Stem-Modell), monotones Progress, Einzel-Stem-Download, `job.json`, Cache, Abbruch, Pause/Fortsetzung, Bridge-Ergebnisse, Staging statt Original |
+| `tests/stem-engine-ipc-contract.test.ts` | 8 | Katalog→`STEM_NAMES`, preload↔Host-Kanaleindeutigkeit, `StemDesktopApi`↔preload 1:1, browser-sicherer Vertrag, Brücke ohne Build, Request-Filterung, End-to-End über das echte Bundle, UI-Routing |
 
 Alle Suiten überspringen sauber, wenn Python/PyTorch fehlen.
 
@@ -350,6 +366,19 @@ Bis dahin gilt: **technisch funktionsfähig, Qualität offen.**
 * `modelHash` steht im Katalog auf `"unverified"`, solange die Gewichte nicht
   geladen und geprüft wurden; das Setup-Skript liefert den zu hinterlegenden
   sha256.
-* GUI/IPC-Anbindung des bestehenden Editors (`electron/demucsRunner.cjs`,
-  `src/audio/stemEngine.ts` mit hart kodierter 4-Stem-Liste und Demucs-Gewichten)
-  ist bewusst noch nicht umgestellt — Teil 1 bleibt kernfokussiert.
+* **Anbindung an den Editor ist erfolgt** (Schritt 3 aus Teil 1 → jetzt):
+  `src/stems/stemJobService.ts` ist die job-orientierte Schicht über der Engine,
+  `src/stems/nodeBridge.ts` wird per `npm run build:stems-bridge` nach
+  `dist/stems/node-bridge.cjs` gebündelt, `electron/stemEngineBridge.cjs` registriert
+  die IPC-Kanäle (`stems:engine-status`, `stems:job-*`, `stems:job-progress`),
+  `server.ts` bedient dieselben Vorgänge über HTTP (`/api/stems/engine`,
+  `/api/stems/jobs…`). Der Renderer (`src/audio/stemEngine.ts`) wählt nach Profil:
+  `HIGH_QUALITY`/`MAXIMUM_QUALITY` über den Kern, `PREVIEW` bleibt der
+  Demucs-Pfad; die Stem-Liste kommt aus `stems.stemIds` (Deskriptor), die
+  htdemucs-Namen des Vorschau-Pfads aus `modelCatalog.json` statt aus einer
+  Konstanten. Fortschritt und „Abbrechen“ sitzen im Deck (`DeckStemsControl`).
+  Offen geblieben: Der Mischpult-Desk des Decks hat vier Slots
+  (vocals/drums/bass/other). Modelle mit anderen Stem-Mengen laufen durch die
+  Engine und werden als Job sauber validiert, aber `buildTrackStems` bricht mit
+  klarer Meldung ab, statt Stems still zu ignorieren – ein 6-Stem-oder
+  2-Stem-Mixer ist ein eigener UI-Schritt.

@@ -27,14 +27,34 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # package.json VOR der Installation prüfen: eine doppelt vorhandene
+      # „test“-Zeile (Kollisionsklasse aus parallelen Branches) macht das JSON
+      # ungültig, und `npm ci` scheitert dann mit einer kryptischen Meldung,
+      # bevor irgendein Build-Schritt läuft. Diese Prüfung nennt die Datei.
+      - name: Manifest prüfen (package.json)
+        run: npm run test:package
+
       - name: Abhängigkeiten installieren
         run: npm ci
 
       - name: TypeScript-Prüfung
         run: npm run lint
 
+      # Die Stem-Engine ist reines TypeScript und läuft ohne Python: Registry-,
+      # Backend-Vertrags-, Technical-Gate- und Job-Service-Suite fangen
+      # Engine-Regressionen ab, bevor gebaut wird. Tests mit requirement-
+      # Direktive (@requires: python/torch/model) werden sauber übersprungen.
+      - name: Stem-Engine-Prüfung (Registry, Backend-Vertrag, Technical Gate, Job-Service)
+        run: npm run test:stems
+
       - name: Renderer bauen (Vite)
         run: npm run build
+
+      # Volle Suite nur im Nachtlauf/manuell: sie enthält lang laufende
+      # Audio- und Import-Tests, die pro PR den Windows-Runner aufhalten.
+      - name: Komplette Test-Suite (Nachtlauf / manueller Lauf)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm test
 
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never

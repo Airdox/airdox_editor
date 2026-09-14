@@ -1,4 +1,9 @@
 /**
+ * @requires: python, torch, model
+ *   Diese Suite braucht Python+PyTorch und einen installierten Checkpoint
+ *   (npm run stems:setup:bsroformer). scripts/run-tests.mjs überspringt sie
+ *   sonst sauber – in CI wie auf einer Maschine ohne Modellumgebung.
+ *
  * LIVE BS-RoFormer test – real architecture, real transport, real process.
  *
  * This is the only test in the suite that runs the actual BS-RoFormer

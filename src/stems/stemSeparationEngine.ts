@@ -49,6 +49,12 @@ export const PREFERRED_PRECISION: Record<QualityProfile, ModelPrecision[]> = {
 
 export interface BackendFactoryOptions {
   nativeCommand?: string;
+  /**
+   * `false` relaxes the python availability probe to "interpreter exists".
+   * Only meaningful for the protocol stub of the contract tests; production
+   * leaves it unset so a torch-less interpreter stays unavailable.
+   */
+  requireTorch?: boolean;
   nativeDialect?: 'audio.cpp' | 'bsroformer.cpp';
   pythonCommand?: string;
   adapterScript?: string;
@@ -85,6 +91,7 @@ export function createDefaultBackendFactory(options: BackendFactoryOptions = {})
         referenceSourceDir: options.referenceSourceDir,
         modelStoreDir: options.modelStoreDir,
         env: options.env,
+        requireTorch: options.requireTorch,
       };
       if (descriptor.family === 'bs_roformer') {
         // Native first: the shipped app must not require Python (§7).

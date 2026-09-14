@@ -9,3 +9,4 @@ stem-test-output/
 .env*
 !.env.example
 logs/
+stem-engine-data/
