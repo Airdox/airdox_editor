@@ -31,7 +31,8 @@
  * weights are available; see docs/STEM_SEPARATION_ENGINE.md §14).
  */
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { restoreWriteAccess, simulateWriteDenial } from './support/permissionProbe';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { StemSeparationEngine, createDefaultBackendFactory } from '../src/stems/stemSeparationEngine';
@@ -367,23 +368,30 @@ async function run() {
   console.log('\n[ TEST ] #15 Kein Schreibrecht: klassifizierter Fehler, Original unangetastet, keine Teilschreibvorgänge sichtbar');
   const readOnlyRoot = path.join(root, 'ReadOnlyGate');
   await mkdir(readOnlyRoot, { recursive: true });
-  await chmod(readOnlyRoot, 0o500);
-  const permError = await new StemSeparationEngine({
-    workingRoot: path.join(root, 'Working'),
-    outputRoot: readOnlyRoot,
-    cacheRoot: path.join(root, 'CachePermGate'),
-    modelStoreDir: path.join(root, 'Models'),
-    allowPipelineDouble: true,
-    backendFactory: createDefaultBackendFactory({ pipelineDouble: new PipelineDoubleSeparator() }),
-  })
-    .separate({ inputPath: mixPath, modelId: 'pipeline-double-v1', trackName: 'perm_gate' })
-    .then(() => undefined, (e: unknown) => e as StemSeparationError);
-  assert.ok(permError instanceof StemSeparationError);
-  assert.equal(permError.code, 'WRITE_DENIED');
-  await chmod(readOnlyRoot, 0o700);
-  const permHashAfter = await sha256File(mixPath);
-  assert.equal(permHashAfter, crashHashBefore, 'Original muss auch nach Schreibrechte-Fehler unverändert sein');
-  console.log(`  ✓ ${permError.code}, Original unverändert`);
+  const writable = await simulateWriteDenial(readOnlyRoot);
+  if (writable) {
+    // Windows (ACL statt chmod) bzw. Root: die Simulation greift nicht. Der
+    // Fall bleibt dokumentiert übersprungen – ein rot meldendes Rechtetest-
+    // Ergebnis wäre auf dem Windows-Runner eine Falschaussage über den Code.
+    console.log('  – Schreibrechte-Simulation unwirksam (Windows/ACL oder Root): Fall übersprungen');
+  } else {
+    const permError = await new StemSeparationEngine({
+      workingRoot: path.join(root, 'Working'),
+      outputRoot: readOnlyRoot,
+      cacheRoot: path.join(root, 'CachePermGate'),
+      modelStoreDir: path.join(root, 'Models'),
+      allowPipelineDouble: true,
+      backendFactory: createDefaultBackendFactory({ pipelineDouble: new PipelineDoubleSeparator() }),
+    })
+      .separate({ inputPath: mixPath, modelId: 'pipeline-double-v1', trackName: 'perm_gate' })
+      .then(() => undefined, (e: unknown) => e as StemSeparationError);
+    assert.ok(permError instanceof StemSeparationError);
+    assert.equal(permError.code, 'WRITE_DENIED');
+    const permHashAfter = await sha256File(mixPath);
+    assert.equal(permHashAfter, crashHashBefore, 'Original muss auch nach Schreibrechte-Fehler unverändert sein');
+    console.log(`  ✓ ${permError.code}, Original unverändert`);
+  }
+  await restoreWriteAccess(readOnlyRoot);
 
   // =====================================================================
   console.log('\n[ TEST ] #16 Stem Isolation Gate End-to-End: Pipeline-Double MUSS QUALITY FAIL liefern (nie fabriziertes PASS)');

@@ -34,7 +34,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -44,6 +44,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TESTS_DIR = path.join(ROOT, 'tests');
+/** Ziel für die Ferndiagnose fehlgeschlagener Tests (CI lädt die Datei als Artefakt). */
+const FAILURE_REPORT = 'test-runner-failure.txt';
 
 /** Gruppen sind die einzigen Namen, die package.json/CI kennen muss. */
 const GROUPS = {
@@ -242,7 +244,10 @@ function parseArgs(argv) {
       const value = next();
       const split = value ? value.indexOf('=') : -1;
       if (split <= 0) throw new Error('--set-env erwartet KEY=WERT');
-      options.env[value.slice(0, split)] = value.slice(split + 1);
+      // Anführungszeichen abnehmen: `npm run … -- --set-env 'A=b'` liefert sie auf
+      // Windows über cmd mit, auf Unix nicht – der Wert soll überall gleich sein.
+      const unquote = (text) => text.replace(/^['"]|['"]$/g, '');
+      options.env[unquote(value.slice(0, split))] = unquote(value.slice(split + 1));
       continue;
     }
     if (arg === '--include-manual') { options.includeManual = true; continue; }
@@ -418,7 +423,19 @@ async function main() {
   );
   console.log('────────────────────────────────────────────────────────────');
 
-  if (failed.length) process.exit(1);
+  if (failed.length) {
+    // Ferndiagnose: Auf CI-Runnern hängen die Job-Logs an einem externen
+    // Blob-Storage, das nicht in jeder Umgebung erreichbar ist (bei uns
+    // SSL_ERROR_SYSCALL). Deshalb landet die vollständige Ausgabe der
+    // fehlgeschlagenen Tests als Datei im Arbeitsverzeichnis, und der Workflow
+    // lädt sie als Artefakt hoch.
+    const report = failed
+      .map((result) => `===== ${result.file} =====\n${result.output.trim() || '(keine Ausgabe)'}\n`)
+      .join('\n');
+    await writeFile(path.join(ROOT, FAILURE_REPORT), `Test-Runner: ${failed.length} von ${results.length} fehlgeschlagen\n${report}`);
+    console.log(`\nVollständige Ausgabe der Fehlschläge: ${FAILURE_REPORT}`);
+    process.exit(1);
+  }
   if (skipped.length && options.failOnSkip) {
     console.error(`\n${skipped.length} Test(s) wurden übersprungen – bei --fail-on-skip ist das ein Fehler.`);
     process.exit(1);

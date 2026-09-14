@@ -15,7 +15,8 @@
  * `stem-separation-bsroformer-live.test.ts`.
  */
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { restoreWriteAccess, simulateWriteDenial } from './support/permissionProbe';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { StemSeparationEngine, createDefaultBackendFactory, DEFAULT_CHUNK_OVERLAP } from '../src/stems/stemSeparationEngine';
@@ -485,20 +486,24 @@ async function run() {
   // missing write permission
   const readOnlyRoot = path.join(root, 'ReadOnly');
   await mkdir(readOnlyRoot, { recursive: true });
-  await chmod(readOnlyRoot, 0o500);
-  const permissionError = (await new StemSeparationEngine({
-    workingRoot: path.join(root, 'Working'),
-    outputRoot: readOnlyRoot,
-    cacheRoot: path.join(root, 'CachePerm'),
-    modelStoreDir: path.join(root, 'Models'),
-    allowPipelineDouble: true,
-    backendFactory: createDefaultBackendFactory({ pipelineDouble: new PipelineDoubleSeparator() }),
-  })
-    .separate({ inputPath, modelId: 'pipeline-double-v1', trackName: 'err8' })
-    .then(() => undefined, (caught: unknown) => caught)) as StemSeparationError;
-  assert.equal(permissionError.code, 'WRITE_DENIED', `erwartete WRITE_DENIED, erhielt ${permissionError.code}`);
-  await chmod(readOnlyRoot, 0o700);
-  console.log(`  ✓ fehlende Schreibrechte -> ${permissionError.code}`);
+  const writable = await simulateWriteDenial(readOnlyRoot);
+  if (writable) {
+    console.log('  – Schreibrechte-Simulation unwirksam (Windows/ACL oder Root): Fall übersprungen');
+  } else {
+    const permissionError = (await new StemSeparationEngine({
+      workingRoot: path.join(root, 'Working'),
+      outputRoot: readOnlyRoot,
+      cacheRoot: path.join(root, 'CachePerm'),
+      modelStoreDir: path.join(root, 'Models'),
+      allowPipelineDouble: true,
+      backendFactory: createDefaultBackendFactory({ pipelineDouble: new PipelineDoubleSeparator() }),
+    })
+      .separate({ inputPath, modelId: 'pipeline-double-v1', trackName: 'err8' })
+      .then(() => undefined, (caught: unknown) => caught)) as StemSeparationError;
+    assert.equal(permissionError?.code, 'WRITE_DENIED', `erwartete WRITE_DENIED, erhielt ${permissionError?.code}`);
+    console.log(`  ✓ fehlende Schreibrechte -> ${permissionError.code}`);
+  }
+  await restoreWriteAccess(readOnlyRoot);
 
   // invalid stem configuration
   const stemError = (await engine

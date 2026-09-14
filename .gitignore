@@ -12,3 +12,4 @@ logs/
 stem-engine-data/
 stem-gate-run/
 stem-gate-colab.tar.gz
+test-runner-failure.txt

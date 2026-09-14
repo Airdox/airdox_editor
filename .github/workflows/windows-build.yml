@@ -53,6 +53,18 @@ jobs:
       - name: Stem-Engine-Prüfung (Registry, Backend-Vertrag, Technical Gate, Job-Service)
         run: npm run test:stems
 
+      # Ferndiagnose: die Job-Logs liegen auf externem Blob-Storage, das nicht
+      # von jeder Umgebung erreichbar ist. Der Runner schreibt die vollständige
+      # Ausgabe fehlender Tests in test-runner-failure.txt → hier als Artefakt.
+      - name: Test-Ausgabe bei Fehlschlag anhängen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-runner-failure-stems
+          path: test-runner-failure.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Renderer bauen (Vite)
         run: npm run build
 
