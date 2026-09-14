@@ -192,6 +192,58 @@ export function encodeWavFloat32(sampleRate: number, channels: number, data: Flo
   return bytes;
 }
 
+/**
+ * Writes interleaved float32 audio as 24 bit PCM WAV.
+ *
+ * Used for the part 2 gold standard test data (§3: "mindestens 24 Bit für
+ * Testdaten") — ground truth/mix artefacts that are meant to be inspected by
+ * ear should not carry 16 bit quantisation noise. The internal engine
+ * transport format stays float32 (`encodeWavFloat32`); this encoder is only
+ * used for on-disk deliverables of the test system.
+ */
+export function encodeWavInt24(sampleRate: number, channels: number, data: Float32Array, frames?: number): Uint8Array {
+  const ch = Math.max(1, Math.floor(channels));
+  const frameCount = Math.floor(frames ?? data.length / ch);
+  const bytesPerSample = 3;
+  const blockAlign = ch * bytesPerSample;
+  const dataSize = frameCount * blockAlign;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  const ascii = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, ch, true);
+  view.setUint32(24, Math.round(sampleRate), true);
+  view.setUint32(28, Math.round(sampleRate) * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 24, true);
+  ascii(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const max24 = 8388607;
+  const min24 = -8388608;
+  for (let f = 0; f < frameCount; f++) {
+    for (let c = 0; c < ch; c++) {
+      const value = data[f * ch + c];
+      const sample = Number.isFinite(value) ? value : 0;
+      let intValue = Math.round(Math.max(-1, Math.min(1, sample)) * 8388608);
+      if (intValue > max24) intValue = max24;
+      if (intValue < min24) intValue = min24;
+      const at = 44 + (f * ch + c) * 3;
+      view.setUint8(at, intValue & 0xff);
+      view.setUint8(at + 1, (intValue >> 8) & 0xff);
+      view.setUint8(at + 2, (intValue >> 16) & 0xff);
+    }
+  }
+  return bytes;
+}
+
 /** Zeroth order modified Bessel function, used for the Kaiser window. */
 function besselI0(x: number): number {
   let sum = 1;

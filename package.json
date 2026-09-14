@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "stems:setup": "bash scripts/setup-stem-model.sh",
     "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
-    "test:stems": "tsx tests/stem-separation-registry.test.ts && tsx tests/stem-separation-backend-contract.test.ts && tsx tests/stem-separation-engine-gate.test.ts",
+    "test:stems": "tsx tests/stem-separation-registry.test.ts && tsx tests/stem-separation-backend-contract.test.ts && tsx tests/stem-separation-engine-gate.test.ts && tsx tests/stem-isolation-gate.test.ts",
     "test:stems:live": "tsx tests/stem-separation-bsroformer-live.test.ts",
     "test:stems:all": "npm run test:stems && npm run test:stems:live",
     "stems:setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup-stem-model.ps1",
