@@ -50,10 +50,16 @@ const GROUPS = {
   // Stem-Separations-Engine: Kern, Anbindung und Verträge. Alles reines
   // TypeScript und ohne Python ausführbar (die python-abhängigen Suiten
   // erklären sich über @requires-Direktiven selbst für SKIP).
-  stems: (file) => /stem-separation-|stem-job-service|stem-engine/.test(file) && !/live/.test(file),
-  // Nur die BS-RoFormer-Live-Suite (Checkpoint + PyTorch nötig); der
-  // Demucs-Real-File-Lauf bleibt über `test:stems:real` adressierbar.
-  'stems-live': (file) => /stem-separation-.*live/.test(file),
+  stems: (file) =>
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine/.test(file) && !/live/.test(file),
+  // Die Freigabe-Läufe mit echten Gewichten (Checkpoint + PyTorch nötig). Beide
+  // sind ohne installierten Checkpoint ein sauberer SKIP – `test:stems:release`
+  // dreht das mit --fail-on-skip um, damit niemand "grün" liest, wo nichts lief.
+  // Der Demucs-Real-File-Lauf bleibt über `test:stems:real` adressierbar.
+  'stems-live': (file) => /stem-separation-.*live|stem-isolation-gate-live/.test(file),
+  // CI-Freigabe: alles, was ohne Spezialumgebung wirklich laufen muss.
+  'stems-release': (file) =>
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine/.test(file) && !/live/.test(file),
   logging: (file) => /logger/.test(file),
   all: () => true,
 };

@@ -3,9 +3,11 @@
 Nicht-destruktive KI-Stem-Separation für elektronische Musik (Techno, House,
 Deep/Progressive House, Trance, DnB, Dubstep, EDM, Electro, Synthwave).
 
-**Status: TEIL 1 (technische Funktionalität) ist implementiert und automatisiert
-geprüft. TEIL 2 (Trennqualität, Stem Isolation Gate) ist offen** — siehe
-[Abschnitt 14](#14-teil-2--was-noch-fehlt-und-warum-das-hier-nicht-entschieden-wird).
+**Status: TEIL 1 (technische Funktionalität) und TEIL 2 (Goldstandard-Testtrack,
+Qualitätsmetriken, Stem Isolation Gate) sind implementiert und automatisiert
+geprüft. Ein echtes Qualitäts-`PASS` ist in dieser Umgebung mangels
+trainiertem Checkpoint nicht erreichbar** — siehe
+[Abschnitt 14](#14-teil-2--stem-isolation-gate-goldstandard-testtrack-qualitätsmetriken).
 
 ---
 
@@ -57,7 +59,7 @@ Ordner werden vom Engine-Aufruf konfiguriert (`workingRoot`, `outputRoot`,
 
 ---
 
-## 3. Modulübersicht (`src/stems/`, inkl. Backends)
+## 3. Modulübersicht (`src/stems/`, ~7.900 Zeilen inkl. Backends, Anbindung und Teil-2-Modulen)
 
 | Modul | Aufgabe |
 |---|---|
@@ -78,7 +80,14 @@ Ordner werden vom Engine-Aufruf konfiguriert (`workingRoot`, `outputRoot`,
 | `separationJob.ts` | `SeparationJob` — `job.json`, Statusübergänge, Fortschritt, Validierungsbericht |
 | `separationCache.ts` | `SeparationCache` — Schlüssel, Integrität, Invalidierung bei Beschädigung |
 | `wavIo.ts` | Selbstständige WAV-I/O (float32/16/24/32), Resampling, `sha256File`, `analyzeAudio` |
-| `testAudioGenerator.ts` | Deterministischer EDM-Testtrack (Kick, Bass, Hats, Supersaw, Side-Mix) für Tests |
+| `testAudioGenerator.ts` | Deterministischer, kurzer 4-Stem-EDM-Testtrack (Kick, Bass, Hats, Supersaw) für Teil-1-Tests |
+| `dsp.ts` (Teil 2) | FFT/STFT, Onset-Erkennung, Cross-Correlation-Lag — reine Signalanalyse |
+| `mixEffects.ts` (Teil 2) | Bus-Effekte (Kompression, Limiting, Sättigung, Clipping, Stereo-Breite, Reverb, Delay, Sidechain, Auto-Pan) für Testvarianten |
+| `metrics.ts` (Teil 2) | SDR/SI-SDR/Interference/Bleed/Stereo/Transient/Pegel/Spektrum/Phase, `evaluateStem()`, `qualityScore()` |
+| `goldStandard.ts` (Teil 2) | `generateGoldStandardTrack()` — 30-s-Goldstandard, 6 Ground-Truth-Stems, 6 Segmente |
+| `goldStandardVariants.ts` (Teil 2) | `buildGoldStandardVariants()` — 15 benannte Mix-Varianten |
+| `stemGroupMapping.ts` (Teil 2) | Ordnet Ground-Truth-Quellen den tatsächlichen Modell-Stems zu |
+| `stemIsolationGate.ts` (Teil 2) | `runStemIsolationGate()` — End-to-End-Gate, Report-Verzeichnis, Release-Entscheidung |
 | `backends/types.ts` | `IStemSeparator` — das einzige Interface, das der Kern kennt |
 | `backends/roformerSeparator.ts` | `BSRoFormerSeparator`, `MelBandRoFormerSeparator` (Transport: `native-cli` / `python-torch`) |
 | `backends/htDemucsSeparator.ts` | `HTDemucsSeparator` (PREVIEW-Profil) |
@@ -292,10 +301,11 @@ enthält je Prüfung `pass`, Titel, Details und Messwerte.
 
 ```bash
 npm test                    # komplette Suite über scripts/run-tests.mjs (Fund + SKIP-Logik)
-npm run test:stems:release  # wie test:stems, aber ein SKIP ist ein Fehler (Freigabe)
-npm run test:stems          # Registry + Backend-Vertrag + Technical Gate + Anbindung
-npm run test:stems:live     # echte BS-RoFormer-Architektur über den Adapter
-npm run test:stems:all      # beides
+npm run test:stems          # Gruppe `stems`: Registry + Backend-Vertrag + Technical Gate
+                            # + Stem Isolation Gate (Teil 2) + Job-Schicht + IPC-Vertrag
+npm run test:stems:release  # Gruppe `stems-release` mit --fail-on-skip (Freigabe-Lauf)
+npm run test:stems:live     # Gruppe `stems-live`: echte BS-RoFormer-Architektur + Live-Gate
+npm run test:stems:all      # alle Separations- und Gate-Suiten (SKIPs erlaubt)
 npm run lint                # tsc --noEmit
 ```
 
@@ -314,10 +324,14 @@ Freigabe-Hindernis (so läuft `test:stems:live`).
 | `tests/stem-separation-backend-contract.test.ts` | 10 | JSONL-Protokoll, `stem_order`-Prüfung, SIGTERM, Exit-Code-Map, GPU→CPU-Fallback, native Verträge, `BACKEND_UNAVAILABLE` |
 | `tests/stem-separation-engine-gate.test.ts` | 19 | Gesamtdurchlauf, Read-only-Nachweis, Resampling, Stereo, Grenzmetrik, harte Schnitte vs. Overlap-Add, Backend-Aufrufzählung, Job-Metadaten, Cache, Abbruch/Pause, Fehlermatrix, Profile, Historie, Recovery, Gate-Bericht |
 | `tests/stem-separation-bsroformer-live.test.ts` | 8 | echte Architektur + Protokoll, keine stillen Zufallsgewichte, `stem_order`-Widerspruch, Overlap-Add auf echter Modellausgabe, Abbruch des echten Prozesses, Original-Hash |
+| `tests/stem-isolation-gate.test.ts` (TEIL 2) | 18 | 30-s-Goldstandard-Track (deterministisch, 6 Stems, 6 Segmente), ≥15 Mix-Varianten, Frequenzüberlappungspaare, Stem-Group-Mapping, Metrik-Grundfunktionen (SI-SDR/Bleed/Transient/Stereo), Chunk-Boundary-A/B-Test, Determinismus, Original-Integrität, Crash-Recovery, Fehlerfälle, Stem-Isolation-Gate End-to-End (muss `TECHNICAL_PASS_QUALITY_FAIL` liefern, nie fabriziertes `RELEASE_READY`), Report-Verzeichnis (§26), Release-Entscheidung-Eindeutigkeit |
 | `tests/stem-job-service.test.ts` | 10 | Job-Ansicht sofort, Stem-Liste aus dem Deskriptor (3-Stem-Modell), monotones Progress, Einzel-Stem-Download, `job.json`, Cache, Abbruch, Pause/Fortsetzung, Bridge-Ergebnisse, Staging statt Original |
 | `tests/stem-engine-ipc-contract.test.ts` | 8 | Katalog→`STEM_NAMES`, preload↔Host-Kanaleindeutigkeit, `StemDesktopApi`↔preload 1:1, browser-sicherer Vertrag, Brücke ohne Build, Request-Filterung, End-to-End über das echte Bundle, UI-Routing |
+| `tests/stem-isolation-gate-live.test.ts` (opt-in) | 6 | **Qualitätsfreigabe** mit trainiertem Checkpoint über den Produktionspfad (`StemSeparationEngine` → Adapter → BS-RoFormer): `modelHash`-Prüfung gegen das Manifest, Gate-Entscheidung `RELEASE_READY`/`QUALITY_FAIL`, Messwerttabelle je Stem, Original-Hash vor/nach. Läuft nur mit `AIRODOX_STEM_ALLOW_QUALITY_RUN=1` und installiertem Checkpoint – sonst SKIP, nie ein erfundenes PASS |
 
-Alle Suiten überspringen sauber, wenn Python/PyTorch fehlen.
+Alle Suiten überspringen sauber, wenn Python/PyTorch fehlen (nur
+`stem-separation-bsroformer-live.test.ts`; `stem-isolation-gate.test.ts` läuft
+immer, da es gegen den `PipelineDoubleSeparator` testet).
 
 ### Einrichtung der Modellumgebung
 
@@ -335,26 +349,74 @@ berechneten Hash, solange `modelHash: "unverified"` steht) und schreibt
 
 ---
 
-## 14. TEIL 2 — was noch fehlt (und warum das hier nicht entschieden wird)
+## 14. TEIL 2 — Stem Isolation Gate, Goldstandard-Testtrack, Qualitätsmetriken
 
-**Kein Lauf dieser Umgebung belegt Trennqualität.** In der Sandbox sind
-GitHub-Release-Assets nicht erreichbar, deshalb ist kein trainierter Checkpoint
-installierbar. Der Live-Test läuft folglich mit `--allow-random-weights`; jeder
-solche Lauf meldet `weights: "random"` im `done`-Report und im Job. Ein
-untrainiertes Netz erzeugt zufällige Masken — die Ausgabe ist technisch gültig,
-aber keine Separation.
+TEIL 2 ist implementiert: Testtrack, Varianten, Metriken, Bleed-/Transient-/
+Stereo-/Chunk-Boundary-/Recombination-Tests und der Stem Isolation Gate selbst
+sind vorhanden und automatisiert getestet (`npm run test:stems` schließt
+`tests/stem-isolation-gate.test.ts` ein). **Was weiterhin fehlt, ist ein
+trainierter Checkpoint** — deshalb kann dieser Gate in dieser Umgebung niemals
+ein echtes Qualitäts-`PASS` liefern, sondern konsequent nur
+`TECHNICAL_PASS_QUALITY_FAIL` (siehe unten). Das ist beabsichtigtes Verhalten,
+kein Bug.
 
-TEIL 2 ist damit **nicht** erledigt und darf nicht übersprungen werden:
+### 14.1 Module
 
-1. 30-s-EDM-Testtrack (Referenz-Mix + Ground-Truth-Stems)
-2. objektive Metriken (SI-SDR / SDRi, spektrale Distanzen) gegen Ground Truth
-3. perzeptive QA (Klicks, Pumpen, Übersprechen, Stereo-Bild, Höhenverlust)
-4. **STEM ISOLATION GATE** als einzige Freigabe für „produktionsreif"
+| Modul | Zweck |
+|---|---|
+| `src/stems/dsp.ts` | FFT, STFT, Onset-Erkennung, Cross-Correlation-Lag — reine Analyse, kein Audio-I/O |
+| `src/stems/mixEffects.ts` | Bus-Effekte für Testvarianten: Kompression, Limiting, Sättigung, Clipping, Stereo-Breite, Reverb, Delay, Sidechain, Auto-Pan |
+| `src/stems/metrics.ts` | SDR, SI-SDR, Interference, Bleed-Tabelle, Stereo-Vergleich, Transient-Vergleich, Pegel-/Spektral-/Phasen-Vergleich, `evaluateStem()`, `qualityScore()` (1–9.5, nie 10) |
+| `src/stems/goldStandard.ts` | `generateGoldStandardTrack()` — deterministischer 30-s-Track, Seed `TEST_SEED=20260913`, 6 Ground-Truth-Stems (vocals/drums/bass/synth/percussion/fx), 6 Segmente à 5 s mit gezielten Frequenzüberlappungen |
+| `src/stems/goldStandardVariants.ts` | `buildGoldStandardVariants()` — 15 benannte Mix-Varianten (Clean … Dense Full Mix) aus denselben Ground-Truth-Stems |
+| `src/stems/stemGroupMapping.ts` | Ordnet die 6 Ground-Truth-Quellen den tatsächlichen Modell-Stems zu (z. B. 4-Stem-Modell: `other` = synth+percussion+fx), dokumentiert statt versteckt |
+| `src/stems/stemIsolationGate.ts` | `runStemIsolationGate()` — End-to-End-Orchestrierung: Track bauen → Separation laufen lassen → pro Stem gegen Ground Truth vergleichen → rekombinieren → Original-Hash prüfen → Ergebnistabelle + `report_run/`-Verzeichnis + Release-Entscheidung |
+
+### 14.2 Warum ein Qualitäts-`PASS` hier nicht möglich ist
+
+In der Sandbox sind GitHub-Release-Assets nicht erreichbar (siehe §15), also
+ist kein trainierter Checkpoint installierbar. Jeder Lauf mit dem echten
+BS-RoFormer-Adapter läuft folglich mit `--allow-random-weights`; jeder solche
+Lauf meldet `weights: "random"`. Ein untrainiertes Netz erzeugt zufällige
+Masken — die Ausgabe ist technisch gültig, aber keine Separation.
+
+`runStemIsolationGate()` erkennt das explizit über `detectRandomWeights()`
+(request-Extra ODER Backend-Report) und über `capabilities().trainedModel`
+des Backends, und setzt in diesem Fall **hart**:
+
+* `qualityPass = false`
+* `releaseDecision = 'TECHNICAL_PASS_QUALITY_FAIL'` (nie `RELEASE_READY`)
+
+Das gilt auch für den `PipelineDoubleSeparator` (Teil 1, kein Modell
+überhaupt) — beide Fälle sind in `tests/stem-isolation-gate.test.ts` #16
+verifiziert: der Gate darf niemals ein Qualitäts-`PASS` fabrizieren, ohne
+dass eine echte, trainierte Separation stattgefunden hat.
 
 Erst wenn trainierte Gewichte vorliegen
 (`scripts/setup-bsroformer-model.sh`, erwartet
-`model_bs_roformer_ep_17_sdr_9.6568.ckpt`), kann dieser Gate ausgeführt werden.
-Bis dahin gilt: **technisch funktionsfähig, Qualität offen.**
+`model_bs_roformer_ep_17_sdr_9.6568.ckpt`), kann `RELEASE_READY` überhaupt
+erreicht werden. Bis dahin gilt: **technisch funktionsfähig, Qualität
+"nicht bewertbar" statt fabriziert.**
+
+### 14.3 Report-Layout
+
+`runStemIsolationGate({ outputRoot })` schreibt exakt die im Master-Prompt
+geforderte Struktur:
+
+```
+test_run/
+  metadata.json
+  original/mix.wav
+  ground_truth/{vocals,drums,bass,synth,percussion,fx}.wav
+  separated/{...}.wav
+  recombined/mix.wav
+  metrics/metrics.json
+  report/report.html
+```
+
+`report.html` enthält die Ergebnistabelle (Stem | Isolation | Bleed |
+Transient | Stereo | Recombination | PASS/FAIL) sowie alle Gate-Checks und
+die Release-Entscheidung als Badge.
 
 ---
 
