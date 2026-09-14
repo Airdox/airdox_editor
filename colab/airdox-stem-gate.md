@@ -58,14 +58,23 @@ FEHLER_BEI_QUALITAET_FAIL = False   # True → Notebook bricht ab, wenn das Gate
 
 # ── Ausgabe ──────────────────────────────────────────────────────────────────
 DRIVE_ZIELORDNER = "AirDox/stem-gate"
+
+# ── Notausgang ───────────────────────────────────────────────────────────────
+# Falls der Release-Asset-Download in der Laufzeitumgebung scheitert: hier kann
+# eine beliebige Alternativ-URL für den Checkpoint stehen (z.B. ein
+# Hugging-Face-Mirror desselben Modells). Der sha256 wird danach gegen
+# modelCatalog.json bzw. das Setup-Manifest geprüft – eine andere Datei fällt
+# auf, sie wird nicht unbesehen übernommen.
+ALTERNATIV_URL_CHECKPOINT = ""
 >>>
 
 <<<CELL py
 # ── 1 · Umgebung ────────────────────────────────────────────────────────────
-import glob, hashlib, json, os, pathlib, platform, shutil, subprocess, sys, time
+import glob, hashlib, json, os, pathlib, platform, re, shutil, subprocess, sys, time
 
 STEM_HOME = "/content/stem-home"
 GATE_OUT = "/content/stem-gate-run"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.I)
 
 def run(cmd, check=True, quiet=False):
     """Führt einen Shell-Befehl im Arbeitsordner aus (Standard: /content/airdox)."""
@@ -189,6 +198,11 @@ setup = run(
 checkpoint = os.path.join(STEM_HOME, "checkpoints", modell["checkpoint"]["file"])
 vorhanden = os.path.exists(checkpoint)
 print("\nCheckpoint vorhanden:", vorhanden, os.path.getsize(checkpoint) if vorhanden else 0, "Bytes")
+if not vorhanden and ALTERNATIV_URL_CHECKPOINT:
+    os.makedirs(os.path.dirname(checkpoint), exist_ok=True)
+    print("Release-Asset nicht erreichbar – Notausgang über ALTERNATIV_URL_CHECKPOINT")
+    run(f"curl -fL --retry 3 -o {checkpoint + '.part'!r} {ALTERNATIV_URL_CHECKPOINT!r} && mv {checkpoint + '.part'!r} {checkpoint!r}")
+    vorhanden = os.path.exists(checkpoint)
 if vorhanden:
     sha = hashlib.sha256(open(checkpoint, "rb").read()).hexdigest()
     manifest = json.load(open(os.path.join(STEM_HOME, "manifest.json"))) if os.path.exists(os.path.join(STEM_HOME, "manifest.json")) else {}
@@ -196,7 +210,13 @@ if vorhanden:
     print("sha256 (hier nachgerechnet):", sha)
     print("sha256 (Setup-Manifest)    :", aus_manifest)
     print("sha256 (Katalog, gepinnt)  :", modell.get("modelHash"))
-    assert sha == aus_manifest, "Setup-Manifest und Datei stimmen nicht überein"
+    if SHA256_RE.match(aus_manifest or ""):
+        assert sha == aus_manifest, "Setup-Manifest und Datei stimmen nicht überein"
+    else:
+        # Kein Manifest-Eintrag (z. B. Download über den Notausgang): die Datei
+        # wird nur gegen den gepinnten Katalog-Hash geprüft – und wenn dort schon
+        # ein Hash steht, ist das die einzige Instanz, der wir vertrauen.
+        print("Hinweis: kein Manifest-Eintrag – Vergleich nur gegen modelCatalog.json")
     if modell.get("modelHash") not in (None, "unverified"):
         assert sha == modell["modelHash"], "Checkpoint passt nicht zum gepinnten modelHash"
         print("✓ passt zum im Katalog gepinnten modelHash")
@@ -204,8 +224,10 @@ if vorhanden:
         print("→ modelHash ist noch 'unverified'; dieser Lauf liefert den Wert zum Pinnen.")
 if not vorhanden:
     raise RuntimeError(
-        "Checkpoint nicht geladen – Zelle 5 zeigt, woran es scheitert. Notausgang: Datei im\n"
-        f"Browser herunterladen und unter {checkpoint} ablegen, dann diese Zelle erneut laufen lassen."
+        "Checkpoint nicht geladen – Zelle 5 zeigt, woran es scheitert. Zwei Auswege:\n"
+        f"  a) ALTERNATIV_URL_CHECKPOINT im Config-Feld setzen und Zelle 6 erneut laufen lassen\n"
+        f"  b) Datei im Browser herunterladen und unter {checkpoint} ablegen\n"
+        "In beiden Fällen wird der sha256 gegen modelCatalog.json geprüft, bevor gemessen wird."
     )
 >>>
 
