@@ -15,13 +15,10 @@ import {
   DataOrigin,
   EditHistoryEntry,
   CuePoint,
-  WaveformAnalysisData,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, extractMiniPeaksFromAnalysis, estimateBpm } from './waveform/analyzer';
-import { selectTrackWaveform } from './waveform/renderModel';
-import { initFileLogging } from './utils/fileLog';
 import { audioEngine } from './audio/audioEngine';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
@@ -76,39 +73,6 @@ import {
   executeOverdub,
   applyExecutionToTrack,
 } from './audio/editingEngine';
-
-/**
- * Extracts the genuine source waveform slice for a palette clip: the ANLZ
- * columns of the selected range (aggregated by slicing, never synthesized),
- * taken from the zoom-appropriate variant of the source track. Clips cut
- * from tracks without any waveform carry no waveform payload — the palette
- * then shows its honest placeholder instead of an invented contour.
- */
-function extractPaletteWaveform(
-  track: TrackModel,
-  start: number,
-  end: number
-): WaveformAnalysisData | undefined {
-  const source = selectTrackWaveform(track, Math.max(0.001, end - start), 48);
-  if (!source || source.length === 0) return undefined;
-  const duration = Math.max(0.001, track.duration);
-  const lo = Math.max(0, Math.floor((Math.max(0, start) / duration) * source.length));
-  const hi = Math.min(source.length, Math.max(lo + 1, Math.ceil((Math.min(duration, end) / duration) * source.length)));
-  const slice = (values: Float32Array) => values.slice(lo, hi);
-  return {
-    length: hi - lo,
-    peaks: slice(source.peaks),
-    peaksL: slice(source.peaksL),
-    peaksR: slice(source.peaksR),
-    lowEnergy: slice(source.lowEnergy),
-    midEnergy: slice(source.midEnergy),
-    highEnergy: slice(source.highEnergy),
-    origin: source.origin,
-    sourceTag: source.sourceTag,
-    secPerBucket: source.secPerBucket,
-    samplesPerBucket: source.samplesPerBucket,
-  };
-}
 
 /**
  * Shared conversion of a compact collection entry (XML or Rekordbox DB)
@@ -359,7 +323,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
   // (Disabled on startup so the app opens with a completely empty project as requested)
   const handleSeparateStems = useCallback(async () => {
-    if (!activeTrack || !activeTrack.filePath) {
+    const sourcePath = activeTrack?.filePath || activeTrack?.originalMedia?.resolvedPath || activeTrack?.originalMedia?.location;
+    if (!activeTrack || !sourcePath) {
       alert("Es muss zuerst eine echte Audiodatei geladen werden!");
       return;
     }
@@ -372,7 +337,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setIsSeparating(true);
     try {
       // 1. Call Python CLI via Electron IPC
-      const stems = await window.rekordboxDesktop.separateStems(activeTrack.filePath);
+      const stems = await window.rekordboxDesktop.separateStems(sourcePath);
       
       if (stems && stems.length > 0) {
         console.log("Stem Separation erfolgreich:", stems);
@@ -391,13 +356,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
         }
         
-        // Update the active track immutably through the tracks state (there is
-        // no separate activeTrack setter — the deck follows the track list).
-        setTracks((prev) =>
-          prev.map((t) =>
-            t.id === activeTrack.id ? { ...t, stems, stemBuffers } : t
-          )
-        );
+        setTracks(prevTracks => prevTracks.map(t => t.id === activeTrack.id ? { ...t, stems: stems, stemBuffers: stemBuffers } : t));
         setStemVolumes(new Array(stemBuffers.length).fill(1.0));
         alert(`Stem Separation erfolgreich! ${stemBuffers.length} Stems geladen.`);
       } else {
@@ -514,14 +473,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     } catch (err) {
       console.error('Fehler beim Laden des Referenz-Tracks:', err);
     }
-  }, []);
-
-  // Mirror every logger entry into the durable desktop log file
-  // (<userData>/airdox-smart-editor.log, rotated at 5 MB) while the app runs
-  // inside Electron; in a plain browser this degrades to a no-op.
-  useEffect(() => {
-    const stopFileLogging = initFileLogging();
-    return stopFileLogging;
   }, []);
 
   // Real-time animation loop for playhead progress and VU stereo meters
@@ -897,17 +848,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (previous.audioBuffer) {
       setWorkingAudioBuffer(previous.audioBuffer);
       if (!previous.analysis) {
-        // Project-sourced analysis for re-rendered project audio (never a
-        // replacement for an original Rekordbox analysis).
-        const projectAnalysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
-        activeTrack.analysis = projectAnalysis;
+        activeTrack.analysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
       }
     } else if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
       setWorkingAudioBuffer(reRendered);
       activeTrack.duration = reRendered.duration;
-      const projectAnalysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-      activeTrack.analysis = projectAnalysis;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
     }
     setTracks([...tracks]);
   };
@@ -943,17 +890,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (next.audioBuffer) {
       setWorkingAudioBuffer(next.audioBuffer);
       if (!next.analysis) {
-        // Project-sourced analysis for re-rendered project audio (never a
-        // replacement for an original Rekordbox analysis).
-        const projectAnalysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
-        activeTrack.analysis = projectAnalysis;
+        activeTrack.analysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
       }
     } else if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
       setWorkingAudioBuffer(reRendered);
       activeTrack.duration = reRendered.duration;
-      const projectAnalysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-      activeTrack.analysis = projectAnalysis;
+      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
     }
     setTracks([...tracks]);
   };
@@ -990,10 +933,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           return t;
         }));
         
-        logger.info('EDITING', `Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
+        logger.info('SYSTEM', `Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
       }
     } catch (err: any) {
-      logger.error('EDITING', `Fehler bei Auto-Cue Generierung: ${err.message}`);
+      logger.error('SYSTEM', `Fehler bei Auto-Cue Generierung: ${err.message}`);
     }
   }, [activeTrack]);
 
@@ -1067,21 +1010,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleAddSelectionToPalette = () => {
     if (!selection || !activeTrack || !workingAudioBuffer) return;
     const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
-
-    // The clip carries the genuine source waveform slice of its range; the
-    // mini-peak preview is aggregated from that payload (never synthesized).
-    const clipWaveform = extractPaletteWaveform(activeTrack, selection.start, selection.end);
-    let analysisData: Partial<PaletteClip>;
+    
+    let analysisData = {};
     if (activeTrack.analysis) {
       const extracted = extractMiniPeaksFromAnalysis(activeTrack.analysis, selection.start, selection.end, 48);
-      analysisData = {
-        miniPeaks: extracted.peaks,
-        miniLow: extracted.low,
-        miniMid: extracted.mid,
-        miniHigh: extracted.high
-      };
-    } else if (clipWaveform) {
-      const extracted = extractMiniPeaksFromAnalysis(clipWaveform, 0, selection.duration, 48);
       analysisData = {
         miniPeaks: extracted.peaks,
         miniLow: extracted.low,
@@ -1107,7 +1039,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       key: activeTrack.key,
       color: '#00a2ff',
       audioBuffer: sliced,
-      waveform: clipWaveform,
       ...analysisData,
       origin: DataOrigin.PROJECT,
     };
@@ -1701,18 +1632,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const firstBeatDef = selectedDef.beatGrid?.firstBeat || 0.0;
 
       // In accordance with VORHABEN.md: No synthetic replacement track is generated when original audio is missing
+      // No own analysis in the Rekordbox deck path – only genuine ANLZ/XML data is kept.
       const duration = originalAudio ? originalAudio.duration : durationDef;
-      // Honest deck load (PIPELINE_PLAN Stufe 3–5): a Rekordbox track never
-      // receives an own-generated analysis. Its waveform comes exclusively
-      // from ANLZ (assign DATA afterwards); without ANLZ the renderers show
-      // the honest empty state instead of a synthesized preview.
       const analysis = selectedDef.analysis || null;
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
         : (selectedDef.originalSha256 || 'missing-audio');
-      const phrases = selectedDef.phrases && selectedDef.phrases.length > 0
-        ? selectedDef.phrases
-        : generateRekordboxPhrases(bpm, duration, firstBeatDef);
+      const phrases = selectedDef.phrases || [];
 
       const loadedTrack: TrackModel = {
         ...selectedDef,

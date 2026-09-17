@@ -79,7 +79,6 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
-  /** Every decoded PWV variant with its source tag; `waveform` is the best of these. */
   waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
@@ -123,9 +122,7 @@ function readUtf16Be(view: DataView, offset: number, byteLength: number): string
   return String.fromCharCode(...chars);
 }
 
-// Decoded-variant priority (which PWV section becomes `waveform`): shared
-// with the DAT+EXT merge in databaseExtractor.ts.
-export const WAVEFORM_PRIORITY: Record<string, number> = {
+const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
@@ -225,7 +222,7 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
 function createWaveform(
   spec: WaveformSpec,
   view: DataView,
-  sourceTag: string
+  sourceTag?: string
 ): WaveformAnalysisData {
   const { entryCount, entryBytes, dataOffset, style } = spec;
   const peaks = new Float32Array(entryCount);
@@ -288,7 +285,7 @@ function createWaveform(
     midEnergy,
     highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
-    sourceTag,
+    sourceTag: sourceTag ?? 'PWV',
   };
 }
 
@@ -651,11 +648,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
-          // Honest gap report: scalars without beat nodes never replace a
-          // stored grid — the missing PQTZ nodes are logged, not hidden.
-          result.warnings.push(
-            `${tag}: keine Beat-Knoten lesbar (Legacy-Skalare) – nur BPM/First-Beat übernommen, Grid bleibt unverändert.`
-          );
+          result.warnings.push(`${tag}: legacy bpm-only layout, keine Beat-Knoten – PQTZ-Lücke gemeldet.`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -781,12 +774,10 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
       if (spec) {
-        // Every decoded PWV variant is kept (zoom selection happens at render
-        // time); the highest-priority variant additionally becomes `waveform`.
-        const variant = createWaveform(spec, view, tag);
-        result.waveformVariants.push(variant);
+        const wf = createWaveform(spec, view, tag);
+        result.waveformVariants.push(wf);
         if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-          result.waveform = variant;
+          result.waveform = wf;
           waveformPriority = WAVEFORM_PRIORITY[tag];
         }
       } else {

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
+const fs = require('node:fs');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -32,6 +33,18 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow;
+let logWriter = null;
+
+function getLogWriter() {
+  if (logWriter) return logWriter;
+  try {
+    const logPath = path.join(app.getPath('userData'), 'airdox-smart-editor.log');
+    logWriter = createLogWriter(logPath);
+  } catch {
+    logWriter = null;
+  }
+  return logWriter;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -311,7 +324,7 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
 });
 
 // --- AUDIO STEM SEPARATION (Python CLI Integration) ---
-const { exec } = require('child_process');
+const { exec } = require('node:child_process');
 
 ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
   return new Promise((resolve, reject) => {
@@ -348,7 +361,7 @@ ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
         const baseName = path.parse(inputFilePath).name;
         // Sometimes models change spaces to underscores or similar, so we filter by .wav and try to match as best as possible.
         // For audio-separator, it usually appends `_(Vocals)...`
-        const generatedFiles = files.filter(f => f.includes(baseName) && f.endsWith('.wav') || f.endsWith('.wav'));
+        const generatedFiles = files.filter(f => (f.includes(baseName) && f.endsWith('.wav')) || f.endsWith('.wav'));
         
         // Return absolute paths to the React frontend
         const stems = generatedFiles.map(file => path.join(outputDir, file));
@@ -357,6 +370,26 @@ ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
       });
     });
   });
+});
+
+ipcMain.handle('log:append', async (_event, entry) => {
+  try {
+    const writer = getLogWriter();
+    if (!writer) return false;
+    const line = formatLogLine(entry);
+    return writer.append(line);
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('log:get-path', async () => {
+  try {
+    const writer = getLogWriter();
+    return writer ? writer.filePath : null;
+  } catch {
+    return null;
+  }
 });
 
 app.whenReady().then(() => {
