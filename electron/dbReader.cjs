@@ -334,6 +334,11 @@ function locateRekordboxDatabases() {
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
       candidates.push(...findDatabaseFiles(path.join(appData, 'Pioneer', dirName)));
     }
+    // Data-partition installations (documented case: rekordbox lives on `D:`,
+    // e.g. `D:\Pioneer\rekordbox7\master.db`) are searched in addition.
+    for (const volume of ['C:\\', 'D:\\', 'E:\\', 'F:\\', 'G:\\', 'H:\\']) {
+      candidates.push(...findDatabaseFilesOnWindowsVolume(volume));
+    }
   } else if (process.platform === 'darwin') {
     const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
@@ -353,11 +358,258 @@ function locateRekordboxDatabases() {
   return unique;
 }
 
+// ---------------------------------------------------------------------------
+// ANLZ folder discovery + PPTH path index (SQLCipher-independent, read-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Windows-volume database discovery: checks the versioned Rekordbox folders
+ * (`rekordbox7` / `rekordbox6` / `rekordbox`) directly under a volume's
+ * `Pioneer` directory. Covers installations on data partitions — the
+ * documented real-machine case is `D:\Pioneer\rekordbox7` — including
+ * databases that options.json (`db-path`) points to elsewhere. Read-only.
+ */
+function findDatabaseFilesOnWindowsVolume(volumeRoot) {
+  const results = [];
+  if (!volumeRoot || typeof volumeRoot !== 'string' || !fs.existsSync(volumeRoot)) return results;
+  for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
+    results.push(...findDatabaseFiles(path.join(volumeRoot, 'Pioneer', dirName)));
+  }
+  return results;
+}
+
+/** Directory names that mark a Rekordbox analysis tree (…/PIONEER/USBANLZ). */
+function isAnlzFolderName(name) {
+  return /^(usb)?anlz$/i.test(name);
+}
+
+/** Folders that are never descended into during discovery (audio library …). */
+const NON_ANLZ_DIRS = new Set(['music', 'video', 'photos', 'node_modules', '.git', '$recycle.bin']);
+
+/**
+ * Recursively discovers ANLZ folders (…/PIONEER/USBANLZ, …/PIONEER/ANLZ)
+ * under a base directory — including custom library layouts such as
+ * `D:\PIONEER\Master\share\PIONEER\USBANLZ`. Read-only, depth-limited walk;
+ * the audio library itself (Music/…) is never descended into.
+ */
+function findAnlzFolders(baseDir) {
+  const found = [];
+  const root =
+    baseDir ||
+    (process.env.APPDATA ? path.join(process.env.APPDATA, 'Pioneer') : null);
+  if (!root || typeof root !== 'string' || !fs.existsSync(root)) return found;
+
+  // Rekordbox trees are shallow; the walk stops after six levels.
+  const maxDepth = 6;
+
+  const walk = (dir, depth) => {
+    if (depth > maxDepth) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // unreadable (permissions) — stay read-only and silent
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (NON_ANLZ_DIRS.has(entry.name.toLowerCase())) continue;
+      const child = path.join(dir, entry.name);
+      if (isAnlzFolderName(entry.name)) {
+        found.push(child);
+        continue;
+      }
+      walk(child, depth + 1);
+    }
+  };
+
+  walk(path.resolve(root), 0);
+  return found;
+}
+
+/**
+ * Win32 media-drive probe: real installations keep their analyses on target
+ * media or data drives (documented case: `D:\PIONEER\Master\share\PIONEER\USBANLZ\…`).
+ * Existing `<drive>\PIONEER` roots on the common drive letters are walked
+ * read-only for ANLZ folders.
+ */
+function findTargetDriveAnlzFolders() {
+  const found = [];
+  if (process.platform !== 'win32') return found;
+  for (const letter of ['C', 'D', 'E', 'F', 'G', 'H']) {
+    const pioneerRoot = path.join(`${letter}:\\`, 'PIONEER');
+    if (!fs.existsSync(pioneerRoot)) continue;
+    found.push(...findAnlzFolders(pioneerRoot));
+  }
+  return found;
+}
+
+/** Normalizes a path for case-insensitive ANLZ matching (compare only). */
+function normalizeAnlzPath(p) {
+  let s = String(p);
+  if (s.startsWith('\\\\?\\')) s = s.slice(4); // Windows long-path prefix
+  return s.replace(/\\/g, '/').toLowerCase();
+}
+
+/** Decodes a PPTH path body (UTF-16BE, UTF-16LE or plain ASCII). */
+function decodePpthBody(buf) {
+  if (buf.length === 0) return null;
+  let text;
+  if (buf.length >= 2 && buf[0] === 0x00 && buf[1] !== 0x00) {
+    // UTF-16BE (Rekordbox default): byte-swap into LE for Node decoding.
+    const swapped = Buffer.from(buf);
+    swapped.swap16();
+    text = swapped.toString('utf16le');
+  } else if (buf.length >= 2 && buf[0] !== 0x00 && buf[1] === 0x00) {
+    text = buf.toString('utf16le');
+  } else if (!buf.includes(0)) {
+    text = buf.toString('latin1');
+  } else {
+    return null; // unreadable byte mix
+  }
+  const trimmed = text.replace(/\0+$/, '');
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** ANLZ container file names (ANLZnnnn.DAT / .EXT). */
+const ANLZ_FILE_PATTERN = /^anlz.+\.(dat|ext)$/i;
+
+/**
+ * Reads the PPTH source path from an ANLZ container header. Only the file
+ * header is read (never the full payload, never a write); an optional PMAI
+ * file header in front of the first section is skipped.
+ */
+function readPpthFromHeader(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    try {
+      let offset = 0;
+      const tag = Buffer.alloc(4);
+      if (fs.readSync(fd, tag, 0, 4, 0) < 4) return null;
+      if (tag.toString('latin1') === 'PMAI') {
+        const lenBuf = Buffer.alloc(4);
+        if (fs.readSync(fd, lenBuf, 0, 4, 4) < 4) return null;
+        offset = lenBuf.readUInt32BE(0);
+        if (offset < 4 || offset > 0x1000) return null; // implausible header
+      }
+      const section = Buffer.alloc(0x10);
+      if (fs.readSync(fd, section, 0, 0x10, offset) < 0x10) return null;
+      if (section.toString('latin1', 0, 4) !== 'PPTH') return null;
+      const lenPath = section.readUInt32BE(0x0c);
+      if (lenPath === 0 || lenPath > 4096) return null;
+      const body = Buffer.alloc(lenPath);
+      if (fs.readSync(fd, body, 0, lenPath, offset + 0x10) < lenPath) return null;
+      return decodePpthBody(body);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SQLCipher-independent ANLZ PPTH index: scans ANLZ folders for containers
+ * whose PPTH header records one of the target audio paths.
+ *  - pairs DAT + EXT siblings by basename,
+ *  - matches targets case-insensitively (Windows drive-letter folding) and
+ *    strips the `\\?\` long-path prefix (tier 1: exact path),
+ *  - falls back to a tier-2 basename match only when the basename is unique
+ *    in the whole index (file moved after analysis) and flags it with a
+ *    verification note; ambiguous basenames never match.
+ */
+async function scanAnlzForPaths(targetPaths, anlzFolders) {
+  const startedAt = Date.now();
+  const folders = (Array.isArray(anlzFolders) ? anlzFolders : [])
+    .filter((f) => typeof f === 'string' && f.trim() !== '')
+    .map((f) => path.resolve(f));
+  const targets = (Array.isArray(targetPaths) ? targetPaths : [])
+    .filter((t) => typeof t === 'string' && t.trim() !== '')
+    .map((t) => {
+      const key = normalizeAnlzPath(t);
+      return { original: t, key, base: path.posix.basename(key) };
+    });
+
+  // ppth key → { datPath, extPath }; basename → distinct ppth keys.
+  const byPath = new Map();
+  const basenameKeys = new Map();
+  let scanned = 0;
+  const ppthSample = [];
+
+  for (const folder of folders) {
+    let entries;
+    try {
+      entries = fs.readdirSync(folder, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !ANLZ_FILE_PATTERN.test(entry.name)) continue;
+      const filePath = path.join(folder, entry.name);
+      scanned += 1;
+      const ppth = readPpthFromHeader(filePath);
+      if (!ppth) continue;
+      if (ppthSample.length < 8) ppthSample.push(ppth);
+      const key = normalizeAnlzPath(ppth);
+      const record = byPath.get(key) || { datPath: null, extPath: null };
+      if (/\.dat$/i.test(entry.name) && !record.datPath) record.datPath = filePath;
+      if (/\.ext$/i.test(entry.name) && !record.extPath) record.extPath = filePath;
+      byPath.set(key, record);
+      const base = path.posix.basename(key);
+      if (!basenameKeys.has(base)) basenameKeys.set(base, new Set());
+      basenameKeys.get(base).add(key);
+    }
+  }
+
+  const matches = [];
+  for (const target of targets) {
+    // Tier 1: exact path (case- and separator-insensitive).
+    const exact = byPath.get(target.key);
+    if (exact && (exact.datPath || exact.extPath)) {
+      matches.push({
+        path: target.original,
+        datPath: exact.datPath,
+        extPath: exact.extPath,
+        matchTier: 1,
+        note: null,
+      });
+      continue;
+    }
+    // Tier 2: file moved after analysis — basename unique in the index.
+    const candidates = basenameKeys.get(target.base);
+    if (candidates && candidates.size === 1) {
+      const [key] = candidates;
+      const record = byPath.get(key);
+      if (record && (record.datPath || record.extPath)) {
+        matches.push({
+          path: target.original,
+          datPath: record.datPath,
+          extPath: record.extPath,
+          matchTier: 2,
+          note: 'PPTH verweist auf den alten Speicherort (Basisname eindeutig) – Zuordnung bitte verifizieren.',
+        });
+      }
+    }
+    // Unknown or ambiguous → no match (honest, never throws).
+  }
+
+  return {
+    scanned,
+    matches,
+    folders,
+    elapsedMs: Date.now() - startedAt,
+    ppthSample,
+  };
+}
+
 module.exports = {
   getMasterDbKey,
   getOneLibraryKey,
   detectDbType,
   readRekordboxDatabase,
   locateRekordboxDatabases,
+  findAnlzFolders,
+  findTargetDriveAnlzFolders,
+  scanAnlzForPaths,
   isCipherAvailable: () => getCipherModule() !== null,
 };

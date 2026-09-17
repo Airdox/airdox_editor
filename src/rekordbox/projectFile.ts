@@ -117,10 +117,21 @@ export function audioBufferToWavBase64(buffer: AudioBufferLike): string {
 // Serialized (persisted) shapes
 // ---------------------------------------------------------------------------
 
+export interface SerializedBeatNode {
+  index?: number;
+  time: number;
+  isBarStart: boolean;
+  barNumber: number;
+  beatInBar: number;
+  tailExtended?: boolean;
+}
+
 export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
+  beats?: SerializedBeatNode[];
+  origin?: import('../types/rekordbox').DataOrigin;
 }
 
 export interface SerializedSegment {
@@ -253,6 +264,14 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
+      beats: track.beatGrid?.beats?.map((b) => ({
+        time: b.time,
+        isBarStart: b.isBarStart,
+        barNumber: b.barNumber,
+        beatInBar: b.beatInBar,
+        ...(b.tailExtended ? { tailExtended: true as const } : {}),
+      })),
+      origin: track.beatGrid?.origin,
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],

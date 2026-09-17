@@ -32,6 +32,8 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
+  /** True when this beat is a uniform continuation appended after the last verbatim PQTZ beat */
+  tailExtended?: boolean;
 }
 
 export interface BeatGrid {
@@ -145,6 +147,8 @@ export interface WaveformAnalysisData {
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
+  /** Original ANLZ tag that produced this variant, e.g. PWV5, PWV3, PWV7 */
+  sourceTag?: string;
 }
 
 /**
@@ -171,6 +175,7 @@ export interface TrackModel {
   playCount?: number; // Rekordbox DJ-Play Count
   year?: string;
   comments?: string;
+  filePath?: string;
   stems?: string[];
   stemBuffers?: AudioBuffer[];
   dateAdded?: string;
@@ -183,11 +188,13 @@ export interface TrackModel {
   channels: number;
   originalSha256: string;
   isOriginalUntouched: boolean;
+  isModified?: boolean;
   audioBuffer: AudioBuffer | null;
   beatGrid: BeatGrid;
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
+  analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];

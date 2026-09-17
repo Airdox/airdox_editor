@@ -217,7 +217,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                       })}
                     </div>
                   ) : (
-                    <div className="text-[10px] text-neutral-600">Clip Waveform</div>
+                    <div className="text-[10px] text-neutral-600">Keine Waveform-Daten</div>
                   )}
 
                   {/* Playhead / preview indicator */}

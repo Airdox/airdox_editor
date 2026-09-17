@@ -22,14 +22,13 @@ on:
   schedule:
     - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE (Nightly)
 
-permissions:
-  contents: write         # wird für das Erstellen/Aktualisieren von GitHub-Releases benötigt
-
-# Bei schnellen Push-Folgen wird der noch laufende alte Build desselben
-# Refs abgebrochen – es gewinnt immer der neueste Commit.
+# Schnelle Folge-Pushes: nur der neueste Lauf pro Ref baut.
 concurrency:
   group: windows-build-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write         # wird für das Erstellen/Aktualisieren von GitHub-Releases benötigt
 
 jobs:
   build:
@@ -37,7 +36,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # setup-node mit npm-Cache bricht hart ab, wenn die Lock-Datei im
       # Commit fehlt – daher vorher prüfen.
@@ -54,14 +53,14 @@ jobs:
 
       - name: Node.js aufsetzen (mit npm-Cache)
         if: steps.lock.outputs.exists == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
 
       - name: Node.js aufsetzen (ohne Cache)
         if: steps.lock.outputs.exists != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -105,19 +104,17 @@ jobs:
 
       - name: Artefakte anhängen (immer)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: airdox-smart-editor-windows
           path: release/*.exe
+          retention-days: 30
           if-no-files-found: warn
           compression-level: 0  # .exe sind bereits komprimiert – spart Upload-Zeit
-          retention-days: 30
 
-      # Offizielles Release bei Versionstag, z. B.:
-      #   git tag v0.4.13 && git push --tags
       - name: GitHub-Release bei Tag
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: airdox_SMART_Editor ${{ github.ref_name }}
           files: release/*.exe
@@ -128,7 +125,7 @@ jobs:
       # WIN-App als Download gibt – ganz ohne Tag.
       - name: Rolling Prerelease „latest" aktualisieren (main)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: Latest dev build (main)

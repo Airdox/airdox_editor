@@ -7,19 +7,22 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "vite",
     "build": "vite build",
-    "verify:waveform": "node scripts/waveform-gates.mjs",
-    "start": "node dist/server.cjs",
+    "start": "electron .",
     "desktop": "npm run build && electron .",
     "package:win": "npm run build && electron-builder --win",
     "package:win:nsis": "npm run build && electron-builder --win nsis",
     "package:win:portable": "npm run build && electron-builder --win portable",
     "preview": "vite preview",
-    "clean": "rm -rf dist release server.js",
+    "clean": "rm -rf dist release",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/editing-waveform-causality.test.ts && tsx tests/import-simulation.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && tsx tests/edit-assistant.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs"
+    "verify:waveform": "node scripts/waveform-gates.mjs",
+    "test": "tsx tests/analysis-resolver.test.ts && tsx tests/anlz-ext-merge.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/import-simulation.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && tsx tests/track-guards.test.ts && tsx tests/waveform-variants.test.ts && tsx tests/pqtz-strict.test.ts && tsx tests/renderer-original-data.test.ts && tsx tests/xml-exclusive-import.test.ts && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs && node tests/log-writer.test.mjs && npm run test:stems",
+    "test:stems": "tsx tests/stem-isolation-gate.test.ts",
+    "test:stems:live": "tsx tests/stem-separation-bsroformer-live.test.ts",
+    "test:stems:all": "npm run test:stems && npm run test:stems:live"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

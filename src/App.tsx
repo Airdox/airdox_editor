@@ -323,7 +323,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
   // (Disabled on startup so the app opens with a completely empty project as requested)
   const handleSeparateStems = useCallback(async () => {
-    if (!activeTrack || !activeTrack.filePath) {
+    const sourcePath = activeTrack?.filePath || activeTrack?.originalMedia?.resolvedPath || activeTrack?.originalMedia?.location;
+    if (!activeTrack || !sourcePath) {
       alert("Es muss zuerst eine echte Audiodatei geladen werden!");
       return;
     }
@@ -336,7 +337,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setIsSeparating(true);
     try {
       // 1. Call Python CLI via Electron IPC
-      const stems = await window.rekordboxDesktop.separateStems(activeTrack.filePath);
+      const stems = await window.rekordboxDesktop.separateStems(sourcePath);
       
       if (stems && stems.length > 0) {
         console.log("Stem Separation erfolgreich:", stems);
@@ -355,7 +356,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
         }
         
-        setActiveTrack(prev => prev ? { ...prev, stems: stems, stemBuffers: stemBuffers } : null);
+        setTracks(prevTracks => prevTracks.map(t => t.id === activeTrack.id ? { ...t, stems: stems, stemBuffers: stemBuffers } : t));
         setStemVolumes(new Array(stemBuffers.length).fill(1.0));
         alert(`Stem Separation erfolgreich! ${stemBuffers.length} Stems geladen.`);
       } else {
@@ -932,10 +933,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           return t;
         }));
         
-        logger.info(`Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
+        logger.info('SYSTEM', `Auto-Cue: Generierte ${newCues.length} neue Cue-Punkte (Drops & Breaks) für "${activeTrack.title}"`);
       }
     } catch (err: any) {
-      logger.error(`Fehler bei Auto-Cue Generierung: ${err.message}`);
+      logger.error('SYSTEM', `Fehler bei Auto-Cue Generierung: ${err.message}`);
     }
   }, [activeTrack]);
 
@@ -1631,16 +1632,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const firstBeatDef = selectedDef.beatGrid?.firstBeat || 0.0;
 
       // In accordance with VORHABEN.md: No synthetic replacement track is generated when original audio is missing
+      // No own analysis in the Rekordbox deck path – only genuine ANLZ/XML data is kept.
       const duration = originalAudio ? originalAudio.duration : durationDef;
-      const analysis = originalAudio
-        ? (selectedDef.analysis || analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS))
-        : (selectedDef.analysis || null);
+      const analysis = selectedDef.analysis || null;
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
         : (selectedDef.originalSha256 || 'missing-audio');
-      const phrases = selectedDef.phrases && selectedDef.phrases.length > 0
-        ? selectedDef.phrases
-        : generateRekordboxPhrases(bpm, duration, firstBeatDef);
+      const phrases = selectedDef.phrases || [];
 
       const loadedTrack: TrackModel = {
         ...selectedDef,
