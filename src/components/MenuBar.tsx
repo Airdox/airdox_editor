@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot } from 'lucide-react';
+import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot, Radio } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -46,6 +46,9 @@ interface MenuBarProps {
   hasClipboard?: boolean;
   onOpenEditAssistant?: () => void;
   onAnalyzeMixIn?: () => void;
+  onOpenMidiModal?: () => void;
+  onSeparateStems?: () => void;
+  onOpenRecorder?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -86,6 +89,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   hasClipboard,
   onOpenEditAssistant,
   onAnalyzeMixIn,
+  onOpenMidiModal,
+  onSeparateStems,
+  onOpenRecorder,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -144,7 +150,17 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+S</span>
               </button>
               <div className="h-px bg-[#262830] my-1" />
-              {onOpenDatabaseInspector && (
+              {onOpenMidiModal && (
+          <button
+            onClick={onOpenMidiModal}
+            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#10b981]/15 hover:bg-[#10b981] text-[#10b981] hover:text-white border border-[#10b981]/30 text-[10px] transition-colors"
+            title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Pad Mapping öffnen"
+          >
+            <Radio size={11} />
+            <span className="font-semibold tracking-wide">MIDI (FLX4/1000)</span>
+          </button>
+        )}
+        {onOpenDatabaseInspector && (
                 <button
                   onClick={() => { onOpenDatabaseInspector(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#00a2ff] font-medium"
@@ -177,6 +193,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               >
                 <span>Audiodatei laden (WAV, MP3, FLAC)...</span>
               </button>
+              {onOpenRecorder && (
+                <button
+                  onClick={() => { onOpenRecorder(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#ff5147] font-semibold"
+                >
+                  <span className="flex items-center gap-2"><Radio size={13} /> Pro Recorder öffnen…</span>
+                  <span className="text-neutral-500">F9</span>
+                </button>
+              )}
               <div className="h-px bg-[#262830] my-1" />
               <button
                 onClick={() => { onExportWav(); setActiveMenu(null); }}
@@ -276,7 +301,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 >
                   <span className="flex items-center space-x-1.5">
                     <Trash2 size={12} />
-                    <span>Löschen (Delete)</span>
+                    <span>Löschen… (Delete-Variante)</span>
                   </span>
                   <span className="text-neutral-500 hover:text-neutral-200">Del</span>
                 </button>
@@ -322,6 +347,34 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     <span>Mix-In analysieren (Copilot)...</span>
                   </span>
                   <span className="text-[10px] text-emerald-500/80 hover:text-white font-mono">AI</span>
+                </button>
+              )}
+
+              {onSeparateStems && (
+                <button
+                  onClick={() => { onSeparateStems(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
+                  title="Trennt den aktiven Track in 4 Stems (Vocals, Drums, Bass, Other)"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Sparkles size={12} className="text-[#00e5ff]" />
+                    <span>Multi-Band Stems trennen...</span>
+                  </span>
+                  <span className="text-[9px] bg-[#0088ff]/30 text-white px-1 rounded font-mono">4-STEMS</span>
+                </button>
+              )}
+
+              {onOpenMidiModal && (
+                <button
+                  onClick={() => { onOpenMidiModal(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e676]"
+                  title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Action Pad Mapping öffnen"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Radio size={12} className="text-[#00e676]" />
+                    <span>Pioneer MIDI Controller (DDJ-FLX4 / 1000)...</span>
+                  </span>
+                  <span className="text-[9px] bg-emerald-500/20 text-[#00e676] px-1 rounded font-mono">PADS</span>
                 </button>
               )}
 

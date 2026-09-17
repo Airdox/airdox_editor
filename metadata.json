@@ -1,6 +1,6 @@
 {
-  "name": "Rekordbox DJ Audio Editor",
-  "description": "Professional Rekordbox-style DJ audio editor with beatgrid synchronization, real audio engine, XML parsing, palette clips, multi-track, and non-destructive editing.",
+  "name": "airdox_SMART_Editor",
+  "description": "Professioneller Rekordbox-DJ-Audio-Editor mit Beatgrid-Synchronisation, nicht-destruktivem Import, Echtzeit-Audio-Engine, ANLZ-Parsing und Multi-Track.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

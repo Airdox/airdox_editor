@@ -4,15 +4,18 @@
  * Right-hand clip palette matching Screenshot 01 and 02:
  * - Polygon angled tab header "PALETTE"
  * - Trash can icon on top-right
- * - Clip list items with real mini-waveforms, play preview, and clip metadata
+ * - Clip list items with detailed canvas waveforms (BLUE/RGB/3BAND, same
+ *   visual language as the main DetailWaveform), play preview, clip metadata
  * - Bottom "+" button to create clip from current selection
  * - Collapse / Expand toggle (< / >) on the divider border
  */
 
 import React, { useState } from 'react';
-import { PaletteClip } from '../types/rekordbox';
+import { PaletteClip, WaveformMode } from '../types/rekordbox';
 import { Trash2, Play, Square, Plus, ChevronRight, ChevronLeft, Maximize2, CheckSquare } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
+import { ClipWaveform } from './ClipWaveform';
+import { writePaletteClipDrag } from '../utils/paletteDrag';
 
 interface PalettePanelProps {
   isOpen: boolean;
@@ -28,7 +31,8 @@ interface PalettePanelProps {
   onToggleMatchPitch?: (match: boolean) => void;
   targetBpm?: number;
   targetKey?: string;
-  waveformMode?: 'BLUE' | 'RGB' | '3BAND';
+  /** Active waveform render mode shared with the main DetailWaveform. */
+  waveformMode?: WaveformMode;
 }
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
@@ -172,53 +176,27 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
             return (
               <div
                 key={clip.id}
+                draggable={Boolean(clip.audioBuffer)}
+                onDragStart={(event) => {
+                  if (!clip.audioBuffer) {
+                    event.preventDefault();
+                    return;
+                  }
+                  onSelectClip(clip);
+                  writePaletteClipDrag(event.dataTransfer, clip.id);
+                }}
                 onClick={() => onSelectClip(clip)}
-                className={`p-1.5 rounded-xs border transition-all cursor-pointer ${
+                title={clip.audioBuffer ? 'Clip auf die Wellenform ziehen, um ihn dort einzufügen' : 'Clip besitzt keine Audiodaten'}
+                className={`p-1.5 rounded-xs border transition-all ${clip.audioBuffer ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed opacity-60'} ${
                   isSelected
                     ? 'bg-[#181a24] border-[#0088ff] shadow-sm'
                     : 'bg-[#14151a] border-[#22242d] hover:border-[#323543]'
                 }`}
               >
-                {/* Mini Waveform Display */}
-                <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
-                  {clip.miniPeaks && clip.miniPeaks.length > 0 ? (
-                    <div className="w-full h-full flex items-center px-1">
-                      {clip.miniPeaks.map((pk, idx) => {
-                        let h = Math.max(2, pk * 28);
-                        let col = '#0088ff';
-                        
-                        if (waveformMode === 'BLUE') {
-                          col = '#00a2ff';
-                        } else if (waveformMode === 'RGB' || waveformMode === '3BAND') {
-                          const low = clip.miniLow?.[idx] ?? pk;
-                          const mid = clip.miniMid?.[idx] ?? pk;
-                          const high = clip.miniHigh?.[idx] ?? pk;
-                          
-                          if (waveformMode === '3BAND') {
-                            if (low > mid && low > high) col = '#0088ff'; // Low=Blue
-                            else if (mid > low && mid > high) col = '#f59e0b'; // Mid=Amber
-                            else col = '#fff'; // High=White
-                          } else {
-                            // RGB Mixing approach
-                            const r = Math.min(255, Math.floor(low * 255));
-                            const g = Math.min(255, Math.floor(mid * 255));
-                            const b = Math.min(255, Math.floor(high * 255 + 50));
-                            col = `rgb(${r},${g},${b})`;
-                          }
-                        }
-
-                        return (
-                          <div
-                            key={idx}
-                            style={{ height: `${h}px`, backgroundColor: col }}
-                            className="flex-1 mx-[0.5px] rounded-[0.5px]"
-                          />
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="text-[10px] text-neutral-600">Clip Waveform</div>
-                  )}
+                {/* Detailed Waveform Display (native ANLZ buckets or per-sample
+                    analysis, rendered in the active BLUE/RGB/3BAND mode) */}
+                <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden relative border border-[#1b1c23]">
+                  <ClipWaveform clip={clip} waveformMode={waveformMode} showBeatgrid />
 
                   {/* Playhead / preview indicator */}
                   {isPlaying && (

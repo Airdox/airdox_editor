@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -7,10 +7,76 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
-const { isProtectedTarget } = require('./pathGuard.cjs');
+const { OriginalSourceRegistry } = require('./pathGuard.cjs');
+const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
+const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
+const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
+const { installStemEngine } = require('./stemInstaller.cjs');
+const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
+const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
+
+// ---------------------------------------------------------------------------
+// Logging-System so früh wie möglich aktivieren – noch vor dem ersten
+// Fenster und vor allen IPC-Registrierungen, damit kein Ereignis verloren geht.
+// ---------------------------------------------------------------------------
+const bootLogDir = path.join(app.getPath('appData'), app.getName(), 'logs');
+logger.configure({
+  logDirectory: bootLogDir,
+  processName: 'main',
+  level: process.env.AIRDOX_LOG_LEVEL || (IS_DEV ? 'DEBUG' : 'INFO'),
+  appInfo: { appName: APP_NAME, appVersion: app.getVersion() },
+});
+logger.installProcessHandlers();
+logger.installConsoleCapture();
+logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
+  platform: process.platform,
+  arch: process.arch,
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  node: process.version,
+  dev: IS_DEV,
+});
+
+/**
+ * Automatisches Audit-Protokoll für JEDEN ipcMain.handle-Kanal: Aufruf mit
+ * kompakter Argument-Zusammenfassung, Dauer, Ergebnisgröße und Fehlern.
+ * Große Binärdaten (Audio, ANLZ, WAV) werden nur als Byte-Länge erfasst.
+ */
+(function installIpcAudit() {
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = function auditedHandle(channel, listener) {
+    return originalHandle(channel, async (event, ...args) => {
+      const startedAt = Date.now();
+      logger.debug('IPC', `Aufruf ›${channel}‹`, {
+        args: summarizeForLog(args),
+        sender: event.senderFrame ? { url: event.senderFrame.url } : undefined,
+      });
+      try {
+        const result = await listener(event, ...args);
+        const durationMs = Date.now() - startedAt;
+        logger.debug('IPC', `Antwort ›${channel}‹`, {
+          durationMs,
+          result: summarizeForLog(result),
+        });
+        if (durationMs >= 2000) {
+          logger.warn('PERFORMANCE', `Langsamer IPC-Handler ›${channel}‹: ${durationMs} ms`);
+        }
+        return result;
+      } catch (error) {
+        const durationMs = Date.now() - startedAt;
+        logger.error(
+          'IPC',
+          `IPC ›${channel}‹ nach ${durationMs} ms fehlgeschlagen: ${error.message}`,
+          { name: error.name, stack: error.stack, code: error.code, args: summarizeForLog(args) }
+        );
+        throw error;
+      }
+    });
+  };
+})();
 
 // WICHTIG: Das eigene Protokoll muss VOR app.whenReady() als privilegiert
 // registriert werden, damit Chromium es als "standard" (http-ähnlich)
@@ -31,6 +97,23 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow;
+let analysisPathRegistry;
+// Authoritative main-process list; it cannot be weakened by renderer payloads.
+const originalSourceRegistry = new OriginalSourceRegistry();
+
+/**
+ * The local index is deliberately outside the Rekordbox folders. It contains
+ * only our read-only path associations and is never written back to Pioneer
+ * files or databases.
+ */
+function getAnalysisPathRegistry() {
+  if (!analysisPathRegistry) {
+    analysisPathRegistry = new AnalysisPathRegistry(
+      path.join(app.getPath('userData'), 'rekordbox-analysis-path-index.json')
+    );
+  }
+  return analysisPathRegistry;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -64,10 +147,26 @@ function createWindow() {
 
   // Renderer-Abstürze und fehlgeschlagene Ladungen protokollieren.
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[Electron] Renderer-Prozess abgestürzt:', details);
+    logger.fatal('SYSTEM', `Renderer-Prozess abgestürzt (${details.reason})`, details);
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    logger.warn('UI', 'Renderer reagiert nicht mehr (unresponsive).');
+  });
+  mainWindow.webContents.on('responsive', () => {
+    logger.info('UI', 'Renderer reagiert wieder.');
   });
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[Electron] Laden fehlgeschlagen (${errorCode}) bei ${validatedURL}: ${errorDescription}`);
+    logger.error('SYSTEM', `Laden fehlgeschlagen (${errorCode}) bei ${validatedURL}: ${errorDescription}`);
+  });
+  // Renderer-Konsolenmeldungen, die nicht über den Logger laufen, trotzdem
+  // dauerhaft im Datei-Protokoll sichern (keine stillen Fehler mehr).
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    // 0=verbose 1=info 2=warning 3=error
+    if (level === 3) {
+      logger.error('UI', `[renderer-console] ${message}`, { line, source: sourceId });
+    } else if (level === 2) {
+      logger.warn('UI', `[renderer-console] ${message}`, { line, source: sourceId });
+    }
   });
 
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
@@ -82,7 +181,7 @@ function createWindow() {
     // ordner. Dadurch funktionieren <script type="module" crossorigin> und
     // alle relativen Asset-Pfade ohne CORS-/Origin-Probleme.
     mainWindow.loadURL(`${APP_PROTOCOL}://app/index.html`).catch((err) => {
-      console.error('[Electron] Konnte App-Startseite nicht laden:', err);
+      logger.fatal('SYSTEM', 'Konnte App-Startseite nicht laden:', err);
     });
     // F12 schaltet DevTools in der ausgelieferten App an/aus (Diagnose).
     mainWindow.webContents.on('before-input-event', (_event, input) => {
@@ -132,7 +231,10 @@ function registerAppProtocol() {
       }
       return net.fetch(pathToFileURL(target).toString());
     } catch (err) {
-      console.error('[App-Protocol] Fehler bei', request.url, err);
+      logger.error('SYSTEM', `App-Protocol Fehler bei ${request.url}: ${err.message}`, {
+        stack: err.stack,
+        url: request.url,
+      });
       return new Response('Internal Error', { status: 500 });
     }
   });
@@ -157,6 +259,89 @@ function toLocalPath(location) {
   }
 }
 
+// Probe executable, supported Python version, imports and cached model weights
+// without touching audio. This catches Python 3.14 / missing-module installs up front.
+ipcMain.handle('stems:get-status', async () =>
+  inspectDemucsEnvironment(
+    path.join(__dirname, '..'),
+    undefined,
+    undefined,
+    (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
+  )
+);
+
+// One-click in-app installation of the complete Demucs environment
+// (Python venv, torch, demucs, htdemucs_ft weights) with progress events.
+let stemInstallRunning = false;
+ipcMain.handle('stems:install-engine', async (event) => {
+  if (stemInstallRunning) {
+    return { ok: false, error: 'Die Installation läuft bereits.' };
+  }
+  stemInstallRunning = true;
+  try {
+    return await installStemEngine(path.join(__dirname, '..'), (progress) => {
+      try {
+        event.sender.send('stems:install-progress', progress);
+      } catch { /* window may be closing */ }
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    stemInstallRunning = false;
+  }
+});
+
+// High-quality local AI separation. The renderer sends one finished WAV mix;
+// Demucs returns newly inferred stems and never receives reference sources.
+ipcMain.handle('stems:separate', async (_event, wavBytes) => {
+  let lastProgressLine = '';
+  const result = await separateWav(Buffer.from(wavBytes), {
+    repoRoot: path.join(__dirname, '..'),
+    model: process.env.DEMUCS_MODEL || 'htdemucs_ft',
+    onProgress: (text) => {
+      const line = text.trim();
+      if (line && line !== lastProgressLine) {
+        lastProgressLine = line;
+        logger.debug('STEMS', `[demucs-fortschritt] ${line.slice(0, 300)}`);
+      }
+    },
+    onLog: (level, category, message, details) =>
+      logger[level] ? logger[level](category, message, details) : logger.info(category, message, details),
+  });
+  return {
+    engine: 'demucs',
+    model: result.model,
+    stems: Object.fromEntries(
+      Object.entries(result.stems).map(([name, bytes]) => [name, new Uint8Array(bytes)])
+    ),
+  };
+});
+
+// --- Neue Engine (src/stems) ──────────────────────────────────────────────
+// Job-basierte Separation mit Profilwahl, Cache, Abbruch/Pause und
+// Deskriptor-abhängiger Stem-Liste. Läuft im Main-Prozess, der Renderer
+// bekommt Fortschritt über `stems:job-progress` und lädt Stems einzeln.
+const stemEngineHost = registerStemEngineIpc({
+  repoRoot: path.join(__dirname, '..'),
+  // Dieselbe Lage wie der Log-Ordner: %APPDATA%/airdox_SMART_Editor/stems/…
+  userDataDir: path.join(app.getPath('appData'), app.getName()),
+  logger,
+  ipcMain,
+  broadcast: (channel, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload);
+      } catch {
+        /* Fenster schließt gerade */
+      }
+    }
+  },
+});
+logger.info('SYSTEM', stemEngineHost.available ? 'Stem-Engine (Teil-1-Kern) aktiv' : 'Stem-Engine-Kern nicht verfügbar', {
+  bundle: stemEngineHost.bundlePath,
+  reason: stemEngineHost.reason,
+});
+
 // --- IPC-Handler bleiben unverändert ---
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
@@ -167,6 +352,7 @@ ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   try {
     await access(localPath, constants.R_OK);
     const details = await stat(localPath);
+    if (details.isFile()) originalSourceRegistry.register(localPath);
     return {
       validLocation: true,
       exists: details.isFile(),
@@ -189,7 +375,9 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
       { name: 'All files', extensions: ['*'] },
     ],
   });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  if (result.canceled) return null;
+  originalSourceRegistry.register(result.filePaths[0]);
+  return { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
@@ -201,7 +389,9 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
       { name: 'All files', extensions: ['*'] },
     ],
   });
-  return result.canceled ? null : { path: result.filePaths[0], accessMode: 'READ_ONLY' };
+  if (result.canceled) return null;
+  originalSourceRegistry.register(result.filePaths[0]);
+  return { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
@@ -212,7 +402,27 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
+  originalSourceRegistry.register(dbPath);
   return readRekordboxDatabase(dbPath);
+});
+
+// Persistent, app-owned association index. It intentionally stores neither
+// decrypted master.db rows nor audio/waveform bytes: only read-only paths and
+// compact track identifiers required to reopen an already known ANLZ file.
+ipcMain.handle('rekordbox:cache-analysis-mappings', async (_event, mappings) => {
+  if (!Array.isArray(mappings)) {
+    throw new Error('Analyse-Zuordnungen müssen als Liste übergeben werden.');
+  }
+  return getAnalysisPathRegistry().registerMany(mappings);
+});
+
+ipcMain.handle('rekordbox:find-analysis-mapping', async (_event, query) => {
+  if (!query || typeof query !== 'object') return null;
+  return getAnalysisPathRegistry().find(query);
+});
+
+ipcMain.handle('rekordbox:analysis-mapping-stats', async () => {
+  return getAnalysisPathRegistry().stats();
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
@@ -231,6 +441,7 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
     throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     path: localPath,
@@ -247,6 +458,7 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
   }
   const kindFilters = {
     WAV: { name: 'WAV Audio', extensions: ['wav'] },
+    AUDIO: { name: 'Audioaufnahme (WAV, FLAC, MP3)', extensions: ['wav', 'flac', 'mp3'] },
     XML: { name: 'Rekordbox XML', extensions: ['xml'] },
     JSON: { name: 'JSON', extensions: ['json'] },
     PROJECT: { name: 'airdox_SMART_Editor Projekt', extensions: ['airdox.json', 'json'] },
@@ -261,7 +473,7 @@ ipcMain.handle('rekordbox:save-export-file', async (_event, payload) => {
     return { saved: false };
   }
   const targetPath = path.resolve(result.filePath);
-  if (isProtectedTarget(targetPath, protectedPaths)) {
+  if (originalSourceRegistry.isProtected(targetPath, protectedPaths)) {
     throw new Error(
       'Der gewählte Zielpfad ist eine Original-Rekordbox-Quelle. Exporte dürfen Originaldateien niemals überschreiben (Non-destructive).'
     );
@@ -306,6 +518,7 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
     throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     path: localPath,
@@ -315,63 +528,80 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
-// --- AUDIO STEM SEPARATION (Python CLI Integration) ---
-const { exec } = require('child_process');
+// --- Diagnose & Logging ------------------------------------------------------
 
-ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
-  return new Promise((resolve, reject) => {
-    // Output directory for the stems
-    const outputDir = path.join(app.getPath('userData'), 'separated_stems');
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    console.log(`Starting separation for: ${inputFilePath}`);
-    console.log(`Output directory: ${outputDir}`);
-    
-    // Wir rufen das globale Python CLI Tool 'audio-separator' auf.
-    // Voraussetzung: Der Nutzer hat `pip install audio-separator[gpu]` auf seinem Windows PC ausgeführt.
-    const command = `audio-separator "${inputFilePath}" --output_dir "${outputDir}" --output_format WAV`;
-
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error executing separator: ${error}`);
-        console.error(stderr);
-        reject(error.message);
-        return;
-      }
-      
-      console.log(`Separation finished. Output: ${stdout}`);
-      
-      fs.readdir(outputDir, (err, files) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        
-        // Find generated .wav files that contain the base name
-        const baseName = path.parse(inputFilePath).name;
-        // Sometimes models change spaces to underscores or similar, so we filter by .wav and try to match as best as possible.
-        // For audio-separator, it usually appends `_(Vocals)...`
-        const generatedFiles = files.filter(f => f.includes(baseName) && f.endsWith('.wav') || f.endsWith('.wav'));
-        
-        // Return absolute paths to the React frontend
-        const stems = generatedFiles.map(file => path.join(outputDir, file));
-        
-        resolve(stems);
-      });
+// Gebündelter Log-Strom aus dem Renderer (gleiche Tagesdatei wie der Main-Prozess).
+ipcMain.on('logs:write', (event, entries) => {
+  try {
+    if (!Array.isArray(entries)) return;
+    logger.ingestRendererEntries(entries);
+  } catch (error) {
+    logger.error('LOG', `Renderer-Logs konnten nicht geschrieben werden: ${error.message}`, {
+      stack: error.stack,
     });
-  });
+  }
+});
+
+ipcMain.handle('logs:get-info', async () => {
+  return {
+    ...logger.getInfo(),
+    userData: app.getPath('userData'),
+    isPackaged: app.isPackaged,
+  };
+});
+
+ipcMain.handle('logs:read-tail', async (_event, maxBytes) => {
+  const cap = Math.min(Number(maxBytes) || 256 * 1024, 2 * 1024 * 1024);
+  return logger.readRecent(cap);
+});
+
+ipcMain.handle('logs:open-log-folder', async () => {
+  const info = logger.readRecent(1);
+  const target = info.file || logger.getLogDirectory();
+  logger.info('LOG', 'Log-Ordner wird im System-Dateimanager geöffnet.', { target });
+  shell.showItemInFolder(target);
+  return { opened: true, target, logDirectory: logger.getLogDirectory() };
 });
 
 app.whenReady().then(() => {
+  // Offizielles userData-Logverzeichnis übernehmen, falls es beim Boot noch
+  // nicht zur Verfügung stand (Normalfall: beide Pfade sind identisch).
+  const officialDir = path.join(app.getPath('userData'), 'logs');
+  if (logger.getLogDirectory() !== officialDir) {
+    logger.info('SYSTEM', `Log-Verzeichnis gewechselt: ${logger.getLogDirectory()} → ${officialDir}`);
+    logger.configure({ logDirectory: officialDir });
+  }
+
+  logger.info('SYSTEM', `Electron app ready – packaged=${app.isPackaged}`, {
+    userData: app.getPath('userData'),
+    argv: process.argv,
+  });
+
   registerAppProtocol();
   createWindow();
+
   app.on('activate', () => {
+    logger.info('SYSTEM', 'App-Aktivierung (activate) – Fenster werden geprüft.');
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+app.on('child-process-gone', (_event, details) => {
+  logger.error('SYSTEM', `Kindprozess abgestürzt: ${details.type} (${details.reason})`, details);
+});
+
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('render-process-gone', (_e, details) => {
+    logger.fatal('SYSTEM', `WebContents Renderer abgestürzt (${details.reason})`, details);
+  });
+});
+
+app.on('before-quit', () => {
+  logger.info('SYSTEM', 'Anwendung wird beendet (before-quit) – Log-Puffer wird synchron geschrieben.');
+  logger.flushSync();
+});
+
 app.on('window-all-closed', () => {
+  logger.info('SYSTEM', 'Alle Fenster geschlossen (window-all-closed).');
   if (process.platform !== 'darwin') app.quit();
 });
