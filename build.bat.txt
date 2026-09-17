@@ -1,0 +1,61 @@
+@echo off
+chcp 65001 > nul
+title Airdox Editor - EXE Builder
+
+echo ====================================================
+echo  AIRDOX EDITOR - AUTOMATISCHER EXE BUILDER
+echo ====================================================
+echo.
+
+if not exist "scripts" mkdir scripts
+
+echo [1/2] Aktualisiere Build-Skript (scripts/build-exe.mjs)...
+
+(
+echo import { execSync } from 'child_process';
+echo import fs from 'fs';
+echo import path from 'path';
+echo.
+echo console.log('===================================================='^);
+echo console.log('AIRDOX EDITOR - WINDOWS EXE BUILDER'^);
+echo console.log('====================================================\n'^);
+echo.
+echo try {
+echo   if ^(!fs.existsSync^(path.join^(process.cwd^(^), 'node_modules', 'electron-builder'^)^)^) {
+echo     console.log('[1/5] Installiere electron-builder und @electron/rebuild...'^);
+echo     execSync('npm install --save-dev electron-builder @electron/rebuild', { stdio: 'inherit' }^);
+echo   }
+echo.
+echo   console.log('\n[2/5] Bilde Frontend ^(Vite / React^)...'^);
+echo   execSync('npm run build', { stdio: 'inherit' }^);
+echo.
+echo   console.log('\n[3/5] Rekompiliere native C++ Module für Electron ^(SQLite Fix^)...'^);
+echo   execSync('npx @electron/rebuild', { stdio: 'inherit' }^);
+echo.
+echo   console.log('\n[4/5] Prüfe App-Dependencies...'^);
+echo   execSync('npx electron-builder install-app-deps', { stdio: 'inherit' }^);
+echo.
+echo   console.log('\n[5/5] Paketiere Standalone Windows .exe...'^);
+echo   execSync('npx electron-builder --win portable', { stdio: 'inherit' }^);
+echo.
+echo   console.log('\n===================================================='^);
+echo   console.log('BUILD ERFOLGREICH!'^);
+echo   console.log('Deine ausführbare Datei liegt unter: '^ + path.join^(process.cwd^(^), 'dist'^)^);
+echo   console.log('===================================================='^);
+echo } catch ^(error^) {
+echo   console.error('\n[FEHLER beim Build-Prozess]:', error.message^);
+echo   process.exit^(1^);
+echo }
+) > scripts\build-exe.mjs
+
+echo.
+echo [2/2] Starte Build-Prozess mit Node/TSX...
+echo.
+
+npx tsx scripts/build-exe.mjs
+
+echo.
+echo ====================================================
+echo Fertig! Druecke eine Taste zum Beenden.
+echo ====================================================
+pause > nul

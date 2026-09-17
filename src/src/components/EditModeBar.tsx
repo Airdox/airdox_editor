@@ -1,0 +1,364 @@
+/**
+ * @license
+ * Rekordbox EditModeBar Component
+ * Sub-toolbar matching screenshots 01, 02, 03:
+ * EDIT dropdown, transport controls, quantize, master stereo meters, Free Plus badge.
+ */
+
+import React, { useState, useEffect } from 'react';
+import {
+  FilePlus,
+  Save,
+  Share2,
+  ChevronDown,
+  RotateCcw,
+  Info,
+  Settings,
+  Volume2,
+  PanelBottom,
+  PanelRight,
+  Maximize2,
+  Minimize2,
+} from 'lucide-react';
+
+import { TrackSeparation } from './TrackSeparation';
+
+interface EditModeBarProps {
+  projectName: string;
+  isPlaying: boolean;
+  onTogglePlay: () => void;
+  onReturnToStart: () => void;
+  loopActive: boolean;
+  onToggleLoop: () => void;
+  quantizeActive: boolean;
+  onToggleQuantize: () => void;
+  onNewProject: () => void;
+  onSaveProject: () => void;
+  onExport: () => void;
+  onShowInfo: () => void;
+  onOpenSettings?: () => void;
+  masterVolume: number;
+  onMasterVolumeChange: (vol: number) => void;
+  meterL: number;
+  meterR: number;
+  paletteViewMode?: 'SIDEBAR' | 'FULL_DECK';
+  onTogglePaletteViewMode?: () => void;
+  bottomControlOpen?: boolean;
+  onToggleBottomControl?: () => void;
+  paletteOpen?: boolean;
+  onTogglePalette?: () => void;
+  isMaxWaveform?: boolean;
+  onToggleMaxWaveform?: () => void;
+  stemVolumes?: number[];
+  onStemVolumeChange?: (index: number, vol: number) => void;
+  trackHasStems?: boolean;
+}
+
+export const EditModeBar: React.FC<EditModeBarProps> = ({
+  projectName,
+  isPlaying,
+  onTogglePlay,
+  onReturnToStart,
+  loopActive,
+  onToggleLoop,
+  quantizeActive,
+  onToggleQuantize,
+  onNewProject,
+  onSaveProject,
+  onExport,
+  onShowInfo,
+  onOpenSettings,
+  masterVolume,
+  onMasterVolumeChange,
+  meterL,
+  meterR,
+  paletteViewMode = 'SIDEBAR',
+  onTogglePaletteViewMode,
+  bottomControlOpen = true,
+  onToggleBottomControl,
+  paletteOpen = true,
+  onTogglePalette,
+  isMaxWaveform = false,
+  onToggleMaxWaveform,
+  stemVolumes = [],
+  onStemVolumeChange,
+  trackHasStems = false
+}) => {
+  const [timeStr, setTimeStr] = useState<string>('15:21');
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const hours = now.getHours().toString().padStart(2, '0');
+      const mins = now.getMinutes().toString().padStart(2, '0');
+      setTimeStr(`${hours}:${mins}`);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="h-10 bg-[#0e0f12] border-b border-[#1c1d23] flex items-center justify-between px-3 text-xs select-none">
+      {/* Left section: EDIT mode dropdown, Project tools, Transport */}
+      <div className="flex items-center space-x-3">
+        {/* EDIT Mode selector */}
+        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027] group relative">
+          <span>EDIT</span>
+          <ChevronDown size={12} className="text-neutral-400 group-hover:text-white" />
+          
+          <div className="absolute top-full left-0 mt-1 bg-[#1a1c23] border border-[#2d303b] rounded shadow-lg py-1 hidden group-hover:block z-50 min-w-[120px]">
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">EXPORT</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">PERFORMANCE</div>
+            <div className="px-3 py-1.5 text-[#00a2ff] font-bold bg-[#252834] cursor-pointer">EDIT</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">RECORD</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">LIGHTING</div>
+          </div>
+        </div>
+
+        {/* Small project icons */}
+        <div className="flex items-center space-x-1.5 text-neutral-400 pl-1 border-r border-[#262832] pr-3">
+          <button
+            onClick={onNewProject}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Neues Projekt"
+          >
+            <FilePlus size={14} />
+          </button>
+          <button
+            onClick={onSaveProject}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Projekt speichern"
+          >
+            <Save size={14} />
+          </button>
+          <button
+            onClick={onExport}
+            className="p-1 hover:text-white hover:bg-[#20222a] rounded transition-colors"
+            title="Exportieren"
+          >
+            <Share2 size={14} />
+          </button>
+        </div>
+
+        {/* Project Name dropdown */}
+        <div className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]">
+          <span>{projectName}</span>
+          <ChevronDown size={11} className="text-neutral-500" />
+        </div>
+
+        {/* Transport Controls */}
+        <div className="flex items-center space-x-2 pl-4">
+          {/* Cue / Return to Start: |< */}
+          <button
+            onClick={onReturnToStart}
+            className="w-6 h-6 flex items-center justify-center text-neutral-300 hover:text-white hover:bg-[#242630] rounded transition-colors"
+            title="Return to Cue / Start (|<)"
+          >
+            <div className="flex items-center">
+              <div className="w-[2px] h-3 bg-current mr-[1px]"></div>
+              <div className="w-0 h-0 border-y-[5px] border-y-transparent border-r-[8px] border-r-current"></div>
+            </div>
+          </button>
+
+          {/* Play / Pause: > */}
+          <button
+            onClick={onTogglePlay}
+            className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
+              isPlaying
+                ? 'bg-[#00c853] text-black shadow-[0_0_10px_rgba(0,200,83,0.4)]'
+                : 'text-neutral-200 hover:text-white hover:bg-[#282a34]'
+            }`}
+            title="Play / Pause"
+          >
+            {isPlaying ? (
+              <div className="flex space-x-[2px]">
+                <div className="w-[3px] h-3.5 bg-black rounded-[0.5px]" />
+                <div className="w-[3px] h-3.5 bg-black rounded-[0.5px]" />
+              </div>
+            ) : (
+              <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[10px] border-l-current ml-0.5"></div>
+            )}
+          </button>
+
+          {/* Loop toggle */}
+          <button
+            onClick={onToggleLoop}
+            className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
+              loopActive ? 'text-[#ff9500] bg-[#332200]' : 'text-neutral-400 hover:text-white hover:bg-[#242630]'
+            }`}
+            title="Loop"
+          >
+            <RotateCcw size={13} />
+          </button>
+
+          {/* Quantize: Q : AUTO */}
+          <button
+            onClick={onToggleQuantize}
+            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors ${
+              quantizeActive
+                ? 'border-[#ff3b30]/60 bg-[#281414] text-neutral-200'
+                : 'border-transparent text-neutral-500 hover:text-neutral-300'
+            }`}
+            title="Quantize Mode"
+          >
+            <span className="text-[#ff3b30] font-bold">Q</span>
+            <span className="text-neutral-300 font-sans text-[11px]">: AUTO</span>
+            <ChevronDown size={10} className="text-neutral-400" />
+          </button>
+
+          {/* ACTIVE PART / TRACK SEPARATION UI */}
+          {trackHasStems && onStemVolumeChange && (
+            <TrackSeparation
+              stemsActive={true}
+              stemsAvailable={trackHasStems}
+              stemVolumes={stemVolumes}
+              onStemVolumeChange={onStemVolumeChange}
+            />
+          )}
+
+          {/* Deck View Layout Toggle: 1-DECK vs 2-DECK (Dual Deck Clip View) */}
+          {onTogglePaletteViewMode && (
+            <button
+              onClick={onTogglePaletteViewMode}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
+                paletteViewMode === 'FULL_DECK'
+                  ? 'border-[#0088ff] bg-[#0d2238] text-[#00c8ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white hover:border-[#383d4e]'
+              }`}
+              title="Zwischen Standard-Ansicht und 2-Deck-Ansicht (Deck A + Clip-Deck B) umschalten"
+            >
+              <span>{paletteViewMode === 'FULL_DECK' ? '2-DECK AKTIV' : '2-DECK ANSICHT'}</span>
+            </button>
+          )}
+
+          {/* Collapsible Edit Palette (Bottom) & Clip Palette (Side) & Max Waveform Mode */}
+          <div className="h-4 w-px bg-[#262832] mx-0.5" />
+
+          {onToggleBottomControl && (
+            <button
+              onClick={onToggleBottomControl}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                bottomControlOpen
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
+              }`}
+              title="Editierpalette unten ein-/ausklappen für maximale Wellenform-Fläche (Taste: E)"
+            >
+              <PanelBottom size={12} />
+              <span>EDIT-PANEL</span>
+            </button>
+          )}
+
+          {onTogglePalette && (
+            <button
+              onClick={onTogglePalette}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                paletteOpen
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
+              }`}
+              title="Clip-Palette rechts ein-/ausklappen (Taste: P)"
+            >
+              <PanelRight size={12} />
+              <span>CLIPS</span>
+            </button>
+          )}
+
+          {onToggleMaxWaveform && (
+            <button
+              onClick={onToggleMaxWaveform}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
+                isMaxWaveform
+                  ? 'border-[#00e5ff] bg-[#003848] text-[#00e5ff] shadow-[0_0_8px_rgba(0,229,255,0.3)]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-[#00e5ff] hover:border-[#383d4e]'
+              }`}
+              title="Wellenform maximieren (Zen-Modus: klappt Paletten ein für maximale Bearbeitungsfläche) [Taste: M]"
+            >
+              {isMaxWaveform ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              <span>{isMaxWaveform ? 'MAX AKTIV' : 'MAX ZOOM'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Right section: Settings, Master Meter, Clock */}
+      <div className="flex items-center space-x-3">
+        {/* Settings gear */}
+        <button
+          onClick={onOpenSettings}
+          className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#242630] rounded transition-colors"
+          title="Workspace Settings & Utilities"
+        >
+          <Settings size={14} />
+        </button>
+
+        {/* Master Meter & Level */}
+        <div className="flex items-center space-x-2 bg-[#121317] px-2.5 py-1 rounded border border-[#22242d]">
+          {/* Rotary indicator */}
+          <div className="w-4 h-4 rounded-full border border-neutral-500 relative flex items-center justify-center">
+            <div
+              className="w-1.5 h-[1.5px] bg-[#00a2ff] absolute"
+              style={{
+                transform: `rotate(${(masterVolume * 240) - 120}deg)`,
+                transformOrigin: 'right center',
+                right: '50%',
+              }}
+            />
+          </div>
+
+          {/* Dual Stereo LED Meter (Left / Right) */}
+          <div className="flex flex-col space-y-[2px] w-14">
+            {/* L */}
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+              <div
+                className="h-full transition-all duration-75"
+                style={{
+                  width: `${Math.min(100, meterL * 100)}%`,
+                  background:
+                    meterL > 0.85
+                      ? 'linear-gradient(90deg, #00c853 60%, #ffd600 85%, #ff3b30 100%)'
+                      : meterL > 0.65
+                      ? 'linear-gradient(90deg, #00c853 75%, #ffd600 100%)'
+                      : '#00c853',
+                }}
+              />
+            </div>
+            {/* R */}
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+              <div
+                className="h-full transition-all duration-75"
+                style={{
+                  width: `${Math.min(100, meterR * 100)}%`,
+                  background:
+                    meterR > 0.85
+                      ? 'linear-gradient(90deg, #00c853 60%, #ffd600 85%, #ff3b30 100%)'
+                      : meterR > 0.65
+                      ? 'linear-gradient(90deg, #00c853 75%, #ffd600 100%)'
+                      : '#00c853',
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Master volume slider */}
+          <input
+            type="range"
+            min="0"
+            max="1.2"
+            step="0.02"
+            value={masterVolume}
+            onChange={(e) => onMasterVolumeChange(parseFloat(e.target.value))}
+            className="w-12 h-1 bg-[#22242d] accent-[#00a2ff] cursor-pointer"
+            title={`Master Volume: ${Math.round(masterVolume * 100)}%`}
+          />
+        </div>
+
+        {/* Digital Time display matching screenshot (e.g. 15:21) */}
+        <div className="font-mono text-[11.5px] text-neutral-300 pl-1 font-semibold">
+          {timeStr}
+        </div>
+      </div>
+    </div>
+  );
+};

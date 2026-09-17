@@ -1,4 +1,18 @@
-﻿import fs from 'node:fs';
+# ==============================================================================
+# PIPELINE SETUP SCRIPT (Stufe 4 & Multi-File Utilities)
+# ==============================================================================
+
+# 1. Ordner 'scripts' sicherstellen
+if (-not (Test-Path "scripts")) {
+    New-Item -ItemType Directory -Path "scripts" | Out-Null
+    Write-Host "[OK] Ordner 'scripts' erstellt." -ForegroundColor Green
+}
+
+# ------------------------------------------------------------------------------
+# DATEI 1: scripts/anlz-probe.mjs (Einzeldatei-Probe für Stufe 4)
+# ------------------------------------------------------------------------------
+$anlzProbeContent = @'
+import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -27,10 +41,10 @@ const hashBefore = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 const stats = fs.statSync(resolvedPath);
 
 console.log(`==================================================`);
-console.log(`ANLZ PROBE (Stufe 4) - Probe-Lauf fÃ¼r: ${path.basename(resolvedPath)}`);
+console.log(`ANLZ PROBE (Stufe 4) - Probe-Lauf für: ${path.basename(resolvedPath)}`);
 console.log(`==================================================`);
 console.log(`Pfad:         ${resolvedPath}`);
-console.log(`GrÃ¶ÃŸe:        ${stats.size} Bytes`);
+console.log(`Größe:        ${stats.size} Bytes`);
 console.log(`SHA-256 Vor:  ${hashBefore}`);
 console.log(`--------------------------------------------------`);
 
@@ -39,7 +53,7 @@ function parseAnlz(buffer) {
   
   const magic = buffer.toString('ascii', offset, offset + 4);
   if (magic !== 'PMAI' && magic !== 'PANL') {
-    throw new Error(`UngÃ¼ltiger ANLZ-Header: '${magic}' (Erwartet: PMAI oder PANL)`);
+    throw new Error(`Ungültiger ANLZ-Header: '${magic}' (Erwartet: PMAI oder PANL)`);
   }
 
   const headerLen = buffer.readUInt32BE(offset + 4);
@@ -121,7 +135,7 @@ try {
   console.log(`SHA-256 Nach: ${hashAfter}`);
   
   if (hashBefore !== hashAfter) {
-    console.error(`\n[FAIL] EVIDENZ FEHLGESCHLAGEN: Datei wurde verÃ¤ndert!`);
+    console.error(`\n[FAIL] EVIDENZ FEHLGESCHLAGEN: Datei wurde verändert!`);
     process.exit(1);
   }
 
@@ -129,10 +143,90 @@ try {
   if (!hasEssential) {
     console.warn(`\n[WARNUNG] Keine Beatgrid- oder Waveform-Tags gefunden!`);
   } else {
-    console.log(`\n[PASS] EVIDENZ GATE STUFE 4 ERFÃœLLT (UnverÃ¤ndert & Tag-Inventar valide)`);
+    console.log(`\n[PASS] EVIDENZ GATE STUFE 4 ERFÜLLT (Unverändert & Tag-Inventar valide)`);
   }
 
 } catch (err) {
   console.error(`\n[FAIL] Fehler beim Parsen der ANLZ-Datei:`, err.message);
   process.exit(1);
 }
+'@
+
+$anlzProbeContent | Out-File -FilePath "scripts/anlz-probe.mjs" -Encoding utf8
+Write-Host "[OK] Datei 'scripts/anlz-probe.mjs' geschrieben." -ForegroundColor Green
+
+# ------------------------------------------------------------------------------
+# DATEI 2: scripts/batch-probe.mjs (Multi-File Scan für ganze Verzeichnisse)
+# ------------------------------------------------------------------------------
+$batchProbeContent = @'
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
+
+const args = process.argv.slice(2);
+const dirInput = args[0];
+
+if (!dirInput) {
+  console.error('Fehler: Bitte gib ein Verzeichnis an: node scripts/batch-probe.mjs <ordner-pfad>');
+  process.exit(1);
+}
+
+const targetDir = path.resolve(dirInput);
+
+function findAnlzFiles(dir, fileList = []) {
+  const files = fs.readdirSync(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    if (fs.statSync(filePath).isDirectory()) {
+      findAnlzFiles(filePath, fileList);
+    } else if (file.toUpperCase().startsWith('ANLZ') && (file.toUpperCase().endsWith('.DAT') || file.toUpperCase().endsWith('.EXT'))) {
+      fileList.push(filePath);
+    }
+  }
+  return fileList;
+}
+
+try {
+  const files = findAnlzFiles(targetDir);
+  console.log(`[BATCH PROBE] ${files.length} ANLZ-Dateien in '${targetDir}' gefunden.\n`);
+
+  files.forEach((f, idx) => {
+    console.log(`>>> [${idx + 1}/${files.length}] TESTE: ${f}`);
+    try {
+      execSync(`node scripts/anlz-probe.mjs --file "${f}"`, { stdio: 'inherit' });
+      console.log('\n');
+    } catch {
+      console.error(`[FAIL] Fehler bei Datei: ${f}\n`);
+    }
+  });
+} catch (err) {
+  console.error('Fehler beim Ordnerscan:', err.message);
+}
+'@
+
+$batchProbeContent | Out-File -FilePath "scripts/batch-probe.mjs" -Encoding utf8
+Write-Host "[OK] Datei 'scripts/batch-probe.mjs' geschrieben." -ForegroundColor Green
+
+# ------------------------------------------------------------------------------
+# DATEI 3: package.json Konfiguration anpassen
+# ------------------------------------------------------------------------------
+if (Test-Path "package.json") {
+    $pkg = Get-Content "package.json" -Raw | ConvertFrom-Json
+    
+    if (-not $pkg.PSObject.Properties['scripts']) {
+        $pkg | Add-Member -MemberType NoteProperty -Name "scripts" -Value ([PSCustomObject]@{})
+    }
+    
+    $pkg.scripts | Add-Member -MemberType NoteProperty -Name "probe:anlz" -Value "node scripts/anlz-probe.mjs" -Force
+    $pkg.scripts | Add-Member -MemberType NoteProperty -Name "probe:anlz-batch" -Value "node scripts/batch-probe.mjs" -Force
+    
+    $pkg | ConvertTo-Json -Depth 100 | Out-File -FilePath "package.json" -Encoding utf8
+    Write-Host "[OK] Befehle 'probe:anlz' und 'probe:anlz-batch' in package.json registriert." -ForegroundColor Green
+} else {
+    Write-Host "[WARNUNG] Keine package.json gefunden." -ForegroundColor Yellow
+}
+
+Write-Host "`nSetup vollständig abgeschlossen!" -ForegroundColor Cyan
+Write-Host "Verfügbare Befehle:" -ForegroundColor Yellow
+Write-Host " 1. Einzeldatei-Test: npm run probe:anlz -- --file <pfad/zu/ANLZ0000.DAT>" -ForegroundColor White
+Write-Host " 2. Ordner-Batch-Test: npm run probe:anlz-batch -- <pfad/zum/ANLZ-Ordner>" -ForegroundColor White

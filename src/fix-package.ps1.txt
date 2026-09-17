@@ -1,0 +1,13 @@
+$jsonPath = "package.json"
+if (Test-Path $jsonPath) {
+    $content = Get-Content -Raw $jsonPath
+    if ($content -match '"probe:anlz"\s*:\s*"node ') {
+        $updatedContent = $content -replace '"probe:anlz"\s*:\s*"node ', '"probe:anlz": "tsx '
+        Set-Content -Path $jsonPath -Value $updatedContent -Encoding utf8
+        Write-Host "SUCCESS: package.json wurde erfolgreich angepasst ('node' -> 'tsx')." -ForegroundColor Green
+    } else {
+        Write-Host "HINWEIS: 'probe:anlz' verwendet bereits 'tsx' oder wurde nicht gefunden." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "FEHLER: package.json wurde im aktuellen Ordner nicht gefunden." -ForegroundColor Red
+}
