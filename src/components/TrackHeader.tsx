@@ -5,9 +5,16 @@
  */
 
 import React from 'react';
-import { FileAudio, Check, Layers } from 'lucide-react';
-import { TrackModel } from '../types/rekordbox';
+import { FileAudio, Check, Layers, XCircle } from 'lucide-react';
+import { StemSeparationInfo, TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
+
+/** Fortschrittszustand der Stem-Separation (interne Engine oder externe CLI). */
+export interface StemSeparationProgress {
+  phase: 'prepare' | 'separating' | 'decoding' | 'done';
+  ratio: number;
+  message: string;
+}
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -18,9 +25,14 @@ interface TrackHeaderProps {
   onPanView: (newOffset: number) => void;
   onLoadAudioClick?: () => void;
   onSeparateStems?: () => void;
+  onCancelSeparateStems?: () => void;
   isSeparating?: boolean;
+  separationProgress?: StemSeparationProgress | null;
   onStemVolumeChange?: (index: number, volume: number) => void;
   stemVolumes?: number[];
+  stemLabels?: string[];
+  stemIds?: string[];
+  stemInfo?: StemSeparationInfo | null;
 }
 
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
@@ -32,9 +44,11 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   onPanView,
   onLoadAudioClick,
   onSeparateStems,
+  onCancelSeparateStems,
   isSeparating = false,
-  onStemVolumeChange,
-  stemVolumes = [],
+  separationProgress = null,
+  stemLabels = [],
+  stemInfo = null,
 }) => {
   // Format 05:26.3
   const formatTime = (secs: number) => {
@@ -81,7 +95,10 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   <span>Audio aktiv ({track.sampleRate}Hz)</span>
                 </span>
               )}
-              {track && track.audioBuffer && track.filePath && onSeparateStems && !track.stems && (
+              {/* Stems trennen: funktioniert mit jeder verknüpften Audiodatei.
+                  Desktop + installierte CLI => trainiertes Modell, sonst die
+                  eingebaute Heuristik. Beides ersetzt das Original nie. */}
+              {track && track.audioBuffer && onSeparateStems && !(track.stemBuffers && track.stemBuffers.length > 0) && (
                 <button
                   onClick={onSeparateStems}
                   disabled={isSeparating}
@@ -90,11 +107,43 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                       ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 animate-pulse cursor-wait'
                       : 'bg-indigo-500/20 hover:bg-indigo-500/35 border-indigo-500/50 text-indigo-300'
                   }`}
-                  title="Stems mit lokaler KI trennen (Requires audio-separator CLI)"
+                  title="Stems trennen: trainiertes Modell, wenn die Desktop-CLI verfügbar ist, sonst interne DSP-Heuristik"
                 >
                   <Layers size={11} />
-                  <span>{isSeparating ? 'Trenne Stems (GPU)...' : 'Stems trennen'}</span>
+                  <span>{isSeparating ? 'Trenne Stems …' : 'Stems trennen'}</span>
                 </button>
+              )}
+              {isSeparating && (
+                <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-purple-500/10 border border-purple-500/40 text-purple-200 text-[9.5px] font-mono">
+                  <span>{separationProgress?.message ?? 'Separation läuft …'}</span>
+                  {typeof separationProgress?.ratio === 'number' && separationProgress.ratio > 0 && (
+                    <span className="text-purple-300">{Math.round(separationProgress.ratio * 100)} %</span>
+                  )}
+                  {onCancelSeparateStems && (
+                    <button
+                      onClick={onCancelSeparateStems}
+                      className="ml-1 text-purple-300 hover:text-white cursor-pointer"
+                      title="Separation abbrechen"
+                    >
+                      <XCircle size={11} />
+                    </button>
+                  )}
+                </span>
+              )}
+              {stemInfo && stemLabels.length > 0 && (
+                <span
+                  className={`flex items-center space-x-1 px-1.5 py-0.5 rounded border text-[9.5px] font-mono ${
+                    stemInfo.trainedModel
+                      ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                      : 'bg-amber-500/10 border-amber-500/40 text-amber-300'
+                  }`}
+                  title={`${stemInfo.modelId} · ${(stemInfo.durationMs / 1000).toFixed(1)} s · ${stemInfo.notes.join(' ')}`}
+                >
+                  <Layers size={10} />
+                  <span>
+                    {stemLabels.length} Stems · {stemInfo.trainedModel ? 'KI-MODELL' : 'DSP-HEURISTIK'}
+                  </span>
+                </span>
               )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">

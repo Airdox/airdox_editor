@@ -78,6 +78,19 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Der Dev-Server muss im Container bzw. hinter dem Preview-Proxy
+      // erreichbar sein: Bindung auf alle Interfaces und Freigabe der
+      // Proxy-Hostnamen (z. B. https://<port>-<sandbox>.e2b.app). Ohne
+      // allowedHosts lehnt Vite 6 solche Anfragen mit „Blocked request“ ab.
+      host: process.env.VITE_HOST ?? '0.0.0.0',
+      port: Number(process.env.PORT ?? 5173),
+      allowedHosts: true as const,
+      strictPort: false,
+    },
+    preview: {
+      host: process.env.VITE_HOST ?? '0.0.0.0',
+      port: Number(process.env.PORT ?? 4173),
+      allowedHosts: true as const,
     },
   };
 });

@@ -11,6 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
+  /** Von der App erzeugte Stem-Daten (Separation) – klar getrennt von
+   * Rekordbox-Quellen, wie in der Roadmap als `PROJECT_DSP` vorgesehen. */
+  PROJECT_DSP = 'PROJECT_DSP',
   /** Own calculation used as a clearly labeled fallback when no Rekordbox
    * source (ANLZ/DB/audio) provides the data. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
@@ -164,6 +167,33 @@ export interface OriginalMediaReference {
   modifiedAt?: number;
 }
 
+/**
+ * Provenance of a stem set. The editor must always be able to tell the user
+ * whether the stems came from a trained model or from the built-in heuristic,
+ * so the metadata travels with the track instead of being guessed from the
+ * number of buffers.
+ */
+export interface StemSeparationInfo {
+  /** Herkunft der Stem-Daten: immer PROJECT_DSP (eigene Berechnung, nie Rekordbox). */
+  origin: DataOrigin.PROJECT_DSP;
+  /** 'desktop' = external trained CLI via Electron, 'builtin' = in-process DSP. */
+  engine: 'desktop' | 'builtin';
+  modelId: string;
+  trainedModel: boolean;
+  qualityTier: 'TRAINED' | 'HEURISTIC';
+  ids: string[];
+  labels: string[];
+  /** Absolute output paths, only for the desktop engine. */
+  paths?: string[];
+  notes: string[];
+  /** Reasons the desktop engine was skipped, in the order they occurred. */
+  fallbackReasons?: string[];
+  separatedAt: number;
+  durationMs: number;
+  /** Largest |mix − Σstems| deviation, when measured (builtin engine). */
+  recombinationMaxError?: number;
+}
+
 export interface TrackModel {
   id: string;
   title: string;
@@ -176,8 +206,11 @@ export interface TrackModel {
   year?: string;
   comments?: string;
   filePath?: string;
+  /** Stem ids (or, for the external engine, the produced file paths). */
   stems?: string[];
   stemBuffers?: AudioBuffer[];
+  /** Which engine produced `stemBuffers`, plus honest quality metadata. */
+  stemInfo?: StemSeparationInfo;
   dateAdded?: string;
   remixer?: string;
   isrc?: string;
