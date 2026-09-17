@@ -154,6 +154,19 @@ function registerAppProtocol() {
 
 // --- IPC-Handler bleiben unverändert ---
 
+// Durable log mirror: every renderer log entry is appended to
+// <userData>/airdox-smart-editor.log (rotated at 5 MB by logWriter.cjs).
+// Writes never throw — logging must not break the app it observes.
+const desktopLogWriter = createLogWriter(
+  path.join(app.getPath('userData'), 'airdox-smart-editor.log')
+);
+
+ipcMain.handle('rekordbox:append-log', (_event, entry) => {
+  return desktopLogWriter.append(formatLogLine(entry));
+});
+
+ipcMain.handle('rekordbox:get-log-file-path', () => desktopLogWriter.filePath);
+
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);
   if (!localPath) {
