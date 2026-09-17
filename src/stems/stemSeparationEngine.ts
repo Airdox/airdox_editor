@@ -6,6 +6,7 @@ import { readWavFile } from './wavIo';
 import type { StemId, StemProfile, StemDescriptor } from './types';
 import type { BackendSeparationResult, IStemSeparator } from './backends/types';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
+import { AudioSeparatorSeparator, type AudioSeparatorOptions } from './backends/audioSeparatorSeparator';
 export interface SeparationRequest { inputPath: string; modelId?: string; profile?: StemProfile; trackName?: string; chunkSizeSamples?: number; overlap?: number; token?: SeparationCancellationToken; onProgress?: (entry: { chunkIndex?: number; phase: string; detail?: string }) => void; extras?: Record<string, string | number | boolean>; }
 export interface SeparationStem { id: StemId; filePath: string; sampleRate: number; channels: number; frames: number; }
 export interface SeparationMetadata { settings: { inputPath: string; modelId: string; profile: StemProfile; trackName: string; extras?: Record<string, string | number | boolean> }; events: { phase: string; detail?: string }[]; }
@@ -37,4 +38,20 @@ export class StemSeparationEngine {
   private metadata(request: SeparationRequest, modelId: string, trackName: string, events: { phase: string; detail?: string }[]): SeparationMetadata { return { settings: { inputPath: request.inputPath, modelId, profile: request.profile ?? 'HIGH_QUALITY', trackName, extras: request.extras }, events }; }
   private async ensureWritableRoot(root: string): Promise<void> { try { const info = await stat(root).catch(() => undefined); if (info && (info.mode & 0o222) === 0) throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis ist nicht beschreibbar: ${root}`); await mkdir(root, { recursive: true }); } catch (error) { if (error instanceof StemSeparationError) throw error; throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis konnte nicht erstellt werden: ${root}`, error); } }
 }
-export function createDefaultBackendFactory(options: { pipelineDouble?: PipelineDoubleSeparator } = {}): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator { return (model) => { if (model.id === 'pipeline-double-v1' || options.pipelineDouble) return options.pipelineDouble ?? new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); return new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); }; }
+/**
+ * Default backend selection.
+ *
+ * - `pipeline-double-v1` always maps to the deterministic double.
+ * - An explicitly injected `pipelineDouble` wins for every model (tests/CI).
+ * - Every other (trained) model runs the real `audio-separator` backend.
+ *
+ * Previously this returned the double for trained models too, which meant a
+ * caller asking for a trained model silently received fixture audio.
+ */
+export function createDefaultBackendFactory(options: { pipelineDouble?: PipelineDoubleSeparator; audioSeparator?: AudioSeparatorOptions } = {}): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator {
+  return (model) => {
+    if (options.pipelineDouble) return options.pipelineDouble;
+    if (model.id === 'pipeline-double-v1' || !model.trainedModel) return new PipelineDoubleSeparator({ stemOrder: model.stemOrder });
+    return new AudioSeparatorSeparator({ ...options.audioSeparator, stemOrder: model.stemOrder });
+  };
+}

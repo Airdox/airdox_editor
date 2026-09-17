@@ -21,6 +21,11 @@ interface TrackHeaderProps {
   isSeparating?: boolean;
   onStemVolumeChange?: (index: number, volume: number) => void;
   stemVolumes?: number[];
+  stemIds?: string[];
+  /** 0..100 while a separation runs, null when indeterminate. */
+  stemProgress?: number | null;
+  stemStatus?: { kind: 'idle' | 'running' | 'done' | 'error'; message: string };
+  onCancelSeparation?: () => void;
 }
 
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
@@ -35,6 +40,10 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   isSeparating = false,
   onStemVolumeChange,
   stemVolumes = [],
+  stemIds = [],
+  stemProgress = null,
+  stemStatus,
+  onCancelSeparation,
 }) => {
   // Format 05:26.3
   const formatTime = (secs: number) => {
@@ -93,8 +102,33 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   title="Stems mit lokaler KI trennen (Requires audio-separator CLI)"
                 >
                   <Layers size={11} />
-                  <span>{isSeparating ? 'Trenne Stems (GPU)...' : 'Stems trennen'}</span>
+                  <span>
+                    {isSeparating
+                      ? stemProgress !== null
+                        ? `Trenne Stems … ${Math.round(stemProgress)}%`
+                        : 'Trenne Stems …'
+                      : 'Stems trennen'}
+                  </span>
                 </button>
+              )}
+              {isSeparating && onCancelSeparation && (
+                <button
+                  onClick={onCancelSeparation}
+                  className="px-2 py-0.5 rounded border text-[10px] font-semibold bg-red-500/15 hover:bg-red-500/30 border-red-500/50 text-red-300"
+                  title="Separation abbrechen"
+                >
+                  Abbrechen
+                </button>
+              )}
+              {stemStatus && stemStatus.kind === 'error' && (
+                <span className="text-[10px] text-red-400 max-w-[42ch] truncate" title={stemStatus.message}>
+                  {stemStatus.message}
+                </span>
+              )}
+              {stemStatus && stemStatus.kind === 'done' && (
+                <span className="text-[10px] text-emerald-400 max-w-[42ch] truncate" title={stemStatus.message}>
+                  {stemStatus.message}
+                </span>
               )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">

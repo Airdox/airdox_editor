@@ -9,3 +9,13 @@ coverage/
 release/
 release-current/
 *.zip
+
+# Stem-Separation-Modelle: niemals ins Repo (Groesse + ungeklaerte Gewichte-Lizenz)
+models/
+*.ckpt
+*.onnx
+*.th
+*.safetensors
+
+# Generiert von `npm run build:stems` (electron-builder baut vorher neu)
+electron/stemsEngine.cjs

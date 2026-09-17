@@ -39,7 +39,7 @@ import { PipelineDoubleSeparator } from '../src/stems/backends/pipelineDoubleSep
 import { generateGoldStandardTrack, TEST_SEED } from '../src/stems/goldStandard';
 import { buildGoldStandardVariants } from '../src/stems/goldStandardVariants';
 import { buildStemGroupMap, sumStems } from '../src/stems/stemGroupMapping';
-import { evaluateStem, qualityScore } from '../src/stems/metrics';
+import { evaluateStem, qualityScore, sdr, siSdr, MAX_SDR_DB, MAX_QUALITY_SCORE } from '../src/stems/metrics';
 import { runStemIsolationGate } from '../src/stems/stemIsolationGate';
 import { downmixMono } from '../src/stems/dsp';
 import { OverlapAddReconstructor, measureContinuity } from '../src/stems/reconstructor';
@@ -430,6 +430,34 @@ async function run() {
   const validDecisions = ['TECHNICAL_FAIL', 'TECHNICAL_PASS_QUALITY_FAIL', 'RELEASE_READY'];
   assert.ok(validDecisions.includes(gateReport.releaseDecision));
   console.log(`  ✓ ${gateReport.releaseDecision} ist ein gültiger, eindeutiger Zustand`);
+
+  console.log('\n[ TEST ] #19 Ein stummer Stem erreicht nie einen guten Score (Regression)');
+  // Ohne Stille-Guard liefern sdr()/siSdr() fuer einen leeren Stem einen
+  // PERFEKTEN Wert: der Fehler ist dann ~0, und 10*log10(x/0) laeuft in den
+  // Maximalwert. Ein Backend, das schlicht nichts ausgibt, haette das Gate so
+  // bestanden. Ein stummer Stem muss den schlechtesten Wert bekommen.
+  const refTone = new Float64Array(4096);
+  for (let i = 0; i < refTone.length; i++) refTone[i] = Math.sin((2 * Math.PI * 440 * i) / 44100);
+  const silentEstimate = new Float64Array(refTone.length);
+  assert.equal(sdr(refTone, silentEstimate), -MAX_SDR_DB, 'stummer Stem muss -MAX_SDR_DB liefern, nicht +MAX_SDR_DB');
+  assert.equal(siSdr(refTone, silentEstimate), -MAX_SDR_DB, 'stummer Stem muss auch bei SI-SDR -MAX_SDR_DB liefern');
+  console.log(`  ✓ stummer Stem -> ${-MAX_SDR_DB} dB bei sdr() und siSdr()`);
+
+  console.log('\n[ TEST ] #20 sdr() bestraft Pegelfehler, siSdr() ignoriert ihn');
+  // Die beiden Metriken duerfen nicht dieselbe Funktion sein: der
+  // Recombination-Check braucht gerade die Pegelempfindlichkeit von sdr().
+  const halved = Float64Array.from(refTone, (v) => v * 0.5);
+  const sdrHalved = sdr(refTone, halved);
+  const siSdrHalved = siSdr(refTone, halved);
+  assert.ok(sdrHalved < 20, `sdr() muss -6 dB Pegelfehler bestrafen, war ${sdrHalved.toFixed(2)} dB`);
+  assert.ok(siSdrHalved > 100, `siSdr() muss skaleninvariant sein, war ${siSdrHalved.toFixed(2)} dB`);
+  console.log(`  ✓ Pegelfehler -6 dB: sdr=${sdrHalved.toFixed(2)} dB (bestraft), siSdr=${siSdrHalved.toFixed(2)} dB (invariant)`);
+
+  console.log('\n[ TEST ] #21 Werte bleiben endlich und der Score erreicht nie 10 (§24)');
+  assert.ok(Number.isFinite(sdr(refTone, refTone.slice())), 'identische Signale duerfen nicht Infinity liefern');
+  assert.equal(sdr(refTone, refTone.slice()), MAX_SDR_DB);
+  assert.ok(MAX_QUALITY_SCORE < 10, 'der Qualitaetsscore darf nie 10/10 behaupten');
+  console.log(`  ✓ identisch -> ${MAX_SDR_DB} dB (endlich), Score-Deckel ${MAX_QUALITY_SCORE}`);
 
   // Cleanup best-effort (temp dirs are outside the repo, but keep the sandbox tidy).
   await rm(root, { recursive: true, force: true }).catch(() => {});

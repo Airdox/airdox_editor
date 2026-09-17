@@ -12,3 +12,4 @@ export * from './metrics';
 export * from './stemGroupMapping';
 export * from './backends/types';
 export * from './backends/pipelineDoubleSeparator';
+export * from './backends/audioSeparatorSeparator';
