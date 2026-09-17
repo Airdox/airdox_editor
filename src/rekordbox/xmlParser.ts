@@ -271,12 +271,29 @@ function parseSingleTrackNode(
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
 
-  const markElements = el.querySelectorAll('POSITION_MARK');
+  // Robust cue intake: only marks with a parseable position become cues or
+  // loops. Junk entries without a position attribute are ignored, and
+  // alternative exporters that write <CUE Position="…"> instead of
+  // <POSITION_MARK Start="…"> are recognized (foreign-export guard).
+  const positionOf = (mEl: any): number | null => {
+    const raw = mEl.getAttribute('Start') ?? mEl.getAttribute('Position');
+    if (raw === null || raw.trim() === '') return null;
+    const value = parseFloat(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  };
+
+  const markElements = [
+    ...Array.from(el.querySelectorAll('POSITION_MARK')),
+    ...Array.from(el.querySelectorAll('CUE')),
+  ];
   let firstBeatCueAnchor: number | null = null;
   markElements.forEach((mEl: any) => {
     const name = (mEl.getAttribute('Name') || '').toLowerCase();
-    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
-    if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
+    const start = positionOf(mEl);
+    if (
+      start !== null &&
+      (name.includes('first beat') || name.includes('1.1') || name === 'grid')
+    ) {
       firstBeatCueAnchor = start;
     }
   });
@@ -302,7 +319,10 @@ function parseSingleTrackNode(
       };
   markElements.forEach((mEl: any, mIdx: number) => {
     const type = mEl.getAttribute('Type') || '0';
-    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
+    const start = positionOf(mEl);
+    // A mark without a genuine position carries no information — skip it
+    // instead of inventing a cue at 0.0.
+    if (start === null) return;
     const name = mEl.getAttribute('Name') || `Cue ${mIdx + 1}`;
     const numStr = mEl.getAttribute('Num') || '-1';
     const num = parseInt(numStr, 10);

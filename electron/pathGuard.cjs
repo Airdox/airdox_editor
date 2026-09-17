@@ -28,4 +28,29 @@ function isProtectedTarget(targetPath, protectedPaths) {
   );
 }
 
-module.exports = { normalizeForCompare, isProtectedTarget };
+/**
+ * Converts a Rekordbox LOCATION string into a local filesystem path:
+ * file:// URLs are decoded (percent-encoding resolved), plain absolute and
+ * drive-letter paths resolve without a search, and anything non-local
+ * (remote URLs, empty, null/undefined) yields null.
+ */
+function toLocalPath(location) {
+  if (typeof location !== 'string' || !location.trim()) return null;
+
+  try {
+    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
+      return path.resolve(location);
+    }
+
+    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
+      const url = new URL(location);
+      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
+    }
+
+    return path.resolve(location);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { normalizeForCompare, isProtectedTarget, toLocalPath };

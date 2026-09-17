@@ -121,6 +121,19 @@ export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
+  /** Stored grid provenance; adoptSerializedGrid falls back to the track origin when absent. */
+  origin?: DataOrigin;
+  /** Verbatim beat nodes (PQTZ/dense grid); absent in older project files. */
+  beats?: SerializedBeatNode[];
+}
+
+export interface SerializedBeatNode {
+  time: number;
+  isBarStart: boolean;
+  barNumber: number;
+  beatInBar: number;
+  /** Uniform tail continuation appended after the last verbatim beat. */
+  tailExtended?: true;
 }
 
 export interface SerializedSegment {
@@ -253,6 +266,16 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
+      // Dense grids round-trip verbatim: node times and the tail flag survive
+      // save/load; older readers ignore the extra fields.
+      origin: track.beatGrid?.origin,
+      beats: (track.beatGrid?.beats ?? []).map((node) => ({
+        time: node.time,
+        isBarStart: node.isBarStart,
+        barNumber: node.barNumber,
+        beatInBar: node.beatInBar,
+        ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
+      })),
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],

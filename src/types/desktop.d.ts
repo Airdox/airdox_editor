@@ -46,6 +46,20 @@ declare global {
         accessMode: 'READ_ONLY';
       } | null>;
       separateStems(inputFilePath: string): Promise<string[]>;
+      /**
+       * Mirrors one log entry into the durable desktop log file
+       * (`<userData>/airdox-smart-editor.log`, rotated at 5 MB). Returns
+       * whether the line was written; it never rejects.
+       */
+      appendLog(entry: {
+        ts: number;
+        level: string;
+        category: string;
+        message: string;
+        data?: unknown;
+      }): Promise<boolean>;
+      /** Absolute path of the durable desktop log file. */
+      getLogFilePath(): Promise<string>;
     };
   }
 

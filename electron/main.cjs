@@ -7,7 +7,8 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
-const { isProtectedTarget } = require('./pathGuard.cjs');
+const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
+const { createLogWriter, formatLogLine } = require('./logWriter.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -138,26 +139,20 @@ function registerAppProtocol() {
   });
 }
 
-function toLocalPath(location) {
-  if (typeof location !== 'string' || !location.trim()) return null;
-
-  try {
-    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
-      return path.resolve(location);
-    }
-
-    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
-      const url = new URL(location);
-      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
-    }
-
-    return path.resolve(location);
-  } catch {
-    return null;
-  }
-}
-
 // --- IPC-Handler bleiben unverändert ---
+
+// Durable log mirror: every renderer log entry is appended to
+// <userData>/airdox-smart-editor.log (rotated at 5 MB by logWriter.cjs).
+// Writes never throw — logging must not break the app it observes.
+const desktopLogWriter = createLogWriter(
+  path.join(app.getPath('userData'), 'airdox-smart-editor.log')
+);
+
+ipcMain.handle('rekordbox:append-log', (_event, entry) => {
+  return desktopLogWriter.append(formatLogLine(entry));
+});
+
+ipcMain.handle('rekordbox:get-log-file-path', () => desktopLogWriter.filePath);
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);

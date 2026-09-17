@@ -18,6 +18,11 @@ import {
   CuePoint,
 } from '../types/rekordbox';
 import {
+  selectGridRenderBeats,
+  selectTrackWaveform,
+  waveformMissingNotice,
+} from '../waveform/renderModel';
+import {
   Plus,
   Minus,
   RotateCcw,
@@ -235,22 +240,20 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
+      // Original-data rule: verbatim beatGrid.beats[] times are drawn exactly
+      // as stored (tail continuations dimmed); a uniform reconstruction only
+      // runs for grids without stored nodes and reports itself.
       const bg = track.beatGrid;
-      const secondsPerBeat = 60.0 / bg.bpm;
-      const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
-      const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
+      const gridSelection = selectGridRenderBeats(bg, viewOffset, viewOffset + viewDuration);
+      const gridBeats = gridSelection.beats;
 
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+      for (const beat of gridBeats) {
+        const x = timeToPixel(beat.time, width);
         if (x < -20 || x > width + 20) continue;
 
-        const isBar = b % bg.meter === 0;
-        const barNumber = Math.floor(b / bg.meter) + 1;
-
-        if (isBar) {
+        if (beat.isBar) {
           // Rekordbox authentic solid white Bar vertical downbeat line
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.55)' : '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 0);
@@ -258,12 +261,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.stroke();
 
           // Rekordbox Bar number in top ruler (e.g. 109, 113)
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = beat.tail ? 'rgba(255, 255, 255, 0.6)' : '#ffffff';
           ctx.font = 'bold 11px sans-serif';
-          ctx.fillText(`${barNumber}`, x + 3, 14);
+          ctx.fillText(`${beat.barNumber}`, x + 3, 14);
         } else {
           // Intermediate beat lines (beats 2, 3, 4)
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.22)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -306,7 +309,9 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 3. Render Waveform (BLUE / RGB / 3BAND)
-      const analysis = track.analysis;
+      // Genuine ANLZ variants only: the zoom-appropriate variant resolves the
+      // view; nothing is ever synthesized from BPM or the beatgrid.
+      const analysis = selectTrackWaveform(track, viewDuration, width);
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
@@ -365,59 +370,37 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           }
         }
       } else {
-        // Synthesize dynamic beat-synced DJ waveform in case analysis is temporarily resolving
-        const maxHalfH = height * 0.42;
-        const bpm = bg.bpm || 130.05;
-        const secondsPerBeat = 60 / bpm;
-        const numCols = Math.ceil(width / 2);
-        for (let i = 0; i < numCols; i++) {
-          const x = i * 2;
-          const t = pixelToTime(x, width);
-          const beatPos = (t - bg.firstBeat) / secondsPerBeat;
-          const beatFract = ((beatPos % 1) + 1) % 1;
-          const barIndex = Math.floor(beatPos / 4);
-          // Match breakdown at bars 96-112 (seconds ~177s to ~206.69s)
-          const isBreak = (barIndex >= 96 && barIndex < 112);
-          const kickEnv = isBreak ? 0.05 : Math.exp(-beatFract * 12) * 0.88;
-          const subBass = isBreak ? 0.08 : (0.2 + 0.15 * Math.sin(t * 18));
-          const hiHat = Math.exp(-((beatFract * 4) % 1) * 20) * 0.28;
-          const peak = Math.min(1.0, kickEnv + subBass + hiHat);
+        // Honest empty state: no genuine waveform data exists for this track
+        // (no ANLZ assigned / no local analysis). The renderer shows the
+        // transparent missing-waveform notice instead of inventing a contour.
+        const notice = waveformMissingNotice(track);
+        ctx.strokeStyle = '#2a2d38';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(width, centerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
 
-          const barH = Math.max(2, peak * maxHalfH);
-          if (waveformMode === 'RGB') {
-            const r = Math.min(255, Math.floor(kickEnv * 280));
-            const g = Math.min(255, Math.floor(subBass * 260 + hiHat * 80));
-            const bCol = Math.min(255, Math.floor(hiHat * 350 + 60));
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.6)';
-            ctx.fillRect(x, centerY - 2, 2, 4);
-          } else if (waveformMode === 'BLUE') {
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x, centerY - barH, 2, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x, centerY - barH * 0.35, 2, barH * 0.7);
-          } else {
-            // 3BAND
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x, centerY - barH * 0.8, 2, barH * 1.6);
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x, centerY - barH * 0.45, 2, barH * 0.9);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x, centerY - barH * 0.2, 2, barH * 0.4);
-          }
-        }
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#8b93a5';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.fillText(notice.title, width / 2, centerY - 26);
+        ctx.fillStyle = '#5b6270';
+        ctx.font = '11px sans-serif';
+        ctx.fillText(notice.hint, width / 2, centerY - 8);
+        ctx.textAlign = 'left';
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
-      for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+      for (const beat of gridBeats) {
+        const x = timeToPixel(beat.time, width);
         if (x < -10 || x > width + 10) continue;
-        const isBar = b % bg.meter === 0;
+        const isBar = beat.isBar;
 
         if (isBar) {
-          ctx.strokeStyle = '#ffffff';
+          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.5)' : '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 18);
