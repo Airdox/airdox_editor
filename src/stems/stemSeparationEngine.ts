@@ -6,12 +6,14 @@ import { readWavFile } from './wavIo';
 import type { StemId, StemProfile, StemDescriptor } from './types';
 import type { BackendSeparationResult, IStemSeparator } from './backends/types';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
+import { DspHeuristicSeparator } from './backends/dspHeuristicSeparator';
+import { DSP_SEPARATOR_ENGINE } from './dspSeparator';
 export interface SeparationRequest { inputPath: string; modelId?: string; profile?: StemProfile; trackName?: string; chunkSizeSamples?: number; overlap?: number; token?: SeparationCancellationToken; onProgress?: (entry: { chunkIndex?: number; phase: string; detail?: string }) => void; extras?: Record<string, string | number | boolean>; }
 export interface SeparationStem { id: StemId; filePath: string; sampleRate: number; channels: number; frames: number; }
 export interface SeparationMetadata { settings: { inputPath: string; modelId: string; profile: StemProfile; trackName: string; extras?: Record<string, string | number | boolean> }; events: { phase: string; detail?: string }[]; }
 export interface SeparationSummary { status: 'COMPLETED' | 'CANCELLED' | 'FAILED'; stems: SeparationStem[]; metadata: SeparationMetadata; validation: { fromTrainedModel: boolean; stemOrder: StemId[] }; error?: { code: string; message: string }; }
 export interface StemModelDescriptor extends StemDescriptor { id: string; stemOrder: StemId[]; trainedModel: boolean; }
-export class StemRegistry { private readonly models = new Map<string, StemModelDescriptor>(); constructor() { this.register({ id: 'bsroformer-musdb18hq-4stem-zfturbo', stemOrder: ['vocals', 'drums', 'bass', 'other'], trainedModel: true }); this.register({ id: 'pipeline-double-v1', stemOrder: ['vocals', 'drums', 'bass', 'other'], trainedModel: false }); } register(model: StemModelDescriptor): void { this.models.set(model.id, model); } get(id: string): StemModelDescriptor | undefined { return this.models.get(id); } list(): StemModelDescriptor[] { return [...this.models.values()]; } }
+export class StemRegistry { private readonly models = new Map<string, StemModelDescriptor>(); constructor() { this.register({ id: 'bsroformer-musdb18hq-4stem-zfturbo', stemOrder: ['vocals', 'drums', 'bass', 'other'], trainedModel: true }); this.register({ id: DSP_SEPARATOR_ENGINE, stemOrder: ['vocals', 'drums', 'bass', 'other'], trainedModel: false }); this.register({ id: 'pipeline-double-v1', stemOrder: ['vocals', 'drums', 'bass', 'other'], trainedModel: false }); } register(model: StemModelDescriptor): void { this.models.set(model.id, model); } get(id: string): StemModelDescriptor | undefined { return this.models.get(id); } list(): StemModelDescriptor[] { return [...this.models.values()]; } }
 export interface StemEngineOptions { workingRoot: string; outputRoot: string; cacheRoot?: string; modelStoreDir?: string; allowPipelineDouble?: boolean; backendFactory?: (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator; registry?: StemRegistry; }
 export class StemSeparationEngine {
   readonly registry: StemRegistry;
@@ -27,7 +29,7 @@ export class StemSeparationEngine {
     await this.ensureWritableRoot(this.options.outputRoot);
     const token = request.token; token?.throwIfCancelled(); const trackName = (request.trackName ?? path.basename(request.inputPath, path.extname(request.inputPath))).replace(/[^a-zA-Z0-9_.-]/g, '_'); const outputRoot = path.join(this.options.outputRoot, trackName);
     await mkdir(outputRoot, { recursive: true });
-    const backend = this.options.backendFactory?.(model, request) ?? new PipelineDoubleSeparator({ stemOrder: model.stemOrder });
+    const backend = this.options.backendFactory?.(model, request) ?? defaultBackendFor(model);
     let result: BackendSeparationResult;
     try { result = await backend.separate({ inputPath: request.inputPath, outputRoot, stemOrder: model.stemOrder, sampleRate: audio.sampleRate, channels: audio.channels, token, onProgress: request.onProgress, extras: request.extras }); }
     catch (error) { if (token?.isCancelled || (error instanceof Error && /cancel/i.test(error.message))) return { status: 'CANCELLED', stems: [], metadata: this.metadata(request, modelId, trackName, []), validation: { fromTrainedModel: model.trainedModel, stemOrder: model.stemOrder } }; throw asStemSeparationError(error); }
@@ -37,4 +39,6 @@ export class StemSeparationEngine {
   private metadata(request: SeparationRequest, modelId: string, trackName: string, events: { phase: string; detail?: string }[]): SeparationMetadata { return { settings: { inputPath: request.inputPath, modelId, profile: request.profile ?? 'HIGH_QUALITY', trackName, extras: request.extras }, events }; }
   private async ensureWritableRoot(root: string): Promise<void> { try { const info = await stat(root).catch(() => undefined); if (info && (info.mode & 0o222) === 0) throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis ist nicht beschreibbar: ${root}`); await mkdir(root, { recursive: true }); } catch (error) { if (error instanceof StemSeparationError) throw error; throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis konnte nicht erstellt werden: ${root}`, error); } }
 }
-export function createDefaultBackendFactory(options: { pipelineDouble?: PipelineDoubleSeparator } = {}): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator { return (model) => { if (model.id === 'pipeline-double-v1' || options.pipelineDouble) return options.pipelineDouble ?? new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); return new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); }; }
+/** Backend that runs without any external runtime: the built-in heuristic separator. */
+export function defaultBackendFor(model: StemModelDescriptor): IStemSeparator { if (model.id === DSP_SEPARATOR_ENGINE) return new DspHeuristicSeparator({ stemOrder: model.stemOrder }); return new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); }
+export function createDefaultBackendFactory(options: { pipelineDouble?: PipelineDoubleSeparator } = {}): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator { return (model) => { if (model.id === DSP_SEPARATOR_ENGINE) return new DspHeuristicSeparator({ stemOrder: model.stemOrder }); if (model.id === 'pipeline-double-v1' || options.pipelineDouble) return options.pipelineDouble ?? new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); return defaultBackendFor(model); }; }

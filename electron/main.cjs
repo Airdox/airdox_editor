@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const fs = require('node:fs');
 const { constants } = require('node:fs');
@@ -9,6 +9,7 @@ const {
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
+const { MODEL_EXTENSIONS, createStemModelStore, isModelFileName, safeModelFileName } = require('./stemModelStore.cjs');
 const { createLogWriter, formatLogLine } = require('./logWriter.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
@@ -323,53 +324,510 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
-// --- AUDIO STEM SEPARATION (Python CLI Integration) ---
-const { exec } = require('node:child_process');
+// --- AUDIO STEM SEPARATION (externe Python-CLI: Status, Progress, Cancel) ---
+//
+// Wichtige Regeln hier:
+//  1. `execFile` mit Argument-Array statt Shell-String: Dateinamen mit
+//     Leerzeichen/Umlauten/Anführungszeichen können den Aufruf nicht mehr
+//     zerlegen und es gibt keine Command-Injection über Tracknamen.
+//  2. Pro Quelldatei ein eigener Ausgabeordner und ein Vorher/Nachher-Diff:
+//     es werden nur die Stems dieses Laufs zurückgegeben, keine Leichen.
+//  3. Fehler werden klassifiziert (SEPARATOR_NOT_INSTALLED, …) und als
+//     verständliche deutsche Meldung inkl. nächstem Schritt geworfen, damit der
+//     Renderer sauber auf die interne Heuristik-Separation zurückfallen kann.
+const { execFile } = require('node:child_process');
+const os = require('node:os');
+const {
+  ERROR_CODES: STEM_ERROR_CODES,
+  INSTALL_HINT: STEM_INSTALL_HINT,
+  buildListModelsArgs,
+  buildSeparatorArgs,
+  normalizeModelRequest,
+  classifySeparatorFailure,
+  collectStemOutputs,
+  parseRuntimeModelList,
+  parseSeparatorProgress,
+  requiresShell,
+  separatorCandidates,
+  toShellArgs,
+  trackOutputRoot,
+} = require('./stemRunner.cjs');
 
-ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
+const SEPARATOR_LOOKUP_TIMEOUT_MS = 8000;
+const SEPARATOR_RUN_TIMEOUT_MS = 45 * 60 * 1000;
+const SEPARATOR_MAX_BUFFER = 32 * 1024 * 1024;
+const SEPARATOR_LOG_TAIL_CHARS = 4000;
+const MODEL_LIST_TIMEOUT_MS = 90 * 1000;
+// normalizeModelRequest validiert den Renderer-Payload (HTTPS-Pflicht, Dateiname).
+const MODEL_EXTENSION_LIST = MODEL_EXTENSIONS.join(', ');
+
+let cachedSeparatorStatus = null;
+const activeSeparations = new Map();
+const cancelledSeparations = new Set();
+
+function stemRoots() {
+  const userData = app.getPath('userData');
+  return { output: path.join(userData, 'separated_stems'), models: path.join(userData, 'audio-separator-models') };
+}
+
+/** execFile als Promise (für kurze Hilfsaufrufe wie die Modell-Liste). */
+function execFilePromise(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    // Output directory for the stems
-    const outputDir = path.join(app.getPath('userData'), 'separated_stems');
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    console.log(`Starting separation for: ${inputFilePath}`);
-    console.log(`Output directory: ${outputDir}`);
-    
-    // Wir rufen das globale Python CLI Tool 'audio-separator' auf.
-    // Voraussetzung: Der Nutzer hat `pip install audio-separator[gpu]` auf seinem Windows PC ausgeführt.
-    const command = `audio-separator "${inputFilePath}" --output_dir "${outputDir}" --output_format WAV`;
-
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error executing separator: ${error}`);
-        console.error(stderr);
-        reject(error.message);
-        return;
-      }
-      
-      console.log(`Separation finished. Output: ${stdout}`);
-      
-      fs.readdir(outputDir, (err, files) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        
-        // Find generated .wav files that contain the base name
-        const baseName = path.parse(inputFilePath).name;
-        // Sometimes models change spaces to underscores or similar, so we filter by .wav and try to match as best as possible.
-        // For audio-separator, it usually appends `_(Vocals)...`
-        const generatedFiles = files.filter(f => (f.includes(baseName) && f.endsWith('.wav')) || f.endsWith('.wav'));
-        
-        // Return absolute paths to the React frontend
-        const stems = generatedFiles.map(file => path.join(outputDir, file));
-        
-        resolve(stems);
-      });
+    execFile(command, args, { windowsHide: true, maxBuffer: SEPARATOR_MAX_BUFFER, ...options }, (error, stdout, stderr) => {
+      if (error) reject(Object.assign(error, { stdout, stderr }));
+      else resolve({ stdout, stderr });
     });
   });
+}
+
+let stemModelStore = null;
+function getStemModelStore() {
+  if (!stemModelStore) stemModelStore = createStemModelStore({ rootDir: stemRoots().models });
+  return stemModelStore;
+}
+
+function stemLog(level, message, data) {
+  try {
+    const writer = getLogWriter();
+    if (writer) writer.append(formatLogLine({ level, category: 'STEMS', message, data }));
+  } catch {
+    // Logging darf die Separation niemals abbrechen.
+  }
+}
+
+function sendStemProgress(event, payload) {
+  try {
+    if (event && event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('audio:separate-stems:progress', payload);
+    }
+  } catch {
+    // Ein geschlossener Renderer ist kein Fehler der Separation.
+  }
+}
+
+function withStemCode(error, code) {
+  if (error instanceof Error && code) error.code = code;
+  return error;
+}
+
+function runLookup(command, args) {
+  return new Promise((resolve) => {
+    try {
+      execFile(command, args, { timeout: SEPARATOR_LOOKUP_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+        if (error) resolve(null);
+        else resolve(parseLookupOutput(stdout));
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/** pip legt die CLI neben (oder in Scripts/ von) der Python-Installation ab. */
+async function pythonScriptDirs() {
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+  const names = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  const dirs = new Set();
+  for (const name of names) {
+    const found = await runLookup(lookupCommand, [name]);
+    if (!found) continue;
+    const binDir = path.dirname(found);
+    dirs.add(binDir);
+    dirs.add(path.join(binDir, 'Scripts'));
+    dirs.add(path.resolve(binDir, '..', 'Scripts'));
+  }
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    const roaming = path.join(process.env.APPDATA, 'Python');
+    try {
+      for (const entry of fs.readdirSync(roaming)) dirs.add(path.join(roaming, entry, 'Scripts'));
+    } catch {
+      // kein User-Site-Python vorhanden
+    }
+  } else {
+    dirs.add(path.join(os.homedir(), '.local', 'bin'));
+  }
+  return [...dirs];
+}
+
+/**
+ * Prüft einmal (und auf Wunsch erneut), ob der externe Separator verfügbar ist.
+ * Das Ergebnis entscheidet, ob der Renderer die trainierte CLI oder die
+ * eingebaute Heuristik benutzt.
+ */
+async function resolveSeparatorStatus(options = {}) {
+  if (cachedSeparatorStatus && !options.force) return cachedSeparatorStatus;
+  const lookupCommand = process.platform === 'win32' ? 'where' : 'which';
+  const candidates = separatorCandidates({
+    env: process.env,
+    platform: process.platform,
+    scriptDirs: await pythonScriptDirs(),
+  });
+  for (const candidate of candidates) {
+    let command = candidate.command;
+    if (candidate.source === 'path') {
+      const found = await runLookup(lookupCommand, [command]);
+      if (!found) continue;
+      command = found;
+    } else if (!fs.existsSync(command)) {
+      continue;
+    }
+    cachedSeparatorStatus = { available: true, command, source: candidate.source, reason: '', hint: '' };
+    stemLog('INFO', `Externer Separator gefunden: ${command} (${candidate.source})`);
+    return cachedSeparatorStatus;
+  }
+  cachedSeparatorStatus = {
+    available: false,
+    command: null,
+    source: null,
+    reason: 'Der externe Separator "audio-separator" wurde weder im PATH noch in den Python-Script-Ordnern gefunden.',
+    hint: STEM_INSTALL_HINT,
+  };
+  stemLog('WARN', cachedSeparatorStatus.reason);
+  return cachedSeparatorStatus;
+}
+
+function listDirectoryEntries(dir) {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        try {
+          const info = fs.statSync(path.join(dir, entry.name));
+          return { name: entry.name, mtimeMs: info.mtimeMs, size: info.size };
+        } catch {
+          return { name: entry.name, mtimeMs: 0, size: 0 };
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+// --- STEM-MODELL-GEWICHTE (Model-Store, Katalog, Download, Import) ---
+//
+// Die Gewichte trainierter Modelle (.ckpt/.onnx/.pth) liegen im Modell-Ordner
+// der Desktop-App. Der Renderer liefert den Modell-Eintrag (aus
+// src/stems/modelCatalog.ts) als Payload; der Main-Prozess validiert ihn streng:
+//  - Dateiname ohne Pfadtrenner und mit erlaubten Zeichen,
+//  - Direkt-Downloads nur über HTTPS (Ausnahme: explizite Dev-Variable),
+//  - Prüfsumme nur im 64-Hex-Format.
+// Damit kann ein manipuliertes Renderer-Payload weder beliebige Dateien
+// schreiben noch unsichere Quellen laden.
+function sendModelProgress(event, payload) {
+  try {
+    if (event && event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('stems:models:progress', payload);
+    }
+  } catch {
+    // Renderer kann bereits geschlossen sein – kein Fehler des Downloads.
+  }
+}
+
+/** Modell-Liste der installierten CLI (inkl. der Stem-Namen pro Modell). */
+async function fetchRuntimeModelCatalog(options = {}) {
+  if (cachedRuntimeCatalog && !options.force) return cachedRuntimeCatalog;
+  const status = await resolveSeparatorStatus({ force: Boolean(options.force) });
+  if (!status.available) {
+    return { available: false, reason: status.reason, hint: status.hint, models: [], fetchedAt: Date.now() };
+  }
+  try {
+    const { stdout } = await execFilePromise(status.command, buildListModelsArgs({ modelFileDir: stemRoots().models }), {
+      timeout: MODEL_LIST_TIMEOUT_MS,
+      shell: requiresShell(status.command),
+    });
+    const models = parseRuntimeModelList(stdout);
+    cachedRuntimeCatalog = { available: true, command: status.command, models, fetchedAt: Date.now() };
+    stemLog('INFO', `Modellliste der Separator-CLI gelesen: ${models.length} Einträge`, { command: status.command });
+    return cachedRuntimeCatalog;
+  } catch (error) {
+    return { available: false, reason: `Modellliste konnte nicht gelesen werden: ${error.message}`, models: [], fetchedAt: Date.now() };
+  }
+}
+
+ipcMain.handle('stems:models:list', async (_event, catalog) => {
+  const entries = Array.isArray(catalog) ? catalog.filter((entry) => entry && typeof entry === 'object') : [];
+  return getStemModelStore().status(entries);
+});
+
+ipcMain.handle('stems:models:runtime-catalog', async (_event, options) => {
+  try {
+    return await fetchRuntimeModelCatalog({ force: Boolean(options && options.force) });
+  } catch (error) {
+    return { available: false, reason: error.message, models: [], fetchedAt: Date.now() };
+  }
+});
+
+ipcMain.handle('stems:models:download', async (event, payload) => {
+  const model = normalizeModelRequest(payload);
+  if (!model) throw new Error('Für den Modell-Download werden Dateiname und HTTPS-URL benötigt.');
+  if (!isModelFileName(model.fileName)) {
+    throw Object.assign(new Error(`Nur Gewichte mit Endung (${MODEL_EXTENSION_LIST}) können direkt geladen werden. CLI-Modelle ohne Dateiendung lädt die Separator-CLI beim ersten Lauf selbst.`), {
+      code: STEM_ERROR_CODES.MODEL_UNSUPPORTED,
+    });
+  }
+  if (!model.downloadUrl) {
+    throw Object.assign(new Error(`Für "${model.fileName}" ist keine Direkt-URL hinterlegt. Die Separator-CLI lädt diese Gewichte beim ersten Trennvorgang automatisch in den Modell-Ordner.`), {
+      code: STEM_ERROR_CODES.MODEL_NO_URL,
+    });
+  }
+  const store = getStemModelStore();
+  const controller = new AbortController();
+  activeModelDownloads.set(model.fileName, controller);
+  stemLog('INFO', `Modell-Download gestartet: ${model.fileName}`, { url: model.downloadUrl, sha256: model.sha256 });
+  try {
+    const result = await store.download({
+      fileName: model.fileName,
+      url: model.downloadUrl,
+      sha256: model.sha256,
+      expectedSizeBytes: model.expectedSizeBytes,
+      signal: controller.signal,
+      onProgress: (progress) => sendModelProgress(event, progress),
+    });
+    stemLog('INFO', `Modell-Gewichte installiert: ${result.fileName}`, { sizeBytes: result.sizeBytes, sha256: result.sha256 });
+    return { ok: true, ...result };
+  } catch (error) {
+    stemLog('ERROR', `Modell-Download fehlgeschlagen: ${error.message}`, { fileName: model.fileName, code: error.code });
+    sendModelProgress(event, { fileName: model.fileName, phase: 'failed', ratio: null, message: error.message, code: error.code });
+    throw error;
+  } finally {
+    activeModelDownloads.delete(model.fileName);
+  }
+});
+
+ipcMain.handle('stems:models:cancel', async (_event, fileName) => {
+  const store = getStemModelStore();
+  const name = typeof fileName === 'string' && fileName.trim() ? safeModelFileName(fileName) : null;
+  if (name) {
+    activeModelDownloads.get(name)?.abort();
+    return { cancelled: store.cancelDownload(name) ? 1 : 0 };
+  }
+  for (const controller of activeModelDownloads.values()) controller.abort();
+  return { cancelled: store.cancelDownload() ? activeModelDownloads.size : 0 };
+});
+
+ipcMain.handle('stems:models:remove', async (_event, fileName) => {
+  if (typeof fileName !== 'string' || !fileName.trim()) throw new Error('Es wurde kein Modell zum Entfernen angegeben.');
+  const store = getStemModelStore();
+  const name = safeModelFileName(fileName);
+  if (isProtectedTarget(store.modelPath(name))) throw new Error('Geschützte Originaldateien dürfen nicht entfernt werden.');
+  stemLog('WARN', `Modell-Gewichte entfernt: ${name}`);
+  return store.remove(name);
+});
+
+ipcMain.handle('stems:models:import', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Modell-Gewichte importieren (nur lesend kopiert)',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Modell-Gewichte', extensions: ['ckpt', 'onnx', 'pth', 'th', 'pt', 'bin'] },
+      { name: 'Alle Dateien', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return { imported: [] };
+  const store = getStemModelStore();
+  const imported = [];
+  const failures = [];
+  for (const filePath of result.filePaths) {
+    try {
+      imported.push(await store.importFile(filePath));
+    } catch (error) {
+      failures.push({ filePath, message: error.message });
+    }
+  }
+  stemLog('INFO', `Modelle importiert: ${imported.length}`, { imported: imported.map((entry) => entry.fileName), failures });
+  return { imported, failures };
+});
+
+ipcMain.handle('stems:models:open-folder', async () => {
+  const store = getStemModelStore();
+  await store.ensureRoot();
+  const errorMessage = await shell.openPath(store.rootDir);
+  if (errorMessage) throw new Error(errorMessage);
+  return { path: store.rootDir };
+});
+
+ipcMain.handle('audio:separator-status', async (_event, options) => {
+  try {
+    return await resolveSeparatorStatus({ force: Boolean(options && options.force) });
+  } catch (error) {
+    return { available: false, command: null, reason: error.message, hint: STEM_INSTALL_HINT };
+  }
+});
+
+ipcMain.handle('audio:separate-stems', async (event, inputFilePath, options = {}) => {
+  const requested = typeof inputFilePath === 'string' ? inputFilePath.trim() : '';
+  const localPath = toLocalPath(requested) || (path.isAbsolute(requested) ? path.resolve(requested) : null);
+  if (!localPath) {
+    throw withStemCode(new Error('Für die Stem-Separation wird ein echter lokaler Dateipfad benötigt.'), STEM_ERROR_CODES.FAILED);
+  }
+  try {
+    await access(localPath, constants.R_OK);
+  } catch {
+    throw withStemCode(new Error(`Audiodatei ist nicht lesbar: ${localPath}`), STEM_ERROR_CODES.INPUT_MISSING);
+  }
+  const details = await stat(localPath);
+  if (!details.isFile()) {
+    throw withStemCode(new Error('Der Pfad für die Stem-Separation verweist nicht auf eine Datei.'), STEM_ERROR_CODES.INPUT_MISSING);
+  }
+
+  const status = await resolveSeparatorStatus();
+  if (!status.available) {
+    const failure = classifySeparatorFailure({ error: { code: 'ENOENT', message: status.reason } });
+    stemLog('WARN', `${failure.message} ${failure.hint}`.trim(), { inputPath: localPath });
+    throw withStemCode(new Error(`${failure.message} ${failure.hint}`.trim()), failure.code);
+  }
+
+  const roots = stemRoots();
+  const outputDir = trackOutputRoot(roots.output, localPath);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  await fs.promises.mkdir(roots.models, { recursive: true });
+  const filesBefore = listDirectoryEntries(outputDir);
+
+  // Gewählte Modell-Gewichte: lokal verfügbar? Sonst lädt die CLI sie selbst
+  // in denselben Modell-Ordner (delegateToRuntime). Ohne beides => harter,
+  // klassifizierter Fehler statt stiller Ausweich-Inferenz.
+  let modelFilename = typeof options.modelFilename === 'string' && options.modelFilename.trim() ? options.modelFilename.trim() : null;
+  const modelNotes = [];
+  if (options.model) {
+    const model = normalizeModelRequest(options.model);
+    if (!model) throw withStemCode(new Error('Die Modell-Auswahl ist ungültig (Dateiname fehlt).'), STEM_ERROR_CODES.MODEL_MISSING);
+    const store = getStemModelStore();
+    const ensured = await store.ensureModel(
+      { fileName: model.fileName, downloadUrl: model.downloadUrl, sha256: model.sha256, expectedSizeBytes: model.expectedSizeBytes },
+      {
+        onProgress: (progress) =>
+          sendStemProgress(event, { jobId: 'model', phase: 'running', ratio: progress.ratio, message: progress.message }),
+      }
+    );
+    if (!ensured.available && !ensured.delegateToRuntime) {
+      throw withStemCode(new Error(ensured.reason || `Modell-Gewichte nicht verfügbar: ${model.fileName}`), STEM_ERROR_CODES.MODEL_MISSING);
+    }
+    modelFilename = model.fileName;
+    modelNotes.push(ensured.available ? `Gewichte lokal vorhanden: ${ensured.filePath}` : ensured.reason);
+    stemLog('INFO', `Modell für Separation: ${model.fileName}`, { ensured: ensured.available, delegated: ensured.delegateToRuntime });
+  }
+
+  const args = buildSeparatorArgs({
+    inputPath: localPath,
+    outputDir,
+    modelFilename,
+    modelFileDir: roots.models,
+    outputFormat: 'WAV',
+    chunkDuration: options.chunkDuration,
+    extraArgs: Array.isArray(options.extraArgs) ? options.extraArgs : [],
+  });
+
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+  const useShell = requiresShell(status.command);
+  stemLog('INFO', `Stem-Separation startet`, { jobId, command: status.command, args, outputDir, modelNotes });
+  sendStemProgress(event, { jobId, phase: 'start', ratio: 0, message: `Separator gestartet: ${path.basename(localPath)}`, outputDir });
+
+  const child = execFile(status.command, useShell ? toShellArgs(args) : args, {
+    cwd: outputDir,
+    timeout: SEPARATOR_RUN_TIMEOUT_MS,
+    maxBuffer: SEPARATOR_MAX_BUFFER,
+    windowsHide: true,
+    shell: useShell,
+    env: process.env,
+  });
+  activeSeparations.set(jobId, child);
+
+  let stdoutTail = '';
+  let stderrTail = '';
+  const rememberTail = (target, chunk) => {
+    const next = target + chunk;
+    return next.length > SEPARATOR_LOG_TAIL_CHARS ? next.slice(next.length - SEPARATOR_LOG_TAIL_CHARS) : next;
+  };
+  const handleChunk = (chunk, isError) => {
+    const text = chunk.toString();
+    if (isError) stderrTail = rememberTail(stderrTail, text);
+    else stdoutTail = rememberTail(stdoutTail, text);
+    for (const line of text.split(/\r?\n/)) {
+      const progress = parseSeparatorProgress(line);
+      if (progress) {
+        sendStemProgress(event, { jobId, phase: 'running', ratio: progress.ratio, message: progress.message });
+      } else if (isError && line.trim()) {
+        stemLog('DEBUG', line.trim(), { jobId });
+      }
+    }
+  };
+  if (child.stdout) child.stdout.on('data', (chunk) => handleChunk(chunk, false));
+  if (child.stderr) child.stderr.on('data', (chunk) => handleChunk(chunk, true));
+
+  return new Promise((resolve, reject) => {
+    const fail = (failure) => {
+      activeSeparations.delete(jobId);
+      stemLog('ERROR', `${failure.code}: ${failure.message}`, { jobId, hint: failure.hint, stderr: stderrTail.slice(-800) });
+      sendStemProgress(event, { jobId, phase: 'failed', ratio: null, message: failure.message, code: failure.code });
+      reject(withStemCode(new Error([failure.message, failure.hint].filter(Boolean).join(' ')), failure.code));
+    };
+
+    child.once('error', (error) => {
+      fail(classifySeparatorFailure({ error, stderr: stderrTail, stdout: stdoutTail, inputPath: localPath }));
+    });
+
+    child.once('close', async (code, signal) => {
+      const elapsed = Date.now() - startedAt;
+      const cancelled = cancelledSeparations.has(jobId);
+      const timedOut = !cancelled && child.killed === true && elapsed >= SEPARATOR_RUN_TIMEOUT_MS - 5000;
+      cancelledSeparations.delete(jobId);
+
+      if (cancelled || timedOut || code !== 0) {
+        fail(
+          classifySeparatorFailure({
+            error: { message: `Separator beendet mit Code ${code}${signal ? ` (Signal ${signal})` : ''}`, signal, killed: child.killed },
+            stderr: stderrTail,
+            stdout: stdoutTail,
+            inputPath: localPath,
+            timedOut,
+            cancelled,
+          })
+        );
+        return;
+      }
+
+      const stems = collectStemOutputs({ outputDir, filesBefore, filesAfter: listDirectoryEntries(outputDir) });
+      if (!stems.length) {
+        fail({
+          code: STEM_ERROR_CODES.NO_OUTPUT,
+          message: `Der Separator lief durch, hat aber keine WAV-Datei in ${outputDir} erzeugt.`,
+          hint: 'Anderes Modell wählen (--model_filename) oder die interne Heuristik-Separation verwenden.',
+        });
+        return;
+      }
+
+      activeSeparations.delete(jobId);
+      stemLog('INFO', `Stem-Separation fertig: ${stems.length} Stems`, { jobId, stems, durationMs: elapsed });
+      sendStemProgress(event, {
+        jobId,
+        phase: 'done',
+        ratio: 1,
+        message: `${stems.length} Stems erzeugt`,
+        stems,
+        durationMs: elapsed,
+      });
+      resolve(stems);
+    });
+  });
+});
+
+ipcMain.handle('audio:separate-stems:cancel', async (_event, jobId) => {
+  const targets = jobId ? [[jobId, activeSeparations.get(jobId)]] : [...activeSeparations.entries()];
+  let cancelled = 0;
+  for (const [id, child] of targets) {
+    if (!child) continue;
+    cancelledSeparations.add(id);
+    try {
+      child.kill('SIGTERM');
+      cancelled += 1;
+    } catch {
+      // Prozess ist bereits weg
+    }
+  }
+  stemLog('INFO', `Stem-Separation abgebrochen (${cancelled} Prozess(e))`, { jobId: jobId ?? '*' });
+  return { cancelled };
 });
 
 ipcMain.handle('log:append', async (_event, entry) => {
