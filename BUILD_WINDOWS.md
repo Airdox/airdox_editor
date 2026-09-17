@@ -32,11 +32,33 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 
 ## Automatischer Build (GitHub Actions)
 
-Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
-`main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
-beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.13 && git push --tags`) wird automatisch ein GitHub
-Release mit den `.exe`-Dateien erzeugt.
+Der Workflow `.github/workflows/windows-build.yml` baut **auf jedem Push
+(alle Branches), auf jedem Pull Request, auf Tags `v*` und einmal täglich
+um 03:00 UTC (05:00 DE)** automatisch beide Windows-Artefakte und lädt sie
+als Artifact (30 Tage) hoch:
+
+- **Jeder Commit-Push** → frischer Build unter *Actions → Windows-Build →
+  Artifacts* (`airdox-smart-editor-windows`), herunterladbar als ZIP mit
+  Installer + Portable-`.exe`.
+- **Jeder Push auf `main`** → aktualisiert zusätzlich das Rolling-Prerelease
+  `latest` unter *Releases*, sodass es dort immer die neueste WIN-App gibt
+  – ganz ohne Tag.
+- **Tag** (z. B. `git tag v0.4.13 && git push --tags`) → offizielles GitHub
+  Release mit den `.exe`-Dateien und generierten Release-Notes.
+
+Laufen bei schnellen Push-Folgen mehrere Builds, wird der ältere automatisch
+abgebrochen – es gewinnt immer der neueste Commit.
+
+Der Build ist robust gegen unvollständige Commits: Fehlt die
+`package-lock.json` oder ist sie nicht synchron mit der `package.json`
+(passiert bei parallelen Branches), schaltet der Workflow automatisch auf
+`npm install` ohne Cache um und baut trotzdem – mit einer Warnung im
+Build-Protokoll statt eines Abruchs. Die CI nutzt Node.js 22.
+
+Hinweis: Die Qualitäts-Gates (`TypeScript-Prüfung`, `Waveform-Gates`) laufen
+bei jedem Build mit und bleiben sichtbar, blockieren den WIN-Build aber
+vorerst nicht, bis der Baum wieder vollständig grün ist (siehe
+`continue-on-error` im Workflow).
 
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 
