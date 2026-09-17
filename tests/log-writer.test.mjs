@@ -1,14 +1,6 @@
 /**
- * Tests for electron/logWriter.cjs — the durable single-line log writer that
- * persists every decisive pipeline parameter (ANLZ resolution, file sizes,
- * tags, waveform variants, merge verdicts) so a missing waveform can be
- * diagnosed from the log file alone.
- *
- * Covers: ISO timestamp format, level/category, newline collapsing, data JSON
- * serialization (incl. circular fallback), truncation, rotation into
- * .prev.log, and the never-throws guarantee.
- *
- * Run with: node tests/log-writer.test.mjs
+ * Tests for electron/logger.cjs — the durable daily logger that merges main+renderer
+ * Covers: daily rotation file path, secret redaction, binary summarization, retention, session header
  */
 
 import assert from 'node:assert';
@@ -18,74 +10,58 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { formatLogLine, createLogWriter, DEFAULT_MAX_BYTES } = require('../electron/logWriter.cjs');
+const logger = require('../electron/logger.cjs');
 
-// ─── formatLogLine ──────────────────────────────────────────────────────────
-const ts = new Date('2026-09-09T16:42:31.512Z').getTime();
-const line = formatLogLine({ ts, level: 'INFO', category: 'DATABASE', message: 'Auflösung', data: { resolved: 'C:\\anlz\\ANLZ0000.DAT', bytes: 31415 } });
-assert.ok(line.startsWith('2026-09-09T16:42:31.512Z INFO [DATABASE] Auflösung'), 'ISO time, level, category, message');
-assert.ok(line.includes('"resolved":"C:\\\\anlz\\\\ANLZ0000.DAT"'), 'data appended as JSON');
-assert.ok(!line.includes('\n'), 'single line only');
+// formatLogLine compatibility
+const line = logger.formatLogLine({ level: 'INFO', message: 'test', ts: Date.now() });
+assert.ok(line.includes('INFO'), 'formatLogLine contains level');
+assert.ok(line.includes('test'), 'formatLogLine contains message');
 
-// Defaults and casing
-const minimal = formatLogLine({ message: 'x' });
-assert.ok(/ INFO \[SYSTEM\] x$/.test(minimal), 'defaults to INFO [SYSTEM]');
-assert.ok(!minimal.endsWith(' | '), 'no dangling separator without data');
+// Secret redaction
+const redacted = logger.redactSecrets({ apiKey: '123', password: 'secret', normal: 'ok' });
+assert.equal(redacted.apiKey, '[REDACTED]');
+assert.equal(redacted.password, '[REDACTED]');
+assert.equal(redacted.normal, 'ok');
 
-// Newlines inside message/data collapse instead of breaking the line format
-const multi = formatLogLine({ ts, message: 'a\nb\r\nc', data: { x: '1\n2' } });
-assert.strictEqual(multi.split('\n').length, 1, 'newlines collapsed');
-assert.ok(multi.includes('a \\n b \\n c'), 'escaped newline markers');
+// Binary summarization
+const bin = logger.summarizeForLog(Buffer.from('hello world'));
+assert.ok(bin.__binary, 'binary summarized');
+assert.equal(bin.byteLength, 11);
 
-// Circular data never throws and degrades to a string
-const circular = { self: null };
-circular.self = circular;
-const circLine = formatLogLine({ ts, message: 'circular', data: circular });
-assert.ok(circLine.includes('circular'), 'circular data handled');
+const bin2 = logger.summarizeForLog(new Uint8Array(2048));
+assert.ok(bin2.__binary, 'Uint8Array summarized');
 
-// Truncation keeps lines bounded
-const longMsg = formatLogLine({ ts, message: 'm'.repeat(5000) });
-assert.ok(longMsg.length < 5000 && longMsg.includes('(+'), 'long message truncated with marker');
-const longData = formatLogLine({ ts, message: 'ok', data: { blob: 'd'.repeat(9000) } });
-assert.ok(longData.length < 9500 && longData.includes('(+'), 'long data truncated with marker');
+const arr = logger.summarizeForLog(new Array(200).fill(0));
+assert.ok(arr.__array, 'large array summarized');
 
-// ─── createLogWriter ────────────────────────────────────────────────────────
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-log-'));
-const filePath = path.join(tmp, 'nested', 'airdox-smart-editor.log');
+// Daily file path
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-logger-'));
+const fakeApp = { getPath: (name) => { if (name === 'userData') return tmp; return os.tmpdir(); } };
+const logDir = logger.getLogDir(fakeApp);
+assert.ok(logDir.includes('logs'), 'log dir contains logs');
 
-const writer = createLogWriter(filePath);
-assert.strictEqual(writer.bytesWritten, 0, 'fresh file starts at 0 bytes');
-assert.strictEqual(writer.append(formatLogLine({ ts, message: 'erste Zeile' })), true, 'append succeeds');
-assert.strictEqual(writer.append(formatLogLine({ ts, message: 'zweite Zeile' })), true, 'append succeeds');
-const written = fs.readFileSync(filePath, 'utf8').trim().split('\n');
-assert.strictEqual(written.length, 2, 'both lines persisted');
-assert.ok(writer.bytesWritten > 0, 'byte accounting grows');
+const filePath = logger.getLogFilePath(fakeApp, new Date('2026-09-17T12:00:00Z'));
+assert.ok(filePath.includes('airdox-editor-2026-09-17.log'), 'daily file name');
 
-// Byte accounting resumes across restarts
-const writer2 = createLogWriter(filePath);
-assert.strictEqual(writer2.bytesWritten, writer.bytesWritten, 'existing size adopted');
+// Configure logger and write
+logger.configureLogger({ app: fakeApp, level: 'debug' });
+logger.info('Test info', { detail: 'hello' });
+logger.error('Test error', { error: 'oops' });
 
-// Rotation: tiny maxBytes forces a .prev.log rollover without data loss
-const rotPath = path.join(tmp, 'rotate.log');
-const rot = createLogWriter(rotPath, { maxBytes: 400 });
-for (let i = 0; i < 10; i++) {
-  assert.strictEqual(rot.append(formatLogLine({ ts, level: 'INFO', category: 'DATABASE', message: `entry ${i} ${'x'.repeat(60)}` })), true, `append ${i} succeeds`);
-}
-assert.ok(fs.existsSync(rot.prevPath), 'rotation creates .prev.log');
-const prevContent = fs.readFileSync(rot.prevPath, 'utf8').trim();
-const curContent = fs.readFileSync(rotPath, 'utf8').trim();
-assert.ok(prevContent.includes('entry'), 'prev log retains earlier entries');
-assert.ok(curContent.includes('entry 9'), 'current log continues after rotation');
-assert.ok(fs.statSync(rot.prevPath).size <= 400 + 200, 'rotated file bounded (~maxBytes + one line)');
+// Check file exists and contains session header
+const files = fs.readdirSync(path.join(tmp, 'logs'));
+assert.ok(files.length > 0, 'log file created');
+const content = fs.readFileSync(path.join(tmp, 'logs', files[0]), 'utf8');
+assert.ok(content.includes('Session started'), 'session header present');
+assert.ok(content.includes('Test info'), 'info logged');
+assert.ok(content.includes('Test error'), 'error logged');
 
-// Never throws on unwritable targets — append degrades to false. A regular
-// file used as a directory component fails mkdir/write on every OS (ENOTDIR).
-const blocker = path.join(tmp, 'blocker');
-fs.writeFileSync(blocker, 'x');
-const bogus = createLogWriter(path.join(blocker, 'log.log'));
-assert.strictEqual(bogus.append('anything'), false, 'unwritable target degrades to false');
-assert.strictEqual(DEFAULT_MAX_BYTES, 5 * 1024 * 1024, '5 MB default rotation');
+// Ingest renderer entries
+logger.ingestRendererEntries([{ level: 'info', message: 'renderer test', data: { x: 1 } }], fakeApp);
+const content2 = fs.readFileSync(path.join(tmp, 'logs', files[0]), 'utf8');
+assert.ok(content2.includes('renderer test'), 'renderer entry ingested');
 
+// Cleanup
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log('log writer: OK');

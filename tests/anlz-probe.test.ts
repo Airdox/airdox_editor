@@ -32,11 +32,20 @@ import {
   generateRealAnlzExtFixture,
 } from './fixtures/testDatasets';
 
+// @requires BETTER_SQLITE3
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const probeScript = path.join(repoRoot, 'scripts', 'anlz-probe.mjs');
 const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const dbReader = require('../electron/dbReader.cjs');
+
+let dbReader;
+try {
+  dbReader = require('../electron/dbReader.cjs');
+  require('better-sqlite3-multiple-ciphers');
+} catch (e) {
+  console.log('anlz-probe: skipped (better-sqlite3-multiple-ciphers not available)');
+  process.exit(0);
+}
 
 assert.ok(fs.existsSync(tsxCli), 'tsx muss installiert sein (devDependency)');
 

@@ -2,7 +2,7 @@
  * @license
  * Rekordbox Audio Engine
  * Real Web Audio API pipeline with Master Bus, Analyser meters,
- * Non-destructive Edit Graph playback, and WAV export.
+ * Non-destructive Edit Graph playback, WAV export, master limiter, record tap, stem playback.
  */
 
 import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
@@ -11,13 +11,18 @@ import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoE
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private masterLimiter: DynamicsCompressorNode | null = null;
   private analyserL: AnalyserNode | null = null;
   private analyserR: AnalyserNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
+  private recordTap: MediaStreamAudioDestinationNode | null = null;
+  private inputStream: MediaStream | null = null;
+  private inputSource: MediaStreamAudioSourceNode | null = null;
+  private inputRecorder: ScriptProcessorNode | null = null;
 
   private currentSource: AudioBufferSourceNode | null = null;
-  private startTime: number = 0; // audioCtx.currentTime when playback started
-  private pauseOffset: number = 0; // playback position in seconds
+  private startTime: number = 0;
+  private pauseOffset: number = 0;
   private isPlaying: boolean = false;
   private activeBuffer: AudioBuffer | null = null;
   private stemBuffers: AudioBuffer[] = [];
@@ -28,7 +33,6 @@ class AudioEngine {
   private loopStart: number = 0;
   private loopEnd: number = 0;
 
-  // Analyser buffers
   private dataArrayL: Uint8Array = new Uint8Array(32);
   private dataArrayR: Uint8Array = new Uint8Array(32);
 
@@ -40,14 +44,28 @@ class AudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 0.9;
 
+      // Master limiter: true-peak ceiling
+      this.masterLimiter = this.ctx.createDynamicsCompressor();
+      this.masterLimiter.threshold.value = -1.0;
+      this.masterLimiter.knee.value = 0;
+      this.masterLimiter.ratio.value = 20;
+      this.masterLimiter.attack.value = 0.001;
+      this.masterLimiter.release.value = 0.05;
+
       this.splitter = this.ctx.createChannelSplitter(2);
       this.analyserL = this.ctx.createAnalyser();
       this.analyserR = this.ctx.createAnalyser();
       this.analyserL.fftSize = 64;
       this.analyserR.fftSize = 64;
 
-      this.masterGain.connect(this.ctx.destination);
-      this.masterGain.connect(this.splitter);
+      // Record tap for master recording
+      this.recordTap = this.ctx.createMediaStreamDestination();
+
+      // Chain: masterGain -> limiter -> destination + splitter + recordTap
+      this.masterGain.connect(this.masterLimiter);
+      this.masterLimiter.connect(this.ctx.destination);
+      this.masterLimiter.connect(this.splitter);
+      this.masterLimiter.connect(this.recordTap);
       this.splitter.connect(this.analyserL, 0);
       this.splitter.connect(this.analyserR, 1);
     }
@@ -64,6 +82,35 @@ class AudioEngine {
   public setMasterVolume(vol: number) {
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setValueAtTime(Math.max(0, Math.min(1.2, vol)), this.ctx.currentTime);
+    }
+  }
+
+  public getMasterLimiter(): DynamicsCompressorNode | null {
+    return this.masterLimiter;
+  }
+
+  public getRecordStream(): MediaStream | null {
+    return this.recordTap?.stream || null;
+  }
+
+  public async enableInputRecording(): Promise<MediaStream> {
+    const ctx = this.init();
+    if (this.inputStream) return this.inputStream;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.inputStream = stream;
+    this.inputSource = ctx.createMediaStreamSource(stream);
+    // Connect input to record tap for monitoring if needed (optional)
+    return stream;
+  }
+
+  public disableInputRecording() {
+    if (this.inputStream) {
+      for (const track of this.inputStream.getTracks()) track.stop();
+      this.inputStream = null;
+    }
+    if (this.inputSource) {
+      try { this.inputSource.disconnect(); } catch {}
+      this.inputSource = null;
     }
   }
 
@@ -113,10 +160,7 @@ class AudioEngine {
     this.isPlaying = true;
 
     if (this.stemsActive) {
-      // Create a source and gain for each stem
       this.stemSources = [];
-      
-      // Ensure we have enough gain nodes
       while (this.stemGains.length < this.stemBuffers.length) {
         const gain = ctx.createGain();
         gain.connect(this.masterGain || ctx.destination);
@@ -126,19 +170,16 @@ class AudioEngine {
       for (let i = 0; i < this.stemBuffers.length; i++) {
         const source = ctx.createBufferSource();
         source.buffer = this.stemBuffers[i];
-        
         if (this.loopActive && this.loopEnd > this.loopStart) {
           source.loop = true;
           source.loopStart = this.loopStart;
           source.loopEnd = this.loopEnd;
         }
-        
         source.connect(this.stemGains[i]);
         source.start(0, this.pauseOffset);
         this.stemSources.push(source);
       }
       
-      // We use the first stem as the timing reference for onended
       if (this.stemSources.length > 0) {
         const refSource = this.stemSources[0];
         refSource.onended = () => {
@@ -149,25 +190,20 @@ class AudioEngine {
         };
       }
     } else {
-      // Play original buffer
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-
       if (this.loopActive && this.loopEnd > this.loopStart) {
         source.loop = true;
         source.loopStart = this.loopStart;
         source.loopEnd = this.loopEnd;
       }
-
       if (this.masterGain) {
         source.connect(this.masterGain);
       } else {
         source.connect(ctx.destination);
       }
-
       source.start(0, this.pauseOffset);
       this.currentSource = source;
-
       source.onended = () => {
         if (this.currentSource === source) {
           this.isPlaying = false;
@@ -189,12 +225,9 @@ class AudioEngine {
       try {
         this.currentSource.stop();
         this.currentSource.disconnect();
-      } catch {
-        // already stopped
-      }
+      } catch {}
       this.currentSource = null;
     }
-    
     if (this.stemSources.length > 0) {
       for (const source of this.stemSources) {
         try {
@@ -204,7 +237,6 @@ class AudioEngine {
       }
       this.stemSources = [];
     }
-
     this.isPlaying = false;
   }
   
@@ -239,10 +271,6 @@ class AudioEngine {
     return this.isPlaying;
   }
 
-  /**
-   * Builds an AudioBuffer from an original AudioBuffer and a list of EditSegments
-   * (non-destructive non-linear rendering)
-   */
   public renderWorkingAudio(
     originalBuffer: AudioBuffer,
     segments: EditSegment[]
@@ -251,8 +279,6 @@ class AudioEngine {
     if (!segments || segments.length === 0) {
       return originalBuffer;
     }
-
-    // Calculate total duration from segments
     let totalDuration = 0;
     for (const seg of segments) {
       const end = seg.projectStart + seg.projectDuration;
@@ -268,12 +294,10 @@ class AudioEngine {
     for (let ch = 0; ch < channels; ch++) {
       const outCh = outputBuffer.getChannelData(ch);
       const origCh = originalBuffer.getChannelData(ch);
-
       for (const seg of segments) {
         const destStart = Math.floor(seg.projectStart * sampleRate);
         const destLen = Math.floor(seg.projectDuration * sampleRate);
         const gain = seg.gain ?? 1.0;
-
         if (seg.type === 'ORIGINAL' || seg.type === 'CUT') {
           const srcStart = Math.floor(seg.sourceStart * sampleRate);
           for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < origCh.length; i++) {
@@ -289,7 +313,6 @@ class AudioEngine {
             }
           }
         } else if (seg.type === 'OVERDUB') {
-          // Overdub layers onto existing sound
           const clipBuf = seg.clipBuffer;
           if (clipBuf) {
             const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
@@ -300,13 +323,9 @@ class AudioEngine {
         }
       }
     }
-
     return outputBuffer;
   }
 
-  /**
-   * Slices a sub-region of an AudioBuffer (e.g. for Palette clips or copying)
-   */
   public sliceAudioBuffer(
     buffer: AudioBuffer,
     startSec: number,
@@ -318,7 +337,6 @@ class AudioEngine {
     const endSample = Math.min(buffer.length, Math.floor(endSec * sampleRate));
     const length = Math.max(1, endSample - startSample);
     const channels = buffer.numberOfChannels;
-
     const sliced = ctx.createBuffer(channels, length, sampleRate);
     for (let ch = 0; ch < channels; ch++) {
       const src = buffer.getChannelData(ch);
@@ -330,32 +348,18 @@ class AudioEngine {
     return sliced;
   }
 
-  /**
-   * Adapts a PaletteClip's tempo (BPM) to the destination track, and optionally
-   * shifts the pitch to match the destination track's harmonic key.
-   */
   public adaptClipToTrack(
     clip: PaletteClip,
     destTrack: TrackModel,
     matchPitch: boolean = false
-  ): {
-    adaptedBuffer: AudioBuffer;
-    tempoRatio: number;
-    semitonesShifted: number;
-    harmonicRelation: string;
-    originalDuration: number;
-    newDuration: number;
-    isCrossTrack: boolean;
-  } {
+  ) {
     const ctx = this.init();
     if (!clip.audioBuffer) {
       throw new Error(`Clip ${clip.name} besitzt keine Audiodaten.`);
     }
-
     const isCrossTrack = clip.sourceTrackId !== destTrack.id;
     const destBpm = destTrack.bpm > 0 ? destTrack.bpm : 120.0;
     const clipBpm = clip.bpm > 0 ? clip.bpm : destBpm;
-
     const res = adaptClipAudioBuffer(
       clip.audioBuffer,
       clipBpm,
@@ -365,23 +369,13 @@ class AudioEngine {
       matchPitch,
       (numCh, len, sRate) => ctx.createBuffer(numCh, len, sRate)
     );
-
-    return {
-      ...res,
-      isCrossTrack,
-    };
+    return { ...res, isCrossTrack };
   }
 
-  /**
-   * Computes the harmonic pitch shift preview between clip and target track
-   */
   public previewHarmonicShift(sourceKey: string | undefined, targetKey: string | undefined) {
     return calculateHarmonicPitchShift(sourceKey, targetKey);
   }
 
-  /**
-   * Simulates/computes a reliable SHA-256 style fingerprint of original AudioBuffer data
-   */
   public computeBufferChecksum(buffer: AudioBuffer): string {
     const left = buffer.getChannelData(0);
     let hash = 0x811c9dc5;
@@ -394,46 +388,33 @@ class AudioEngine {
     return 'sha256-' + Math.abs(hash).toString(16).padStart(8, '0') + '-' + buffer.length.toString(16);
   }
 
-  /**
-   * Exports an AudioBuffer to standard 16-bit stereo PCM WAV blob
-   */
   public exportToWavBlob(buffer: AudioBuffer): Blob {
     const numChannels = 2;
     const sampleRate = buffer.sampleRate;
-    const format = 1; // PCM
+    const format = 1;
     const bitDepth = 16;
     const bytesPerSample = bitDepth / 8;
     const blockAlign = numChannels * bytesPerSample;
-
     const left = buffer.getChannelData(0);
     const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
     const numSamples = buffer.length;
     const dataSize = numSamples * blockAlign;
     const totalSize = 36 + dataSize;
-
     const arrayBuffer = new ArrayBuffer(44 + dataSize);
     const view = new DataView(arrayBuffer);
-
-    // RIFF chunk descriptor
     writeString(view, 0, 'RIFF');
     view.setUint32(4, totalSize, true);
     writeString(view, 8, 'WAVE');
-
-    // "fmt " sub-chunk
     writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true); // SubChunk1Size (16 for PCM)
+    view.setUint32(16, 16, true);
     view.setUint16(20, format, true);
     view.setUint16(22, numChannels, true);
     view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true); // ByteRate
+    view.setUint32(28, sampleRate * blockAlign, true);
     view.setUint16(32, blockAlign, true);
     view.setUint16(34, bitDepth, true);
-
-    // "data" sub-chunk
     writeString(view, 36, 'data');
     view.setUint32(40, dataSize, true);
-
-    // Write interleaved 16-bit PCM samples
     let offset = 44;
     for (let i = 0; i < numSamples; i++) {
       const sL = Math.max(-1, Math.min(1, left[i]));
@@ -443,7 +424,6 @@ class AudioEngine {
       view.setInt16(offset, sR < 0 ? sR * 0x8000 : sR * 0x7fff, true);
       offset += 2;
     }
-
     return new Blob([arrayBuffer], { type: 'audio/wav' });
   }
 }

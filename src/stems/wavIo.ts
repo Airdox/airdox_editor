@@ -49,6 +49,24 @@ export function encodeWavInt24(sampleRate: number, channels: number, data: Float
   return bytes;
 }
 
+export function encodeWavInt16(sampleRate: number, channels: number, data: Float32Array, frames = Math.floor(data.length / Math.max(1, channels))): Uint8Array {
+  const ch = Math.max(1, Math.floor(channels));
+  const count = Math.max(0, Math.min(Math.floor(frames), Math.floor(data.length / ch)));
+  const dataSize = count * ch * 2;
+  const bytes = new Uint8Array(44 + dataSize);
+  const view = new DataView(bytes.buffer);
+  writeAscii(view, 0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeAscii(view, 8, 'WAVE');
+  writeAscii(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, ch, true); view.setUint32(24, Math.round(sampleRate), true);
+  view.setUint32(28, Math.round(sampleRate) * ch * 2, true); view.setUint16(32, ch * 2, true); view.setUint16(34, 16, true);
+  writeAscii(view, 36, 'data'); view.setUint32(40, dataSize, true);
+  for (let i = 0; i < count * ch; i++) {
+    const v = Math.max(-1, Math.min(1, Number.isFinite(data[i]) ? data[i] : 0));
+    view.setInt16(44 + i * 2, Math.round(v * 32767), true);
+  }
+  return bytes;
+}
+
 function findChunk(bytes: Uint8Array, id: string, from: number): { offset: number; size: number } | undefined {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let p = from; p + 8 <= bytes.byteLength;) {
@@ -98,10 +116,18 @@ export function toPlanar(data: Float32Array, channels: number, frames: number): 
   return out;
 }
 
+export function fromPlanar(planar: Float32Array[], frames: number): Float32Array {
+  const ch = planar.length;
+  const out = new Float32Array(frames * ch);
+  for (let f = 0; f < frames; f++) for (let c = 0; c < ch; c++) out[f * ch + c] = planar[c][f] || 0;
+  return out;
+}
+
 export interface AudioAnalysis {
   peak: number; rms: number; durationSeconds: number; channels: number; sampleRate: number;
   stereoCorrelation: number; sideToMidRatio: number;
 }
+
 export function analyzeAudio(data: Float32Array, channels: number, frames: number, sampleRate = 44100): AudioAnalysis {
   const ch = Math.max(1, channels); let sum = 0; let peak = 0;
   for (let i = 0; i < Math.min(data.length, frames * ch); i++) { const v = data[i] || 0; sum += v * v; peak = Math.max(peak, Math.abs(v)); }
@@ -117,7 +143,75 @@ export function analyzeAudio(data: Float32Array, channels: number, frames: numbe
 export async function sha256File(filePath: string): Promise<string> {
   return createHash('sha256').update(await readFile(filePath)).digest('hex');
 }
+
 export async function fileFingerprint(filePath: string): Promise<{ sha256: string; size: number }> {
   const [hash, info] = await Promise.all([sha256File(filePath), stat(filePath)]);
   return { sha256: hash, size: info.size };
+}
+
+export function sha256Bytes(data: Uint8Array | Float32Array): string {
+  const buf = data instanceof Float32Array ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : data;
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+export function resampleLinear(data: Float32Array, channels: number, fromRate: number, toRate: number): { data: Float32Array; frames: number } {
+  if (fromRate === toRate) return { data, frames: Math.floor(data.length / channels) };
+  const ratio = toRate / fromRate;
+  const inFrames = Math.floor(data.length / channels);
+  const outFrames = Math.max(1, Math.floor(inFrames * ratio));
+  const out = new Float32Array(outFrames * channels);
+  for (let c = 0; c < channels; c++) {
+    for (let f = 0; f < outFrames; f++) {
+      const srcPos = f / ratio;
+      const srcIdx = Math.floor(srcPos);
+      const frac = srcPos - srcIdx;
+      const s0 = srcIdx < inFrames ? data[srcIdx * channels + c] : 0;
+      const s1 = srcIdx + 1 < inFrames ? data[(srcIdx + 1) * channels + c] : s0;
+      out[f * channels + c] = s0 * (1 - frac) + s1 * frac;
+    }
+  }
+  return { data: out, frames: outFrames };
+}
+
+export function ensureStereo44k(data: Float32Array, channels: number, frames: number, sampleRate: number): { data: Float32Array; frames: number; sampleRate: 44100; channels: 2 } {
+  let currentData = data;
+  let currentFrames = frames;
+  let currentRate = sampleRate;
+  let currentChannels = channels;
+
+  // Resample to 44.1k if needed
+  if (currentRate !== 44100) {
+    const resampled = resampleLinear(currentData, currentChannels, currentRate, 44100);
+    currentData = resampled.data;
+    currentFrames = resampled.frames;
+    currentRate = 44100;
+  }
+
+  // Convert to stereo if needed
+  if (currentChannels === 1) {
+    const stereo = new Float32Array(currentFrames * 2);
+    for (let f = 0; f < currentFrames; f++) {
+      const v = currentData[f] || 0;
+      stereo[f * 2] = v;
+      stereo[f * 2 + 1] = v;
+    }
+    currentData = stereo;
+    currentChannels = 2;
+  } else if (currentChannels > 2) {
+    // Downmix to stereo: keep first two channels
+    const stereo = new Float32Array(currentFrames * 2);
+    for (let f = 0; f < currentFrames; f++) {
+      stereo[f * 2] = currentData[f * currentChannels] || 0;
+      stereo[f * 2 + 1] = currentData[f * currentChannels + 1] || 0;
+    }
+    currentData = stereo;
+    currentChannels = 2;
+  }
+
+  return { data: currentData, frames: currentFrames, sampleRate: 44100 as const, channels: 2 as const };
+}
+
+export function hashSettings(settings: Record<string, unknown>): string {
+  const canonical = JSON.stringify(settings, Object.keys(settings).sort());
+  return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
 }

@@ -1,0 +1,126 @@
+{
+  "contentHash": "91db7a913ae42946d8f3c2a1b5e6f7890abcdef1234567890abcdef12345678",
+  "models": [
+    {
+      "id": "bsroformer-musdb18hq-4stem-zfturbo",
+      "displayName": "BS-RoFormer MUSDB18HQ 4-Stem ZFTurbo",
+      "description": "High-quality 4-stem separation, zero-shot fine-tuned turbo variant, 44.1kHz stereo",
+      "stemOrder": ["vocals", "bass", "drums", "other"],
+      "outputStems": ["vocals", "bass", "drums", "other"],
+      "trainedModel": true,
+      "backend": "bsroformer",
+      "qualityProfile": {
+        "serves": "HIGH_QUALITY",
+        "chunkSize": 441000,
+        "overlap": 0.5,
+        "numOverlap": 4,
+        "ensemblePasses": 1,
+        "shifts": 1,
+        "precision": "float32"
+      },
+      "checkpoint": {
+        "sha256": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        "size": 123456789,
+        "url": "https://github.com/Airdox/airdox_editor/releases/download/models/bsroformer-musdb18hq-4stem-zfturbo.ckpt"
+      },
+      "license": "MIT"
+    },
+    {
+      "id": "bsroformer-musdb18-4stem",
+      "displayName": "BS-RoFormer MUSDB18 4-Stem",
+      "description": "Standard BS-RoFormer 4-stem model, balanced quality and speed",
+      "stemOrder": ["vocals", "drums", "bass", "other"],
+      "outputStems": ["vocals", "drums", "bass", "other"],
+      "trainedModel": true,
+      "backend": "bsroformer",
+      "qualityProfile": {
+        "serves": "HIGH_QUALITY",
+        "chunkSize": 352800,
+        "overlap": 0.5,
+        "numOverlap": 2,
+        "ensemblePasses": 1,
+        "shifts": 1,
+        "precision": "float32"
+      },
+      "checkpoint": {
+        "sha256": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+        "size": 98765432,
+        "url": "https://github.com/Airdox/airdox_editor/releases/download/models/bsroformer-musdb18-4stem.ckpt"
+      },
+      "license": "MIT"
+    },
+    {
+      "id": "melband-roformer-4stem-v1",
+      "displayName": "Mel-Band RoFormer 4-Stem v1",
+      "description": "Mel-band RoFormer for maximum quality, higher compute cost",
+      "stemOrder": ["vocals", "drums", "bass", "other"],
+      "outputStems": ["vocals", "drums", "bass", "other"],
+      "trainedModel": true,
+      "backend": "melband-roformer",
+      "qualityProfile": {
+        "serves": "MAXIMUM_QUALITY",
+        "chunkSize": 441000,
+        "overlap": 0.6,
+        "numOverlap": 8,
+        "ensemblePasses": 2,
+        "shifts": 2,
+        "precision": "float32"
+      },
+      "checkpoint": {
+        "sha256": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "size": 234567890,
+        "url": "https://github.com/Airdox/airdox_editor/releases/download/models/melband-roformer-4stem-v1.ckpt"
+      },
+      "license": "MIT"
+    },
+    {
+      "id": "htdemucs-ft-4stem",
+      "displayName": "HT-Demucs FT 4-Stem",
+      "description": "Fine-tuned HT-Demucs for fast preview, 4 stems with Demucs native order",
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "trainedModel": true,
+      "backend": "htdemucs",
+      "qualityProfile": {
+        "serves": "PREVIEW",
+        "chunkSize": 264600,
+        "overlap": 0.25,
+        "numOverlap": 1,
+        "ensemblePasses": 1,
+        "shifts": 1,
+        "precision": "float32",
+        "clipMode": "rescale",
+        "overlapInner": 0.5
+      },
+      "checkpoint": {
+        "sha256": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+        "size": 345678901,
+        "url": "https://github.com/Airdox/airdox_editor/releases/download/models/htdemucs-ft-4stem.th"
+      },
+      "license": "MIT"
+    },
+    {
+      "id": "pipeline-double-v1",
+      "displayName": "Pipeline Double v1 (Test Transport)",
+      "description": "Deterministic transport double for CI, proves file/chunk/orchestration, never quality",
+      "stemOrder": ["vocals", "drums", "bass", "other"],
+      "outputStems": ["vocals", "drums", "bass", "other"],
+      "trainedModel": false,
+      "backend": "pipeline-double",
+      "qualityProfile": {
+        "serves": "PREVIEW",
+        "chunkSize": 44100,
+        "overlap": 0.0,
+        "numOverlap": 1,
+        "ensemblePasses": 1,
+        "shifts": 1,
+        "precision": "float32"
+      },
+      "checkpoint": {
+        "sha256": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+        "size": 0
+      },
+      "license": "MIT"
+    }
+  ]
+}

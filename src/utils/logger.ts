@@ -1,9 +1,7 @@
 /**
  * @license
  * Rekordbox DJ Editor - Comprehensive Diagnostic Logging System
- * 
- * Provides centralized high-resolution logging, error interception, ring-buffer persistence,
- * subscriber notifications, and complete incident telemetry for maximum transparency.
+ * Merged main+renderer daily file, retention 14d, level env, secret redaction, binary summarization, console/fetch/XHR capture, flush on error/pagehide
  */
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
@@ -16,7 +14,8 @@ export type LogCategory =
   | 'EDITING'
   | 'DATABASE'
   | 'CHATBOT'
-  | 'UI';
+  | 'UI'
+  | 'STEM';
 
 export interface LogEntry {
   id: string;
@@ -31,12 +30,65 @@ export interface LogEntry {
 
 export type LogListener = (entry: LogEntry) => void;
 
+const SECRET_KEYS = ['apiKey', 'api_key', 'GEMINI_API_KEY', 'password', 'token', 'secret', 'authorization', 'key'];
+
+function redactSecrets(obj: any): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactSecrets);
+  const clone: any = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const lower = k.toLowerCase();
+    if (SECRET_KEYS.some(s => lower.includes(s.toLowerCase()))) {
+      clone[k] = '[REDACTED]';
+    } else if (v && typeof v === 'object') {
+      clone[k] = redactSecrets(v);
+    } else {
+      clone[k] = v;
+    }
+  }
+  return clone;
+}
+
+function summarizeForLog(value: any): any {
+  if (value == null) return value;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer?.(value)) {
+    return { __binary: true, byteLength: value.length };
+  }
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+    const len = (value as any).byteLength || (value as any).length || 0;
+    return { __binary: true, byteLength: len };
+  }
+  if (value && typeof value.byteLength === 'number' && value.byteLength > 1024) {
+    return { __binary: true, byteLength: value.byteLength };
+  }
+  if (Array.isArray(value) && value.length > 100) {
+    return { __array: true, length: value.length, preview: value.slice(0, 3) };
+  }
+  if (typeof value === 'object') {
+    if ('tagName' in value || 'nodeType' in value) return `[DOM Element <${(value as any).tagName}>]`;
+    const out: any = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'data' && v && typeof (v as any).byteLength === 'number' && (v as any).byteLength > 1024) {
+        out[k] = { __binary: true, byteLength: (v as any).byteLength };
+      } else {
+        out[k] = summarizeForLog(v);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 class LoggerService {
   private static instance: LoggerService;
   private readonly maxEntries = 1000;
   private entries: LogEntry[] = [];
   private listeners: Set<LogListener> = new Set();
   private isInitialized = false;
+  private originalConsole: Record<string, any> = {};
+  private originalFetch: typeof fetch | null = null;
+  private originalXHROpen: any = null;
+  private level: LogLevel = (typeof process !== 'undefined' && (process.env as any).AIRDOX_LOG_LEVEL ? (process.env as any).AIRDOX_LOG_LEVEL.toUpperCase() : 'INFO') as LogLevel;
 
   private constructor() {
     this.initGlobalHandlers();
@@ -49,11 +101,70 @@ class LoggerService {
     return LoggerService.instance;
   }
 
+  private shouldLog(level: LogLevel): boolean {
+    const order = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, FATAL: 4 };
+    return (order[level] ?? 1) >= (order[this.level] ?? 1);
+  }
+
   private initGlobalHandlers() {
     if (this.isInitialized || typeof window === 'undefined') return;
     this.isInitialized = true;
 
-    // Capture uncaught JavaScript runtime errors
+    // Capture console
+    try {
+      this.originalConsole.log = console.log;
+      this.originalConsole.warn = console.warn;
+      this.originalConsole.error = console.error;
+      this.originalConsole.debug = console.debug;
+
+      console.log = (...args: any[]) => {
+        this.originalConsole.log(...args);
+        this.info('UI', args.map(a => typeof a === 'string' ? a : JSON.stringify(summarizeForLog(a))).join(' '));
+      };
+      console.warn = (...args: any[]) => {
+        this.originalConsole.warn(...args);
+        this.warn('UI', args.map(a => typeof a === 'string' ? a : JSON.stringify(summarizeForLog(a))).join(' '));
+      };
+      console.error = (...args: any[]) => {
+        this.originalConsole.error(...args);
+        this.error('UI', args.map(a => typeof a === 'string' ? a : JSON.stringify(summarizeForLog(a))).join(' '));
+      };
+    } catch {}
+
+    // Capture fetch
+    try {
+      this.originalFetch = window.fetch;
+      window.fetch = async (...args: Parameters<typeof fetch>) => {
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const start = Date.now();
+        try {
+          const res = await this.originalFetch!(...args);
+          this.info('SYSTEM', `fetch ${url} -> ${res.status} ${Date.now() - start}ms`);
+          return res;
+        } catch (e) {
+          this.error('SYSTEM', `fetch ${url} failed`, { error: (e as Error).message });
+          throw e;
+        }
+      };
+    } catch {}
+
+    // Capture XHR
+    try {
+      const origOpen = XMLHttpRequest.prototype.open;
+      this.originalXHROpen = origOpen;
+      const self = this;
+      XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: any[]) {
+        this.addEventListener('load', () => {
+          self.info('SYSTEM', `XHR ${method} ${url} -> ${this.status}`);
+        });
+        this.addEventListener('error', () => {
+          self.error('SYSTEM', `XHR ${method} ${url} error`);
+        });
+        // @ts-ignore
+        return origOpen.call(this, method, url, ...rest);
+      };
+    } catch {}
+
     window.addEventListener('error', (event) => {
       this.fatal(
         'SYSTEM',
@@ -66,21 +177,26 @@ class LoggerService {
           stack: event.error?.stack,
         }
       );
+      this.flush();
     });
 
-    // Capture unhandled asynchronous Promise rejections
     window.addEventListener('unhandledrejection', (event) => {
       const reason = event.reason;
       const message = reason instanceof Error ? reason.message : String(reason);
       const stack = reason instanceof Error ? reason.stack : undefined;
-      this.fatal(
-        'SYSTEM',
-        `Unhandled Promise Rejection: ${message}`,
-        { reason, stack }
-      );
+      this.fatal('SYSTEM', `Unhandled Promise Rejection: ${message}`, { reason, stack });
+      this.flush();
     });
 
-    this.info('SYSTEM', 'Umfassendes Log-System erfolgreich initialisiert (Max Transparenz).');
+    window.addEventListener('pagehide', () => {
+      this.flush();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.flush();
+    });
+
+    this.info('SYSTEM', 'Umfassendes Log-System erfolgreich initialisiert (Max Transparenz) – console/fetch/XHR capture aktiv, flush on error/pagehide.');
   }
 
   public log(
@@ -89,6 +205,10 @@ class LoggerService {
     message: string,
     details?: any
   ): LogEntry {
+    if (!this.shouldLog(level)) {
+      // Still create entry for ring buffer but skip heavy work? We still store
+    }
+
     const now = new Date();
     const timeString = `${now.getHours().toString().padStart(2, '0')}:${now
       .getMinutes()
@@ -107,6 +227,8 @@ class LoggerService {
       }
     }
 
+    const sanitized = details !== undefined ? redactSecrets(summarizeForLog(details)) : undefined;
+
     const entry: LogEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: now.getTime(),
@@ -114,7 +236,7 @@ class LoggerService {
       level,
       category,
       message,
-      details: details !== undefined ? this.sanitizeDetails(details) : undefined,
+      details: sanitized,
       stack,
     };
 
@@ -123,54 +245,68 @@ class LoggerService {
       this.entries.shift();
     }
 
-    // Console output with Pioneer DJ-styled coloring
     this.printToConsole(entry);
-
-    // Notify active listeners (e.g., live log modals)
     this.notifyListeners(entry);
+    this.mirrorToFile(entry);
+
+    if (level === 'ERROR' || level === 'FATAL') {
+      this.flush();
+    }
 
     return entry;
   }
 
-  private sanitizeDetails(details: any): any {
+  private mirrorToFile(entry: LogEntry) {
     try {
-      if (details instanceof Error) {
-        return {
-          name: details.name,
-          message: details.message,
-          stack: details.stack,
-        };
+      // Try new bridge first
+      // @ts-ignore
+      const bridge = window.airdoxLogger || window.rekordboxDesktop;
+      if (bridge?.write) {
+        // @ts-ignore
+        bridge.write([{
+          ts: entry.timestamp,
+          level: entry.level.toLowerCase(),
+          category: entry.category,
+          message: entry.message,
+          data: entry.details,
+          stack: entry.stack,
+        }]).catch(() => {});
+      } else if (bridge?.appendLog) {
+        bridge.appendLog({
+          ts: entry.timestamp,
+          level: entry.level,
+          category: entry.category,
+          message: entry.message,
+          data: entry.details,
+        }).catch(() => {});
       }
-      if (typeof details === 'object' && details !== null) {
-        // Prevent circular references and huge DOM nodes
-        if ('tagName' in details || 'nodeType' in details) {
-          return `[DOM Element <${details.tagName}>]`;
-        }
-        return JSON.parse(JSON.stringify(details));
-      }
-      return details;
-    } catch {
-      return String(details);
-    }
+    } catch {}
   }
 
   private printToConsole(entry: LogEntry) {
+    if (!this.shouldLog(entry.level)) return;
     const prefix = `[${entry.timeString}] [${entry.category}]`;
+    // Use original console to avoid recursion
+    const logFn = this.originalConsole.log || console.log;
+    const warnFn = this.originalConsole.warn || console.warn;
+    const errorFn = this.originalConsole.error || console.error;
+    const debugFn = this.originalConsole.debug || console.debug;
+
     switch (entry.level) {
       case 'DEBUG':
-        console.debug(`%c${prefix} ${entry.message}`, 'color: #888', entry.details || '');
+        debugFn(`%c${prefix} ${entry.message}`, 'color: #888', entry.details || '');
         break;
       case 'INFO':
-        console.log(`%c${prefix} ${entry.message}`, 'color: #00a2ff; font-weight: bold', entry.details || '');
+        logFn(`%c${prefix} ${entry.message}`, 'color: #00a2ff; font-weight: bold', entry.details || '');
         break;
       case 'WARN':
-        console.warn(`%c${prefix} ${entry.message}`, 'color: #f59e0b; font-weight: bold', entry.details || '');
+        warnFn(`%c${prefix} ${entry.message}`, 'color: #f59e0b; font-weight: bold', entry.details || '');
         break;
       case 'ERROR':
-        console.error(`%c${prefix} ${entry.message}`, 'color: #ef4444; font-weight: bold', entry.details || '', entry.stack || '');
+        errorFn(`%c${prefix} ${entry.message}`, 'color: #ef4444; font-weight: bold', entry.details || '', entry.stack || '');
         break;
       case 'FATAL':
-        console.error(`%c[FATAL CRASH] ${prefix} ${entry.message}`, 'background: #990000; color: #fff; font-weight: bold; font-size: 12px; padding: 2px 4px', entry.details || '', entry.stack || '');
+        errorFn(`%c[FATAL CRASH] ${prefix} ${entry.message}`, 'background: #990000; color: #fff; font-weight: bold; font-size: 12px; padding: 2px 4px', entry.details || '', entry.stack || '');
         break;
     }
   }
@@ -216,15 +352,29 @@ class LoggerService {
       try {
         listener(entry);
       } catch (err) {
-        console.error('Error in log listener:', err);
+        (this.originalConsole.error || console.error)('Error in log listener:', err);
       }
     });
   }
 
-  /**
-   * Generates a complete JSON diagnostic report including browser environment,
-   * audio context state, memory usage and historical log records.
-   */
+  public async flush(): Promise<void> {
+    // In renderer, flush means try to send buffered logs via beacon
+    try {
+      const entries = this.entries.slice(-50);
+      // @ts-ignore
+      if (window.airdoxLogger?.write) {
+        // @ts-ignore
+        await window.airdoxLogger.write(entries.map(e => ({
+          ts: e.timestamp,
+          level: e.level.toLowerCase(),
+          category: e.category,
+          message: e.message,
+          data: e.details,
+        })));
+      }
+    } catch {}
+  }
+
   public generateDiagnosticReport(appContextState?: any): string {
     const report = {
       title: 'airdox_SMART_Editor – Diagnosebericht',

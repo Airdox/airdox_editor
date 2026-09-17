@@ -2,11 +2,13 @@ name: Windows-Build
 
 on:
   push:
-    branches: ['main', 'release/**']
+    branches: ['main', 'release/**', 'arena/**']
     tags: ['v*']
   pull_request:
     branches: ['main']
   workflow_dispatch:      # manuell auf Knopfdruck
+  schedule:
+    - cron: '0 3 * * *'  # daily 03:00 UTC full suite
 
 # Schnelle Folge-Pushes: nur der neueste Lauf pro Ref baut.
 concurrency:
@@ -33,6 +35,15 @@ jobs:
       - name: Abhängigkeiten installieren
         run: npm ci
 
+      - name: Package.json validieren
+        run: npm run test:package
+
+      - name: Notebook Manifest prüfen
+        run: npm run stems:gate:notebook -- --check
+
+      - name: Stem Engine Tests
+        run: npm run test:stems
+
       - name: TypeScript-Prüfung
         run: npm run lint
 
@@ -41,6 +52,10 @@ jobs:
 
       - name: Waveform-Gates / Quellenherkunft verifizieren
         run: npm run verify:waveform
+
+      - name: Full test suite (schedule/manual only)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm run test
 
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never
@@ -56,6 +71,15 @@ jobs:
           name: airdox-smart-editor-windows
           path: release/*.exe
           retention-days: 30
+          if-no-files-found: warn
+
+      - name: Failure report hochladen
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-runner-failure
+          path: test-runner-failure.txt
+          retention-days: 14
           if-no-files-found: warn
 
       - name: GitHub-Release bei Tag

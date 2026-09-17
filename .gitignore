@@ -9,3 +9,7 @@ coverage/
 release/
 release-current/
 *.zip
+test-runner-failure.txt
+stem-gate-run/
+test_run/
+stem-test-output/
