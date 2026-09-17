@@ -120,3 +120,58 @@ erfolgen.
   nicht-kommerziell. Ein MIT-lizenzierter ONNX-Reexport desselben 4-Stem-Modells
   existiert (`silverdaw/bs-roformer-rhythm-onnx`) und wäre die sauberere
   Variante, falls der Adapter ohnehin auf ONNX Runtime gebaut wird.
+
+## Desktop-Integration (Electron)
+
+Der Weg von der UI bis zur Inferenz:
+
+```
+App.tsx  ──IPC──▶ electron/main.cjs ──▶ electron/stemsEngine.cjs ──▶ AudioSeparatorSeparator ──▶ audio-separator (CLI)
+         ◀─progress/result─                (Bundle von src/stems/desktopEntry.ts)
+```
+
+* `src/stems/desktopEntry.ts` ist die einzige Schnittstelle zum Desktop:
+  `separateForDesktop`, `cancelSeparation`, `preflight`, `describeError`.
+* Das Bundle `electron/stemsEngine.cjs` wird mit `npm run build:stems` erzeugt
+  (läuft automatisch in `npm run build` und damit in jedem `package:win`).
+  Es ist ein Artefakt und daher **nicht** eingecheckt — nie von Hand editieren.
+
+### IPC-Kanäle
+
+| Kanal | Richtung | Zweck |
+| --- | --- | --- |
+| `audio:stems-preflight` | invoke | Ist `audio-separator` installiert? Liefert ggf. Installationshinweis. |
+| `audio:separate-stems` | invoke | Startet einen Job (`{ inputFilePath, jobId, usePipelineDouble? }`). |
+| `audio:cancel-stems` | invoke | Bricht einen laufenden Job über seine `jobId` ab. |
+| `audio:stems-progress` | main → renderer | Fortschritt (`{ jobId, phase, percent }`). |
+
+Ergebnisse liegen unter `userData/stems/{working,separated,cache,models}`, pro
+Job in einem eigenen Unterordner.
+
+### Stem-Identität
+
+Die Zuordnung Datei → Stem wird **erzwungen**, nicht geraten: der Adapter
+übergibt `--custom_output_names` und erwartet exakt `stem_<id>.wav`. Fehlt ein
+Stem, ist das ein `INFERENCE_FAILED` — es wird nie eine kürzere Liste
+zurückgegeben, die die UI dann verschoben beschriften würde. Renderer-seitig
+trägt `TrackModel.stems: TrackStem[]` die `id` mit; `TrackSeparation.tsx`
+leitet Label und Farbe aus dieser `id` ab, nicht aus dem Array-Index.
+
+### Voraussetzung auf dem Zielrechner
+
+```bash
+pip install "audio-separator[gpu]"   # oder [cpu]
+npm run stems:setup                  # lädt das BS-RoFormer-Modell
+```
+
+Fehlt das Binary, meldet die UI das vor dem Start des Jobs im Klartext, statt
+mitten im Track zu scheitern.
+
+### Was hier nicht verifiziert werden konnte
+
+Die Sandbox hat kein `audio-separator` und keinen Zugriff auf die Model-Hosts.
+Verifiziert ist deshalb der komplette Pfad bis einschließlich Adapter (mit
+injiziertem Runner, siehe `tests/stem-desktop-backend.test.ts`) sowie ein
+End-to-End-Lauf über das Pipeline-Double. Der Lauf mit echten Gewichten muss
+auf einer Maschine mit installierter CLI nachgeholt werden; das Gate meldet bis
+dahin korrekt `TECHNICAL_PASS_QUALITY_FAIL`.

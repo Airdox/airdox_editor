@@ -45,10 +45,32 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       } | null>;
-      separateStems(inputFilePath: string): Promise<string[]>;
+      separateStems(payload: string | { inputFilePath: string; jobId?: string; usePipelineDouble?: boolean }): Promise<DesktopSeparationResponse>;
+      stemsPreflight(): Promise<{ available: boolean; version?: string; reason?: string; command: string; defaultModel: string }>;
+      cancelStems(jobId: string): Promise<boolean>;
+      onStemsProgress(handler: (payload: { jobId: string; phase: string; detail?: string; percent?: number }) => void): () => void;
       appendLog(entry: { ts?: number; timestamp?: string | number; level: string; category?: string; scope?: string; message: string; data?: unknown }): Promise<boolean>;
       getLogFilePath(): Promise<string | null>;
     };
+  }
+
+  interface DesktopStemResult {
+    id: string;
+    filePath: string;
+    sampleRate: number;
+    channels: number;
+    frames: number;
+  }
+
+  interface DesktopSeparationResponse {
+    status: 'COMPLETED' | 'CANCELLED' | 'FAILED';
+    stems: DesktopStemResult[];
+    jobId: string;
+    modelId?: string;
+    fromTrainedModel?: boolean;
+    originalUnchanged?: boolean;
+    durationMs?: number;
+    error?: { code: string; message: string };
   }
 
   interface RekordboxDatabaseReadRow {

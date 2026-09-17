@@ -323,53 +323,77 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   };
 });
 
-// --- AUDIO STEM SEPARATION (Python CLI Integration) ---
-const { exec } = require('node:child_process');
+// --- AUDIO STEM SEPARATION ---
+// Treibt die getestete Engine aus src/stems (gebundelt nach stemsEngine.cjs).
+// Frueher wurde hier `exec` mit interpoliertem Pfad aufgerufen und die
+// Stem-Identitaet aus der Verzeichnisreihenfolge geraten - beides ist weg.
+const stemsEngine = require('./stemsEngine.cjs');
 
-ipcMain.handle('audio:separate-stems', async (_event, inputFilePath) => {
-  return new Promise((resolve, reject) => {
-    // Output directory for the stems
-    const outputDir = path.join(app.getPath('userData'), 'separated_stems');
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+function stemRoots() {
+  const base = path.join(app.getPath('userData'), 'stems');
+  return {
+    workingRoot: path.join(base, 'working'),
+    outputRoot: path.join(base, 'separated'),
+    cacheRoot: path.join(base, 'cache'),
+    modelStoreDir: path.join(base, 'models'),
+  };
+}
 
-    console.log(`Starting separation for: ${inputFilePath}`);
-    console.log(`Output directory: ${outputDir}`);
-    
-    // Wir rufen das globale Python CLI Tool 'audio-separator' auf.
-    // Voraussetzung: Der Nutzer hat `pip install audio-separator[gpu]` auf seinem Windows PC ausgeführt.
-    const command = `audio-separator "${inputFilePath}" --output_dir "${outputDir}" --output_format WAV`;
+ipcMain.handle('audio:stems-preflight', async () => {
+  try {
+    return await stemsEngine.preflight();
+  } catch (error) {
+    return { available: false, reason: error && error.message ? error.message : String(error), command: 'audio-separator', defaultModel: '' };
+  }
+});
 
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error executing separator: ${error}`);
-        console.error(stderr);
-        reject(error.message);
-        return;
-      }
-      
-      console.log(`Separation finished. Output: ${stdout}`);
-      
-      fs.readdir(outputDir, (err, files) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        
-        // Find generated .wav files that contain the base name
-        const baseName = path.parse(inputFilePath).name;
-        // Sometimes models change spaces to underscores or similar, so we filter by .wav and try to match as best as possible.
-        // For audio-separator, it usually appends `_(Vocals)...`
-        const generatedFiles = files.filter(f => (f.includes(baseName) && f.endsWith('.wav')) || f.endsWith('.wav'));
-        
-        // Return absolute paths to the React frontend
-        const stems = generatedFiles.map(file => path.join(outputDir, file));
-        
-        resolve(stems);
-      });
+ipcMain.handle('audio:cancel-stems', async (_event, jobId) => {
+  try {
+    return stemsEngine.cancelSeparation(String(jobId || ''));
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('audio:separate-stems', async (event, payload) => {
+  // Accepts a bare path (legacy renderer) or { inputFilePath, jobId, usePipelineDouble }.
+  const request = typeof payload === 'string' ? { inputFilePath: payload } : (payload || {});
+  const inputFilePath = request.inputFilePath;
+  const jobId = String(request.jobId || `job-${Date.now()}`);
+
+  if (!inputFilePath || typeof inputFilePath !== 'string') {
+    return { status: 'FAILED', stems: [], jobId, error: { code: 'INVALID_REQUEST', message: 'Kein Eingabepfad angegeben.' } };
+  }
+
+  // Read-only guard: the source must never be a protected Rekordbox original
+  // that we then write next to. Output always goes to userData.
+  const localPath = toLocalPath(inputFilePath);
+  if (!localPath) {
+    return { status: 'FAILED', stems: [], jobId, error: { code: 'INVALID_REQUEST', message: `Pfad konnte nicht aufgeloest werden: ${inputFilePath}` } };
+  }
+
+  const roots = stemRoots();
+  const sender = event.sender;
+  try {
+    const result = await stemsEngine.separateForDesktop({
+      ...roots,
+      inputPath: localPath,
+      jobId,
+      usePipelineDouble: request.usePipelineDouble === true,
+      onProgress: (entry) => {
+        if (sender.isDestroyed()) return;
+        sender.send('audio:stems-progress', { jobId, phase: entry.phase, detail: entry.detail, percent: entry.percent });
+      },
     });
-  });
+    if (!result.originalUnchanged) {
+      // Should be impossible; if it ever happens it is a hard bug, not a warning.
+      return { ...result, jobId, status: 'FAILED', stems: [], error: { code: 'ORIGINAL_MODIFIED', message: 'Die Originaldatei wurde veraendert - Abbruch.' } };
+    }
+    return { ...result, jobId };
+  } catch (error) {
+    const described = stemsEngine.describeError(error);
+    return { status: 'FAILED', stems: [], jobId, error: described };
+  }
 });
 
 ipcMain.handle('log:append', async (_event, entry) => {

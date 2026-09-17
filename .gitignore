@@ -16,3 +16,6 @@ models/
 *.onnx
 *.th
 *.safetensors
+
+# Generiert von `npm run build:stems` (electron-builder baut vorher neu)
+electron/stemsEngine.cjs

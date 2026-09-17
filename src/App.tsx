@@ -228,6 +228,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [meterL, setMeterL] = useState<number>(0);
   const [meterR, setMeterR] = useState<number>(0);
   const [stemVolumes, setStemVolumes] = useState<number[]>([]);
+  // Stem identity, parallel to stemVolumes/stemBuffers. Labels come from here,
+  // never from the index, so "VOCAL" is always actually the vocals stem.
+  const [stemIds, setStemIds] = useState<string[]>([]);
+  const [stemJobId, setStemJobId] = useState<string | null>(null);
+  const [stemProgress, setStemProgress] = useState<number | null>(null);
+  const [stemStatus, setStemStatus] = useState<{ kind: 'idle' | 'running' | 'done' | 'error'; message: string }>({ kind: 'idle', message: '' });
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -325,50 +331,98 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleSeparateStems = useCallback(async () => {
     const sourcePath = activeTrack?.filePath || activeTrack?.originalMedia?.resolvedPath || activeTrack?.originalMedia?.location;
     if (!activeTrack || !sourcePath) {
-      alert("Es muss zuerst eine echte Audiodatei geladen werden!");
+      setStemStatus({ kind: 'error', message: 'Es muss zuerst eine echte Audiodatei geladen werden.' });
       return;
     }
-    
-    if (!window.rekordboxDesktop?.separateStems) {
-      alert("Desktop Bridge nicht gefunden! App muss in Electron laufen.");
+    const bridge = window.rekordboxDesktop;
+    if (!bridge?.separateStems) {
+      setStemStatus({ kind: 'error', message: 'Desktop-Bridge nicht gefunden. Die App muss in Electron laufen.' });
       return;
     }
 
-    setIsSeparating(true);
-    try {
-      // 1. Call Python CLI via Electron IPC
-      const stems = await window.rekordboxDesktop.separateStems(sourcePath);
-      
-      if (stems && stems.length > 0) {
-        console.log("Stem Separation erfolgreich:", stems);
-        
-        // Decode stems into AudioBuffers
-        const audioCtx = audioEngine.getContext();
-        const stemBuffers: AudioBuffer[] = [];
-        
-        for (const stemPath of stems) {
-          try {
-            const source = await window.rekordboxDesktop.readOriginalAudio(stemPath);
-            const decoded = await audioCtx.decodeAudioData(source.data);
-            stemBuffers.push(decoded);
-          } catch (err) {
-            console.error("Failed to decode stem:", stemPath, err);
-          }
+    // Preflight first: an actionable install hint beats a failure mid-track.
+    if (bridge.stemsPreflight) {
+      try {
+        const pre = await bridge.stemsPreflight();
+        if (!pre.available) {
+          setStemStatus({ kind: 'error', message: pre.reason || 'Separations-Engine nicht verfügbar.' });
+          return;
         }
-        
-        setTracks(prevTracks => prevTracks.map(t => t.id === activeTrack.id ? { ...t, stems: stems, stemBuffers: stemBuffers } : t));
-        setStemVolumes(new Array(stemBuffers.length).fill(1.0));
-        alert(`Stem Separation erfolgreich! ${stemBuffers.length} Stems geladen.`);
-      } else {
-        alert("Fehler: Keine Stems gefunden.");
+      } catch {
+        // Preflight itself is best-effort; a hard failure still surfaces below.
       }
-    } catch (e: any) {
-      console.error("Separation error", e);
-      alert("Fehler bei der Separation: " + (e.message || e.toString()));
+    }
+
+    const jobId = `stem-${Date.now()}`;
+    setIsSeparating(true);
+    setStemJobId(jobId);
+    setStemProgress(0);
+    setStemStatus({ kind: 'running', message: 'Separation läuft …' });
+
+    const unsubscribe = bridge.onStemsProgress?.((payload) => {
+      if (payload.jobId !== jobId) return;
+      if (typeof payload.percent === 'number') setStemProgress(payload.percent);
+    });
+
+    try {
+      const result = await bridge.separateStems({ inputFilePath: sourcePath, jobId });
+
+      if (result.status === 'CANCELLED') {
+        setStemStatus({ kind: 'idle', message: 'Separation abgebrochen.' });
+        return;
+      }
+      if (result.status !== 'COMPLETED' || result.stems.length === 0) {
+        setStemStatus({ kind: 'error', message: result.error?.message || 'Separation fehlgeschlagen.' });
+        return;
+      }
+      if (result.originalUnchanged === false) {
+        setStemStatus({ kind: 'error', message: 'Die Originaldatei wurde verändert — Ergebnis verworfen.' });
+        return;
+      }
+
+      // Decode in parallel and keep each buffer bound to its stem id, so a
+      // failed decode can never shift the remaining stems onto wrong labels.
+      const audioCtx = audioEngine.getContext();
+      const decoded = await Promise.all(result.stems.map(async (stem) => {
+        try {
+          const source = await bridge.readOriginalAudio(stem.filePath);
+          return { id: stem.id, filePath: stem.filePath, buffer: await audioCtx.decodeAudioData(source.data) };
+        } catch (err) {
+          console.error('Stem konnte nicht dekodiert werden:', stem.filePath, err);
+          return { id: stem.id, filePath: stem.filePath, buffer: undefined };
+        }
+      }));
+
+      const usable = decoded.filter((s): s is { id: string; filePath: string; buffer: AudioBuffer } => !!s.buffer);
+      if (usable.length === 0) {
+        setStemStatus({ kind: 'error', message: 'Kein Stem konnte dekodiert werden.' });
+        return;
+      }
+
+      setTracks(prev => prev.map(t => t.id === activeTrack.id
+        ? { ...t, stems: usable.map(s => ({ id: s.id, filePath: s.filePath })), stemBuffers: usable.map(s => s.buffer) }
+        : t));
+      setStemIds(usable.map(s => s.id));
+      setStemVolumes(new Array(usable.length).fill(1.0));
+      const skipped = decoded.length - usable.length;
+      setStemStatus({
+        kind: 'done',
+        message: `${usable.length} Stems geladen (${usable.map(s => s.id).join(', ')})${skipped > 0 ? ` — ${skipped} übersprungen` : ''}.`,
+      });
+    } catch (e: unknown) {
+      console.error('Separation error', e);
+      setStemStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
     } finally {
+      unsubscribe?.();
       setIsSeparating(false);
+      setStemJobId(null);
+      setStemProgress(null);
     }
   }, [activeTrack]);
+
+  const handleCancelSeparation = useCallback(() => {
+    if (stemJobId) void window.rekordboxDesktop?.cancelStems?.(stemJobId);
+  }, [stemJobId]);
 
   const handleLoadDemoTrack = useCallback(() => {
     try {
@@ -2471,6 +2525,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isMaxWaveform={isMaxWaveform}
         onToggleMaxWaveform={handleToggleMaxWaveform}
         stemVolumes={stemVolumes}
+        stemIds={stemIds}
         onStemVolumeChange={handleStemVolumeChange}
         trackHasStems={!!(activeTrack && activeTrack.stems && activeTrack.stems.length > 0)}
       />
@@ -2486,6 +2541,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSeparateStems={handleSeparateStems}
         isSeparating={isSeparating}
         stemVolumes={stemVolumes}
+        stemIds={stemIds}
+        stemProgress={stemProgress}
+        stemStatus={stemStatus}
+        onCancelSeparation={handleCancelSeparation}
         onStemVolumeChange={handleStemVolumeChange}
       />
 

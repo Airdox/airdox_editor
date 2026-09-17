@@ -50,6 +50,7 @@ interface EditModeBarProps {
   isMaxWaveform?: boolean;
   onToggleMaxWaveform?: () => void;
   stemVolumes?: number[];
+  stemIds?: string[];
   onStemVolumeChange?: (index: number, vol: number) => void;
   trackHasStems?: boolean;
 }
@@ -81,6 +82,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   isMaxWaveform = false,
   onToggleMaxWaveform,
   stemVolumes = [],
+  stemIds = [],
   onStemVolumeChange,
   trackHasStems = false
 }) => {
@@ -213,6 +215,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               stemsActive={true}
               stemsAvailable={trackHasStems}
               stemVolumes={stemVolumes}
+              stemIds={stemIds}
               onStemVolumeChange={onStemVolumeChange}
             />
           )}

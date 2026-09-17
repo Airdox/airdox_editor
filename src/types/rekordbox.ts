@@ -1,3 +1,10 @@
+/** One separated stem: identity comes from the engine, not from list order. */
+export interface TrackStem {
+  id: string;
+  filePath: string;
+  buffer?: AudioBuffer;
+}
+
 /**
  * @license
  * Rekordbox DJ Audio Editor - Type Definitions
@@ -176,7 +183,8 @@ export interface TrackModel {
   year?: string;
   comments?: string;
   filePath?: string;
-  stems?: string[];
+  /** Separated stems with their real identity. Never rely on array position. */
+  stems?: TrackStem[];
   stemBuffers?: AudioBuffer[];
   dateAdded?: string;
   remixer?: string;

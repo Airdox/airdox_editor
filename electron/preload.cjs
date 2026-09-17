@@ -14,7 +14,16 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
-  separateStems: (inputFilePath) => ipcRenderer.invoke('audio:separate-stems', inputFilePath),
+  separateStems: (payload) => ipcRenderer.invoke('audio:separate-stems', payload),
+  stemsPreflight: () => ipcRenderer.invoke('audio:stems-preflight'),
+  cancelStems: (jobId) => ipcRenderer.invoke('audio:cancel-stems', jobId),
+  // Progress is push-based; returns an unsubscribe function so the renderer
+  // cannot leak listeners across re-renders.
+  onStemsProgress: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('audio:stems-progress', listener);
+    return () => ipcRenderer.removeListener('audio:stems-progress', listener);
+  },
   appendLog: (entry) => ipcRenderer.invoke('log:append', entry),
   getLogFilePath: () => ipcRenderer.invoke('log:get-path'),
 });
