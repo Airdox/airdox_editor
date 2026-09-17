@@ -46,6 +46,8 @@ declare global {
         accessMode: 'READ_ONLY';
       } | null>;
       separateStems(inputFilePath: string): Promise<string[]>;
+      appendLog(entry: { ts?: number; timestamp?: string | number; level: string; category?: string; scope?: string; message: string; data?: unknown }): Promise<boolean>;
+      getLogFilePath(): Promise<string | null>;
     };
   }
 

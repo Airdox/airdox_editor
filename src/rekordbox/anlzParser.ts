@@ -79,6 +79,7 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -220,7 +221,8 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
 
 function createWaveform(
   spec: WaveformSpec,
-  view: DataView
+  view: DataView,
+  sourceTag?: string
 ): WaveformAnalysisData {
   const { entryCount, entryBytes, dataOffset, style } = spec;
   const peaks = new Float32Array(entryCount);
@@ -283,6 +285,7 @@ function createWaveform(
     midEnergy,
     highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
+    sourceTag: sourceTag ?? 'PWV',
   };
 }
 
@@ -576,6 +579,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
+    waveformVariants: [],
     warnings: [],
   };
 
@@ -644,6 +648,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
+          result.warnings.push(`${tag}: legacy bpm-only layout, keine Beat-Knoten – PQTZ-Lücke gemeldet.`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -768,10 +773,14 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-        result.waveform = createWaveform(spec, view);
-        waveformPriority = WAVEFORM_PRIORITY[tag];
-      } else if (!spec) {
+      if (spec) {
+        const wf = createWaveform(spec, view, tag);
+        result.waveformVariants.push(wf);
+        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+          result.waveform = wf;
+          waveformPriority = WAVEFORM_PRIORITY[tag];
+        }
+      } else {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }

@@ -15,4 +15,6 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
   separateStems: (inputFilePath) => ipcRenderer.invoke('audio:separate-stems', inputFilePath),
+  appendLog: (entry) => ipcRenderer.invoke('log:append', entry),
+  getLogFilePath: () => ipcRenderer.invoke('log:get-path'),
 });
