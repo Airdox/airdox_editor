@@ -14,8 +14,14 @@ import {
   RotateCcw,
   Info,
   Settings,
-  Volume2
+  Volume2,
+  PanelBottom,
+  PanelRight,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
+
+import { TrackSeparation } from './TrackSeparation';
 
 interface EditModeBarProps {
   projectName: string;
@@ -30,12 +36,22 @@ interface EditModeBarProps {
   onSaveProject: () => void;
   onExport: () => void;
   onShowInfo: () => void;
+  onOpenSettings?: () => void;
   masterVolume: number;
   onMasterVolumeChange: (vol: number) => void;
   meterL: number;
   meterR: number;
   paletteViewMode?: 'SIDEBAR' | 'FULL_DECK';
   onTogglePaletteViewMode?: () => void;
+  bottomControlOpen?: boolean;
+  onToggleBottomControl?: () => void;
+  paletteOpen?: boolean;
+  onTogglePalette?: () => void;
+  isMaxWaveform?: boolean;
+  onToggleMaxWaveform?: () => void;
+  stemVolumes?: number[];
+  onStemVolumeChange?: (index: number, vol: number) => void;
+  trackHasStems?: boolean;
 }
 
 export const EditModeBar: React.FC<EditModeBarProps> = ({
@@ -51,12 +67,22 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onSaveProject,
   onExport,
   onShowInfo,
+  onOpenSettings,
   masterVolume,
   onMasterVolumeChange,
   meterL,
   meterR,
   paletteViewMode = 'SIDEBAR',
   onTogglePaletteViewMode,
+  bottomControlOpen = true,
+  onToggleBottomControl,
+  paletteOpen = true,
+  onTogglePalette,
+  isMaxWaveform = false,
+  onToggleMaxWaveform,
+  stemVolumes = [],
+  onStemVolumeChange,
+  trackHasStems = false
 }) => {
   const [timeStr, setTimeStr] = useState<string>('15:21');
 
@@ -77,9 +103,17 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
       {/* Left section: EDIT mode dropdown, Project tools, Transport */}
       <div className="flex items-center space-x-3">
         {/* EDIT Mode selector */}
-        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027]">
+        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027] group relative">
           <span>EDIT</span>
-          <ChevronDown size={12} className="text-neutral-400" />
+          <ChevronDown size={12} className="text-neutral-400 group-hover:text-white" />
+          
+          <div className="absolute top-full left-0 mt-1 bg-[#1a1c23] border border-[#2d303b] rounded shadow-lg py-1 hidden group-hover:block z-50 min-w-[120px]">
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">EXPORT</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">PERFORMANCE</div>
+            <div className="px-3 py-1.5 text-[#00a2ff] font-bold bg-[#252834] cursor-pointer">EDIT</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">RECORD</div>
+            <div className="px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#252834] cursor-pointer">LIGHTING</div>
+          </div>
         </div>
 
         {/* Small project icons */}
@@ -173,6 +207,16 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             <ChevronDown size={10} className="text-neutral-400" />
           </button>
 
+          {/* ACTIVE PART / TRACK SEPARATION UI */}
+          {trackHasStems && onStemVolumeChange && (
+            <TrackSeparation
+              stemsActive={true}
+              stemsAvailable={trackHasStems}
+              stemVolumes={stemVolumes}
+              onStemVolumeChange={onStemVolumeChange}
+            />
+          )}
+
           {/* Deck View Layout Toggle: 1-DECK vs 2-DECK (Dual Deck Clip View) */}
           {onTogglePaletteViewMode && (
             <button
@@ -187,30 +231,64 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               <span>{paletteViewMode === 'FULL_DECK' ? '2-DECK AKTIV' : '2-DECK ANSICHT'}</span>
             </button>
           )}
+
+          {/* Collapsible Edit Palette (Bottom) & Clip Palette (Side) & Max Waveform Mode */}
+          <div className="h-4 w-px bg-[#262832] mx-0.5" />
+
+          {onToggleBottomControl && (
+            <button
+              onClick={onToggleBottomControl}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                bottomControlOpen
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
+              }`}
+              title="Editierpalette unten ein-/ausklappen für maximale Wellenform-Fläche (Taste: E)"
+            >
+              <PanelBottom size={12} />
+              <span>EDIT-PANEL</span>
+            </button>
+          )}
+
+          {onTogglePalette && (
+            <button
+              onClick={onTogglePalette}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                paletteOpen
+                  ? 'border-[#0088ff] bg-[#0c2035] text-[#00a2ff]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-white'
+              }`}
+              title="Clip-Palette rechts ein-/ausklappen (Taste: P)"
+            >
+              <PanelRight size={12} />
+              <span>CLIPS</span>
+            </button>
+          )}
+
+          {onToggleMaxWaveform && (
+            <button
+              onClick={onToggleMaxWaveform}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors ${
+                isMaxWaveform
+                  ? 'border-[#00e5ff] bg-[#003848] text-[#00e5ff] shadow-[0_0_8px_rgba(0,229,255,0.3)]'
+                  : 'border-[#262a36] bg-[#14161e] text-neutral-400 hover:text-[#00e5ff] hover:border-[#383d4e]'
+              }`}
+              title="Wellenform maximieren (Zen-Modus: klappt Paletten ein für maximale Bearbeitungsfläche) [Taste: M]"
+            >
+              {isMaxWaveform ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              <span>{isMaxWaveform ? 'MAX AKTIV' : 'MAX ZOOM'}</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Right section: Info, Free Plus badge, Settings, Master Meter, Clock */}
+      {/* Right section: Settings, Master Meter, Clock */}
       <div className="flex items-center space-x-3">
-        {/* Info button */}
-        <button
-          onClick={onShowInfo}
-          className="p-1 text-neutral-400 hover:text-white hover:bg-[#242630] rounded"
-          title="Rekordbox Datenursprung & Originalschutz"
-        >
-          <Info size={14} />
-        </button>
-
-        {/* "Free Plus" Rekordbox license badge */}
-        <div className="px-2.5 py-0.5 rounded border border-[#3a3d4a] bg-[#1a1b22] text-neutral-200 font-medium text-[11px] tracking-wide">
-          Free Plus
-        </div>
-
         {/* Settings gear */}
         <button
-          onClick={onShowInfo}
-          className="p-1 text-neutral-400 hover:text-white hover:bg-[#242630] rounded"
-          title="Einstellungen"
+          onClick={onOpenSettings}
+          className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#242630] rounded transition-colors"
+          title="Workspace Settings & Utilities"
         >
           <Settings size={14} />
         </button>

@@ -306,6 +306,15 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                               <span className={`font-semibold ${isActive ? 'text-white' : 'text-neutral-200'} group-hover:text-white`}>
                                 {t.title}
                               </span>
+                              {t.audioBuffer ? (
+                                <span className="px-1.5 py-0.2 rounded-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[9px] font-mono">
+                                  AUDIO
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.2 rounded-xs bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[9px] font-mono" title="Originalaudiodatei noch nicht verknüpft">
+                                  KEIN AUDIO
+                                </span>
+                              )}
                               {isActive && (
                                 <span className="px-1.5 py-0.2 rounded-xs bg-[#0088ff]/30 text-[#00a2ff] border border-[#0088ff]/40 text-[9px] font-mono font-bold">
                                   IM DECK

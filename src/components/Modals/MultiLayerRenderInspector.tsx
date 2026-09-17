@@ -23,6 +23,7 @@ import {
   Zap,
   Clock
 } from 'lucide-react';
+import { MultiLayer3DVisualizer } from './MultiLayer3DVisualizer';
 import { TrackModel, PaletteClip } from '../../types/rekordbox';
 
 export interface RenderLayerItem {
@@ -219,6 +220,11 @@ export const MultiLayerRenderInspector: React.FC<MultiLayerRenderInspectorProps>
             <ShieldCheck size={12} className="text-[#10b981]" />
             <span>Non-Destructive • Original intakt</span>
           </div>
+        </div>
+
+        {/* 3D Render Engine View */}
+        <div className="px-4 pt-4">
+          <MultiLayer3DVisualizer progress={renderProgress} layers={layers} />
         </div>
 
         {/* Multi-Layer Timeline Visualization */}

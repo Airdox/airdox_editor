@@ -15,6 +15,7 @@ export type LogCategory =
   | 'BEATGRID'
   | 'EDITING'
   | 'DATABASE'
+  | 'CHATBOT'
   | 'UI';
 
 export interface LogEntry {

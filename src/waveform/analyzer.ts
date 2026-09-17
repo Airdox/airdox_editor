@@ -208,3 +208,105 @@ export function detectBeatgridAlignment(
 
   return alignedFirstBeat;
 }
+
+/**
+ * Fast onset-energy tempo estimator for newly imported audio tracks.
+ * Returns BPM between 80 and 175, defaulting to 128.0 if ambiguous.
+ */
+export function estimateBpm(buffer: AudioBuffer): number {
+  const sampleRate = buffer.sampleRate;
+  const channel = buffer.getChannelData(0);
+  const maxSeconds = Math.min(buffer.duration, 60.0);
+  const totalSamples = Math.floor(maxSeconds * sampleRate);
+
+  if (totalSamples < sampleRate * 3) return 128.0;
+
+  // Downsample to ~100Hz energy envelope
+  const envelopeRate = 100;
+  const step = Math.floor(sampleRate / envelopeRate);
+  const numSteps = Math.floor(totalSamples / step);
+  const envelope = new Float32Array(numSteps);
+
+  for (let i = 0; i < numSteps; i++) {
+    const start = i * step;
+    let sum = 0;
+    for (let j = 0; j < step; j += 4) {
+      const s = channel[start + j] || 0;
+      sum += s * s;
+    }
+    envelope[i] = Math.sqrt((sum * 4) / step);
+  }
+
+  // Energy flux (first derivative / onsets)
+  const flux = new Float32Array(numSteps);
+  for (let i = 1; i < numSteps; i++) {
+    flux[i] = Math.max(0, envelope[i] - envelope[i - 1]);
+  }
+
+  // Autocorrelation across DJ BPM range [85, 175]
+  let bestBpm = 128.0;
+  let maxCorr = 0;
+
+  for (let bpmTest = 90; bpmTest <= 170; bpmTest += 0.5) {
+    const lag = Math.round((60.0 / bpmTest) * envelopeRate);
+    if (lag < 1 || lag >= numSteps) continue;
+
+    let corr = 0;
+    const count = Math.min(numSteps - lag, 1500);
+    for (let i = 0; i < count; i += 2) {
+      corr += flux[i] * flux[i + lag];
+    }
+
+    if (corr > maxCorr) {
+      maxCorr = corr;
+      bestBpm = bpmTest;
+    }
+  }
+
+  return Math.round(bestBpm * 10) / 10;
+}
+
+/**
+ * Extracts a downsampled 64-bucket representation of the waveform
+ * directly from the Rekordbox ANLZ analysis data, avoiding audio buffer processing.
+ */
+export function extractMiniPeaksFromAnalysis(
+  analysis: WaveformAnalysisData,
+  startSec: number,
+  endSec: number,
+  numBuckets: number = 64
+): { peaks: number[]; low: number[]; mid: number[]; high: number[] } {
+  const secPerBucket = analysis.secPerBucket || 0.02;
+  const startIndex = Math.max(0, Math.floor(startSec / secPerBucket));
+  const endIndex = Math.min(analysis.length, Math.ceil(endSec / secPerBucket));
+  
+  const span = endIndex - startIndex;
+  const step = Math.max(1, span / numBuckets);
+  
+  const peaks: number[] = [];
+  const low: number[] = [];
+  const mid: number[] = [];
+  const high: number[] = [];
+
+  for (let b = 0; b < numBuckets; b++) {
+    const s = Math.floor(startIndex + b * step);
+    const e = Math.floor(startIndex + (b + 1) * step);
+    const safeStart = Math.min(analysis.length - 1, s);
+    const safeEnd = Math.min(analysis.length, Math.max(safeStart + 1, e));
+    
+    let maxP = 0, maxL = 0, maxM = 0, maxH = 0;
+    for (let i = safeStart; i < safeEnd; i++) {
+      if (analysis.peaks[i] > maxP) maxP = analysis.peaks[i];
+      if (analysis.lowEnergy && analysis.lowEnergy[i] > maxL) maxL = analysis.lowEnergy[i];
+      if (analysis.midEnergy && analysis.midEnergy[i] > maxM) maxM = analysis.midEnergy[i];
+      if (analysis.highEnergy && analysis.highEnergy[i] > maxH) maxH = analysis.highEnergy[i];
+    }
+    
+    peaks.push(maxP);
+    low.push(maxL);
+    mid.push(maxM);
+    high.push(maxH);
+  }
+
+  return { peaks, low, mid, high };
+}

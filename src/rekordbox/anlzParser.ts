@@ -54,27 +54,6 @@ export interface AnlzCueEntry {
   loopDenominator?: number;
 }
 
-/** Roh-Inventar eines Waveform-Tags: exakt die Werte, die readWaveformSpec
- *  aus dem Blockkopf liest (len_entry_bytes / len_entries / Stil). Wird nur
- *  für die Diagnose-CLI (scripts/anlz-probe.mjs, Stufe 4 des
- *  Pipeline-Stufenplans) mitgeführt; der Decode-Pfad bleibt unverändert. */
-export interface AnlzWaveformInventory {
-  entryBytes: number;
-  entryCount: number;
-  style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
-}
-
-/** Ein gelesener ANLZ-Block (Tag + Envelope-Längen). Teil des Tag-Inventars:
- *  jede Sektion einer Quelle wird berichtet, auch wenn der Parser sie nicht
- *  dekodiert ("keine Daten liegen lassen", Pipeline-Stufenplan Regel 4). */
-export interface AnlzTagInventoryEntry {
-  tag: string;
-  offset: number;
-  headerLength: number;
-  blockLength: number;
-  waveform: AnlzWaveformInventory | null;
-}
-
 export interface AnlzPhraseEntry {
   index: number;
   beat: number;
@@ -100,12 +79,7 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
-  /** Every successfully decoded PWV variant, tagged with its source tag. */
-  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
-  /** Read-only inventory of every ANLZ block (Stufe 4 des Stufenplans):
-   *  Tag, Envelope-Längen und Waveform-Spezifikation. Dekodiert nichts. */
-  tagInventory: AnlzTagInventoryEntry[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
   rawMemoryCues?: AnlzCueEntry[];
@@ -147,7 +121,7 @@ function readUtf16Be(view: DataView, offset: number, byteLength: number): string
   return String.fromCharCode(...chars);
 }
 
-export const WAVEFORM_PRIORITY: Record<string, number> = {
+const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
@@ -341,7 +315,6 @@ function parseBeatGrid(view: DataView, offset: number, tagEnd: number): BeatGrid
   return {
     firstBeat: beats[0].time,
     bpm: view.getUint16(entriesStart + 2, false) / 100,
-    // PQTZ carries no meter; 4/4 is the display default (beat times are unaffected).
     meter: 4,
     beats,
     origin: DataOrigin.REKORDBOX_ANLZ,
@@ -603,9 +576,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
-    waveformVariants: [],
     warnings: [],
-    tagInventory: [],
   };
 
   let offset = 0;
@@ -654,30 +625,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     const tagEnd = offset + chunkSize;
     result.tagsFound.push(tag);
 
-    // Read-only-Inventar (Stufe 4): jeden gelesenen Block berichten, inklusive
-    // der Waveform-Spezifikation exakt so, wie readWaveformSpec sie liest.
-    // Hier wird nichts dekodiert und nichts verändert.
-    if (tag in WAVEFORM_PRIORITY) {
-      const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      result.tagInventory.push({
-        tag,
-        offset,
-        headerLength: lenHeader,
-        blockLength: chunkSize,
-        waveform: spec
-          ? { entryBytes: spec.entryBytes, entryCount: spec.entryCount, style: spec.style }
-          : null,
-      });
-    } else {
-      result.tagInventory.push({
-        tag,
-        offset,
-        headerLength: lenHeader,
-        blockLength: chunkSize,
-        waveform: null,
-      });
-    }
-
     if (tag === 'PPTH') {
       if (offset + 0x10 <= tagEnd) {
         const lenPath = view.getUint32(offset + 0x0c, false);
@@ -697,7 +644,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
-          result.warnings.push(`${tag}: keine Beat-Einträge lesbar; nur BPM/First Beat übernommen (Fallback-Layout, kein Beatgrid-Ersatz).`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -822,17 +768,10 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec) {
-        // Every genuine variant is kept (zoom selection happens in the
-        // renderer); `waveform` remains the highest-priority variant.
-        const variant = createWaveform(spec, view);
-        variant.sourceTag = tag;
-        result.waveformVariants.push(variant);
-        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-          result.waveform = variant;
-          waveformPriority = WAVEFORM_PRIORITY[tag];
-        }
-      } else {
+      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+        result.waveform = createWaveform(spec, view);
+        waveformPriority = WAVEFORM_PRIORITY[tag];
+      } else if (!spec) {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }

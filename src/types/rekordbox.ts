@@ -32,12 +32,6 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
-  /**
-   * True only for uniform continuation nodes appended after the last verbatim
-   * PQTZ beat so the grid spans the full track duration. Verbatim Rekordbox
-   * beats never carry this flag (strict-PQTZ provenance).
-   */
-  tailExtended?: boolean;
 }
 
 export interface BeatGrid {
@@ -103,15 +97,6 @@ export interface LoopPoint {
   origin: DataOrigin;
 }
 
-export interface PaletteWaveformData {
-  /** Downsampled genuine source waveform for the clip's time range. */
-  peaks: number[];
-  lowEnergy: number[];
-  midEnergy: number[];
-  highEnergy: number[];
-  origin: DataOrigin;
-}
-
 export interface PaletteClip {
   id: string;
   name: string;
@@ -126,8 +111,10 @@ export interface PaletteClip {
   key: string;
   color: string;
   audioBuffer?: AudioBuffer;
-  miniPeaks?: number[]; // legacy fallback for palette preview
-  waveform?: PaletteWaveformData;
+  miniPeaks?: number[]; // pre-computed 64 normalized peaks for palette preview
+  miniLow?: number[];
+  miniMid?: number[];
+  miniHigh?: number[];
   origin: DataOrigin;
 }
 
@@ -158,11 +145,6 @@ export interface WaveformAnalysisData {
   origin: DataOrigin;
   secPerBucket?: number;
   samplesPerBucket?: number;
-  /**
-   * ANLZ source tag this variant was decoded from (e.g. 'PWV5', 'PWV7').
-   * Set only for genuine ANLZ variants; never for computed analysis.
-   */
-  sourceTag?: string;
 }
 
 /**
@@ -189,6 +171,8 @@ export interface TrackModel {
   playCount?: number; // Rekordbox DJ-Play Count
   year?: string;
   comments?: string;
+  stems?: string[];
+  stemBuffers?: AudioBuffer[];
   dateAdded?: string;
   remixer?: string;
   isrc?: string;
@@ -204,12 +188,6 @@ export interface TrackModel {
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
-  /**
-   * All genuine ANLZ waveform variants decoded from the container (different
-   * PWV tags / resolutions). `analysis` remains the best variant; renderers
-   * pick the variant that matches the current zoom. Never synthesized.
-   */
-  analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];
@@ -230,8 +208,8 @@ export type PartialTrackModel = Partial<TrackModel> & {
 export interface SelectionRange {
   start: number; // seconds
   end: number; // seconds
-  startBeat: number;
-  endBeat: number;
+  startBeat?: number;
+  endBeat?: number;
   beatsCount: number;
   barsCount: number;
   duration: number;
@@ -243,10 +221,9 @@ export interface EditHistoryEntry {
   segments: EditSegment[];
   selection: SelectionRange | null;
   cues: CuePoint[];
-  /** Timeline length is part of edit history (insert/delete change it). */
+  audioBuffer?: AudioBuffer;
   duration?: number;
-  /** Pre-edit beat grid (manual grid edits stay reversible and traceable). */
-  beatGrid?: BeatGrid;
+  analysis?: WaveformAnalysisData;
 }
 
 export interface MultiTrackLayer {
@@ -259,3 +236,5 @@ export interface MultiTrackLayer {
   pan: number; // -1..1
   color: string;
 }
+
+export * from './editAssistant';

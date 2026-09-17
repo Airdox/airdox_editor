@@ -20,6 +20,10 @@ class AudioEngine {
   private pauseOffset: number = 0; // playback position in seconds
   private isPlaying: boolean = false;
   private activeBuffer: AudioBuffer | null = null;
+  private stemBuffers: AudioBuffer[] = [];
+  private stemSources: AudioBufferSourceNode[] = [];
+  private stemGains: GainNode[] = [];
+  private stemsActive: boolean = false;
   private loopActive: boolean = false;
   private loopStart: number = 0;
   private loopEnd: number = 0;
@@ -90,43 +94,87 @@ class AudioEngine {
     offsetSeconds: number = 0,
     loop: boolean = false,
     loopStartSec: number = 0,
-    loopEndSec: number = 0
+    loopEndSec: number = 0,
+    stemBuffers?: AudioBuffer[]
   ) {
     const ctx = this.init();
     this.stop();
 
     this.activeBuffer = buffer;
+    this.stemBuffers = stemBuffers || [];
+    this.stemsActive = this.stemBuffers.length > 0;
+    
     this.pauseOffset = Math.max(0, Math.min(offsetSeconds, buffer.duration));
     this.loopActive = loop;
     this.loopStart = loopStartSec;
     this.loopEnd = loopEndSec > loopStartSec ? loopEndSec : buffer.duration;
 
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-
-    if (this.loopActive && this.loopEnd > this.loopStart) {
-      source.loop = true;
-      source.loopStart = this.loopStart;
-      source.loopEnd = this.loopEnd;
-    }
-
-    if (this.masterGain) {
-      source.connect(this.masterGain);
-    } else {
-      source.connect(ctx.destination);
-    }
-
     this.startTime = ctx.currentTime - this.pauseOffset;
-    source.start(0, this.pauseOffset);
-    this.currentSource = source;
     this.isPlaying = true;
 
-    source.onended = () => {
-      if (this.currentSource === source) {
-        this.isPlaying = false;
-        this.currentSource = null;
+    if (this.stemsActive) {
+      // Create a source and gain for each stem
+      this.stemSources = [];
+      
+      // Ensure we have enough gain nodes
+      while (this.stemGains.length < this.stemBuffers.length) {
+        const gain = ctx.createGain();
+        gain.connect(this.masterGain || ctx.destination);
+        this.stemGains.push(gain);
       }
-    };
+
+      for (let i = 0; i < this.stemBuffers.length; i++) {
+        const source = ctx.createBufferSource();
+        source.buffer = this.stemBuffers[i];
+        
+        if (this.loopActive && this.loopEnd > this.loopStart) {
+          source.loop = true;
+          source.loopStart = this.loopStart;
+          source.loopEnd = this.loopEnd;
+        }
+        
+        source.connect(this.stemGains[i]);
+        source.start(0, this.pauseOffset);
+        this.stemSources.push(source);
+      }
+      
+      // We use the first stem as the timing reference for onended
+      if (this.stemSources.length > 0) {
+        const refSource = this.stemSources[0];
+        refSource.onended = () => {
+          if (this.stemSources.includes(refSource)) {
+            this.isPlaying = false;
+            this.stemSources = [];
+          }
+        };
+      }
+    } else {
+      // Play original buffer
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+
+      if (this.loopActive && this.loopEnd > this.loopStart) {
+        source.loop = true;
+        source.loopStart = this.loopStart;
+        source.loopEnd = this.loopEnd;
+      }
+
+      if (this.masterGain) {
+        source.connect(this.masterGain);
+      } else {
+        source.connect(ctx.destination);
+      }
+
+      source.start(0, this.pauseOffset);
+      this.currentSource = source;
+
+      source.onended = () => {
+        if (this.currentSource === source) {
+          this.isPlaying = false;
+          this.currentSource = null;
+        }
+      };
+    }
   }
 
   public pause(): number {
@@ -146,7 +194,31 @@ class AudioEngine {
       }
       this.currentSource = null;
     }
+    
+    if (this.stemSources.length > 0) {
+      for (const source of this.stemSources) {
+        try {
+          source.stop();
+          source.disconnect();
+        } catch {}
+      }
+      this.stemSources = [];
+    }
+
     this.isPlaying = false;
+  }
+  
+  public setStemVolume(index: number, volume: number) {
+    if (index >= 0 && index < this.stemGains.length) {
+      this.stemGains[index].gain.value = volume;
+    }
+  }
+  
+  public getStemVolume(index: number): number {
+    if (index >= 0 && index < this.stemGains.length) {
+      return this.stemGains[index].gain.value;
+    }
+    return 1.0;
   }
 
   public getCurrentTime(): number {

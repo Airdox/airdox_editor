@@ -28,6 +28,7 @@ interface PalettePanelProps {
   onToggleMatchPitch?: (match: boolean) => void;
   targetBpm?: number;
   targetKey?: string;
+  waveformMode?: 'BLUE' | 'RGB' | '3BAND';
 }
 
 export const PalettePanel: React.FC<PalettePanelProps> = ({
@@ -44,6 +45,7 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
   onToggleMatchPitch,
   targetBpm,
   targetKey,
+  waveformMode = 'RGB',
 }) => {
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
 
@@ -170,13 +172,6 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
             return (
               <div
                 key={clip.id}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.effectAllowed = 'copy';
-                  e.dataTransfer.setData('application/x-airdox-palette-clip', clip.id);
-                  e.dataTransfer.setData('text/plain', clip.id);
-                }}
-                onDragEnd={(e) => e.dataTransfer.clearData()}
                 onClick={() => onSelectClip(clip)}
                 className={`p-1.5 rounded-xs border transition-all cursor-pointer ${
                   isSelected
@@ -186,29 +181,39 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
               >
                 {/* Mini Waveform Display */}
                 <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
-                  {clip.waveform && clip.waveform.peaks.length > 0 ? (
-                    <div className="w-full h-full flex items-center px-1 gap-px" title={`ANLZ-Waveform (${clip.waveform.origin})`}>
-                      {clip.waveform.peaks.map((pk, idx) => {
-                        const low = Math.min(1, clip.waveform!.lowEnergy[idx] || 0);
-                        const mid = Math.min(1, clip.waveform!.midEnergy[idx] || 0);
-                        const high = Math.min(1, clip.waveform!.highEnergy[idx] || 0);
-                        const height = Math.max(2, pk * 30);
-                        return (
-                          <div key={idx} className="flex-1 h-full relative flex items-center">
-                            <div
-                              className="absolute left-0 right-0 rounded-[1px]"
-                              style={{ height: `${height}px`, background: `linear-gradient(to top, rgb(${Math.round(220 + low * 35)}, ${Math.round(45 + mid * 170)}, ${Math.round(35 + high * 180)}), rgb(${Math.round(20 + low * 40)}, ${Math.round(130 + mid * 120)}, ${Math.round(210 + high * 45)}))` }}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : clip.miniPeaks && clip.miniPeaks.length > 0 ? (
+                  {clip.miniPeaks && clip.miniPeaks.length > 0 ? (
                     <div className="w-full h-full flex items-center px-1">
                       {clip.miniPeaks.map((pk, idx) => {
-                        const h = Math.max(2, pk * 28);
-                        const col = idx % 3 === 0 ? '#ff3b30' : idx % 3 === 1 ? '#00e5ff' : '#0088ff';
-                        return <div key={idx} style={{ height: `${h}px`, backgroundColor: col }} className="flex-1 mx-[0.5px] rounded-[0.5px]" />;
+                        let h = Math.max(2, pk * 28);
+                        let col = '#0088ff';
+                        
+                        if (waveformMode === 'BLUE') {
+                          col = '#00a2ff';
+                        } else if (waveformMode === 'RGB' || waveformMode === '3BAND') {
+                          const low = clip.miniLow?.[idx] ?? pk;
+                          const mid = clip.miniMid?.[idx] ?? pk;
+                          const high = clip.miniHigh?.[idx] ?? pk;
+                          
+                          if (waveformMode === '3BAND') {
+                            if (low > mid && low > high) col = '#0088ff'; // Low=Blue
+                            else if (mid > low && mid > high) col = '#f59e0b'; // Mid=Amber
+                            else col = '#fff'; // High=White
+                          } else {
+                            // RGB Mixing approach
+                            const r = Math.min(255, Math.floor(low * 255));
+                            const g = Math.min(255, Math.floor(mid * 255));
+                            const b = Math.min(255, Math.floor(high * 255 + 50));
+                            col = `rgb(${r},${g},${b})`;
+                          }
+                        }
+
+                        return (
+                          <div
+                            key={idx}
+                            style={{ height: `${h}px`, backgroundColor: col }}
+                            className="flex-1 mx-[0.5px] rounded-[0.5px]"
+                          />
+                        );
                       })}
                     </div>
                   ) : (

@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc } from 'lucide-react';
+import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -24,12 +24,28 @@ interface MenuBarProps {
   onSetWaveformMode: (mode: WaveformMode) => void;
   paletteOpen: boolean;
   onTogglePalette: () => void;
+  editPaletteOpen?: boolean;
+  onToggleEditPalette?: () => void;
+  onMaximizeWaveform?: () => void;
   browserOpen: boolean;
   onToggleBrowser: () => void;
+  chatbotOpen?: boolean;
+  onToggleChatbot?: () => void;
+  onLoadDemoTrack?: () => void;
   onShowInfo: () => void;
   onOpenDatabaseInspector?: () => void;
   onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
+  onClearHistory?: () => void;
+  hasHistory?: boolean;
+  onCopy?: () => void;
+  onCut?: () => void;
+  onPaste?: () => void;
+  onDelete?: () => void;
+  hasSelection?: boolean;
+  hasClipboard?: boolean;
+  onOpenEditAssistant?: () => void;
+  onAnalyzeMixIn?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -48,12 +64,28 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSetWaveformMode,
   paletteOpen,
   onTogglePalette,
+  editPaletteOpen = true,
+  onToggleEditPalette,
+  onMaximizeWaveform,
   browserOpen,
   onToggleBrowser,
+  chatbotOpen,
+  onToggleChatbot,
+  onLoadDemoTrack,
   onShowInfo,
   onOpenDatabaseInspector,
   onOpenXmlCollection,
   onOpenSystemLogs,
+  onClearHistory,
+  hasHistory,
+  onCopy,
+  onCut,
+  onPaste,
+  onDelete,
+  hasSelection,
+  hasClipboard,
+  onOpenEditAssistant,
+  onAnalyzeMixIn,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -174,7 +206,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             Bearbeiten
           </button>
           {activeMenu === 'bearbeiten' && (
-            <div className="absolute left-0 top-6 w-48 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
+            <div className="absolute left-0 top-6 w-56 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
               <button
                 onClick={() => { onUndo(); setActiveMenu(null); }}
                 disabled={!canUndo}
@@ -191,6 +223,108 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span>Wiederholen (Redo)</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Y</span>
               </button>
+
+              <div className="h-px bg-[#262830] my-1" />
+
+              {onCut && (
+                <button
+                  onClick={() => { onCut(); setActiveMenu(null); }}
+                  disabled={!hasSelection}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Scissors size={12} className="text-neutral-400" />
+                    <span>Ausschneiden (Cut)</span>
+                  </span>
+                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+X</span>
+                </button>
+              )}
+
+              {onCopy && (
+                <button
+                  onClick={() => { onCopy(); setActiveMenu(null); }}
+                  disabled={!hasSelection}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Copy size={12} className="text-neutral-400" />
+                    <span>Kopieren (Copy)</span>
+                  </span>
+                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+C</span>
+                </button>
+              )}
+
+              {onPaste && (
+                <button
+                  onClick={() => { onPaste(); setActiveMenu(null); }}
+                  disabled={!hasClipboard}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <ClipboardPaste size={12} className="text-neutral-400" />
+                    <span>Einfügen (Paste)</span>
+                  </span>
+                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+V</span>
+                </button>
+              )}
+
+              {onDelete && (
+                <button
+                  onClick={() => { onDelete(); setActiveMenu(null); }}
+                  disabled={!hasSelection}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center text-[#ff6b62]"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Trash2 size={12} />
+                    <span>Löschen (Delete)</span>
+                  </span>
+                  <span className="text-neutral-500 hover:text-neutral-200">Del</span>
+                </button>
+              )}
+
+              <div className="h-px bg-[#262830] my-1" />
+
+              {onClearHistory && (
+                <button
+                  onClick={() => { onClearHistory(); setActiveMenu(null); }}
+                  disabled={!hasHistory}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#b82525] hover:text-white disabled:opacity-40 flex justify-between items-center text-[#ff7066]"
+                  title="Öffnet Sicherheitsdialog zum Leeren des Undo/Redo-Verlaufs"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Trash2 size={12} className="text-[#ff453a]" />
+                    <span>Verlauf leeren...</span>
+                  </span>
+                  <span className="text-[10px] text-neutral-500 hover:text-neutral-200">Dialog</span>
+                </button>
+              )}
+
+              {onOpenEditAssistant && (
+                <button
+                  onClick={() => { onOpenEditAssistant(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <ShieldCheck size={12} className="text-[#00e5ff]" />
+                    <span>Edit Assistant (Integrität)...</span>
+                  </span>
+                </button>
+              )}
+
+              {onAnalyzeMixIn && (
+                <button
+                  onClick={() => { onAnalyzeMixIn(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-emerald-600 hover:text-white flex justify-between items-center text-emerald-400"
+                  title="Öffnet den AI Copilot für die Phrasen- und Energieanalyse des optimalen Mix-In Punkts"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Sparkles size={12} className="text-emerald-400" />
+                    <span>Mix-In analysieren (Copilot)...</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-500/80 hover:text-white font-mono">AI</span>
+                </button>
+              )}
+
               <div className="h-px bg-[#262830] my-1" />
               <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
                 Originalschutz aktiv (Read-Only)
@@ -242,13 +376,37 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 {waveformMode === '3BAND' && <span>✓</span>}
               </button>
               <div className="h-px bg-[#262830] my-1" />
+              {onToggleEditPalette && (
+                <button
+                  onClick={() => { onToggleEditPalette(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
+                >
+                  <span>Editierpalette (Unten)</span>
+                  <span className="flex items-center space-x-2">
+                    <span className="text-neutral-500 text-[10px]">E</span>
+                    <span>{editPaletteOpen ? '✓' : ''}</span>
+                  </span>
+                </button>
+              )}
               <button
                 onClick={() => { onTogglePalette(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
               >
-                <span>Palette ein-/ausblenden</span>
-                <span>{paletteOpen ? '✓' : ''}</span>
+                <span>Clip-Palette (Rechts)</span>
+                <span className="flex items-center space-x-2">
+                  <span className="text-neutral-500 text-[10px]">P</span>
+                  <span>{paletteOpen ? '✓' : ''}</span>
+                </span>
               </button>
+              {onMaximizeWaveform && (
+                <button
+                  onClick={() => { onMaximizeWaveform(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00c8ff]"
+                >
+                  <span>Wellenform maximieren (Zen)</span>
+                  <span className="text-neutral-400 text-[10px]">M</span>
+                </button>
+              )}
               <button
                 onClick={() => { onToggleBrowser(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
@@ -256,6 +414,18 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <span>Browser & Multi-Track</span>
                 <span>{browserOpen ? '✓' : ''}</span>
               </button>
+              {onToggleChatbot && (
+                <button
+                  onClick={() => { onToggleChatbot(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between text-[#00a2ff] hover:text-white font-medium"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Sparkles size={11} />
+                    <span>AI Smart Copilot Palette</span>
+                  </span>
+                  <span>{chatbotOpen ? '✓' : ''}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -271,7 +441,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             Hilfe
           </button>
           {activeMenu === 'hilfe' && (
-            <div className="absolute left-0 top-6 w-56 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
+            <div className="absolute left-0 top-6 w-64 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
+              {onLoadDemoTrack && (
+                <button
+                  onClick={() => { onLoadDemoTrack(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00a2ff]"
+                >
+                  Demo-Referenztrack laden (La Roux)...
+                </button>
+              )}
               <button
                 onClick={() => { onShowInfo(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
@@ -298,6 +476,21 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* Right side: Quick access triggers */}
       <div className="flex items-center space-x-1.5">
+        {onToggleChatbot && (
+          <button
+            onClick={onToggleChatbot}
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded text-[10.5px] font-mono font-bold transition-all shadow-sm cursor-pointer ${
+              chatbotOpen
+                ? 'bg-gradient-to-r from-[#0088ff] to-[#7c3aed] text-white border border-blue-400/50 shadow-blue-500/20'
+                : 'bg-[#181a24] hover:bg-[#202330] text-neutral-200 border border-[#2d3144] hover:border-[#0088ff]/50'
+            }`}
+            title="AI Smart Copilot Palette öffnen / schließen"
+          >
+            <Sparkles size={11} className={chatbotOpen ? 'text-amber-300 animate-spin' : 'text-[#00a2ff]'} />
+            <span className="tracking-wider">AI COPILOT</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${chatbotOpen ? 'bg-emerald-400 animate-ping' : 'bg-[#00a2ff]'}`} />
+          </button>
+        )}
         {onOpenXmlCollection && (
           <button
             onClick={onOpenXmlCollection}

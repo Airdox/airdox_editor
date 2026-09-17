@@ -20,7 +20,11 @@ import {
   RotateCw,
   XCircle,
   Layers,
-  Repeat
+  Repeat,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
+  Scissors,
 } from 'lucide-react';
 import { SelectionRange } from '../types/rekordbox';
 
@@ -32,6 +36,7 @@ interface BottomControlBlockProps {
   onCancelSelection: () => void;
   onClone: () => void;
   onCopy: () => void;
+  onCut?: () => void;
   onPaste: () => void;
   onInsert: () => void;
   onReplace: () => void;
@@ -46,6 +51,10 @@ interface BottomControlBlockProps {
   matchPitch?: boolean;
   onToggleMatchPitch?: (match: boolean) => void;
   targetKey?: string;
+  onClearHistory?: () => void;
+  onOpenEditAssistant?: () => void;
+  isOpen?: boolean;
+  onToggle?: () => void;
 }
 
 export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
@@ -56,6 +65,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   onCancelSelection,
   onClone,
   onCopy,
+  onCut,
   onPaste,
   onInsert,
   onReplace,
@@ -70,8 +80,119 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
   matchPitch = true,
   onToggleMatchPitch,
   targetKey,
+  onClearHistory,
+  onOpenEditAssistant,
+  isOpen = true,
+  onToggle,
 }) => {
   const hasSelection = selection !== null && selection.duration > 0;
+
+  // Collapsed Minimal Mode: releases maximum vertical screen real estate for waveforms
+  if (isOpen === false) {
+    return (
+      <div className="h-7 bg-[#0d0e12] border-t border-[#1c1e26] flex items-center justify-between px-3 select-none z-20 transition-all">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={onToggle}
+            className="flex items-center space-x-1.5 px-2.5 py-0.5 bg-[#181a22] hover:bg-[#232634] text-neutral-300 hover:text-white rounded-xs border border-[#2d303f] transition-colors text-[10.5px] font-bold"
+            title="Editierpalette ausklappen (BEAT SELECT / SELECT / EDIT) [Taste: E]"
+          >
+            <ChevronUp size={12} className="text-[#00a2ff]" />
+            <span className="tracking-wider uppercase">EDITIERPALETTE</span>
+          </button>
+
+          {/* Real-time selection badge */}
+          {hasSelection ? (
+            <div className="flex items-center space-x-2 text-[10.5px] text-neutral-300">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00a2ff] animate-pulse"></span>
+              <span>
+                Auswahl: <strong className="text-white">{selection.barsCount.toFixed(1)} Takte</strong>{' '}
+                <span className="text-neutral-400">({Math.round(selection.beatsCount)} Beats • {selection.duration.toFixed(3)}s)</span>
+              </span>
+            </div>
+          ) : (
+            <div className="text-[10px] text-neutral-500 italic">
+              Keine Auswahl • In der Wellenform ziehen oder Taste E drücken
+            </div>
+          )}
+        </div>
+
+        {/* Quick action operations accessible directly even when collapsed */}
+        <div className="flex items-center space-x-1.5 text-[10.5px]">
+          {hasClipboard && (
+            <span className="text-[9.5px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-0.5 rounded-xs mr-1">
+              Zwischenablage bereit
+            </span>
+          )}
+          <button
+            onClick={onCopy}
+            disabled={!hasSelection}
+            className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
+            title="Kopieren (Ctrl+C)"
+          >
+            <Copy size={11} />
+            <span>Copy</span>
+          </button>
+          {onCut && (
+            <button
+              onClick={onCut}
+              disabled={!hasSelection}
+              className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
+              title="Ausschneiden (Ctrl+X)"
+            >
+              <Scissors size={11} />
+              <span>Cut</span>
+            </button>
+          )}
+          <button
+            onClick={onPaste}
+            disabled={!hasClipboard}
+            className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-[#00a2ff] hover:text-white disabled:text-neutral-500 flex items-center space-x-1"
+            title="Einfügen (Ctrl+V)"
+          >
+            <ClipboardPaste size={11} />
+            <span>Paste</span>
+          </button>
+          <button
+            onClick={onDelete}
+            disabled={!hasSelection}
+            className="px-2 py-0.5 bg-[#1f1214] hover:bg-[#301a1c] disabled:opacity-30 rounded-xs border border-[#402024] text-[#ff453a] hover:text-white flex items-center space-x-1"
+            title="Löschen (Del)"
+          >
+            <Trash2 size={11} />
+            <span>Delete</span>
+          </button>
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
+            title="Undo (Ctrl+Z)"
+          >
+            <RotateCcw size={11} />
+          </button>
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
+            title="Redo (Ctrl+Y)"
+          >
+            <RotateCw size={11} />
+          </button>
+
+          {onToggle && (
+            <button
+              onClick={onToggle}
+              className="ml-2 px-2 py-0.5 bg-[#1e2230] hover:bg-[#282d40] text-[#00a2ff] hover:text-white rounded-xs border border-[#353d55] flex items-center space-x-1 text-[10px] font-semibold transition-colors"
+              title="Editierpalette vollständig ausklappen (BEAT SELECT / SELECT / EDIT)"
+            >
+              <ChevronUp size={11} />
+              <span>Ausklappen</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-44 bg-[#0d0e12] border-t border-[#1c1e26] flex select-none z-20">
@@ -209,6 +330,39 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               <Layers size={10} />
               <span>OVERDUB</span>
             </button>
+
+            {onOpenEditAssistant && (
+              <button
+                onClick={onOpenEditAssistant}
+                className="text-[#00e5ff] hover:text-white px-2 py-0.5 rounded bg-[#0088ff]/15 border border-[#0088ff]/40 flex items-center space-x-1 text-[9px] font-semibold"
+                title="Edit Assistant: Puffer- & Bereichs-Integrität prüfen"
+              >
+                <ShieldCheck size={10} className="text-[#00e5ff]" />
+                <span>ASSISTANT</span>
+              </button>
+            )}
+
+            {onClearHistory && (canUndo || canRedo) && (
+              <button
+                onClick={onClearHistory}
+                className="text-neutral-400 hover:text-[#ff6b62] px-1.5 py-0.5 rounded hover:bg-[#251315] border border-transparent hover:border-[#ff453a]/30 flex items-center space-x-1 text-[9px] transition-colors"
+                title="Verlauf leeren (Sicherheitsdialog zur Vermeidung von Datenverlust)"
+              >
+                <Trash2 size={9} />
+                <span>CLEAR HIST</span>
+              </button>
+            )}
+
+            {onToggle && (
+              <button
+                onClick={onToggle}
+                className="text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-[#181a22] hover:bg-[#242838] flex items-center space-x-1 border border-[#2d3040] transition-colors ml-1 font-medium"
+                title="Editierpalette einklappen (für maximale Wellenform-Fläche) [Taste: E]"
+              >
+                <ChevronDown size={11} className="text-[#00a2ff]" />
+                <span className="text-[9.5px]">Einklappen</span>
+              </button>
+            )}
           </div>
         </div>
 
