@@ -84,6 +84,12 @@ export interface DesktopSeparationOptions extends DesktopSeparationRoots {
   trackName?: string;
   modelId?: string;
   command?: string;
+  /**
+   * Checkpoint filename inside `modelStoreDir`. Lets the app run a
+   * self-trained model (see docs/TRAINING.md) instead of the default one.
+   * Falls back to STEM_MODEL_FILENAME, then to the engine default.
+   */
+  modelFilename?: string;
   usePipelineDouble?: boolean;
   onProgress?: (entry: { phase: string; detail?: string; percent?: number }) => void;
 }
@@ -109,7 +115,11 @@ export async function separateForDesktop(options: DesktopSeparationOptions): Pro
     allowPipelineDouble: true,
     registry: new StemRegistry(),
     backendFactory: createDefaultBackendFactory({
-      audioSeparator: { command: options.command, modelFileDir: options.modelStoreDir },
+      audioSeparator: {
+        command: options.command,
+        modelFileDir: options.modelStoreDir,
+        modelFilename: options.modelFilename ?? process.env.STEM_MODEL_FILENAME ?? undefined,
+      },
     }),
   });
 

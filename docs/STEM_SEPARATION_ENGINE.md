@@ -256,3 +256,13 @@ injiziertem Runner, siehe `tests/stem-desktop-backend.test.ts`) sowie ein
 End-to-End-Lauf über das Pipeline-Double. Der Lauf mit echten Gewichten muss
 auf einer Maschine mit installierter CLI nachgeholt werden; das Gate meldet bis
 dahin korrekt `TECHNICAL_PASS_QUALITY_FAIL`.
+
+## Eigenes Modell trainieren
+
+Für ein selbst trainiertes Modell siehe `docs/TRAINING.md` und das Notebook
+`notebooks/train_stem_model_colab.ipynb` (Finetuning auf einer Colab-GPU).
+
+Der Checkpoint wird über `STEM_MODEL_FILENAME` bzw.
+`separateForDesktop({ modelFilename })` eingebunden und muss in
+`modelStoreDir` liegen. Ob das Ergebnis taugt, entscheidet das Stem Isolation
+Gate — nicht die Trainings-Loss.
