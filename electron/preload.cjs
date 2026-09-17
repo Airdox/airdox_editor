@@ -15,4 +15,8 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
   separateStems: (inputFilePath) => ipcRenderer.invoke('audio:separate-stems', inputFilePath),
+  // Durable log mirror: renderer log entries land in
+  // <userData>/airdox-smart-editor.log (rotation handled in the main process).
+  appendLog: (entry) => ipcRenderer.invoke('rekordbox:append-log', entry),
+  getLogFilePath: () => ipcRenderer.invoke('rekordbox:get-log-file-path'),
 });

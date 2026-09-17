@@ -32,6 +32,8 @@ export interface BeatNode {
   isBarStart: boolean;
   barNumber: number;
   beatInBar: number; // 1, 2, 3, 4
+  /** Tail provenance: `true` marks a uniform continuation after the last verbatim beat. */
+  tailExtended?: boolean;
 }
 
 export interface BeatGrid {
@@ -115,6 +117,8 @@ export interface PaletteClip {
   miniLow?: number[];
   miniMid?: number[];
   miniHigh?: number[];
+  /** Genuine source waveform slice (ANLZ columns of the clip range, never synthesized). */
+  waveform?: WaveformAnalysisData;
   origin: DataOrigin;
 }
 
@@ -143,6 +147,8 @@ export interface WaveformAnalysisData {
   midEnergy: Float32Array; // 250 - 4000 Hz (vocals/synths - GREEN)
   highEnergy: Float32Array; // 4000 - 20000 Hz (hihats/air - BLUE)
   origin: DataOrigin;
+  /** ANLZ section this variant was decoded from (e.g. 'PWV3', 'PWV5', 'PWV7'). */
+  sourceTag?: string;
   secPerBucket?: number;
   samplesPerBucket?: number;
 }
@@ -184,10 +190,14 @@ export interface TrackModel {
   originalSha256: string;
   isOriginalUntouched: boolean;
   audioBuffer: AudioBuffer | null;
+  /** Local audio file path (stems separation, re-open); Rekordbox sources use originalMedia. */
+  filePath?: string;
   beatGrid: BeatGrid;
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
+  /** Every genuine ANLZ waveform variant of this track, zoom-selected at render time. */
+  analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
   phrases?: PhraseSection[];
