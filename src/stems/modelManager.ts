@@ -10,7 +10,7 @@
  * The manager never touches audio files and never writes outside the store.
  */
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { existsSync, createWriteStream } from 'node:fs';
 import { mkdir, stat, unlink, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StemSeparationError } from './errors';
@@ -86,6 +86,28 @@ export class ModelManager {
       throw new StemSeparationError('MODEL_MISSING', 'Checkpoint-Pfade müssen relativ zum Model-Store sein', { file: ref.file });
     }
     return path.join(this.storeDir, ref.file);
+  }
+
+  /**
+   * Cheap, synchronous presence check – used for *selection*, never as proof.
+   *
+   * The editor asks for the profile matrix on every status refresh. Hashing a
+   * 500 MiB checkpoint there would be absurd, so selection only asks: are the
+   * files on disk? A present but corrupt checkpoint is therefore selected and
+   * then fails loudly with `MODEL_CORRUPT` in `ensureAvailable()` – which is the
+   * honest outcome, and the file is still reported as unavailable by
+   * `verify()`/`listStatus()`.
+   */
+  isInstalled(descriptor: ModelDescriptor): boolean {
+    const present = (ref: ModelCheckpointRef | undefined): boolean => {
+      if (!ref) return false;
+      try {
+        return existsSync(this.resolvePath(ref));
+      } catch {
+        return false;
+      }
+    };
+    return present(descriptor.checkpoint) && (!descriptor.config || present(descriptor.config));
   }
 
   private async inspect(ref: ModelCheckpointRef | undefined, role: 'checkpoint' | 'config'): Promise<ModelFileStatus | undefined> {

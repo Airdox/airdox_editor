@@ -13,3 +13,16 @@ stem-engine-data/
 stem-gate-run/
 stem-gate-colab.tar.gz
 test-runner-failure.txt
+
+# Gebündelte Stem-Gewichte (503 MiB) und die Python-Runtime (mehrere GB) werden
+# über `npm run stems:bundle` bzw. `npm run stems:runtime` erzeugt und gehören
+# nie ins Repository – nur die Platzhalter-READMEs bleiben versioniert.
+resources/models/*
+!resources/models/README.md
+resources/stem-runtime/*
+!resources/stem-runtime/README.md
+
+# Die ONNX-Modelle des DJ-Pfads (166–1260 MB) liegen ebenfalls nur lokal bzw. im
+# Build; einen Download gibt es nur über `npm run stems:bundle`.
+*.onnx
+!tests/fixtures/onnx/*.onnx

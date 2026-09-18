@@ -118,7 +118,11 @@ async function run() {
       assert.match(line, /from '\.\/types';$/, `transportTypes.ts darf nur Typen aus ./types importieren, Fund: ${line}`);
     }
     const rendererSource = await read('src/audio/stemEngine.ts');
-    assert.match(rendererSource, /import type \{ StemJobView, StemServiceStatus \} from '\.\.\/stems\/transportTypes'/, 'Renderer importiert den Vertrag typ-only');
+    assert.match(
+      rendererSource,
+      /import type \{ (?:StemComputeDevice, )?StemJobView, StemServiceStatus(?:, StemValidationMode)? \} from '\.\.\/stems\/transportTypes'/,
+      'Renderer importiert den Vertrag typ-only'
+    );
     assert.equal(/from '\.\.\/stems\/stemJobService'/.test(rendererSource), false, 'der Renderer darf den Node-Kern nicht direkt importieren');
     console.log('  ✓ type-only Import, kein node:* im Vertrag');
 
@@ -160,6 +164,8 @@ async function run() {
       trackName: 'y'.repeat(400),
       overlap: 42,
       chunkSizeSamples: 10,
+      device: 'directml',
+      mode: 'studio_master',
       stems: ['vocals', '"; rm -rf /', 3],
       bytes: { huge: true },
       evil: 'sollte verworfen werden',
@@ -170,6 +176,11 @@ async function run() {
     assert.equal(sanitized.overlap, undefined, 'overlap außerhalb 0..0.95 verworfen');
     assert.equal(sanitized.chunkSizeSamples, undefined, 'Chunk unter 4096 verworfen');
     assert.equal(sanitized.stems, undefined, 'Stem-Liste mit ungültigen Einträgen verworfen (keine Teilübernahme)');
+    assert.equal(sanitized.device, 'directml', 'bekanntes Rechengerät aus dem Einstellungsmenü bleibt erhalten');
+    assert.equal(sanitized.mode, 'studio_master', 'Validierungstiefe bleibt erhalten');
+    const rejected = host.sanitizeRequest({ device: 'quantenchip', mode: 'hauruck' });
+    assert.equal(rejected.device, undefined, 'unbekanntes Rechengerät wird verworfen');
+    assert.equal(rejected.mode, undefined, 'unbekannte Validierungstiefe wird verworfen');
     assert.equal(sanitized.bytes, undefined, 'bytes werden nie über sanitizeRequest gereicht');
     assert.equal((sanitized as Record<string, unknown>).evil, undefined, 'unbekannte Felder erreichen den Kern nicht');
     console.log('  ✓ Profil bleibt, Müll fällt raus');

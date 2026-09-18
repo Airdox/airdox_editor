@@ -25,7 +25,7 @@ import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { StemSeparationError } from '../errors';
 import { decodeWav, encodeWavFloat32, readWavFile } from '../wavIo';
-import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator } from './types';
+import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator, InlineStem } from './types';
 import type { ModelDescriptor, ModelFamily, StemId } from '../types';
 
 export interface PipelineDoubleOptions {
@@ -78,6 +78,7 @@ export class PipelineDoubleSeparator implements IStemSeparator {
       streamsProgress: true,
       cancellable: true,
       trainedModel: false,
+      inMemory: true,
     };
   }
 
@@ -94,7 +95,17 @@ export class PipelineDoubleSeparator implements IStemSeparator {
       throw new StemSeparationError('MODEL_INCOMPATIBLE', `Pipeline-Double kann ${request.descriptor.id} nicht bedienen`);
     }
     this.invocationCount++;
-    const decoded = await readWavFile(request.workingWavPath);
+    // In-memory path: the engine hands over the slice as interleaved float32
+    // and expects the stems back the same way (no chunk WAV, no output dir).
+    const inMemory = Boolean(request.workingSamples);
+    const decoded = inMemory
+      ? {
+          sampleRate: request.sampleRate ?? request.descriptor.sampleRate,
+          channels: request.channels ?? request.descriptor.inputChannels ?? 2,
+          frames: request.frames,
+          data: request.workingSamples as Float32Array,
+        }
+      : await readWavFile(request.workingWavPath);
     if (decoded.channels !== 2) {
       throw new StemSeparationError('STEM_CONFIG_INVALID', `Double erwartet Stereo, erhielt ${decoded.channels} Kanäle`);
     }
@@ -147,8 +158,13 @@ export class PipelineDoubleSeparator implements IStemSeparator {
     }
 
     const stems: { name: string; filePath: string; outputIndex: number }[] = [];
+    const inlineStems: InlineStem[] = [];
     for (let s = 0; s < stemCount; s++) {
       const stemId: StemId = request.descriptor.stemOrder[s];
+      if (inMemory) {
+        inlineStems.push({ name: stemId, samples: outputs[s], frames, channels, outputIndex: s });
+        continue;
+      }
       const filePath = path.join(request.outputDir, `stem_${s}_${stemId}.wav`);
       await writeFile(filePath, encodeWavFloat32(decoded.sampleRate, channels, outputs[s], frames));
       stems.push({ name: stemId, filePath, outputIndex: s });
@@ -173,8 +189,9 @@ export class PipelineDoubleSeparator implements IStemSeparator {
       engine: this.family,
       backend: this.kind,
       stems,
+      inlineStems: inMemory ? inlineStems : undefined,
       device: 'cpu',
-      report: this.lastRunReport,
+      report: { ...this.lastRunReport, inMemory },
     };
   }
 }

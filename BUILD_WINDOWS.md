@@ -91,10 +91,52 @@ bereits Jobs in dieser Sitzung, bleibt deren Zustand erhalten und die UI fordert
 stattdessen zum Speichern und Neustarten auf. Der Browser-/Serverbetrieb nutzt
 denselben Installer unter `AIRDOX_STEMS_ROOT` bzw. `stem-engine-data/`.
 
+## Stem-Engine offline mitliefern (Runtime + Gewichte im Build)
+
+Wer auf dem Zielrechner **kein** Python 3.10–3.12 und **kein** Internet
+voraussetzen will, bündelt Runtime und Checkpoint vor dem Build:
+
+```powershell
+npm run stems:runtime        # Python-Runtime -> resources/stem-runtime (~1.2 GB mit Paketen)
+npm run stems:bundle         # Standard-Set -> resources/models (669 MiB):
+                             #   BS-RoFormer 503 MiB (sha256-geprüft) + ONNX-Fast-Path 166 MiB
+npm run stems:bundle:check   # nur prüfen, nichts schreiben (CI/Freigabe)
+npm run package:win          # portable EXE + NSIS-Installer
+```
+
+Damit findet die gepackte App alles unter `resources/` – noch vor
+`%APPDATA%/airdox_SMART_Editor/stems`. Die portable EXE wächst dadurch auf
+~1.7 GB (mit ONNX-Fast-Path); ohne Bundling bleibt der In-App-Installer der Weg (siehe unten).
+Details, Optionen (`--mode venv`, `--source`, `--torch-index`) und
+Fehlerbehebung: **`docs/STEM_BUNDLING.md`**.
+
+Wichtig für das Vorschau-Profil: Es zeigt auf htdemucs *und* – laut Katalog –
+auf den primären BS-RoFormer. Die Profilauflösung nimmt das erste Modell, dessen
+Dateien vorhanden sind. Eine BS-RoFormer-Installation allein macht „Vorschau"
+deshalb jetzt nutzbar, obwohl die optionalen Demucs-Gewichte fehlen.
+
+### DJ-Fast-Path (ONNX, in-process)
+
+Für den Live-Betrieb gibt es einen zweiten Weg ohne Python und ohne
+Chunk-Dateien: `src/stems/backends/onnxSeparator.ts` führt einen
+HT-Demucs-ONNX-Graphen direkt im App-Prozess aus (GPU über DirectML/CUDA,
+sonst CPU) und übergibt die Segmente als `Float32Array` – es entstehen keine
+`chunk_NNNN.wav` mehr. Die App validiert in diesem Pfad standardmäßig schlank
+(`fast_dj`); `AIRODOX_STEM_MODE=studio_master` schaltet die volle Analyse ein.
+
+```powershell
+npm install                    # zieht onnxruntime-node mit (optional, win32-x64 inkl. DirectML)
+npm run stems:onnx:doctor      # Provider, Modell, Segmentlänge, Hash
+npm run stems:onnx:doctor -- --bench --seconds 30
+```
+
+Ohne Modell läuft weiterhin der Studio-Pfad; Details, Modellquellen und die
+Hash-Pflege stehen in **`docs/STEM_ONNX_FASTPATH.md`**.
+
 ### Prüfung der Reparatur
 
 `npm run lint`, `npm run build` und `npm test` sind erfolgreich
-(44 Tests bestanden, 3 hardware-/modellabhängige Live-Tests übersprungen).
+(46 Tests bestanden, 3 hardware-/modellabhängige Live-Tests übersprungen).
 Die neuen Regressionstests prüfen den ASAR-/Windows-Pfad, Wiederholung nach
 Fehlern, Download-/Hash-Fehler und die Neuauflösung der Engine ohne echte Downloads.
 Der vollständige Installer mit echten Gewichten und die gepackte Windows-EXE

@@ -28,11 +28,12 @@ import { OverlapAddReconstructor } from './reconstructor';
 import { validateSeparation } from './qualityValidator';
 import { prepareWorkingCopy, verifyOriginalIntegrity, type WorkingCopy } from './preprocessor';
 import { encodeWavFloat32, readWavFile, sha256File, analyzeAudio, type ExternalDecoder } from './wavIo';
-import type { BackendKind, ComputeDevice, ModelDescriptor, ModelPrecision, OriginalIntegrity, ProgressCallback, QualityProfile, SeparationJobSummary, SeparationSettings, StemDescriptor, StemId } from './types';
+import type { BackendKind, ComputeDevice, ModelDescriptor, ModelPrecision, OriginalIntegrity, ProcessingMode, ProgressCallback, QualityProfile, SeparationJobSummary, SeparationSettings, StemDescriptor, StemId } from './types';
 import type { IStemSeparator, BackendSeparationResponse } from './backends/types';
 import { BSRoFormerSeparator, MelBandRoFormerSeparator } from './backends/roformerSeparator';
 import { HTDemucsSeparator } from './backends/htDemucsSeparator';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
+import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
 
 export const DEFAULT_CHUNK_OVERLAP: Record<QualityProfile, number> = {
   PREVIEW: 0.25,
@@ -66,6 +67,16 @@ export interface BackendFactoryOptions {
   modelStoreDir?: string;
   env?: Record<string, string>;
   pipelineDouble?: PipelineDoubleSeparator;
+  /** Requested compute device for the ONNX backend (auto = per platform). */
+  device?: ComputeDevice;
+  /** Outer segment overlap for ONNX models (fraction, default 0.25). */
+  segmentOverlapFraction?: number;
+  /** Inject a loaded onnxruntime-node build (tests, embedded builds). */
+  onnxRuntime?: OnnxRuntimeLike;
+  /** Loader override for onnxruntime-node (tests without the binary). */
+  loadOnnxRuntime?: () => Promise<OnnxRuntimeLike>;
+  /** Verify the ONNX file hash on availability (slow, off by default). */
+  verifyOnnxHash?: boolean;
 }
 
 export interface BackendFactory {
@@ -107,7 +118,25 @@ export function createDefaultBackendFactory(options: BackendFactoryOptions = {})
         out.push(new MelBandRoFormerSeparator(python));
       }
       if (descriptor.family === 'htdemucs') {
-        out.push(new HTDemucsSeparator({ pythonCommand: python.pythonCommand, modelStoreDir: options.modelStoreDir, env: options.env }));
+        // ONNX first: it is the DJ path (no Python, no subprocess, no chunk
+        // files). The Python/Demucs backend stays as a fallback for the
+        // descriptors that only ship `.th` weights.
+        if (descriptor.checkpoint?.format === 'onnx') {
+          out.push(
+            new OnnxSeparator({
+              modelStoreDir: options.modelStoreDir ?? '.',
+              env: options.env,
+              family: descriptor.family,
+              device: options.device,
+              segmentOverlapFraction: options.segmentOverlapFraction,
+              runtime: options.onnxRuntime,
+              loadRuntime: options.loadOnnxRuntime,
+              verifyHash: options.verifyOnnxHash,
+            })
+          );
+        } else {
+          out.push(new HTDemucsSeparator({ pythonCommand: python.pythonCommand, modelStoreDir: options.modelStoreDir, env: options.env }));
+        }
       }
       return out;
     },
@@ -136,6 +165,19 @@ export interface SeparationEngineOptions {
   recombinationLimitDb?: number;
   /** Override of the border specific error tolerance in dB (validator). */
   boundaryErrorExcessDb?: number;
+  /**
+   * Validation depth. `studio_master` (default here) is the strict contract the
+   * quality gates rely on; the app hosts pass `fast_dj` for the live path.
+   * Note: the mode only changes *validation*, never the audio – so it is
+   * deliberately not part of the cache key.
+   */
+  mode?: ProcessingMode;
+  /** Requested compute device for in-process backends (ONNX). */
+  device?: ComputeDevice;
+  /** Inject a loaded onnxruntime-node build (tests / embedded builds). */
+  onnxRuntime?: OnnxRuntimeLike;
+  /** Loader override for onnxruntime-node (tests without the binary). */
+  loadOnnxRuntime?: () => Promise<OnnxRuntimeLike>;
   clock?: () => number;
 }
 
@@ -154,6 +196,8 @@ export interface SeparationRequest {
   clipMode?: 'none' | 'rescale';
   dcRemoval?: boolean;
   extras?: Record<string, string | number | boolean>;
+  /** Validation depth for this run; overrides the engine default. */
+  mode?: ProcessingMode;
   onProgress?: ProgressCallback;
   token?: SeparationCancellationToken;
   /** Base name of the result directory, defaults to the input base name. */
@@ -216,6 +260,24 @@ export class StemSeparationEngine {
     this.backendFactory = options.backendFactory ?? createDefaultBackendFactory({ modelStoreDir: options.modelStoreDir });
   }
 
+  /**
+   * Is this descriptor usable right now?
+   *
+   * Catalog order alone is not enough: PREVIEW is declared for both `htdemucs`
+   * and the primary `bs_roformer`, and the Demucs weights are optional (nothing
+   * ships or installs them). So presence on disk decides – a BS-RoFormer
+   * installation alone makes "Vorschau" usable instead of leaving the profile
+   * permanently dead with "keine Gewichte".
+   *
+   * The in-process test double is deliberately excluded: a synthetic file left
+   * behind by a test run must never become the editor's default. An explicit
+   * `modelId` in the request still selects it.
+   */
+  isSelectable(descriptor: ModelDescriptor): boolean {
+    if (descriptor.family === 'pipeline_double') return false;
+    return this.modelManager.isInstalled(descriptor);
+  }
+
   /** Resolves the model that serves a profile (or the explicitly requested one). */
   resolveModel(profile: QualityProfile, modelId?: string, family?: ModelDescriptor['family']): ModelDescriptor {
     if (modelId) {
@@ -225,7 +287,7 @@ export class StemSeparationEngine {
       }
       return descriptor;
     }
-    return this.registry.selectForProfile(profile, family);
+    return this.registry.selectForProfile(profile, family, { isAvailable: (descriptor) => this.isSelectable(descriptor) });
   }
 
   /** Builds the settings object; everything reproducible lives here. */
@@ -267,7 +329,7 @@ export class StemSeparationEngine {
     const profiles = {} as Record<QualityProfile, string>;
     for (const profile of ['PREVIEW', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'] as QualityProfile[]) {
       try {
-        profiles[profile] = this.registry.selectForProfile(profile).id;
+        profiles[profile] = this.resolveModel(profile).id;
       } catch (error) {
         profiles[profile] = `unavailable: ${describeError(error).message}`;
       }
@@ -343,7 +405,7 @@ export class StemSeparationEngine {
         job.report(60, 'Separation aus Cache wiederverwendet', { totalSeconds: working.seconds });
         const materialised = await this.cache.materialise(job.cacheKey, job.outputDir);
         job.stems = materialised;
-        const validation = await this.runValidation(job, materialised, working, descriptor, backend, []);
+        const validation = await this.runValidation(job, materialised, working, descriptor, backend, [], this.modeFor(request));
         job.validation = validation;
         job.setStatus('COMPLETED', 'Aus Cache geladen und validiert');
         await job.persist({ validation, cacheHit: true });
@@ -372,7 +434,12 @@ export class StemSeparationEngine {
       job.setStatus('RUNNING', 'Chunk-basierte Inferenz läuft');
       const inferenceStart = Date.now();
       const workingAudio = await readWavFile(working.workingPath);
-      await mkdir(job.chunkDir, { recursive: true });
+      // In-memory backends (ONNX, double) never see a chunk file. That removes
+      // the per-chunk WAV write, the per-chunk output directory and the read
+      // back of every stem – the reason the Python path produced hundreds of
+      // files for one track.
+      const inMemory = backend.capabilities().inMemory === true;
+      if (!inMemory) await mkdir(job.chunkDir, { recursive: true });
       await mkdir(job.partialDir, { recursive: true });
 
       const reconstructors = new Map<StemId, OverlapAddReconstructor>();
@@ -387,15 +454,20 @@ export class StemSeparationEngine {
         job.token.throwIfCancelled();
         await job.token.waitForResume();
         const slice = this.sliceAudio(workingAudio, plan, working.channels);
-        const slicePath = path.join(job.chunkDir, `chunk_${String(plan.index).padStart(4, '0')}.wav`);
-        await writeFile(slicePath, encodeWavFloat32(working.sampleRate, working.channels, slice, plan.endSample - plan.startSample));
+        const slicePath = inMemory ? '' : path.join(job.chunkDir, `chunk_${String(plan.index).padStart(4, '0')}.wav`);
+        if (!inMemory) {
+          await writeFile(slicePath, encodeWavFloat32(working.sampleRate, working.channels, slice, plan.endSample - plan.startSample));
+        }
 
-        const chunkDir = path.join(job.chunkDir, `out_${String(plan.index).padStart(4, '0')}`);
-        await mkdir(chunkDir, { recursive: true });
+        const chunkDir = inMemory ? job.chunkDir : path.join(job.chunkDir, `out_${String(plan.index).padStart(4, '0')}`);
+        if (!inMemory) await mkdir(chunkDir, { recursive: true });
         const response: BackendSeparationResponse = await backend.separate({
           descriptor,
           workingWavPath: slicePath,
           outputDir: chunkDir,
+          workingSamples: inMemory ? slice : undefined,
+          sampleRate: working.sampleRate,
+          channels: working.channels,
           stems: job.settings.stems,
           startSample: plan.startSample,
           frames: plan.endSample - plan.startSample,
@@ -420,27 +492,41 @@ export class StemSeparationEngine {
           },
         });
 
-        const mapped = stemRegistry.mapOutputs(
-          response.stems.map((stem) => ({ name: stem.name, filePath: stem.filePath, outputIndex: stem.outputIndex })),
-          job.settings.stems
-        );
-        for (const [stemId, file] of mapped) {
-          const stemAudio = await readWavFile(file.filePath);
-          if (stemAudio.channels !== working.channels) {
-            throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${stemAudio.channels} Kanäle für ${stemId}, erwartet ${working.channels}`);
+        const planFrames = plan.endSample - plan.startSample;
+        if (response.inlineStems?.length) {
+          const mappedInline = stemRegistry.mapStemEntries(response.inlineStems, job.settings.stems);
+          for (const [stemId, inline] of mappedInline) {
+            if (inline.channels !== working.channels) {
+              throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${inline.channels} Kanäle für ${stemId}, erwartet ${working.channels}`);
+            }
+            if (Math.abs(inline.frames - planFrames) > 1) {
+              throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${inline.frames} Frames für ${stemId}, erwartet ${planFrames}`);
+            }
+            reconstructors.get(stemId)!.add(plan, inline.samples);
           }
-          if (Math.abs(stemAudio.frames - (plan.endSample - plan.startSample)) > 1) {
-            throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${stemAudio.frames} Frames für ${stemId}, erwartet ${plan.endSample - plan.startSample}`);
+        } else {
+          const mapped = stemRegistry.mapOutputs(
+            response.stems.map((stem) => ({ name: stem.name, filePath: stem.filePath, outputIndex: stem.outputIndex })),
+            job.settings.stems
+          );
+          for (const [stemId, file] of mapped) {
+            const stemAudio = await readWavFile(file.filePath);
+            if (stemAudio.channels !== working.channels) {
+              throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${stemAudio.channels} Kanäle für ${stemId}, erwartet ${working.channels}`);
+            }
+            if (Math.abs(stemAudio.frames - planFrames) > 1) {
+              throw new StemSeparationError('STEM_CONFIG_INVALID', `Backend lieferte ${stemAudio.frames} Frames für ${stemId}, erwartet ${planFrames}`);
+            }
+            reconstructors.get(stemId)!.add(plan, stemAudio.data);
+            await rm(file.filePath, { force: true });
           }
-          reconstructors.get(stemId)!.add(plan, stemAudio.data);
-          await rm(file.filePath, { force: true });
+          await rm(chunkDir, { recursive: true, force: true });
+          if (!this.options.keepTemporaries) await rm(slicePath, { force: true });
         }
         deviceUsed = response.device;
         cpuFallback = cpuFallback || Boolean(response.cpuFallback);
         backendReports.push(response.report ?? {});
-        job.log('chunk-done', `chunk ${plan.index} über ${response.backend}/${response.device}`);
-        await rm(chunkDir, { recursive: true, force: true });
-        if (!this.options.keepTemporaries) await rm(slicePath, { force: true });
+        job.log('chunk-done', `chunk ${plan.index} über ${response.backend}/${response.device}${inMemory ? ' (in-memory)' : ''}`);
       }
       job.timings.inferenceMs = Date.now() - inferenceStart;
 
@@ -463,6 +549,7 @@ export class StemSeparationEngine {
       // ---- 7. validation before promotion (§17) ----------------------------
       const boundaryOffsets = plans.filter((plan) => plan.index > 0).map((plan) => plan.startSample);
       const { report: validation, stems: descriptors } = await validateSeparation(stemFiles, {
+        mode: this.modeFor(request),
         expectedSampleRate: working.sampleRate,
         expectedChannels: working.channels,
         expectedFrames: working.frames,
@@ -525,16 +612,23 @@ export class StemSeparationEngine {
     }
   }
 
+  /** Effective validation depth of a request (request wins over engine default). */
+  private modeFor(request?: { mode?: ProcessingMode }): ProcessingMode {
+    return request?.mode ?? this.options.mode ?? 'studio_master';
+  }
+
   private async runValidation(
     job: SeparationJob,
     stems: StemDescriptor[],
     working: WorkingCopy,
     descriptor: ModelDescriptor,
     backend: IStemSeparator,
-    boundaryOffsets: number[]
+    boundaryOffsets: number[],
+    mode: ProcessingMode
   ) {
     const stemFiles = new Map<StemId, string>(stems.map((stem) => [stem.id, stem.filePath]));
     const { report } = await validateSeparation(stemFiles, {
+      mode,
       expectedSampleRate: working.sampleRate,
       expectedChannels: working.channels,
       expectedFrames: working.frames,
