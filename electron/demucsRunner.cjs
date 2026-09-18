@@ -62,18 +62,39 @@ async function exists(file) {
 }
 
 function defaultPythonCandidates(repoRoot) {
-  return process.platform === 'win32'
-    ? [
-        path.join(repoRoot, '.venv', 'Scripts', 'python.exe'),
-        'python',
-        'python3',
-      ]
-    : [
-        path.join(repoRoot, '.venv', 'bin', 'python3'),
-        path.join(repoRoot, '.venv', 'bin', 'python'),
-        'python3',
-        'python',
-      ];
+  // NEW: deterministic production paths first – never app.asar/.venv as primary (§9, §10)
+  const candidates = [];
+  try {
+    const { getPythonCandidates } = require('./stemRuntime.cjs');
+    const resourcesPath = process.resourcesPath || null;
+    const resolved = getPythonCandidates(repoRoot, resourcesPath);
+    candidates.push(...resolved);
+  } catch {
+    // Fallback if stemRuntime not available
+    if (process.resourcesPath) {
+      const res = process.resourcesPath;
+      if (process.platform === 'win32') {
+        candidates.push(path.join(res, 'stem-runtime', 'python.exe'));
+        candidates.push(path.join(res, 'stem-runtime', 'Scripts', 'python.exe'));
+      } else {
+        candidates.push(path.join(res, 'stem-runtime', 'bin', 'python3'));
+      }
+    }
+  }
+  // Dev .venv – only for development, never inside app.asar
+  const repoIsAsar = (repoRoot && String(repoRoot).includes('app.asar')) || false;
+  if (!repoIsAsar) {
+    if (process.platform === 'win32') {
+      candidates.push(path.join(repoRoot, '.venv', 'Scripts', 'python.exe'));
+    } else {
+      candidates.push(path.join(repoRoot, '.venv', 'bin', 'python3'));
+      candidates.push(path.join(repoRoot, '.venv', 'bin', 'python'));
+    }
+  }
+  // System python only as diagnostic fallback – must be version-checked (3.9-3.13)
+  candidates.push('python', 'python3');
+  // Defense: never return app.asar/.venv
+  return [...new Set(candidates.filter((p) => !String(p).includes('app.asar')))];
 }
 
 function captureProcess(command, args, timeoutMs = 15000) {

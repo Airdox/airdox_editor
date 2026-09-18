@@ -97,16 +97,21 @@ function getPythonCandidates(repoRoot, resourcesPath) {
     candidates.push(path.join(appDataRoot, 'stem-runtime', 'bin', 'python3'));
   }
 
-  if (process.platform === 'win32') {
-    candidates.push(path.join(repoRoot, '.venv', 'Scripts', 'python.exe'));
-  } else {
-    candidates.push(path.join(repoRoot, '.venv', 'bin', 'python3'));
-    candidates.push(path.join(repoRoot, '.venv', 'bin', 'python'));
+  // Dev .venv – but never inside app.asar (non-executable, causes ENOENT)
+  const repoIsAsar = (repoRoot && repoRoot.includes('app.asar')) || false;
+  if (!repoIsAsar) {
+    if (process.platform === 'win32') {
+      candidates.push(path.join(repoRoot, '.venv', 'Scripts', 'python.exe'));
+    } else {
+      candidates.push(path.join(repoRoot, '.venv', 'bin', 'python3'));
+      candidates.push(path.join(repoRoot, '.venv', 'bin', 'python'));
+    }
   }
 
-  // System python only as diagnostic fallback – will be checked for version
+  // System python only as diagnostic fallback – will be checked for version 3.9-3.13, 3.14 rejected
   candidates.push(process.platform === 'win32' ? 'python' : 'python3');
-  return [...new Set(candidates)];
+  // Filter out any app.asar paths explicitly (defense)
+  return [...new Set(candidates.filter((p) => !p.includes('app.asar')))];
 }
 
 function getModelCandidates(repoRoot, resourcesPath) {
