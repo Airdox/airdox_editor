@@ -77,6 +77,10 @@ jobs:
             npm install --no-audit --no-fund
           fi
 
+      - name: Electron-Native-Binding für die Electron-ABI bauen
+        shell: bash
+        run: npm run rebuild:electron
+
       # Informativ (siehe Kopfkommentar): läuft immer, blockiert nicht.
       - name: TypeScript-Prüfung (informativ)
         continue-on-error: true

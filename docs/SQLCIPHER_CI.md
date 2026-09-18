@@ -73,3 +73,8 @@ Datenbank- und Gate-Kette, nicht die Windows-Laufwerkssuche.
 
 Die CI-Reports liegen nur im Actions-Artifact `sqlcipher-native-gate-*` und
 werden nicht als `ci-artifacts/` eingecheckt.
+
+Für die lokale Electron-App verwenden die Start- und Packaging-Scripts dagegen
+automatisch `npm run rebuild:electron`. Der separate CI-/Node-Test darf nicht
+mit einem bereits für Electron kompilierten Binding ausgeführt werden, ohne
+zuvor wieder für Node 20 zu bauen.
