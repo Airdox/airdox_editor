@@ -98,11 +98,17 @@ declare global {
       openLogFolder(): Promise<{ opened: boolean; target: string; logDirectory: string }>;
       getStemDiagnostics(): Promise<Record<string, unknown>>;
       getStemPreflight(): Promise<Record<string, unknown>>;
-      installStemEngine(): Promise<{
+      /**
+       * Installs the AI model selected in the settings menu
+       * (`options.modelId`). Without `modelId` the primary BS-RoFormer
+       * model is installed (legacy one-click behavior).
+       */
+      installStemEngine(options?: { modelId?: string }): Promise<{
         ok: boolean;
         error?: string;
         python?: string;
         model?: string;
+        modelDir?: string;
         weightsReady?: boolean;
         restartRequired?: boolean;
       }>;

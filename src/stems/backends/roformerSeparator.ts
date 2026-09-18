@@ -117,10 +117,10 @@ export class RoFormerSeparator implements IStemSeparator {
   async isAvailable(): Promise<BackendAvailability> {
     if (this.kind === 'native-cli') {
       const command = this.config.nativeCommand ?? 'audiocpp_cli';
-      const probe = await probeExecutable(command, ['--help']);
+      const probe = await probeExecutable(command, ['--help'], 8000, this.config.env);
       return {
         available: probe.found,
-        reason: probe.found ? undefined : `Natives Separations-Binary nicht gefunden: ${command}`,
+        reason: probe.found ? undefined : `Natives Separations-Binary nicht gefunden: ${command}${probe.detail ? `: ${probe.detail}` : ''}`,
         probes: [{ name: command, found: probe.found, detail: probe.detail }],
       };
     }
@@ -128,15 +128,18 @@ export class RoFormerSeparator implements IStemSeparator {
     const requiresTorch = this.config.requireTorch !== false;
     const probe = await probeExecutable(
       python,
-      requiresTorch ? ['-c', 'import torch; print(torch.__version__)'] : ['-c', 'print(1)']
+      requiresTorch ? ['-c', 'import torch; print(torch.__version__)'] : ['-c', 'print(1)'],
+      requiresTorch ? 60000 : 8000,
+      this.config.env
     );
     const adapter = this.config.adapterScript;
+    const detail = probe.detail ? `: ${probe.detail}` : '';
     return {
       available: probe.found && Boolean(adapter),
       reason: !probe.found
         ? requiresTorch
-          ? `Python/PyTorch-Laufzeit nicht verfügbar (${python})`
-          : `Python-Laufzeit nicht verfügbar (${python})`
+          ? `Python/PyTorch-Laufzeit nicht verfügbar (${python})${detail}`
+          : `Python-Laufzeit nicht verfügbar (${python})${detail}`
         : !adapter
           ? 'Adapter-Skript python/bsroformer_inference.py ist nicht konfiguriert'
           : undefined,

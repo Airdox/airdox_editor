@@ -85,6 +85,11 @@ interface WorkspaceSettingsModalProps {
   /** `auto` oder eine Modell-ID – gilt für neue Separationen. */
   stemArchitectureId: string;
   onSetStemArchitectureId: (id: string) => void;
+  /**
+   * Öffnet den Installations-Dialog für das aktuell gewählte, aber noch nicht
+   * installierte Modell. Dann installiert der Button genau dieses Modell.
+   */
+  onInstallModel?: () => void;
   stemValidationMode: StemValidationMode;
   onSetStemValidationMode: (mode: StemValidationMode) => void;
   stemDevice: StemComputeDevice;
@@ -133,6 +138,7 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   stemArchitectures,
   stemArchitectureId,
   onSetStemArchitectureId,
+  onInstallModel,
   stemValidationMode,
   onSetStemValidationMode,
   stemDevice,
@@ -410,16 +416,31 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
               </div>
 
               {architectureMissing && (
-                <div className="text-[10px] text-[#f0b429] bg-[#1d1808] border border-[#3a2f14] rounded-xs px-2.5 py-1.5 flex items-center justify-between">
-                  <span>Diese Architektur ist noch nicht installiert.</span>
-                  {onOpenInitialSetup && (
-                    <button
-                      onClick={onOpenInitialSetup}
-                      className="px-2 py-0.5 rounded bg-[#f0b429] hover:bg-[#fbbf24] text-black font-bold text-[9.5px]"
-                    >
-                      Jetzt installieren
-                    </button>
-                  )}
+                <div className="text-[10px] text-[#f0b429] bg-[#1d1808] border border-[#3a2f14] rounded-xs px-2.5 py-1.5 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      Diese Architektur ist noch nicht installiert. Neue Separationen starten erst nach der Installation.
+                    </span>
+                    {onInstallModel && activeArchitecture ? (
+                      <button
+                        type="button"
+                        onClick={onInstallModel}
+                        title={`Modell "${activeArchitecture.id}" installieren`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] hover:from-[#34d399] hover:to-[#6ee7b7] text-black text-[10px] font-bold shadow-sm shrink-0 cursor-pointer"
+                      >
+                        <Download size={11} />
+                        <span>{activeArchitecture.label} installieren</span>
+                      </button>
+                    ) : onOpenInitialSetup ? (
+                      <button
+                        type="button"
+                        onClick={onOpenInitialSetup}
+                        className="px-2 py-0.5 rounded bg-[#f0b429] hover:bg-[#fbbf24] text-black font-bold text-[9.5px] shrink-0 cursor-pointer"
+                      >
+                        Jetzt installieren
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               )}
 

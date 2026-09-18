@@ -10,7 +10,7 @@
  * - GPU availability
  *
  * Does NOT rely on global python/python3 in production.
- * Handles Python 3.14 as unsupported (needs 3.9-3.13).
+ * Handles Python outside 3.10-3.12 as unsupported for the pinned PyTorch runtime.
  *
  * Production paths (Windows):
  *   resources/stem-runtime/python.exe
@@ -32,7 +32,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 
-const SUPPORTED_PYTHON_RANGE = { minMinor: 9, maxMinor: 13 };
+const SUPPORTED_PYTHON_RANGE = { minMinor: 10, maxMinor: 12 };
 const PRIMARY_MODEL_ID = 'bsroformer-musdb18hq-4stem-zfturbo';
 const PRIMARY_CHECKPOINT = 'model_bs_roformer_ep_17_sdr_9.6568.ckpt';
 const PRIMARY_CONFIG = 'config_bs_roformer_384_8_2_485100.yaml';
@@ -110,7 +110,7 @@ function getPythonCandidates(repoRoot, resourcesPath) {
     }
   }
 
-  // System python only as diagnostic fallback – will be checked for version 3.9-3.13, 3.14 rejected
+  // System python only as diagnostic fallback – will be checked for version 3.10-3.12
   candidates.push(process.platform === 'win32' ? 'python' : 'python3');
   // Filter out any app.asar paths explicitly (defense)
   return [...new Set(candidates.filter((p) => !p.includes('app.asar')))];

@@ -256,11 +256,16 @@ export async function runBackendProcess(options: RunProcessOptions): Promise<Pro
 }
 
 /** Probes an executable with `--version` style arguments without failing. */
-export async function probeExecutable(command: string, args: string[] = ['--version'], timeoutMs = 8000): Promise<{ found: boolean; detail?: string }> {
+export async function probeExecutable(
+  command: string,
+  args: string[] = ['--version'],
+  timeoutMs = 8000,
+  env?: Record<string, string>
+): Promise<{ found: boolean; detail?: string }> {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(command, args, { windowsHide: true });
+      child = spawn(command, args, { windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
     } catch (error) {
       resolve({ found: false, detail: error instanceof Error ? error.message : String(error) });
       return;

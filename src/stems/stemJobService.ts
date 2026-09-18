@@ -26,6 +26,7 @@ import { isStemError, StemSeparationError } from './errors';
 import { KNOWN_FAMILIES, ModelRegistry } from './modelRegistry';
 import { SeparationCancellationToken } from './chunkProcessor';
 import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
+import type { BackendAvailability, IStemSeparator } from './backends/types';
 import {
   createDefaultBackendFactory,
   StemSeparationEngine,
@@ -163,6 +164,8 @@ export class StemJobService {
   readonly registry: ModelRegistry;
   readonly roots: StemServiceStatus['roots'];
   private readonly options: StemJobServiceOptions;
+  private readonly backendFactory: BackendFactory;
+  private readonly backendAvailabilityCache = new Map<string, { at: number; report: BackendAvailability }>();
   private readonly jobs = new Map<string, JobRecord>();
   private readonly tokens = new Map<string, SeparationCancellationToken>();
   private readonly listeners = new Set<(event: StemServiceEvent) => void>();
@@ -178,6 +181,16 @@ export class StemJobService {
       staging: path.join(root, 'Staging'),
     };
     this.registry = options.registry ?? ModelRegistry.fromBundledCatalog();
+    this.backendFactory =
+      options.backendFactory ??
+      createDefaultBackendFactory({
+        ...(options.backend ?? {}),
+        modelStoreDir: this.roots.models,
+        env: options.env as Record<string, string> | undefined,
+        device: options.device,
+        onnxRuntime: options.onnxRuntime,
+        loadOnnxRuntime: options.loadOnnxRuntime,
+      });
     this.engine = new StemSeparationEngine({
       registry: this.registry,
       workingRoot: this.roots.working,
@@ -192,9 +205,7 @@ export class StemJobService {
       keepTemporaries: options.keepTemporaries,
       externalDecoder: options.externalDecoder,
       env: options.env as NodeJS.ProcessEnv | undefined,
-      backendFactory:
-        options.backendFactory ??
-        createDefaultBackendFactory({ ...(options.backend ?? {}), modelStoreDir: this.roots.models }),
+      backendFactory: this.backendFactory,
     });
   }
 
@@ -218,6 +229,37 @@ export class StemJobService {
     }
   }
 
+  private candidatesForDescriptor(descriptor: ModelDescriptor): IStemSeparator[] {
+    return this.backendFactory.candidates(descriptor).filter((candidate) => {
+      const supports = (candidate as unknown as { supportsDescriptor?: (d: ModelDescriptor) => boolean }).supportsDescriptor;
+      return typeof supports === 'function' ? supports.call(candidate, descriptor) : true;
+    });
+  }
+
+  private async cachedBackendAvailability(candidate: IStemSeparator): Promise<BackendAvailability> {
+    const key = [candidate.kind, candidate.name, this.roots.models, this.options.device ?? 'auto'].join('|');
+    const now = Date.now();
+    const cached = this.backendAvailabilityCache.get(key);
+    if (cached && now - cached.at < 30_000) return cached.report;
+    const report = await candidate.isAvailable();
+    this.backendAvailabilityCache.set(key, { at: now, report });
+    return report;
+  }
+
+  private async runtimeAvailabilityForDescriptor(descriptor: ModelDescriptor): Promise<BackendAvailability> {
+    const candidates = this.candidatesForDescriptor(descriptor);
+    if (!candidates.length) {
+      return { available: false, reason: `Kein Backend-Kandidat für ${descriptor.id} konfiguriert.` };
+    }
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      const report = await this.cachedBackendAvailability(candidate);
+      if (report.available) return { ...report, detail: { ...(report.detail ?? {}), backendName: candidate.name } };
+      failures.push(`${candidate.name}: ${report.reason ?? 'nicht verfügbar'}`);
+    }
+    return { available: false, reason: failures.join(' | ') || 'Kein Backend verfügbar.' };
+  }
+
   /**
    * Profile/model/stem matrix plus runtime availability – everything the
    * editor shows. Stems always come from the descriptor, so a two-stem model
@@ -226,6 +268,12 @@ export class StemJobService {
   async status(): Promise<StemServiceStatus> {
     const engineStatus = await this.engine.status();
     const availability = new Map(engineStatus.models.map((model) => [model.modelId, model]));
+    const runtimeAvailability = new Map<string, BackendAvailability>();
+    for (const descriptor of this.registry.list()) {
+      const model = availability.get(descriptor.id);
+      if (!model?.available) continue;
+      runtimeAvailability.set(descriptor.id, await this.runtimeAvailabilityForDescriptor(descriptor));
+    }
     const profiles: StemServiceStatus['profiles'] = [];
 
     for (const profile of QUALITY_PROFILES) {
@@ -255,14 +303,20 @@ export class StemJobService {
         continue;
       }
       const model = availability.get(descriptor.id);
+      const runtime = runtimeAvailability.get(descriptor.id);
       const parameters = this.registry.parametersFor(descriptor, profile);
+      const runnable = Boolean(model?.available && runtime?.available);
       profiles.push({
         profile,
         modelId: descriptor.id,
         family: descriptor.family,
         stems: [...descriptor.stemOrder].map((id) => ({ id, displayName: descriptor!.stemDisplayNames[id] ?? id })),
-        available: Boolean(model?.available),
-        reason: model?.available ? undefined : model?.reason ?? engineStatus.profiles[profile] ?? 'Modell nicht installiert',
+        available: runnable,
+        reason: runnable
+          ? undefined
+          : model?.available
+            ? runtime?.reason ?? 'Kein Backend für dieses Modell verfügbar'
+            : model?.reason ?? engineStatus.profiles[profile] ?? 'Modell nicht installiert',
         description: PROFILE_DESCRIPTION[profile],
         parameters,
       });
@@ -279,12 +333,18 @@ export class StemJobService {
         const serves = [...new Set(models.flatMap((model) => model.qualityProfile.serves))].sort(
           (a, b) => QUALITY_PROFILES.indexOf(a) - QUALITY_PROFILES.indexOf(b)
         );
-        const available = models.some((model) => availability.get(model.id)?.available);
+        const available = models.some((model) => availability.get(model.id)?.available && runtimeAvailability.get(model.id)?.available);
         const reason = available
           ? undefined
           : models.length === 0
             ? `Kein Modell im Katalog für Familie ${family}.`
-            : models.map((model) => availability.get(model.id)?.reason).find(Boolean) ?? 'Modell nicht installiert';
+            : models
+                .map((model) => {
+                  const files = availability.get(model.id);
+                  if (!files?.available) return files?.reason;
+                  return runtimeAvailability.get(model.id)?.reason;
+                })
+                .find(Boolean) ?? 'Modell nicht installiert';
         return {
           family,
           label: FAMILY_LABEL[family],
@@ -307,6 +367,8 @@ export class StemJobService {
       defaultProfile: usable ? 'HIGH_QUALITY' : 'PREVIEW',
       models: engineStatus.models.map((model) => {
         const descriptor = this.registry.list().find((entry) => entry.id === model.modelId);
+        const runtime = runtimeAvailability.get(model.modelId);
+        const runnable = Boolean(model.available && runtime?.available);
         return {
           id: model.modelId,
           family: model.family,
@@ -314,14 +376,14 @@ export class StemJobService {
           // Format entscheidet in der UI zwischen Subprozess (.th/.ckpt) und
           // in-process ONNX-Graph.
           format: descriptor?.checkpoint?.format,
-          installed: Boolean(model.available),
+          installed: runnable,
           hashVerified: Boolean(model.hashVerified),
-          reason: model.reason,
+          reason: runnable ? undefined : model.reason ?? runtime?.reason,
           stems: descriptor ? [...descriptor.stemOrder] : [],
           serves: descriptor ? [...descriptor.qualityProfile.serves] : [],
         };
       }),
-      backends: await this.probeBackends(),
+      backends: await this.probeBackends(this.registry.list().filter((descriptor) => availability.get(descriptor.id)?.available)),
       onnx: await this.probeOnnx(),
       cacheEntries: engineStatus.cacheEntries.map((entry) => ({ key: entry.key, stems: entry.stems })),
       roots: this.roots,
@@ -334,26 +396,39 @@ export class StemJobService {
    * Which runtimes are reachable. The engine probes per job anyway; this list
    * only exists so the UI can name the reason instead of showing a dead button.
    */
-  private async probeBackends(): Promise<StemServiceStatus['backends']> {
+  private async probeBackends(descriptors: ModelDescriptor[] = this.registry.list()): Promise<StemServiceStatus['backends']> {
     const notes: StemServiceStatus['backends'] = [];
-    const env = { ...(process.env as Record<string, string | undefined>), ...(this.options.env ?? {}) };
-    const configured = this.options.backend ?? {};
-    const native = configured.nativeCommand ?? env.AIRODOX_AUDIOCPP_CLI;
-    notes.push({
-      kind: 'native-cli',
-      name: native ?? 'audiocpp_cli',
-      available: Boolean(native),
-      reason: native ? undefined : 'Natives Separations-Binary fehlt (AIRODOX_AUDIOCPP_CLI)',
-    });
-    const python = configured.pythonCommand ?? env.AIRODOX_STEM_PYTHON;
-    notes.push({
-      kind: 'python-torch',
-      name: python ?? 'python3',
-      available: Boolean(python),
-      reason: python ? undefined : 'Kein Python mit PyTorch konfiguriert (npm run stems:setup)',
-    });
-    if (this.options.allowPipelineDouble) {
-      notes.push({ kind: 'in-process', name: 'pipeline-double (nur Tests)', available: true });
+    const seen = new Map<string, IStemSeparator>();
+    for (const descriptor of descriptors) {
+      for (const candidate of this.candidatesForDescriptor(descriptor)) {
+        const key = `${candidate.kind}:${candidate.name}`;
+        if (!seen.has(key)) seen.set(key, candidate);
+      }
+    }
+    for (const candidate of seen.values()) {
+      const availability = await this.cachedBackendAvailability(candidate);
+      notes.push({
+        kind: candidate.kind,
+        name: candidate.name,
+        available: availability.available,
+        reason: availability.reason,
+      });
+    }
+    if (!notes.some((entry) => entry.kind === 'native-cli')) {
+      notes.push({
+        kind: 'native-cli',
+        name: this.options.backend?.nativeCommand ?? 'audiocpp_cli',
+        available: false,
+        reason: 'Natives Separations-Binary fehlt (AIRODOX_AUDIOCPP_CLI)',
+      });
+    }
+    if (!notes.some((entry) => entry.kind === 'python-torch')) {
+      notes.push({
+        kind: 'python-torch',
+        name: this.options.backend?.pythonCommand ?? 'python3',
+        available: false,
+        reason: 'Kein Python/PyTorch-Backend im Katalog konfiguriert.',
+      });
     }
     return notes;
   }

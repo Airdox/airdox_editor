@@ -23,14 +23,35 @@ export interface CheckpointIntegrityResult {
   reason?: string;
 }
 
+const sha256Cache = new Map<string, { size: number; mtimeMs: number; sha256: string }>();
+const sha256Inflight = new Map<string, Promise<string>>();
+
 export async function computeSha256(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
+  const info = await stat(filePath);
+  const size = Number(info.size);
+  const mtimeMs = Number(info.mtimeMs);
+  const cached = sha256Cache.get(filePath);
+  if (cached && cached.size === size && cached.mtimeMs === mtimeMs) {
+    return cached.sha256;
+  }
+  const key = `${filePath}|${size}|${mtimeMs}`;
+  const inflight = sha256Inflight.get(key);
+  if (inflight) return inflight;
+  const task = new Promise<string>((resolve, reject) => {
     const hash = createHash('sha256');
     const stream = createReadStream(filePath);
     stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('end', () => {
+      const sha256 = hash.digest('hex');
+      sha256Cache.set(filePath, { size, mtimeMs, sha256 });
+      resolve(sha256);
+    });
     stream.on('error', reject);
+  }).finally(() => {
+    sha256Inflight.delete(key);
   });
+  sha256Inflight.set(key, task);
+  return task;
 }
 
 export async function verifyCheckpointIntegrity(

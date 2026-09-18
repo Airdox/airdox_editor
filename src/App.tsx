@@ -50,6 +50,7 @@ import { EditModeBar } from './components/EditModeBar';
 import { TrackHeader } from './components/TrackHeader';
 import { DeckStemsControl } from './components/DeckStemsControl';
 import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
+import { StemModelInstallModal } from './components/Modals/StemModelInstallModal';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
@@ -490,6 +491,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemArchitectures, setStemArchitectures] = useState<StemArchitectureOption[]>([]);
   const [stemArchitectureState, setStemArchitectureState] = useState<StemArchitectureViewState | null>(null);
   const [stemArchitecturesLoading, setStemArchitecturesLoading] = useState<boolean>(false);
+  // Installations-Dialog: öffnet sich, wenn das im Einstellungsmenü gewählte
+  // Modell noch nicht installiert ist und der Nutzer den Button drückt.
+  const [stemInstallOpen, setStemInstallOpen] = useState<boolean>(false);
+
+  // Die im Einstellungsmenü tatsächlich gewählte Architektur („auto" = keine
+  // Fixierung). Ist sie nicht installiert, zeigt das Hauptfenster einen Button,
+  // der exakt dieses Modell installiert – nichts anderes.
+  const pinnedStemArchitecture: StemArchitectureOption | undefined =
+    stemArchitecture.architectureId && stemArchitecture.architectureId !== 'auto'
+      ? stemArchitectures.find((entry) => entry.id === stemArchitecture.architectureId)
+      : undefined;
+  const missingStemModel: { id: string; label: string; detail?: string } | null =
+    pinnedStemArchitecture && !pinnedStemArchitecture.installed
+      ? { id: pinnedStemArchitecture.id, label: pinnedStemArchitecture.label, detail: pinnedStemArchitecture.detail }
+      : null;
 
   // Installationspfade & Ersteinrichtungsstatus
   const [workspacePaths, setWorkspacePaths] = useState<WorkspacePathSettings>(() =>
@@ -1083,6 +1099,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const result = await stemEngine.listArchitectures();
       setStemArchitectures(result.options);
       setStemArchitectureState({ transport: result.transport, reason: result.reason, onnx: result.onnx });
+      setStemArchitecture((prev) => {
+        if (!prev.architectureId || prev.architectureId === 'auto') return prev;
+        const selected = result.options.find((entry) => entry.id === prev.architectureId);
+        const auto = result.options.find((entry) => entry.id === 'auto');
+        if (auto?.installed && (!selected || !selected.installed)) {
+          logger.warn(
+            'EDITING',
+            `Stem-Architektur ${prev.architectureId} ist nicht einsatzbereit; Automatisch nutzt die installierte Engine.`
+          );
+          return { ...prev, architectureId: 'auto' };
+        }
+        return prev;
+      });
     } catch (error) {
       setStemArchitectureState({
         transport: 'unavailable',
@@ -1114,7 +1143,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [settingsModalOpen, refreshStemArchitectures]);
 
   // Stem separation & mixer handlers – BS-RoFormer only, no spectral fallback per §2,§38
-  const runStemSeparation = useCallback(async (profile: StemQualityProfile = 'BALANCED') => {
+  const runStemSeparation = useCallback(async (
+    profile: StemQualityProfile = 'BALANCED',
+    architectureOverride?: StemArchitectureSettings
+  ) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
@@ -1122,9 +1154,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setIsSeparatingStems(true);
     setStemEngineUnavailableReason(null);
     try {
+      const effectiveArchitecture = architectureOverride ?? stemArchitecture;
       const separated = await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
         profile,
-        ...resolveArchitectureJobOptions(stemArchitecture),
+        ...resolveArchitectureJobOptions(effectiveArchitecture),
         onProgress: (prog) => setSeparationProgress(prog),
       });
       setActiveTrackStems(separated);
@@ -1167,20 +1200,31 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       return;
     }
     // Feste Architektur aus dem Einstellungsmenü vor dem Preflight prüfen:
-    // lieber eine klare Ansage als ein Job, der in MODEL_MISSING endet.
-    const pinnedArchitecture =
-      stemArchitecture.architectureId === 'auto'
-        ? undefined
-        : stemArchitectures.find((entry) => entry.id === stemArchitecture.architectureId);
-    if (pinnedArchitecture && !pinnedArchitecture.installed) {
-      const reason = pinnedArchitecture.reason ?? `Modell ${pinnedArchitecture.id} ist nicht installiert.`;
-      logger.warn('EDITING', `Stem-Preflight: Architektur ${pinnedArchitecture.id} nicht nutzbar — ${reason}`);
-      setStemEngineUnavailableReason(reason);
-      setStemQualityWarning(
-        `Architektur „${pinnedArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
-          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Modelle jetzt einzurichten, oder wählen Sie im Einstellungsmenü ein anderes Modell.'
-      );
-      return;
+    // lieber eine klare Ansage als ein Job, der in MODEL_MISSING endet. Wenn
+    // die gespeicherte Auswahl auf ein inzwischen fehlendes Modell zeigt, aber
+    // „Automatisch" bereits eine lauffähige Alternative hat, wird der Lauf auf
+    // Auto umgebogen; andernfalls bleibt der neue modellgenaue Installer der
+    // Hauptpfad und installiert exakt die gewählte Architektur.
+    let effectiveArchitecture = stemArchitecture;
+    if (pinnedStemArchitecture && !pinnedStemArchitecture.installed) {
+      const reason = pinnedStemArchitecture.reason ?? `Modell ${pinnedStemArchitecture.id} ist nicht installiert.`;
+      const autoArchitecture = stemArchitectures.find((entry) => entry.id === 'auto');
+      if (autoArchitecture?.installed) {
+        effectiveArchitecture = { ...stemArchitecture, architectureId: 'auto' };
+        setStemArchitecture(effectiveArchitecture);
+        logger.warn(
+          'EDITING',
+          `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}. Automatisch nutzt eine installierte Alternative.`
+        );
+      } else {
+        logger.warn('EDITING', `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}`);
+        setStemEngineUnavailableReason(reason);
+        setStemQualityWarning(
+          `Architektur „${pinnedStemArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
+            'Installation: Button „Modell installieren" in der Deck-Stem-Leiste bzw. im Einstellungsmenü – oder auf „Automatisch" stellen.'
+        );
+        return;
+      }
     }
 
     // Wenn auf "Automatisch" gestellt ist: prüfen ob irgendein Modell vorhanden ist
@@ -1220,8 +1264,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setStemEngineInfo(info);
     const chosen = info.profiles.find((entry) => entry.profile === profile);
     // Bei fest gewählter Architektur entscheidet deren Verfügbarkeit (oben
-    // geprüft) – die Profil-Reserve darf den Job nicht blockieren.
-    if (!pinnedArchitecture && (!info.ok || (chosen && !chosen.available))) {
+    // geprüft) – die Profil-Reserve darf den Job nicht blockieren. Hat die UI
+    // gerade automatisch auf „Automatisch" umgeschaltet, gilt wieder die
+    // Profilprüfung.
+    const pinnedStillEffective = effectiveArchitecture.architectureId !== 'auto' ? pinnedStemArchitecture : undefined;
+    if (!pinnedStillEffective && (!info.ok || (chosen && !chosen.available))) {
       logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
       setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
       setStemQualityWarning(
@@ -1230,8 +1277,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       );
       return;
     }
-    await runStemSeparation(profile);
-  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile, stemArchitecture, stemArchitectures]);
+    await runStemSeparation(profile, effectiveArchitecture);
+  }, [
+    activeTrack,
+    workingAudioBuffer,
+    runStemSeparation,
+    resolvedStemProfile,
+    stemArchitecture,
+    stemArchitectures,
+    pinnedStemArchitecture,
+  ]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -3892,6 +3947,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenMidiModal={() => setMidiModalOpen(true)}
         midiStatusLabel={midiStatusLabel}
         isMidiConnected={isMidiConnected}
+        missingModel={missingStemModel}
+        onInstallModel={() => setStemInstallOpen(true)}
       />
 
       {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
@@ -4118,6 +4175,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         stemArchitectures={stemArchitectures}
         stemArchitectureId={stemArchitecture.architectureId}
         onSetStemArchitectureId={(id) => setStemArchitecture((prev) => ({ ...prev, architectureId: id }))}
+        onInstallModel={() => setStemInstallOpen(true)}
         stemValidationMode={stemArchitecture.validationMode}
         onSetStemValidationMode={(mode) => setStemArchitecture((prev) => ({ ...prev, validationMode: mode }))}
         stemDevice={stemArchitecture.device}
@@ -4222,6 +4280,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       <StemQualityWarningModal
         isOpen={stemQualityWarning !== null}
         reason={stemQualityWarning || stemEngineUnavailableReason || 'STEM AI UNAVAILABLE'}
+        installModel={missingStemModel}
         onClose={() => {
           setStemQualityWarning(null);
           setStemEngineUnavailableReason(null);
@@ -4232,7 +4291,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           setStemQualityWarning(null);
         }}
         onEngineInstalled={() => {
-          logger.info('EDITING', 'BS-RoFormer Engine wurde installiert und verifiziert.');
+          logger.info(
+            'EDITING',
+            missingStemModel
+              ? `KI-Modell wurde installiert und verifiziert: ${missingStemModel.id}`
+              : 'BS-RoFormer Engine wurde installiert und verifiziert.'
+          );
+          if (!missingStemModel) {
+            // Der Legacy-In-App-Installer installiert die primäre BS-RoFormer-
+            // Engine. Eine vorher gepinnte, fehlende ONNX/Demucs-Architektur
+            // darf den nächsten Lauf nicht weiter blockieren. Bei einem exakt
+            // gewählten Modell bleibt die Auswahl dagegen unverändert.
+            setStemArchitecture((prev) => ({ ...prev, architectureId: 'auto' }));
+          }
+          void stemEngine.getEngineInfo().then((info) => setStemEngineInfo(info));
           void refreshStemArchitectures();
         }}
         onRunWithInstalledEngine={() => {
@@ -4240,9 +4312,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           setStemEngineUnavailableReason(null);
           stemEngine.clearCache();
           setActiveTrackStems(null);
-          void refreshStemArchitectures().then(() => {
-            void handleSeparateStems();
-          });
+          const effectiveArchitecture: StemArchitectureSettings = missingStemModel
+            ? stemArchitecture
+            : { ...stemArchitecture, architectureId: 'auto' };
+          if (!missingStemModel) setStemArchitecture(effectiveArchitecture);
+          void (async () => {
+            const info = await stemEngine.getEngineInfo().catch(() => null);
+            if (info) setStemEngineInfo(info);
+            await refreshStemArchitectures();
+            await runStemSeparation(stemProfile ?? info?.defaultProfile ?? resolvedStemProfile, effectiveArchitecture);
+          })();
+        }}
+      />
+
+      {/* Installiert exakt das im Einstellungsmenü gewählte, noch fehlende Modell. */}
+      <StemModelInstallModal
+        isOpen={stemInstallOpen}
+        model={missingStemModel}
+        onClose={() => setStemInstallOpen(false)}
+        onInstalled={(modelId) => {
+          logger.info('EDITING', `KI-Modell wurde installiert und verifiziert: ${modelId}`);
+          // Architekturliste + Engine-Status aktualisieren, damit das Modell
+          // sofort „installiert" gezeigt wird (Dialog bleibt für die Erfolgsmeldung offen).
+          void refreshStemArchitectures();
+          void stemEngine.getEngineInfo().then((info) => setStemEngineInfo(info));
         }}
       />
 

@@ -2,7 +2,7 @@
  * Python runtime handling (§7, §8, §9).
  *
  * Must NOT rely on global python/python3 in PATH for production.
- * Must handle Python 3.14 as unsupported (needs 3.9-3.13).
+ * Must handle Python outside 3.10-3.12 as unsupported for the pinned PyTorch runtime.
  * Must provide reproducible supported Python version, preferably dedicated runtime.
  */
 
@@ -23,7 +23,7 @@ export interface PythonRuntimeInfo {
   reason?: string;
 }
 
-const SUPPORTED_MINOR_RANGE: [number, number] = [9, 13]; // 3.9 - 3.13
+const SUPPORTED_MINOR_RANGE: [number, number] = [10, 12]; // 3.10 - 3.12
 
 function parseVersion(versionArray: number[]): string {
   return versionArray.join('.');
@@ -137,7 +137,7 @@ print(json.dumps(result))
       torchaudioVersion: parsed.torchaudio,
       hasTorch: Boolean(parsed.hasTorch),
       hasDemucs: Boolean(parsed.hasDemucs),
-      reason: supported ? undefined : `Python ${versionStr} wird nicht unterstützt (benötigt 3.9–3.13)`,
+      reason: supported ? undefined : `Python ${versionStr} wird nicht unterstützt (benötigt 3.10–3.12)`,
     };
   } catch (e) {
     return {
