@@ -181,18 +181,18 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
               >
                 {/* Mini Waveform Display */}
                 <div className="w-full h-9 bg-[#0b0c0f] rounded-xs mb-1.5 overflow-hidden flex items-center justify-center relative border border-[#1b1c23]">
-                  {clip.miniPeaks && clip.miniPeaks.length > 0 ? (
+                  {(clip.waveform?.peaks.length || clip.miniPeaks?.length || 0) > 0 ? (
                     <div className="w-full h-full flex items-center px-1">
-                      {clip.miniPeaks.map((pk, idx) => {
+                      {(clip.waveform ? Array.from(clip.waveform.peaks) : clip.miniPeaks || []).map((pk, idx) => {
                         let h = Math.max(2, pk * 28);
                         let col = '#0088ff';
                         
                         if (waveformMode === 'BLUE') {
                           col = '#00a2ff';
                         } else if (waveformMode === 'RGB' || waveformMode === '3BAND') {
-                          const low = clip.miniLow?.[idx] ?? pk;
-                          const mid = clip.miniMid?.[idx] ?? pk;
-                          const high = clip.miniHigh?.[idx] ?? pk;
+                          const low = clip.waveform?.lowEnergy[idx] ?? clip.miniLow?.[idx] ?? pk;
+                          const mid = clip.waveform?.midEnergy[idx] ?? clip.miniMid?.[idx] ?? pk;
+                          const high = clip.waveform?.highEnergy[idx] ?? clip.miniHigh?.[idx] ?? pk;
                           
                           if (waveformMode === '3BAND') {
                             if (low > mid && low > high) col = '#0088ff'; // Low=Blue

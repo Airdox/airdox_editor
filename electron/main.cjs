@@ -6,6 +6,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
+  readRekordboxTrackAnalysis,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
@@ -221,6 +222,21 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
   return readRekordboxDatabase(dbPath);
+});
+
+// Resolves a selected `djmdContent.ID` through its actual AnalysisDataPath.
+// The reader itself enforces the repair contract's D:\ root and opens both
+// master.db and ANLZ siblings in read-only mode only.
+ipcMain.handle('rekordbox:read-track-analysis', async (_event, payload) => {
+  const masterDbPath = payload?.masterDbPath;
+  const contentId = payload?.contentId;
+  if (typeof masterDbPath !== 'string' || !masterDbPath.trim()) {
+    throw new Error('Kein gültiger master.db-Pfad übergeben.');
+  }
+  if ((typeof contentId !== 'string' && typeof contentId !== 'number') || String(contentId).trim() === '') {
+    throw new Error('Keine gültige djmdContent.ID übergeben.');
+  }
+  return readRekordboxTrackAnalysis(masterDbPath, contentId);
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {

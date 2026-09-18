@@ -1,3 +1,5 @@
+import type { RekordboxSchemaDiagnostic, RekordboxTrackAnalysisReadResult } from '../rekordbox/analysisPipeline';
+
 export {};
 
 declare global {
@@ -32,6 +34,7 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      readRekordboxTrackAnalysis(payload: { masterDbPath: string; contentId: string }): Promise<RekordboxTrackAnalysisReadResult>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;
@@ -85,6 +88,7 @@ declare global {
     fileName?: string;
     stats?: { tracks: number; cues: number; playlists: number };
     warnings?: string[];
+    schema?: RekordboxSchemaDiagnostic;
     rows?: {
       content: RekordboxDatabaseReadRow[];
       cues: RekordboxDatabaseReadRow[];

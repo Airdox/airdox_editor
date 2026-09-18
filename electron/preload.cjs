@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  readRekordboxTrackAnalysis: (payload) => ipcRenderer.invoke('rekordbox:read-track-analysis', payload),
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
