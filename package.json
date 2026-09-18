@@ -9,11 +9,11 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run build:stems && vite build",
-    "start": "electron .",
-    "desktop": "npm run build && electron .",
-    "package:win": "npm run build && electron-builder --win",
-    "package:win:nsis": "npm run build && electron-builder --win nsis",
-    "package:win:portable": "npm run build && electron-builder --win portable",
+    "start": "npm run rebuild:electron && electron .",
+    "desktop": "npm run rebuild:electron && npm run build && electron .",
+    "package:win": "npm run rebuild:electron && npm run build && electron-builder --win",
+    "package:win:nsis": "npm run rebuild:electron && npm run build && electron-builder --win nsis",
+    "package:win:portable": "npm run rebuild:electron && npm run build && electron-builder --win portable",
     "preview": "vite preview",
     "clean": "rm -rf dist release",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
@@ -25,7 +25,8 @@
     "test:stems:all": "npm run test:stems && npm run test:stems:live",
     "build:stems": "esbuild src/stems/desktopEntry.ts --bundle --platform=node --format=cjs --target=node20 --external:electron --outfile=electron/stemsEngine.cjs",
     "stems:setup": "bash scripts/setup-bsroformer-model.sh",
-    "test:masterdb": "node tests/master-db-gate.test.mjs && tsx tests/rekordbox-waveform-pipeline.test.ts"
+    "test:masterdb": "node tests/master-db-gate.test.mjs && tsx tests/rekordbox-waveform-pipeline.test.ts",
+    "test:masterdb:real": "node scripts/sqlcipher-native-gate.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
