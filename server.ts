@@ -211,6 +211,10 @@ async function startServer() {
     // Dasselbe (und nur per Env gesetzte) Test-Double-Gate wie im
     // Electron-Host: Produktionsläufe können es nicht erreichen.
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    // DJ-Pfad: Der Dev-/App-Server validiert schnell (AIRODOX_STEM_MODE steuert
+    // die Tiefe, AIRODOX_STEM_DEVICE das Rechengerät der ONNX-Engine).
+    mode: (process.env.AIRDOX_STEM_MODE as 'fast_dj' | 'studio_master' | undefined) ?? 'fast_dj',
+    device: process.env.AIRDOX_STEM_DEVICE as 'auto' | 'cpu' | 'cuda' | 'directml' | 'coreml' | undefined,
     ...stemEngineHost.resolveEnginePaths(process.cwd(), stemsDataRoot),
     logger: {
       debug: (category, message, details) => logger.debug(category, message, details),

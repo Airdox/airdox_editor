@@ -98,6 +98,7 @@ export class RoFormerSeparator implements IStemSeparator {
       streamsProgress: true,
       cancellable: true,
       trainedModel: true,
+      inMemory: false,
     };
   }
 

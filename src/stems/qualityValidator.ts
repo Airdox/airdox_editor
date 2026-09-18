@@ -17,7 +17,7 @@ import { stat } from 'node:fs/promises';
 import { StemSeparationError } from './errors';
 import { analyzeAudio, parseWavLayout, readWavFile, sha256File, type DecodedAudio } from './wavIo';
 import { measureContinuity, measureBoundaryError } from './reconstructor';
-import type { BoundaryContinuityReport, QualityValidationReport, StemDescriptor, StemId, StemValidationIssue, StemValidationReport } from './types';
+import type { BoundaryContinuityReport, ProcessingMode, QualityValidationReport, StemDescriptor, StemId, StemValidationIssue, StemValidationReport } from './types';
 
 export const DEFAULT_CONTINUITY_EXCESS_DB = 6;
 export const DEFAULT_RMS_JUMP_DB = 9;
@@ -43,6 +43,19 @@ export interface ValidateSeparationOptions {
   recombinationLimitDb?: number;
   /** Border specific reconstruction error tolerance in dB. */
   boundaryErrorExcessDb?: number;
+  /**
+   * `fast_dj` limits the validator to the checks that protect the user:
+   * file geometry, finite samples, peak, non-silence. The boundary metrics,
+   * the recombination measurement and the continuity scan are skipped –
+   * together they are the expensive part (three full passes over every stem
+   * plus a transient search) and they judge *artefacts*, not correctness.
+   *
+   * The report keeps the same shape; the skipped metrics are `null`, so a
+   * consumer can tell "not measured" from "measured and good".
+   */
+  mode?: ProcessingMode;
+  /** Explicit off switch for the continuity block (studio mode). */
+  measureContinuity?: boolean;
 }
 
 async function readStem(filePath: string): Promise<DecodedAudio> {
@@ -184,6 +197,35 @@ export async function validateSeparation(
     });
   }
 
+  const mode: ProcessingMode = options.mode ?? 'studio_master';
+  if (mode === 'fast_dj') {
+    // Fast path: geometry + finite + peak + non-silence per stem (already
+    // collected above). Everything below this line is artefact analysis and
+    // costs several full passes over every stem.
+    const silent = stemReports.filter((report) => report.pass && report.peak <= 1e-6).map((report) => report.stemId);
+    if (silent.length > 0) {
+      issues.push({
+        severity: 'error',
+        code: 'STEM_SILENT',
+        message: `Stem(s) ohne Signal: ${silent.join(', ')} – Separation hat nichts geliefert`,
+      });
+    }
+    const pass = !issues.some((issue) => issue.severity === 'error');
+    return {
+      report: {
+        pass,
+        issues,
+        stems: stemReports,
+        // Not measured in fast_dj: null means "not measured", never "good".
+        continuity: null,
+        recombinationErrorDb: null,
+        fromTrainedModel: options.fromTrainedModel,
+        mode,
+      },
+      stems: descriptors,
+    };
+  }
+
   // Recombination: sum of all stems versus the working copy.
   const mix = await readWavFile(options.workingCopyPath);
   const frames = Math.min(options.expectedFrames, mix.frames);
@@ -287,6 +329,7 @@ export async function validateSeparation(
       continuity,
       recombinationErrorDb,
       fromTrainedModel: options.fromTrainedModel,
+      mode,
     },
     stems: descriptors,
   };

@@ -158,6 +158,12 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     root: roots.root,
     env: process.env,
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    // DJ-Pfad: die App validiert standardmäßig schnell (Geometrie, endliche
+    // Samples, Peak) statt der vollen Grenz-/Rekombinationsanalyse. Über
+    // AIRODOX_STEM_MODE=studio_master lässt sich das verschärfen, und
+    // AIRODOX_STEM_DEVICE wählt das Rechengerät der ONNX-Engine.
+    mode: process.env.AIRDOX_STEM_MODE || 'fast_dj',
+    device: process.env.AIRDOX_STEM_DEVICE,
     ...resolveEnginePaths(repoRoot, roots.root),
     logger: {
       debug: (category, message, details) => log(logger, 'debug', `[bridge] ${message}`, details),

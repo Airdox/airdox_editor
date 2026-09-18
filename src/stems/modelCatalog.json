@@ -198,6 +198,54 @@
       "notes": "Demucs legacy, optional."
     },
     {
+      "id": "htdemucs-onnx-4stem-fp16",
+      "family": "htdemucs",
+      "architecture": "HTDemucs (ONNX Runtime, in-process)",
+      "version": "htdemucs-opset17-fp16weights",
+      "checkpoint": {
+        "file": "htdemucs_fp16weights.onnx",
+        "format": "onnx",
+        "url": "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx",
+        "sha256": "unverified"
+      },
+      "checkpointSha256": "unverified",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
+      "stemDisplayNames": {
+        "drums": "Drums",
+        "bass": "Bass",
+        "other": "Other",
+        "vocals": "Vocals"
+      },
+      "modelHash": "unverified",
+      "sourceUrl": "https://huggingface.co/StemSplitio/htdemucs-onnx",
+      "license": "MIT (HT-Demucs, Meta Research)",
+      "weightLicense": "MIT (ONNX-Export: StemSplit/demucs-onnx, Gewichte: Meta HT-Demucs)",
+      "licenseUrl": "https://huggingface.co/StemSplitio/htdemucs-onnx",
+      "backendSupport": ["onnx"],
+      "precision": ["f32"],
+      "recommendedOverlap": 1,
+      "chunkSizeSamples": 343980,
+      "qualityProfile": {
+        "serves": ["PREVIEW", "BALANCED", "HIGH"],
+        "numOverlap": {
+          "PREVIEW": 1,
+          "BALANCED": 1,
+          "HIGH": 1
+        },
+        "ensemblePasses": {
+          "PREVIEW": 1,
+          "BALANCED": 1,
+          "HIGH": 1
+        },
+        "rationale": "DJ-Pfad: ein ONNX-Graph, in-process, kein Python und keine Chunk-Dateien. 7,8-s-Segmente (343980 Samples) mit 25 % Überlappung, Ausgabe in Graph-Reihenfolge drums/bass/other/vocals. Genauigkeit leicht unter BS-RoFormer (MUSDB vocals ~8.8 dB SDR), dafür um Größenordnungen schneller."
+      },
+      "notes": "Performance-Modell für den Live-Betrieb. Die Datei speichert fp16-Gewichte, gerechnet wird fp32 (I/O des Graphen ist float32) – deshalb precision: f32. Exakter Datei-Hash wird beim Bundling (npm run stems:bundle) berechnet und im bundle-manifest.json festgehalten; stimmt er, den Wert hier als checkpoint.sha256 und modelHash eintragen."
+    },
+    {
       "id": "pipeline-double-v1",
       "family": "pipeline_double",
       "architecture": "Pipeline Double (Synthetic)",
