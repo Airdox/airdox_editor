@@ -120,7 +120,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
         {/* Quick action operations accessible directly even when collapsed */}
         <div className="flex items-center space-x-1.5 text-[10.5px]">
           {hasClipboard && (
-            <span className="text-[9.5px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-0.5 rounded-xs mr-1">
+            <span className="text-[9.5px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-0.5 rounded-xs mr-1" title="Zwischenablage enthält kopiertes Audio">
               Zwischenablage bereit
             </span>
           )}
@@ -128,7 +128,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCopy}
             disabled={!hasSelection}
             className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
-            title="Kopieren (Ctrl+C)"
+            title="Auswahl in Zwischenablage kopieren (Ctrl+C)"
           >
             <Copy size={11} />
             <span>Copy</span>
@@ -138,7 +138,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               onClick={onCut}
               disabled={!hasSelection}
               className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white flex items-center space-x-1"
-              title="Ausschneiden (Ctrl+X)"
+              title="Auswahl ausschneiden und in Zwischenablage legen (Ctrl+X)"
             >
               <Scissors size={11} />
               <span>Cut</span>
@@ -148,7 +148,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onPaste}
             disabled={!hasClipboard}
             className="px-2 py-0.5 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-[#00a2ff] hover:text-white disabled:text-neutral-500 flex items-center space-x-1"
-            title="Einfügen (Ctrl+V)"
+            title="Zwischenablage an Cursorposition einfügen (Ctrl+V)"
           >
             <ClipboardPaste size={11} />
             <span>Paste</span>
@@ -157,7 +157,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onDelete}
             disabled={!hasSelection}
             className="px-2 py-0.5 bg-[#1f1214] hover:bg-[#301a1c] disabled:opacity-30 rounded-xs border border-[#402024] text-[#ff453a] hover:text-white flex items-center space-x-1"
-            title="Delete-Variante auswählen (Normales Delete oder Ripple Delete) [Del]"
+            title="Delete-Dialog öffnen (Stille einfügen oder Ripple Delete) [Del]"
           >
             <Trash2 size={11} />
             <span>Delete…</span>
@@ -166,7 +166,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onUndo}
             disabled={!canUndo}
             className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
-            title="Undo (Ctrl+Z)"
+            title="Letzten Schritt rückgängig machen (Ctrl+Z)"
           >
             <RotateCcw size={11} />
           </button>
@@ -174,7 +174,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onRedo}
             disabled={!canRedo}
             className="p-1 bg-[#15161c] hover:bg-[#20222a] disabled:opacity-30 rounded-xs border border-[#252732] text-neutral-300 hover:text-white"
-            title="Redo (Ctrl+Y)"
+            title="Rückgängig gemachten Schritt wiederholen (Ctrl+Y)"
           >
             <RotateCw size={11} />
           </button>
@@ -200,7 +200,10 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
       <div className="w-[320px] border-r border-[#1a1b22] flex flex-col">
         {/* Angled Tab Header */}
         <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center px-2">
-          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
+          <div
+            className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase"
+            title="BEAT SELECT: Setzt die Auswahllänge auf eine feste Anzahl von Taktschlägen am Beatgrid"
+          >
             BEAT SELECT
           </div>
         </div>
@@ -211,6 +214,9 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             const isCurrentMatch =
               hasSelection && Math.round(selection.beatsCount) === beats;
 
+            const bars = beats / 4;
+            const barLabel = bars >= 1 ? `${bars} ${bars === 1 ? 'Takt' : 'Takte'}` : `${beats}/4 Takt`;
+
             return (
               <button
                 key={beats}
@@ -220,6 +226,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
                     ? 'border-[#0088ff] text-[#00a2ff] bg-[#1a2130]'
                     : 'text-neutral-300'
                 }`}
+                title={`Auswahl auf genau ${beats} Beats (${barLabel}) ab aktuellem Beatgrid-Startpunkt setzen`}
               >
                 <span className="text-[15px] font-mono font-bold leading-tight">
                   {beats}
@@ -237,7 +244,10 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
       <div className="w-[210px] border-r border-[#1a1b22] flex flex-col">
         {/* Angled Tab Header */}
         <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center px-2">
-          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
+          <div
+            className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase"
+            title="SELECT: Schnelle Modifikatoren für den aktuellen Auswahlbereich"
+          >
             SELECT
           </div>
         </div>
@@ -249,7 +259,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onHalfSelection}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Auswahl halbieren"
+            title="Auswahllänge halbieren (1/2)"
           >
             <span className="text-[15px] font-bold leading-tight">1/2</span>
             <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
@@ -262,7 +272,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onDoubleSelection}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Auswahl verdoppeln"
+            title="Auswahllänge verdoppeln (×2)"
           >
             <span className="text-[15px] font-bold leading-tight">× 2</span>
             <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
@@ -275,7 +285,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCancelSelection}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
-            title="Auswahl aufheben"
+            title="Auswahl aufheben (Deselect)"
           >
             <XCircle size={16} strokeWidth={2} />
             <span className="text-[9px] font-semibold text-neutral-400 tracking-wider mt-0.5">
@@ -289,7 +299,10 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
       <div className="flex-1 flex flex-col">
         {/* Angled Tab Header */}
         <div className="h-6 bg-[#111217] border-b border-[#1f2129] flex items-center justify-between px-2">
-          <div className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase">
+          <div
+            className="rb-tab-chamfer bg-[#1e2028] text-neutral-300 text-[10.5px] font-bold px-3 py-0.5 tracking-wider uppercase"
+            title="EDIT: Nicht-destruktive Schnitt- und Audio-Manipulationswerkzeuge"
+          >
             EDIT
           </div>
 
@@ -298,7 +311,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             {onToggleMatchPitch && (
               <label
                 className="flex items-center space-x-1 cursor-pointer select-none text-neutral-300 hover:text-white"
-                title="Tonhöhe beim Einfügen/Überschreiben an Zieltrack anpassen"
+                title="Tonhöhe beim Einfügen/Überschreiben automatisch an die Tonart des Zieltracks anpassen (Pitch Shifting)"
               >
                 <input
                   type="checkbox"
@@ -316,7 +329,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               onClick={onReplace}
               disabled={!hasSelection}
               className="text-[#ff9500] hover:text-[#ffaa33] disabled:opacity-40 px-2 py-0.5 rounded bg-[#20180a] border border-[#3d2e15] flex items-center space-x-1"
-              title="Replace (Clip ersetzt Bereich)"
+              title="Replace: Ersetzt den markierten Auswahlbereich exakt durch das Audio der Zwischenablage"
             >
               <Repeat size={10} />
               <span>REPLACE</span>
@@ -325,7 +338,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               onClick={onOverdub}
               disabled={!hasSelection}
               className="text-[#00c853] hover:text-[#33d677] disabled:opacity-40 px-2 py-0.5 rounded bg-[#0a2012] border border-[#153d20] flex items-center space-x-1"
-              title="Overdub (Clip wird überlagert)"
+              title="Overdub: Mischt den Inhalt der Zwischenablage additiv über den aktuellen Auswahlbereich"
             >
               <Layers size={10} />
               <span>OVERDUB</span>
@@ -346,7 +359,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
               <button
                 onClick={onClearHistory}
                 className="text-neutral-400 hover:text-[#ff6b62] px-1.5 py-0.5 rounded hover:bg-[#251315] border border-transparent hover:border-[#ff453a]/30 flex items-center space-x-1 text-[9px] transition-colors"
-                title="Verlauf leeren (Sicherheitsdialog zur Vermeidung von Datenverlust)"
+                title="Verlauf leeren (Sicherheitsdialog zur Freigabe von Arbeitsspeicher)"
               >
                 <Trash2 size={9} />
                 <span>CLEAR HIST</span>
@@ -373,7 +386,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onClone}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Auswahl klonen / zur Palette"
+            title="Auswahl klonen und direkt als neuen Eintrag in die Clip-Palette legen"
           >
             <PlusSquare size={16} strokeWidth={1.8} className="text-[#00a2ff]" />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -385,7 +398,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onCopy}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Kopieren (Ctrl+C)"
+            title="Auswahl in die verlustfreie Zwischenablage kopieren (Ctrl+C)"
           >
             <Copy size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -397,7 +410,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onPaste}
             disabled={!hasClipboard}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen (Ctrl+V)"
+            title="Zwischenablage an aktueller Cursorposition einfügen (Ctrl+V)"
           >
             <ClipboardPaste size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -409,7 +422,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onInsert}
             disabled={!hasClipboard}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Einfügen mit Zeittransformation (Insert)"
+            title="Insert: Fügt Audio ein und verschiebt nachfolgendes Audio nach hinten (Ripple Insert)"
           >
             <ArrowRightLeft size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -422,7 +435,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onDelete}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
-            title="Delete-Variante auswählen: normal ohne Nachrücken oder Ripple Delete"
+            title="Löschmenü öffnen: Normales Löschen (Stille einfügen) oder Ripple Delete (Aufrücken)"
           >
             <Trash2 size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -434,7 +447,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onClear}
             disabled={!hasSelection}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Stumm schalten / leeren (Clear)"
+            title="Clear: Stummschalten des Bereichs ohne Verschiebung von nachfolgendem Audio"
           >
             <Brush size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -446,7 +459,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onUndo}
             disabled={!canUndo}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Rückgängig (Ctrl+Z)"
+            title="Letzten Bearbeitungsschritt rückgängig machen (Ctrl+Z)"
           >
             <RotateCcw size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">
@@ -458,7 +471,7 @@ export const BottomControlBlock: React.FC<BottomControlBlockProps> = ({
             onClick={onRedo}
             disabled={!canRedo}
             className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
-            title="Wiederholen (Ctrl+Y)"
+            title="Rückgängig gemachten Schritt wiederholen (Ctrl+Y)"
           >
             <RotateCw size={16} strokeWidth={1.8} />
             <span className="text-[9.5px] font-semibold tracking-wider mt-1">

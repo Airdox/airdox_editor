@@ -5,9 +5,10 @@
  */
 
 import React from 'react';
-import { FileAudio, Check } from 'lucide-react';
+import { FileAudio, Check, Info } from 'lucide-react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
+import { Tooltip } from './Tooltip';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -54,7 +55,10 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         {/* Left: Artwork + Track Title */}
         <div className="flex items-center space-x-3">
           {/* Authentic blue disc artwork or empty disc */}
-          <div className="w-10 h-10 rounded-xs bg-gradient-to-br from-[#0c4085] via-[#082a5c] to-[#041433] border border-[#1b4d8c] flex items-center justify-center shadow-inner relative overflow-hidden flex-shrink-0">
+          <div
+            className="w-10 h-10 rounded-xs bg-gradient-to-br from-[#0c4085] via-[#082a5c] to-[#041433] border border-[#1b4d8c] flex items-center justify-center shadow-inner relative overflow-hidden flex-shrink-0"
+            title={track ? `Track: ${track.title} von ${track.artist}` : 'Kein Track geladen'}
+          >
             <div className="w-6 h-6 rounded-full border border-[#f5b800]/60 flex items-center justify-center">
               <span className="font-serif italic font-bold text-[#f5b800] text-[10px] tracking-tighter">
                 {track ? 'SB' : 'RB'}
@@ -65,7 +69,10 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
 
           <div className="flex flex-col">
             <div className="flex items-center space-x-2">
-              <span className="text-white font-semibold text-[13px] tracking-wide">
+              <span
+                className="text-white font-semibold text-[13px] tracking-wide"
+                title={`Titel: ${track ? track.title : 'Kein Track geladen'}`}
+              >
                 {track ? track.title : 'Kein Track geladen'}
               </span>
               {track && !track.audioBuffer && onLoadAudioClick && (
@@ -79,16 +86,22 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                 </button>
               )}
               {track && track.audioBuffer && (
-                <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 text-[9.5px] font-mono">
+                <span
+                  className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 text-[9.5px] font-mono"
+                  title={`Aktive Audiodatei: ${track.sampleRate} Hz, ${track.channels} Kanäle (${track.duration.toFixed(2)}s)`}
+                >
                   <Check size={10} />
                   <span>Audio aktiv ({track.sampleRate}Hz)</span>
                 </span>
               )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">
-              <span>{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
+              <span title="Interpret / Artist">{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
               <span>•</span>
-              <span className="text-[#00a2ff] font-mono text-[9.5px]">
+              <span
+                className="text-[#00a2ff] font-mono text-[9.5px]"
+                title="Datenherkunft: Original Rekordbox XML oder lokale Arbeitskopie"
+              >
                 {!track
                   ? 'LEERES PROJEKT'
                   : track.origin === 'REKORDBOX_XML'
@@ -113,21 +126,21 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         {/* Right: Time, Key, BPM */}
         <div className="flex items-center space-x-6 font-mono text-neutral-200 text-xs">
           {/* Duration */}
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1" title="Gesamtlaufzeit des Tracks (Minuten:Sekunden.Zehntel)">
             <span className="text-white font-bold text-[13px]">
               {track ? formatTime(track.duration) : '00:00.0'}
             </span>
           </div>
 
           {/* Key */}
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1" title="Tonart (Camelot / Musikalische Notation aus Rekordbox)">
             <span className="text-white font-bold text-[13px] tracking-wide">
               {track ? track.key : '--'}
             </span>
           </div>
 
           {/* BPM */}
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1" title="Tempo in Beats per Minute (BPM aus Beatgrid-Analyse)">
             <span className="text-white font-bold text-[13px]">
               {track ? track.bpm.toFixed(2) : '--.--'}
             </span>

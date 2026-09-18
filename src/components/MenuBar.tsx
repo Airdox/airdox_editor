@@ -1,11 +1,27 @@
 /**
  * @license
  * Rekordbox MenuBar Component
- * German/English standard menu bar matching the authoritative reference
+ * German/English standard menu bar matching the authoritative reference with comprehensive tooltips.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot, Radio } from 'lucide-react';
+import {
+  Disc,
+  Trash2,
+  ShieldCheck,
+  Scissors,
+  Copy,
+  ClipboardPaste,
+  Sparkles,
+  Bot,
+  Radio,
+  FileAudio,
+  FolderOpen,
+  Save,
+  Plus,
+  Wand2,
+  Sliders,
+} from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -49,6 +65,7 @@ interface MenuBarProps {
   onOpenMidiModal?: () => void;
   onSeparateStems?: () => void;
   onOpenRecorder?: () => void;
+  onOpenInitialSetup?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -92,6 +109,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenMidiModal,
   onSeparateStems,
   onOpenRecorder,
+  onOpenInitialSetup,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -123,6 +141,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
               activeMenu === 'datei' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
             }`}
+            title="Projekt- und Dateioperationen (Neu, Öffnen, Speichern, Import, Export)"
           >
             Datei
           </button>
@@ -131,6 +150,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onNewProject(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Erstellt ein neues, leeres Editor-Projekt"
               >
                 <span>Neues Projekt</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+N</span>
@@ -138,6 +158,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onOpenProject(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Öffnet ein bestehendes .airdox.json Projekt"
               >
                 <span>Projekt öffnen...</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Shift+O</span>
@@ -145,25 +166,17 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onSaveProject(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Speichert den aktuellen Bearbeitungsstand nicht-destruktiv"
               >
                 <span>Projekt speichern...</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+S</span>
               </button>
               <div className="h-px bg-[#262830] my-1" />
-              {onOpenMidiModal && (
-          <button
-            onClick={onOpenMidiModal}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#10b981]/15 hover:bg-[#10b981] text-[#10b981] hover:text-white border border-[#10b981]/30 text-[10px] transition-colors"
-            title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Pad Mapping öffnen"
-          >
-            <Radio size={11} />
-            <span className="font-semibold tracking-wide">MIDI (FLX4/1000)</span>
-          </button>
-        )}
-        {onOpenDatabaseInspector && (
+              {onOpenDatabaseInspector && (
                 <button
                   onClick={() => { onOpenDatabaseInspector(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#00a2ff] font-medium"
+                  title="Rekordbox SQLite-Datenbank & ANLZ-Wellenformen direkt analysieren"
                 >
                   <span>Daten- &amp; Waveform-Extraktor (DB/ANLZ)...</span>
                 </button>
@@ -171,6 +184,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onImportXml(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Rekordbox XML-Sammlung mit Beatgrids, Cues und Keys importieren"
               >
                 <span>Rekordbox XML importieren...</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+O</span>
@@ -179,6 +193,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onOpenXmlCollection(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#00e5ff] font-medium"
+                  title="Auswahlfenster für Tracks aus der importierten XML-Sammlung öffnen"
                 >
                   <span className="flex items-center space-x-1.5">
                     <Disc size={13} className="text-[#00e5ff]" />
@@ -190,6 +205,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onImportAudio(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Eigenständige Audiodatei (WAV, MP3, FLAC, AIFF) in Deck A laden"
               >
                 <span>Audiodatei laden (WAV, MP3, FLAC)...</span>
               </button>
@@ -197,6 +213,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onOpenRecorder(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#ff5147] font-semibold"
+                  title="Professionellen DJ-Set- und Mikrofon-Recorder öffnen"
                 >
                   <span className="flex items-center gap-2"><Radio size={13} /> Pro Recorder öffnen…</span>
                   <span className="text-neutral-500">F9</span>
@@ -206,6 +223,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onExportWav(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Gemasterte WAV-Audiodatei in voller 24-Bit/32-Bit Qualität exportieren"
               >
                 <span>Master als WAV exportieren...</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+E</span>
@@ -213,6 +231,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onExportXml(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Aktualisierte XML-Metadaten für Pioneer Rekordbox exportieren"
               >
                 <span>Rekordbox XML exportieren...</span>
               </button>
@@ -227,6 +246,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
               activeMenu === 'bearbeiten' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
             }`}
+            title="Schnitt- und Bearbeitungsoperationen (Undo, Redo, Cut, Copy, Paste, Stems)"
           >
             Bearbeiten
           </button>
@@ -236,6 +256,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 onClick={() => { onUndo(); setActiveMenu(null); }}
                 disabled={!canUndo}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                title="Macht die letzte Audio-Bearbeitung rückgängig"
               >
                 <span>Rückgängig (Undo)</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Z</span>
@@ -244,6 +265,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 onClick={() => { onRedo(); setActiveMenu(null); }}
                 disabled={!canRedo}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                title="Wiederholt den zuletzt rückgängig gemachten Schritt"
               >
                 <span>Wiederholen (Redo)</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Y</span>
@@ -251,31 +273,33 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
               <div className="h-px bg-[#262830] my-1" />
 
-              {onCut && (
-                <button
-                  onClick={() => { onCut(); setActiveMenu(null); }}
-                  disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Scissors size={12} className="text-neutral-400" />
-                    <span>Ausschneiden (Cut)</span>
-                  </span>
-                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+X</span>
-                </button>
-              )}
-
               {onCopy && (
                 <button
                   onClick={() => { onCopy(); setActiveMenu(null); }}
                   disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                  title="Kopiert den markierten Wellenformbereich in die verlustfreie Zwischenablage"
                 >
                   <span className="flex items-center space-x-1.5">
-                    <Copy size={12} className="text-neutral-400" />
+                    <Copy size={11} />
                     <span>Kopieren (Copy)</span>
                   </span>
-                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+C</span>
+                  <span className="text-neutral-500">Ctrl+C</span>
+                </button>
+              )}
+
+              {onCut && (
+                <button
+                  onClick={() => { onCut(); setActiveMenu(null); }}
+                  disabled={!hasSelection}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                  title="Schneidet die Auswahl aus und legt sie in der Zwischenablage ab"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Scissors size={11} />
+                    <span>Ausschneiden (Cut)</span>
+                  </span>
+                  <span className="text-neutral-500">Ctrl+X</span>
                 </button>
               )}
 
@@ -283,13 +307,14 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onPaste(); setActiveMenu(null); }}
                   disabled={!hasClipboard}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center"
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
+                  title="Fügt den Clip an der aktuellen Cursorposition ein"
                 >
                   <span className="flex items-center space-x-1.5">
-                    <ClipboardPaste size={12} className="text-neutral-400" />
+                    <ClipboardPaste size={11} />
                     <span>Einfügen (Paste)</span>
                   </span>
-                  <span className="text-neutral-500 hover:text-neutral-200">Ctrl+V</span>
+                  <span className="text-neutral-500">Ctrl+V</span>
                 </button>
               )}
 
@@ -297,30 +322,30 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onDelete(); setActiveMenu(null); }}
                   disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between items-center text-[#ff6b62]"
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between text-[#ff5549]"
+                  title="Auswahl löschen (Standard-Löschen oder Ripple Delete)"
                 >
                   <span className="flex items-center space-x-1.5">
-                    <Trash2 size={12} />
-                    <span>Löschen… (Delete-Variante)</span>
+                    <Trash2 size={11} />
+                    <span>Löschen (Delete)…</span>
                   </span>
-                  <span className="text-neutral-500 hover:text-neutral-200">Del</span>
+                  <span className="text-neutral-500">Del</span>
                 </button>
               )}
 
               <div className="h-px bg-[#262830] my-1" />
 
-              {onClearHistory && (
+              {onSeparateStems && (
                 <button
-                  onClick={() => { onClearHistory(); setActiveMenu(null); }}
-                  disabled={!hasHistory}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#b82525] hover:text-white disabled:opacity-40 flex justify-between items-center text-[#ff7066]"
-                  title="Öffnet Sicherheitsdialog zum Leeren des Undo/Redo-Verlaufs"
+                  onClick={() => { onSeparateStems(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00c8ff] font-medium"
+                  title="Startet die KI-Stem-Separation mit dem in den Einstellungen konfigurierten Modell"
                 >
                   <span className="flex items-center space-x-1.5">
-                    <Trash2 size={12} className="text-[#ff453a]" />
-                    <span>Verlauf leeren...</span>
+                    <Sparkles size={12} className="text-[#00c8ff]" />
+                    <span>Stems jetzt trennen...</span>
                   </span>
-                  <span className="text-[10px] text-neutral-500 hover:text-neutral-200">Dialog</span>
+                  <span className="text-[9px] bg-[#0088ff]/30 text-[#00c8ff] px-1 rounded font-mono">KI</span>
                 </button>
               )}
 
@@ -328,39 +353,25 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onOpenEditAssistant(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
+                  title="Prüft die Integrität von Zwischenablage und Auswahlbereich"
                 >
                   <span className="flex items-center space-x-1.5">
                     <ShieldCheck size={12} className="text-[#00e5ff]" />
-                    <span>Edit Assistant (Integrität)...</span>
+                    <span>Edit Assistant prüfen...</span>
                   </span>
                 </button>
               )}
 
-              {onAnalyzeMixIn && (
+              {onClearHistory && hasHistory && (
                 <button
-                  onClick={() => { onAnalyzeMixIn(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-emerald-600 hover:text-white flex justify-between items-center text-emerald-400"
-                  title="Öffnet den AI Copilot für die Phrasen- und Energieanalyse des optimalen Mix-In Punkts"
+                  onClick={() => { onClearHistory(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#ff3b30] hover:text-white flex justify-between items-center text-[#ff8a80]"
+                  title="Löscht den Undo/Redo-Verlauf zur Freigabe von Arbeitsspeicher"
                 >
                   <span className="flex items-center space-x-1.5">
-                    <Sparkles size={12} className="text-emerald-400" />
-                    <span>Mix-In analysieren (Copilot)...</span>
+                    <Trash2 size={11} />
+                    <span>Bearbeitungsverlauf leeren...</span>
                   </span>
-                  <span className="text-[10px] text-emerald-500/80 hover:text-white font-mono">AI</span>
-                </button>
-              )}
-
-              {onSeparateStems && (
-                <button
-                  onClick={() => { onSeparateStems(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
-                  title="Trennt den aktiven Track in 4 Stems (Vocals, Drums, Bass, Other)"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Sparkles size={12} className="text-[#00e5ff]" />
-                    <span>Multi-Band Stems trennen...</span>
-                  </span>
-                  <span className="text-[9px] bg-[#0088ff]/30 text-white px-1 rounded font-mono">4-STEMS</span>
                 </button>
               )}
 
@@ -377,11 +388,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                   <span className="text-[9px] bg-emerald-500/20 text-[#00e676] px-1 rounded font-mono">PADS</span>
                 </button>
               )}
-
-              <div className="h-px bg-[#262830] my-1" />
-              <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
-                Originalschutz aktiv (Read-Only)
-              </div>
             </div>
           )}
         </div>
@@ -393,6 +399,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
               activeMenu === 'betrachten' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
             }`}
+            title="Ansichten, Farbpaletten und Wellenform-Modi einstellen"
           >
             Betrachten
           </button>
@@ -406,6 +413,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
                   waveformMode === 'BLUE' ? 'text-[#00a2ff] font-medium' : ''
                 }`}
+                title="Monochrome blaue Rekordbox-Wellenform"
               >
                 <span>BLUE (Monochrom)</span>
                 {waveformMode === 'BLUE' && <span>✓</span>}
@@ -415,6 +423,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
                   waveformMode === 'RGB' ? 'text-[#00a2ff] font-medium' : ''
                 }`}
+                title="RGB-Farben nach Frequenzbändern (Rot=Bass, Grün=Mitten, Blau=Höhen)"
               >
                 <span>RGB (Frequenzfarben)</span>
                 {waveformMode === 'RGB' && <span>✓</span>}
@@ -424,6 +433,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
                   waveformMode === '3BAND' ? 'text-[#00a2ff] font-medium' : ''
                 }`}
+                title="3 getrennte Frequenzbänder (Pioneer 3-Band Waveform)"
               >
                 <span>3BAND (Low / Mid / High)</span>
                 {waveformMode === '3BAND' && <span>✓</span>}
@@ -433,6 +443,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onToggleEditPalette(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
+                  title="Untere Palette für Beat Select, Auswahl und Schnittoperationen ein-/ausblenden"
                 >
                   <span>Editierpalette (Unten)</span>
                   <span className="flex items-center space-x-2">
@@ -444,6 +455,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onTogglePalette(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
+                title="Rechte Clip-Palette für geschnittene Audioschnipsel ein-/ausblenden"
               >
                 <span>Clip-Palette (Rechts)</span>
                 <span className="flex items-center space-x-2">
@@ -455,6 +467,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 <button
                   onClick={() => { onMaximizeWaveform(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00c8ff]"
+                  title="Maximiert den Wellenformbereich über die volle Fensterhöhe"
                 >
                   <span>Wellenform maximieren (Zen)</span>
                   <span className="text-neutral-400 text-[10px]">M</span>
@@ -463,14 +476,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onToggleBrowser(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
+                title="Browser & Multi-Track Leiste ein-/ausblenden"
               >
-                <span>Browser & Multi-Track</span>
+                <span>Browser &amp; Multi-Track</span>
                 <span>{browserOpen ? '✓' : ''}</span>
               </button>
               {onToggleChatbot && (
                 <button
                   onClick={() => { onToggleChatbot(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between text-[#00a2ff] hover:text-white font-medium"
+                  title="KI-gestützten DJ-Copiloten für Mix-Analysen und Cue-Vorschläge öffnen"
                 >
                   <span className="flex items-center space-x-1.5">
                     <Sparkles size={11} />
@@ -490,15 +505,30 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
               activeMenu === 'hilfe' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
             }`}
+            title="Hilfe, Ersteinrichtung, Demotrack und System-Diagnose"
           >
             Hilfe
           </button>
           {activeMenu === 'hilfe' && (
             <div className="absolute left-0 top-6 w-64 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
+              {onOpenInitialSetup && (
+                <button
+                  onClick={() => { onOpenInitialSetup(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00c8ff] font-semibold flex items-center justify-between"
+                  title="Ersteinrichtungs- und Installationsassistenten öffnen"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Wand2 size={12} />
+                    <span>Ersteinrichtung &amp; KI-Installer…</span>
+                  </span>
+                  <span className="text-[9px] bg-[#0088ff]/20 text-[#00c8ff] px-1 rounded font-mono">SETUP</span>
+                </button>
+              )}
               {onLoadDemoTrack && (
                 <button
                   onClick={() => { onLoadDemoTrack(); setActiveMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00a2ff]"
+                  title="Lädt den mitgelieferten Demo-Referenztrack mit Beatgrid und Cues"
                 >
                   Demo-Referenztrack laden (La Roux)...
                 </button>
@@ -506,19 +536,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 onClick={() => { onShowInfo(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
+                title="Informationen zu Rekordbox-Datenquellen und Non-Destructive Originalschutz"
               >
-                Rekordbox Daten & Originalschutz...
-              </button>
-              <button
-                onClick={() => { setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
-              >
-                Über airdox_SMART_Editor
+                Rekordbox Daten &amp; Originalschutz...
               </button>
               <div className="border-t border-[#2b2d35] my-1" />
               <button
                 onClick={() => { onOpenSystemLogs?.(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
+                title="System-Diagnoseprotokoll für Fehler und Inferenzzeiten öffnen"
               >
                 System-Protokoll...
               </button>
@@ -537,7 +563,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 ? 'bg-gradient-to-r from-[#0088ff] to-[#7c3aed] text-white border border-blue-400/50 shadow-blue-500/20'
                 : 'bg-[#181a24] hover:bg-[#202330] text-neutral-200 border border-[#2d3144] hover:border-[#0088ff]/50'
             }`}
-            title="AI Smart Copilot Palette öffnen / schließen"
+            title="AI Smart Copilot Palette öffnen / schließen (Mix-Analysen &amp; DJ-Tipps)"
           >
             <Sparkles size={11} className={chatbotOpen ? 'text-amber-300 animate-spin' : 'text-[#00a2ff]'} />
             <span className="tracking-wider">AI COPILOT</span>
@@ -548,7 +574,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           <button
             onClick={onOpenXmlCollection}
             className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#181a24] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2c2f3f] text-[10px] transition-colors"
-            title="Rekordbox XML Track-Auswahl Pop-up öffnen"
+            title="Rekordbox XML Track-Auswahl Pop-up öffnen (Schnellzugriff auf alle importierten Tracks)"
           >
             <Disc size={11} className="text-[#00e5ff]" />
             <span className="font-semibold tracking-wide">XML Track-Auswahl</span>
@@ -558,7 +584,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           <button
             onClick={onOpenDatabaseInspector}
             className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#0088ff]/15 hover:bg-[#0088ff] text-[#00a2ff] hover:text-white border border-[#0088ff]/30 text-[10px] transition-colors"
-            title="Rekordbox Datenbank & Visualisierungs-Extraktor öffnen"
+            title="Rekordbox Datenbank &amp; ANLZ Wellenform-Extraktor öffnen"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] inline-block animate-pulse" />
             <span className="font-semibold tracking-wide">DB-Extraktor</span>

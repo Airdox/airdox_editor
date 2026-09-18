@@ -63,6 +63,7 @@ import { ImportProgressModal } from './components/Modals/ImportProgressModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
+import { InitialSetupModal } from './components/Modals/InitialSetupModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
 import { DeleteModeModal } from './components/Modals/DeleteModeModal';
@@ -86,9 +87,13 @@ import {
   loadStemArchitectureSettings,
   resolveArchitectureJobOptions,
   saveStemArchitectureSettings,
+  loadWorkspacePathSettings,
+  saveWorkspacePathSettings,
+  architectureLabel,
   type StemArchitectureOption,
   type StemArchitectureSettings,
   type StemArchitectureViewState,
+  type WorkspacePathSettings,
 } from './audio/stemArchitectures';
 import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
@@ -485,6 +490,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemArchitectures, setStemArchitectures] = useState<StemArchitectureOption[]>([]);
   const [stemArchitectureState, setStemArchitectureState] = useState<StemArchitectureViewState | null>(null);
   const [stemArchitecturesLoading, setStemArchitecturesLoading] = useState<boolean>(false);
+
+  // Installationspfade & Ersteinrichtungsstatus
+  const [workspacePaths, setWorkspacePaths] = useState<WorkspacePathSettings>(() =>
+    loadWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage)
+  );
+  const [initialSetupOpen, setInitialSetupOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const done = window.localStorage?.getItem('airdox.initialSetupCompleted');
+    return done !== 'true';
+  });
 
   useEffect(() => {
     saveStemArchitectureSettings(typeof window === 'undefined' ? null : window.localStorage, stemArchitecture);
@@ -1083,6 +1098,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     void refreshStemArchitectures();
   }, [refreshStemArchitectures]);
 
+  const handleCompleteInitialSetup = useCallback((paths: WorkspacePathSettings) => {
+    setWorkspacePaths(paths);
+    saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, paths);
+    setInitialSetupOpen(false);
+    void refreshStemArchitectures();
+    logger.info('SYSTEM', 'Ersteinrichtung erfolgreich abgeschlossen.', { paths });
+  }, [refreshStemArchitectures]);
+
   // … und jedes Mal, wenn die Einstellungen geöffnet werden: die
   // Installationslage kann sich zwischenzeitlich geändert haben.
   useEffect(() => {
@@ -1155,16 +1178,30 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setStemEngineUnavailableReason(reason);
       setStemQualityWarning(
         `Architektur „${pinnedArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
-          'Installation: npm run stems:bundle bzw. der In-App-Installer – oder im Einstellungsmenü auf „Automatisch" stellen.'
+          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Modelle jetzt einzurichten, oder wählen Sie im Einstellungsmenü ein anderes Modell.'
       );
       return;
     }
+
+    // Wenn auf "Automatisch" gestellt ist: prüfen ob irgendein Modell vorhanden ist
+    const anyInstalled = stemArchitectures.some((entry) => entry.id !== 'auto' && entry.installed);
+    if (stemArchitecture.architectureId === 'auto' && stemArchitectures.length > 0 && !anyInstalled) {
+      const reason = 'Keine KI-Stem-Modelle installiert (BS-RoFormer / HT-Demucs fehlen).';
+      logger.warn('EDITING', `Stem-Preflight: Auto-Modus ohne installierte Modelle — ${reason}`);
+      setStemEngineUnavailableReason(reason);
+      setStemQualityWarning(
+        `Keine KI-Stem-Modelle installiert: ${reason}\n` +
+          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Stem-Engine jetzt einzurichten.'
+      );
+      return;
+    }
+
     const profile = resolvedStemProfile;
     setIsSeparatingStems(true);
     setStemEngineUnavailableReason(null);
     setSeparationProgress({
       percent: 1,
-      phaseText: `BS-RoFormer Preflight (${profile})…`,
+      phaseText: `KI Stem-Preflight (${architectureLabel(stemArchitecture, stemArchitectures)})…`,
       processedSeconds: 0,
       totalSeconds: workingAudioBuffer.duration,
     });
@@ -1172,7 +1209,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setIsSeparatingStems(false);
     setSeparationProgress(null);
     if (!availability.available) {
-      logger.warn('EDITING', `Stem-Preflight: BS-RoFormer nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
+      logger.warn('EDITING', `Stem-Preflight: KI-Engine nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
       setStemEngineUnavailableReason(availability.reason || 'STEM AI UNAVAILABLE');
       setStemQualityWarning(availability.reason || 'STEM AI UNAVAILABLE');
       const info = await stemEngine.getEngineInfo().catch(() => null);
@@ -1189,7 +1226,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
       setStemQualityWarning(
         `Profil ${profile} nicht verfügbar: ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}. ` +
-          'Installation: npm run stems:setup:bsroformer und npm run stems:diagnose'
+          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Modelle einzurichten.'
       );
       return;
     }
@@ -3768,6 +3805,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenMidiModal={() => setMidiModalOpen(true)}
         onSeparateStems={handleSeparateStems}
         onOpenRecorder={openRecorder}
+        onOpenInitialSetup={() => setInitialSetupOpen(true)}
       />
 
       {/* 3. EDIT Mode Toolbar / Transport */}
@@ -3830,6 +3868,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           if (window.rekordboxDesktop?.getStemDiagnostics) {
             void window.rekordboxDesktop.getStemDiagnostics().then((d: any) => console.log('Diagnostics:', d));
           }
+        }}
+        activeArchitectureLabel={
+          stemArchitectures.find((a) => a.id === stemArchitecture.architectureId)?.label ??
+          (stemArchitecture.architectureId === 'auto' ? 'Automatisch' : stemArchitecture.architectureId)
+        }
+        activeArchitectureBenchmark={(() => {
+          const arch = stemArchitectures.find((a) => a.id === stemArchitecture.architectureId);
+          return arch?.benchmark5Min
+            ? `5-Min: GPU ${arch.benchmark5Min.gpuTime} | CPU ${arch.benchmark5Min.cpuTime}`
+            : '5-Min: GPU ~45–75s | CPU ~3–5 Min.';
+        })()}
+        onOpenInstaller={() => {
+          setStemQualityWarning('KI Stem-Engine ist noch nicht installiert. Bitte installieren Sie die Modelle, um Stems zu trennen.');
         }}
         onToggleStemMute={handleToggleStemMute}
         onToggleStemSolo={handleToggleStemSolo}
@@ -4074,6 +4125,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         stemEngineState={stemArchitectureState}
         stemArchitecturesLoading={stemArchitecturesLoading}
         onRefreshStemArchitectures={() => { void refreshStemArchitectures(); }}
+        workspacePaths={workspacePaths}
+        onSetWorkspacePaths={(paths) => {
+          setWorkspacePaths(paths);
+          saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, paths);
+        }}
+        onOpenInitialSetup={() => setInitialSetupOpen(true)}
       />
       {activeTrack && (
         <>
@@ -4176,14 +4233,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         }}
         onEngineInstalled={() => {
           logger.info('EDITING', 'BS-RoFormer Engine wurde installiert und verifiziert.');
+          void refreshStemArchitectures();
         }}
         onRunWithInstalledEngine={() => {
           setStemQualityWarning(null);
           setStemEngineUnavailableReason(null);
           stemEngine.clearCache();
           setActiveTrackStems(null);
-          void stemEngine.getEngineInfo().then((info) => setStemEngineInfo(info));
+          void refreshStemArchitectures().then(() => {
+            void handleSeparateStems();
+          });
         }}
+      />
+
+      {/* Ersteinrichtungs- & Installationsassistent beim ersten Öffnen */}
+      <InitialSetupModal
+        isOpen={initialSetupOpen}
+        onClose={() => setInitialSetupOpen(false)}
+        onComplete={handleCompleteInitialSetup}
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}
