@@ -11,6 +11,7 @@ import { AlertTriangle, X, Cpu, ShieldAlert, Download, CheckCircle2, Loader2 } f
 import {
   installStemEngineWithProgress,
   StemInstallProgressUpdate,
+  StemInstallResult,
 } from '../../audio/stemEngineInstaller';
 
 interface StemQualityWarningModalProps {
@@ -18,7 +19,8 @@ interface StemQualityWarningModalProps {
   reason: string;
   onClose: () => void;
   onProceedWithFallback: () => void;
-  onEngineInstalled?: () => void;
+  /** Bekommt das Installationsergebnis (Label/Hinweis), damit das Log die Wahrheit sagt. */
+  onEngineInstalled?: (result?: StemInstallResult) => void;
   onRunWithInstalledEngine?: () => void;
   /**
    * Das im Einstellungsmenü gewählte, noch nicht installierte Modell. Dann
@@ -31,7 +33,7 @@ interface StemQualityWarningModalProps {
 type InstallState =
   | { phase: 'IDLE' }
   | { phase: 'RUNNING'; progress: StemInstallProgressUpdate | null; lastLog: string }
-  | { phase: 'DONE'; restartRequired?: boolean }
+  | { phase: 'DONE'; restartRequired?: boolean; label?: string; warning?: string }
   | { phase: 'FAILED'; error: string };
 
 export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = ({
@@ -70,8 +72,13 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
         installModel ? { modelId: installModel.id } : {}
       );
       if (result.ok) {
-        setInstall({ phase: 'DONE', restartRequired: result.restartRequired });
-        if (!result.restartRequired) onEngineInstalled?.();
+        setInstall({
+          phase: 'DONE',
+          restartRequired: result.restartRequired,
+          label: result.label,
+          warning: result.warning,
+        });
+        if (!result.restartRequired) onEngineInstalled?.(result);
       } else {
         setInstall({ phase: 'FAILED', error: result.error || 'Unbekannter Installationsfehler.' });
       }
@@ -177,9 +184,20 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
             <div className="bg-[#0b1a12] border border-[#10b981]/60 rounded-xs p-2.5 space-y-1.5">
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <CheckCircle2 size={14} />
-                <span className="font-bold text-[11px]">{installLabel} erfolgreich installiert und verifiziert!</span>
+                <span className="font-bold text-[11px]">
+                  {install.label ?? `${installLabel} erfolgreich installiert und verifiziert!`}
+                </span>
               </div>
-              <p className="text-[11px] text-neutral-300">{install.restartRequired ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.' : 'Modell SHA256 geprüft, kurze Test-Inferenz erfolgreich. Starte jetzt erneut.'}</p>
+              <p className="text-[11px] text-neutral-300">
+                {install.restartRequired
+                  ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.'
+                  : install.warning
+                    ? 'Installation abgeschlossen – bitte den Hinweis unten lesen.'
+                    : 'Modell SHA256 geprüft, kurze Test-Inferenz erfolgreich. Starte jetzt erneut.'}
+              </p>
+              {install.warning && (
+                <p className="text-[10.5px] text-[#f5d78e] font-mono break-all leading-relaxed">{install.warning}</p>
+              )}
             </div>
           )}
 

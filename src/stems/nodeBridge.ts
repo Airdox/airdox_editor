@@ -14,6 +14,9 @@
  * the same implementation, only the transport differs.
  */
 import { StemJobService, type StemJobServiceOptions, type StartStemJobRequest } from './stemJobService';
+import { clearRuntimeCaches } from './runtimeCaches';
+
+export { clearRuntimeCaches };
 import type { StemBridgeError, StemBridgeResult, StemJobView, StemServiceStatus } from './transportTypes';
 import { isStemError } from './errors';
 

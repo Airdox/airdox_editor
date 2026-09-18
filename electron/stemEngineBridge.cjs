@@ -96,10 +96,11 @@ function loadStemBridge(repoRoot, logger) {
   try {
     const module = require(bundlePath);
     const factory = module.createStemBridge || (module.default && module.default.createStemBridge);
+    const clearCaches = module.clearRuntimeCaches || (module.default && module.default.clearRuntimeCaches);
     if (typeof factory !== 'function') {
       return { bridge: null, bundlePath, reason: 'Engine-Bundle exportiert createStemBridge nicht – Version prüfen.' };
     }
-    return { bridge: factory, bundlePath, reason: undefined };
+    return { bridge: factory, clearCaches, bundlePath, reason: undefined };
   } catch (error) {
     return { bridge: null, bundlePath, reason: `Engine-Bundle konnte nicht geladen werden: ${error.message}` };
   }
@@ -252,6 +253,18 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
         return false;
       }
       bridge.close();
+      // Prozessweite Verdikte (Interpreter/ONNX) verwerfen: nach einer
+      // Installation wäre ein gecachtes „nicht verfügbar“ sonst falsch.
+      try {
+        const clear = loaded.clearCaches;
+        if (typeof clear === 'function') {
+          Promise.resolve(clear()).catch((error) =>
+            log(logger, 'warn', 'Laufzeit-Caches konnten nicht geleert werden', { error: error && error.message })
+          );
+        }
+      } catch (error) {
+        log(logger, 'warn', 'Laufzeit-Caches konnten nicht geleert werden', { error: error && error.message });
+      }
       bridge = createBridge();
       attachEvents();
       return true;

@@ -43,7 +43,15 @@ import { existsSync } from 'node:fs';
 import { StemSeparationError } from '../errors';
 import { planChunks, MIN_OVERLAP_SAMPLES, type CancellationToken } from '../chunkProcessor';
 import { OverlapAddReconstructor } from '../reconstructor';
-import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator, InlineStem } from './types';
+import type {
+  BackendAvailability,
+  BackendAvailabilityOptions,
+  BackendCapabilities,
+  BackendSeparationRequest,
+  BackendSeparationResponse,
+  IStemSeparator,
+  InlineStem,
+} from './types';
 import type { ComputeDevice, ModelDescriptor, ModelFamily, StemId } from '../types';
 
 /* ------------------------------------------------------------------------- *
@@ -225,6 +233,93 @@ export function packSegment(input: {
   return target;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Prozess-weite Runtime + gecachte Laufzeitinfo
+ * ------------------------------------------------------------------------- */
+
+let sharedRuntimePromise: Promise<OnnxRuntimeLike> | undefined;
+let sharedBackends: { at: number; list: { name: string; bundled?: boolean }[] } | undefined;
+let sharedRuntimeInfo: { at: number; key: string; value: RuntimeInfo } | undefined;
+let sharedRuntimeInfoInflight: { key: string; promise: Promise<RuntimeInfo> } | undefined;
+
+/** TTL der Laufzeitinfo – kurz genug für „Runtime nachinstalliert“, lang genug für die UI. */
+const RUNTIME_INFO_TTL_MS = 5 * 60 * 1000;
+/** TTL der Provider-Liste (ändert sich nur mit der installierten Runtime). */
+const BACKENDS_TTL_MS = 10 * 60 * 1000;
+
+export interface RuntimeInfo {
+  available: boolean;
+  providers: string[];
+  supported: { name: string; bundled: boolean }[];
+  reason?: string;
+}
+
+/** Lädt die native Runtime genau einmal pro Prozess. */
+export async function loadSharedOnnxRuntime(): Promise<OnnxRuntimeLike> {
+  if (!sharedRuntimePromise) {
+    sharedRuntimePromise = (async () => {
+      const moduleName = 'onnxruntime-node';
+      const loaded = (await import(/* @vite-ignore */ moduleName)) as unknown as OnnxRuntimeLike & { default?: OnnxRuntimeLike };
+      const runtime = loaded?.InferenceSession ? loaded : (loaded.default as OnnxRuntimeLike);
+      if (!runtime?.InferenceSession || typeof runtime.Tensor !== 'function') {
+        throw new StemSeparationError('BACKEND_UNAVAILABLE', 'onnxruntime-node liefert keine InferenceSession (falsche Version?)');
+      }
+      return runtime;
+    })().catch((error) => {
+      // Ein Fehlversuch darf die (nachinstallierbare) Runtime nicht dauerhaft
+      // blockieren – der nächste Statusaufruf versucht es erneut.
+      sharedRuntimePromise = undefined;
+      throw new StemSeparationError(
+        'BACKEND_UNAVAILABLE',
+        'onnxruntime-node ist nicht verfügbar. Installation: npm install (die Binaries kommen aus dem npm-Tarball; ' +
+          'in Firmennetzen ggf. `npm install onnxruntime-node --onnxruntime-node-install=skip` und Binaries manuell ablegen). ' +
+          `Ursache: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
+  }
+  return sharedRuntimePromise;
+}
+
+/** Provider-Liste der installierten Runtime (gecacht, ändert sich nicht pro Aufruf). */
+export function listSharedBackends(runtime: OnnxRuntimeLike): { name: string; bundled?: boolean }[] {
+  const now = Date.now();
+  if (sharedBackends && now - sharedBackends.at < BACKENDS_TTL_MS) return sharedBackends.list;
+  const list = runtime.listSupportedBackends?.() ?? [];
+  sharedBackends = { at: now, list };
+  return list;
+}
+
+/** Wirft die Laufzeit-/Provider-Caches weg (Tests, Runtime-Installation). */
+export async function resetSharedOnnxRuntime(): Promise<void> {
+  sharedRuntimePromise = undefined;
+  sharedBackends = undefined;
+  sharedRuntimeInfo = undefined;
+  sharedRuntimeInfoInflight = undefined;
+}
+
+/**
+ * Laufzeitinfo für die UI: gecacht mit TTL und single-flight. Ohne Cache lud
+ * jede Statusabfrage die native Runtime neu – der Statusaufruf im Log wurde
+ * damit 7–21 s lang.
+ */
+export async function cachedRuntimeInfo(loader: () => Promise<RuntimeInfo>, key: string): Promise<RuntimeInfo> {
+  const now = Date.now();
+  if (sharedRuntimeInfo && sharedRuntimeInfo.key === key && now - sharedRuntimeInfo.at < RUNTIME_INFO_TTL_MS) {
+    return sharedRuntimeInfo.value;
+  }
+  if (sharedRuntimeInfoInflight && sharedRuntimeInfoInflight.key === key) return sharedRuntimeInfoInflight.promise;
+  const promise = loader()
+    .then((value) => {
+      sharedRuntimeInfo = { at: Date.now(), key, value };
+      return value;
+    })
+    .finally(() => {
+      if (sharedRuntimeInfoInflight?.key === key) sharedRuntimeInfoInflight = undefined;
+    });
+  sharedRuntimeInfoInflight = { key, promise };
+  return promise;
+}
+
 /**
  * Which model output row belongs to which stem. The model emits rows in graph
  * order; the descriptor says what that order means.
@@ -273,6 +368,7 @@ export class OnnxSeparator implements IStemSeparator {
   readonly kind = 'onnx' as const;
   readonly family: ModelFamily;
   readonly name: string;
+  readonly availabilityKey: string;
   private readonly options: OnnxSeparatorOptions;
   private runtimePromise?: Promise<OnnxRuntimeLike>;
 
@@ -280,6 +376,7 @@ export class OnnxSeparator implements IStemSeparator {
     this.options = options;
     this.family = options.family ?? 'htdemucs';
     this.name = `${this.family}:onnx`;
+    this.availabilityKey = [this.kind, this.family, options.modelStoreDir, options.device ?? 'auto'].join('|');
   }
 
   capabilities(): BackendCapabilities {
@@ -303,7 +400,18 @@ export class OnnxSeparator implements IStemSeparator {
     return descriptor.family === this.family && descriptor.checkpoint?.format === 'onnx';
   }
 
+  /**
+   * Die native ONNX-Runtime ist ein Prozess-weit geteiltes Betriebsmittel:
+   * `require('onnxruntime-node')` lädt DirectML/CUDA-DLLs und kostet auf Windows
+   * mehrere Sekunden. Ein eigener Ladevorgang je `OnnxSeparator`-Instanz (und
+   * damit je Statusabfrage) war die Ursache der 7–21-s-`stems:engine-status`-
+   * Einträge im Produktionslog. Eingespritzte Runtimes (Tests) bleiben je
+   * Instanz isoliert.
+   */
   private async loadRuntime(): Promise<OnnxRuntimeLike> {
+    if (!this.options.runtime && !this.options.loadRuntime) {
+      return loadSharedOnnxRuntime();
+    }
     if (!this.runtimePromise) {
       const loader = this.options.loadRuntime ?? (async () => {
         // Optional dependency: a checkout without it must not fail at import.
@@ -338,7 +446,16 @@ export class OnnxSeparator implements IStemSeparator {
    * das Einstellungsmenü soll auch ohne Gewichte eine belastbare Auskunft
    * bekommen (statt einen Gerät-Eintrag anzubieten, der nie greift).
    */
-  async runtimeInfo(): Promise<{ available: boolean; providers: string[]; supported: { name: string; bundled: boolean }[]; reason?: string }> {
+  async runtimeInfo(): Promise<RuntimeInfo> {
+    // Ist die Runtime hier eingespritzt (Tests/Embedded), bleibt es bei einer
+    // direkten Messung – der Prozess-Cache gilt nur für die geteilte Runtime.
+    if (this.options.runtime || this.options.loadRuntime) {
+      return this.measureRuntimeInfo();
+    }
+    return cachedRuntimeInfo(() => this.measureRuntimeInfo(), `shared|${this.options.device ?? 'auto'}`);
+  }
+
+  private async measureRuntimeInfo(): Promise<RuntimeInfo> {
     try {
       const info = await this.executionProviders();
       return {
@@ -354,7 +471,7 @@ export class OnnxSeparator implements IStemSeparator {
   /** Diagnostics for the doctor script and the UI: which EPs can this host use? */
   async executionProviders(descriptor?: ModelDescriptor): Promise<{ providers: string[]; supported: { name: string; bundled?: boolean }[] }> {
     const runtime = await this.loadRuntime();
-    const supported = runtime.listSupportedBackends?.() ?? [];
+    const supported = listSharedBackends(runtime);
     const bundled = Object.fromEntries(supported.map((entry) => [normaliseExecutionProvider(entry.name), entry.bundled !== false]));
     return {
       providers: selectExecutionProviders({
@@ -366,7 +483,8 @@ export class OnnxSeparator implements IStemSeparator {
     };
   }
 
-  async isAvailable(descriptor?: ModelDescriptor): Promise<BackendAvailability> {
+  async isAvailable(options: BackendAvailabilityOptions & { descriptor?: ModelDescriptor } = {}): Promise<BackendAvailability> {
+    const descriptor = options.descriptor;
     const probes: { name: string; found: boolean; detail?: string }[] = [];
     try {
       await this.loadRuntime();
@@ -412,9 +530,10 @@ export class OnnxSeparator implements IStemSeparator {
     runtime: OnnxRuntimeLike
   ): Promise<WarmSession> {
     const modelPath = resolveOnnxModelPath(descriptor, this.options.modelStoreDir);
-    const supported = (runtime.listSupportedBackends?.() ?? []).map((entry) => entry.name);
+    const backendList = listSharedBackends(runtime);
+    const supported = backendList.map((entry) => entry.name);
     const bundled = Object.fromEntries(
-      (runtime.listSupportedBackends?.() ?? []).map((entry) => [normaliseExecutionProvider(entry.name), entry.bundled !== false])
+      backendList.map((entry) => [normaliseExecutionProvider(entry.name), entry.bundled !== false])
     );
     const providers = selectExecutionProviders({ requested: device, supported, bundled });
     const key = `${modelPath}|${providers.join(',')}`;

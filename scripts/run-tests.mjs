@@ -53,7 +53,7 @@ const GROUPS = {
   // TypeScript und ohne Python ausführbar (die python-abhängigen Suiten
   // erklären sich über @requires-Direktiven selbst für SKIP).
   stems: (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
   // Die Freigabe-Läufe mit echten Gewichten (Checkpoint + PyTorch nötig). Beide
   // sind ohne installierten Checkpoint ein sauberer SKIP – `test:stems:release`
   // dreht das mit --fail-on-skip um, damit niemand "grün" liest, wo nichts lief.
@@ -61,7 +61,7 @@ const GROUPS = {
   'stems-live': (file) => /stem-separation-.*live|stem-isolation-gate-live/.test(file),
   // CI-Freigabe: alles, was ohne Spezialumgebung wirklich laufen muss.
   'stems-release': (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
   logging: (file) => /logger/.test(file),
   all: () => true,
 };

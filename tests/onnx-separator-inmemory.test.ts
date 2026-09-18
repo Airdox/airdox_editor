@@ -89,7 +89,7 @@ async function run() {
   // ---- #1: Session + Segmentlänge aus dem Graphen -------------------------
   console.log('\n[ TEST ] #1 Session lädt, Segmentlänge kommt aus dem Graphen');
   const separator = new OnnxSeparator({ modelStoreDir: store, runtime, family: 'htdemucs' });
-  const availability = await separator.isAvailable(descriptor);
+  const availability = await separator.isAvailable({ descriptor });
   assert.equal(availability.available, true, availability.reason);
   const warm = await separator.warmUp(descriptor, 'cpu');
   assert.equal(warm.segmentSamples, SEGMENT, 'Segmentlänge muss aus inputMetadata kommen');

@@ -29,11 +29,12 @@ import { validateSeparation } from './qualityValidator';
 import { prepareWorkingCopy, verifyOriginalIntegrity, type WorkingCopy } from './preprocessor';
 import { encodeWavFloat32, readWavFile, sha256File, analyzeAudio, type ExternalDecoder } from './wavIo';
 import type { BackendKind, ComputeDevice, ModelDescriptor, ModelPrecision, OriginalIntegrity, ProcessingMode, ProgressCallback, QualityProfile, SeparationJobSummary, SeparationSettings, StemDescriptor, StemId } from './types';
-import type { IStemSeparator, BackendSeparationResponse } from './backends/types';
+import type { IStemSeparator, BackendSeparationResponse, BackendAvailability } from './backends/types';
 import { BSRoFormerSeparator, MelBandRoFormerSeparator } from './backends/roformerSeparator';
 import { HTDemucsSeparator } from './backends/htDemucsSeparator';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
 import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
+import { availabilityCacheKey, BackendAvailabilityCache } from './backends/availabilityCache';
 
 export const DEFAULT_CHUNK_OVERLAP: Record<QualityProfile, number> = {
   PREVIEW: 0.25,
@@ -77,6 +78,8 @@ export interface BackendFactoryOptions {
   loadOnnxRuntime?: () => Promise<OnnxRuntimeLike>;
   /** Verify the ONNX file hash on availability (slow, off by default). */
   verifyOnnxHash?: boolean;
+  /** Persistenter Cache für Interpreter-Probes (Engine-`Cache/`). */
+  probeCacheDir?: string;
 }
 
 export interface BackendFactory {
@@ -107,6 +110,7 @@ export function createDefaultBackendFactory(options: BackendFactoryOptions = {})
         modelStoreDir: options.modelStoreDir,
         env: options.env,
         requireTorch: options.requireTorch,
+        probeCacheDir: options.probeCacheDir,
       };
       if (descriptor.family === 'bs_roformer') {
         // Native first: the shipped app must not require Python (§7).
@@ -135,7 +139,14 @@ export function createDefaultBackendFactory(options: BackendFactoryOptions = {})
             })
           );
         } else {
-          out.push(new HTDemucsSeparator({ pythonCommand: python.pythonCommand, modelStoreDir: options.modelStoreDir, env: options.env }));
+          out.push(
+            new HTDemucsSeparator({
+              pythonCommand: python.pythonCommand,
+              modelStoreDir: options.modelStoreDir,
+              env: options.env,
+              probeCacheDir: options.probeCacheDir,
+            })
+          );
         }
       }
       return out;
@@ -178,7 +189,13 @@ export interface SeparationEngineOptions {
   onnxRuntime?: OnnxRuntimeLike;
   /** Loader override for onnxruntime-node (tests without the binary). */
   loadOnnxRuntime?: () => Promise<OnnxRuntimeLike>;
+  /** Persistenter Cache für Interpreter-Probes (Default: `<cacheRoot>`). */
+  probeCacheDir?: string;
+  /** Eigener Verfügbarkeits-Cache (der Job-Service teilt seinen). */
+  availabilityCache?: BackendAvailabilityCache;
   clock?: () => number;
+  /** TTL (ms), in der der Job-Service-Status aus dem Speicher beantwortet wird. */
+  statusTtlMs?: number;
 }
 
 export interface SeparationRequest {
@@ -245,6 +262,8 @@ export class StemSeparationEngine {
   readonly registry: ModelRegistry;
   readonly modelManager: ModelManager;
   readonly cache: SeparationCache;
+  /** Geteilter Verfügbarkeits-Cache: Matrix und Job-Start sehen dieselbe Antwort. */
+  readonly availability: BackendAvailabilityCache;
   private readonly options: SeparationEngineOptions;
   private readonly backendFactory: BackendFactory;
 
@@ -257,7 +276,17 @@ export class StemSeparationEngine {
       env: options.env,
     });
     this.cache = new SeparationCache(options.cacheRoot);
-    this.backendFactory = options.backendFactory ?? createDefaultBackendFactory({ modelStoreDir: options.modelStoreDir });
+    this.availability = options.availabilityCache ?? new BackendAvailabilityCache();
+    this.options = { probeCacheDir: options.cacheRoot, ...options };
+    this.backendFactory =
+      options.backendFactory ??
+      createDefaultBackendFactory({
+        modelStoreDir: options.modelStoreDir,
+        device: options.device,
+        probeCacheDir: this.options.probeCacheDir,
+        onnxRuntime: options.onnxRuntime,
+        loadOnnxRuntime: options.loadOnnxRuntime,
+      });
   }
 
   /**
@@ -276,6 +305,80 @@ export class StemSeparationEngine {
   isSelectable(descriptor: ModelDescriptor): boolean {
     if (descriptor.family === 'pipeline_double') return false;
     return this.modelManager.isInstalled(descriptor);
+  }
+
+  /**
+   * Laufzeit-Verfügbarkeit eines Deskriptors: probt genau die Backends, die
+   * dieser Deskriptor bekommen würde – gecacht und single-flight
+   * (`BackendAvailabilityCache`), damit ein Statusaufruf nicht bei jeder
+   * Abfrage einen Interpreter startet.
+   */
+  async backendAvailability(
+    descriptor: ModelDescriptor,
+    options: { fast?: boolean } = {}
+  ): Promise<BackendAvailability> {
+    const candidates = this.backendCandidates(descriptor);
+    if (!candidates.length) {
+      return { available: false, reason: `Kein Backend-Kandidat für ${descriptor.id} konfiguriert.` };
+    }
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      const report = await this.availability.resolve(
+        availabilityCacheKey(candidate, descriptor.id, this.options.device, options),
+        () => candidate.isAvailable({ fast: options.fast })
+      );
+      if (report.available) return { ...report, detail: { ...(report.detail ?? {}), backendName: candidate.name } };
+      // Backends formulieren ihren Grund oft schon mit Präfix
+      // („bs_roformer:python-torch: …“) – nicht doppelt anhängen.
+      const reason = report.reason?.trim() || 'nicht verfügbar';
+      failures.push(reason.startsWith(candidate.name) ? reason : `${candidate.name}: ${reason}`);
+    }
+    return { available: false, reason: failures.join(' | ') || 'Kein Backend verfügbar.' };
+  }
+
+  /** Kandidaten in Ausführungsreihenfolge – identisch zu `selectBackend`. */
+  private backendCandidates(descriptor: ModelDescriptor): IStemSeparator[] {
+    return this.backendFactory.candidates(descriptor).filter((candidate) => {
+      const supports = (candidate as unknown as { supportsDescriptor?: (d: ModelDescriptor) => boolean }).supportsDescriptor;
+      return typeof supports === 'function' ? supports.call(candidate, descriptor) : true;
+    });
+  }
+
+  /** Ist dieses Modell *jetzt* rechenbar? (Gewichte vorhanden UND Backend startklar) */
+  async isRunnable(descriptor: ModelDescriptor, options: { fast?: boolean } = {}): Promise<boolean> {
+    if (!this.isSelectable(descriptor)) return false;
+    return (await this.backendAvailability(descriptor, options)).available;
+  }
+
+  /**
+   * Wählt – in Katalog-Reihenfolge – das erste Modell, das ein Profil bedienen
+   * kann *und* dessen Backend startklar ist.
+   *
+   * Das ist die Regel, die im Produktionslog fehlte: läuft kein Python, ist das
+   * primäre BS-RoFormer-Modell zwar installiert, aber nicht rechenbar. Die
+   * Auswahl fiel trotzdem darauf (Datei-Präsenz), der Job wurde angenommen und
+   * scheiterte erst Minuten später mit BACKEND_UNAVAILABLE – obwohl der
+   * installierte ONNX-Graph dasselbe Profil hätte bedienen können.
+   */
+  async selectRunnableModel(
+    profile: QualityProfile,
+    family?: ModelDescriptor['family'],
+    options: { fast?: boolean } = {}
+  ): Promise<{ descriptor: ModelDescriptor; runnable: boolean; reason?: string }> {
+    const ranked = this.registry.rankForProfile(profile, family);
+    const failures: string[] = [];
+    for (const candidate of ranked) {
+      if (!this.isSelectable(candidate)) {
+        failures.push(`${candidate.id}: Gewichte fehlen (${candidate.checkpoint.file})`);
+        continue;
+      }
+      const availability = await this.backendAvailability(candidate, options);
+      if (availability.available) return { descriptor: candidate, runnable: true };
+      failures.push(`${candidate.id}: ${availability.reason ?? 'Backend nicht verfügbar'}`);
+    }
+    // Kein Kandidat rechenbar: den ersten (Katalog-)Kandidaten melden, damit die
+    // UI das Profil mit seinem echten Modell und Grund anzeigen kann.
+    return { descriptor: ranked[0], runnable: false, reason: failures.join(' | ') };
   }
 
   /** Resolves the model that serves a profile (or the explicitly requested one). */
@@ -353,13 +456,11 @@ export class StemSeparationEngine {
       );
     }
 
-    // ---- 1. read-only fingerprint + cache lookup -------------------------
-    const working = await prepareWorkingCopy(request.inputPath, {
-      workingRoot: this.options.workingRoot,
-      externalDecoder: this.options.externalDecoder,
-      baseName: request.trackName,
-    });
-    const integrity: OriginalIntegrity = working.integrity;
+    // Reihenfolge mit Absicht: erst die *Umgebung* prüfen (Gewichte, Backend),
+    // dann die teure Arbeit am Audio. Vorher wurde zuerst die Arbeitskopie
+    // erzeugt (Decodieren/Resampling eines 6-Minuten-Tracks) und erst danach
+    // festgestellt, dass gar kein Backend läuft – im Produktionslog als
+    // 263 s `stems:job-wait` sichtbar, bevor BACKEND_UNAVAILABLE kam.
 
     // A missing or corrupt checkpoint is the more fundamental failure, so the
     // model is resolved before any backend is probed (§16).
@@ -368,6 +469,14 @@ export class StemSeparationEngine {
     // Backend choice happens before the settings hash: the backend is part of
     // the reproducible job identity.
     const backend = await this.selectBackend(descriptor, request.backend);
+
+    // ---- 1. read-only fingerprint + working copy ---------------------------
+    const working = await prepareWorkingCopy(request.inputPath, {
+      workingRoot: this.options.workingRoot,
+      externalDecoder: this.options.externalDecoder,
+      baseName: request.trackName,
+    });
+    const integrity: OriginalIntegrity = working.integrity;
     const stemRegistry = new StemRegistry(descriptor);
 
     const job = new SeparationJob({
@@ -715,16 +824,17 @@ export class StemSeparationEngine {
   }
 
   private async selectBackend(descriptor: ModelDescriptor, preferred?: BackendKind): Promise<IStemSeparator> {
-    const candidates = this.backendFactory.candidates(descriptor).filter((candidate) => {
-      const supports = (candidate as unknown as { supportsDescriptor?: (d: ModelDescriptor) => boolean }).supportsDescriptor;
-      return typeof supports === 'function' ? supports.call(candidate, descriptor) : true;
-    });
+    const candidates = this.backendCandidates(descriptor);
     const ordered = preferred ? [...candidates.filter((c) => c.kind === preferred), ...candidates.filter((c) => c.kind !== preferred)] : candidates;
     const failures: string[] = [];
     for (const candidate of ordered) {
-      const availability = await candidate.isAvailable();
+      const availability = await this.availability.resolve(
+        availabilityCacheKey(candidate, descriptor.id, this.options.device),
+        () => candidate.isAvailable()
+      );
       if (availability.available) return candidate;
-      failures.push(`${candidate.name}: ${availability.reason ?? 'nicht verfügbar'}`);
+      const reason = availability.reason?.trim() || 'nicht verfügbar';
+      failures.push(reason.startsWith(candidate.name) ? reason : `${candidate.name}: ${reason}`);
     }
     throw new StemSeparationError(
       'BACKEND_UNAVAILABLE',

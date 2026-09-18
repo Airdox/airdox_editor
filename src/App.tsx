@@ -1086,8 +1086,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     };
   }, []);
 
+  /*
+   * Ohne eigene Wahl entscheidet die Engine: sie kennt das *beste Profil, das
+   * ein Modell mit startklarem Backend hat* (`defaultProfile` aus der
+   * Profil-Matrix). Vorher wurde pauschal HIGH gewählt, was auf Rechnern mit
+   * installiertem ONNX-Graphen, aber ohne PyTorch zu einem Lauf führte, der
+   * gar nicht startklar war.
+   */
   const resolvedStemProfile: StemQualityProfile =
-    stemProfile ?? (stemEngineInfo?.usable ? 'HIGH' : 'BALANCED');
+    stemProfile ??
+    (stemEngineInfo?.defaultProfile as StemQualityProfile | undefined) ??
+    (stemEngineInfo?.usable ? 'HIGH' : 'BALANCED');
 
   /**
    * Architekturliste für das Einstellungsmenü: kommt aus derselben Quelle wie
@@ -1268,7 +1277,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // gerade automatisch auf „Automatisch" umgeschaltet, gilt wieder die
     // Profilprüfung.
     const pinnedStillEffective = effectiveArchitecture.architectureId !== 'auto' ? pinnedStemArchitecture : undefined;
-    if (!pinnedStillEffective && (!info.ok || (chosen && !chosen.available))) {
+    // `chosen` MUSS existieren: fehlt das Profil in der Matrix (z. B. weil der
+    // Statusaufruf nichts geliefert hat), darf der Lauf nicht „irgendwie“ starten.
+    if (!pinnedStillEffective && (!info.ok || !chosen?.available)) {
       logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
       setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
       setStemQualityWarning(
@@ -4290,12 +4301,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           logger.warn('EDITING', 'Spectral fallback requested but blocked per §2 – STEM AI UNAVAILABLE remains');
           setStemQualityWarning(null);
         }}
-        onEngineInstalled={() => {
+        onEngineInstalled={(result) => {
+          // Wortlaut aus dem Installer: nur ein PyTorch-Modell mit Test-Inferenz
+          // ist „verifiziert“; ein ONNX-Graph meldet Datei + SHA256 getrennt.
           logger.info(
             'EDITING',
-            missingStemModel
-              ? `KI-Modell wurde installiert und verifiziert: ${missingStemModel.id}`
-              : 'BS-RoFormer Engine wurde installiert und verifiziert.'
+            result?.label ??
+              (missingStemModel
+                ? `KI-Modell wurde installiert: ${missingStemModel.id}`
+                : 'KI-Stem-Engine wurde installiert.'),
+            result?.warning ? { warning: result.warning } : undefined
           );
           if (!missingStemModel) {
             // Der Legacy-In-App-Installer installiert die primäre BS-RoFormer-
@@ -4320,7 +4335,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             const info = await stemEngine.getEngineInfo().catch(() => null);
             if (info) setStemEngineInfo(info);
             await refreshStemArchitectures();
-            await runStemSeparation(stemProfile ?? info?.defaultProfile ?? resolvedStemProfile, effectiveArchitecture);
+            /*
+             * Bewusst über den Preflight (wie der Deck-Button): die Installation
+             * kann eine Runtime nachgeliefert haben, muss aber nicht. Ein
+             * Direktstart ohne Prüfung erzeugte im Produktionslog einen Job,
+             * der nach 263 s mit BACKEND_UNAVAILABLE endete.
+             */
+            await handleSeparateStems();
           })();
         }}
       />
@@ -4330,8 +4351,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isOpen={stemInstallOpen}
         model={missingStemModel}
         onClose={() => setStemInstallOpen(false)}
-        onInstalled={(modelId) => {
-          logger.info('EDITING', `KI-Modell wurde installiert und verifiziert: ${modelId}`);
+        onInstalled={(modelId, result) => {
+          logger.info(
+            'EDITING',
+            result?.label ?? `KI-Modell wurde installiert: ${modelId}`,
+            result?.warning ? { warning: result.warning } : undefined
+          );
           // Architekturliste + Engine-Status aktualisieren, damit das Modell
           // sofort „installiert" gezeigt wird (Dialog bleibt für die Erfolgsmeldung offen).
           void refreshStemArchitectures();
