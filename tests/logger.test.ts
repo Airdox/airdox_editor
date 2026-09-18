@@ -92,6 +92,10 @@ try {
   ring.clear();
   assert.equal(ring.getEntries().length, 1, 'clear retains only its explicit audit event');
   assert.equal(ring.getEntries()[0].message, 'Log-Puffer zurückgesetzt.');
+  const report = ring.generateDiagnosticReport({ token: 'report-secret', selectedWaveform: 'PWV5' });
+  assert.doesNotMatch(report, /report-secret/);
+  assert.match(report, /\[REDACTED\]/);
+  assert.match(report, /Log-Puffer zurückgesetzt/);
 
   // A failing live subscriber must not prevent later subscribers or persistence.
   const listenerSafe = new LoggerService({ installGlobalHandlers: false });
