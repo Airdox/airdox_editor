@@ -21,7 +21,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
-import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
+import { AnlzTagDiagnostic, parseAnlzBinary as parseAnlzFile } from './anlzParser';
 
 /**
  * Parses binary Rekordbox ANLZ file (.DAT, .EXT, .2EX).
@@ -37,6 +37,8 @@ import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
  */
 export interface AnlzExtractionResult {
   tagsFound: string[];
+  tagBlocks: AnlzTagDiagnostic[];
+  unknownTags: AnlzTagDiagnostic[];
   cues: CuePoint[];
   loops: LoopPoint[];
   phrases: PhraseSection[];
@@ -56,6 +58,8 @@ export interface AnlzExtractionResult {
 function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtractionResult {
   return {
     tagsFound: parsed.tagsFound,
+    tagBlocks: parsed.tagBlocks,
+    unknownTags: parsed.unknownTags,
     cues: parsed.cues,
     loops: parsed.loops,
     phrases: parsed.phrases,
@@ -81,6 +85,7 @@ const WAVEFORM_PRIORITY_MERGE: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
+  'P@V6': 5,
   PWV4: 4,
   PWV3: 3,
   PWV2: 2,
@@ -137,6 +142,8 @@ export function mergeAnlzExtractions(
 
   return {
     tagsFound,
+    tagBlocks: [...primary.tagBlocks, ...secondary.tagBlocks],
+    unknownTags: [...primary.unknownTags, ...secondary.unknownTags],
     cues: mergedCues,
     loops: mergedLoops,
     phrases: mergedPhrases,

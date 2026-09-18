@@ -73,6 +73,38 @@ DB-Import nachvollziehbar. Zum Aktivieren:
    npm run package:win
    ```
 
+## Stem-Separation: trainierte Modell-Gewichte (optional)
+
+Die Desktop-App trennt Stems mit zwei Engines:
+
+1. **Interne Heuristik** (`dsp-heuristic-v1`) – läuft ohne Installation immer
+   (auch in der Browser-Vorschau) und ist im UI als `DSP-HEURISTIK` markiert.
+2. **Trainierte Gewichte** (BS-RoFormer, Mel-Band-RoFormer, MDX-Net, Demucs) –
+   benötigt Python und die CLI `audio-separator`:
+
+   ```powershell
+   python -m pip install --upgrade pip
+   pip install "audio-separator[cpu]"     # NVIDIA-GPU: pip install "audio-separator[gpu]"
+   audio-separator --help                  # muss ohne Pfadangabe funktionieren
+   ```
+
+   Die App findet die CLI im `PATH`, in den Python-`Scripts`-Ordnern
+   (`%APPDATA%/Python/<Version>/Scripts`, `~/.local/bin`) oder über die
+   Umgebungsvariable `AIRDOX_AUDIO_SEPARATOR` (voller Pfad zur CLI).
+
+   Modell-Gewichte werden **nicht** mit dem Installer ausgeliefert (Lizenz und
+   Größe). Sie liegen zur Laufzeit unter
+   `%APPDATA%/airdox_SMART_Editor/stem-models/` und werden entweder über
+   **Bearbeiten → Stem-Modelle & Gewichte …** geladen/importiert oder beim
+   ersten Trennvorgang von der CLI selbst heruntergeladen
+   (`--model_filename … --model_file_dir <Modell-Ordner>`).
+
+   Getrennte Stems landen in `%APPDATA%/airdox_SMART_Editor/separated_stems/`
+   (eigener Unterordner pro Quelldatei). Originaldateien werden nie verändert.
+
+   Fehlt die CLI oder ein Modell, bricht die App nicht ab: Sie meldet den Grund
+   sichtbar und trennt mit der internen Heuristik (kein stiller Fallback).
+
 ## Hinweise
 
 - **Read-Only-Garantie:** Original-Audio, XML, ANLZ und Datenbanken werden

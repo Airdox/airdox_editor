@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot } from 'lucide-react';
+import { Layers, Disc, Trash2, ShieldCheck, Scissors, Copy, ClipboardPaste, Sparkles, Bot } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 
 interface MenuBarProps {
@@ -46,6 +46,8 @@ interface MenuBarProps {
   hasClipboard?: boolean;
   onOpenEditAssistant?: () => void;
   onAnalyzeMixIn?: () => void;
+  /** Öffnet die Verwaltung der Stem-Modell-Gewichte (Desktop-App). */
+  onOpenStemModels?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -86,6 +88,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   hasClipboard,
   onOpenEditAssistant,
   onAnalyzeMixIn,
+  onOpenStemModels,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -322,6 +325,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     <span>Mix-In analysieren (Copilot)...</span>
                   </span>
                   <span className="text-[10px] text-emerald-500/80 hover:text-white font-mono">AI</span>
+                </button>
+              )}
+
+              {onOpenStemModels && (
+                <button
+                  onClick={() => { onOpenStemModels(); setActiveMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-indigo-600 hover:text-white flex justify-between items-center text-indigo-300"
+                  title="Verwaltung der Stem-Modell-Gewichte (BS-RoFormer, Demucs, MDX-Net) und der internen DSP-Engine"
+                >
+                  <span className="flex items-center space-x-1.5">
+                    <Layers size={12} className="text-indigo-300" />
+                    <span>Stem-Modelle &amp; Gewichte...</span>
+                  </span>
+                  <span className="text-[10px] text-indigo-400/80 hover:text-white font-mono">STEMS</span>
                 </button>
               )}
 

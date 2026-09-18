@@ -184,22 +184,95 @@ function fetchRows(db, table, columns = '*', orderBy = '') {
   }
 }
 
-function readMasterDb(db) {
-  const content = fetchRows(db, 'djmdContent', [
-    'ID', 'FolderPath', 'FileNameL', 'Title', 'ArtistID', 'AlbumID', 'GenreID', 'BPM',
+/** Quote only identifiers learned from sqlite_master/PRAGMA, never user input. */
+function quoteIdentifier(identifier) {
+  return `"${String(identifier).replace(/"/g, '""')}"`;
+}
+
+/**
+ * Read the actual encrypted database schema after SQLCipher has been opened.
+ * This is intentionally built entirely from SELECT/PRAGMA statements.
+ */
+function inspectDbSchema(db) {
+  const schema = { tables: [], columns: {}, indexes: {}, properties: {}, missingRequired: [] };
+  try {
+    const objects = db.prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY type, name").all();
+    for (const object of objects) {
+      if (object.type === 'table') schema.tables.push(object.name);
+      else if (object.type === 'index') {
+        const key = object.tbl_name || '(unknown)';
+        if (!schema.indexes[key]) schema.indexes[key] = [];
+        schema.indexes[key].push(object.name);
+      }
+    }
+    for (const table of schema.tables) {
+      try {
+        schema.columns[table] = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all()
+          .map((row) => row.name);
+      } catch {
+        schema.columns[table] = [];
+      }
+    }
+    const propertyTable = schema.tables.find((name) => name.toLowerCase() === 'djmdproperty');
+    if (propertyTable) {
+      // The exact property columns vary across Rekordbox versions. A small
+      // read-only sample records DBVersion/DBID when the version exposes them.
+      const rows = db.prepare(`SELECT * FROM ${quoteIdentifier(propertyTable)} LIMIT 128`).all();
+      for (const row of rows) {
+        const normalized = {};
+        for (const [key, value] of Object.entries(row)) normalized[String(key).toLowerCase()] = value;
+        const propertyName = normalized.property ?? normalized.name ?? normalized.key;
+        const propertyValue = normalized.value ?? normalized.val ?? normalized.text;
+        if (typeof propertyName === 'string' && /^(dbversion|dbid)$/i.test(propertyName)) {
+          schema.properties[propertyName] = propertyValue == null ? null : propertyValue;
+        }
+        for (const [key, value] of Object.entries(row)) {
+          if (/^(dbversion|dbid)$/i.test(key)) schema.properties[key] = value == null ? null : value;
+        }
+      }
+    }
+  } catch (error) {
+    schema.error = error.message || String(error);
+  }
+  return schema;
+}
+
+function schemaTable(schema, wanted) {
+  return schema.tables.find((name) => name.toLowerCase() === wanted.toLowerCase());
+}
+
+function selectKnownColumns(schema, table, wantedColumns) {
+  const actualTable = schemaTable(schema, table);
+  if (!actualTable) return '*';
+  const available = schema.columns[actualTable] || [];
+  const selected = wantedColumns
+    .map((wanted) => available.find((actual) => actual.toLowerCase() === wanted.toLowerCase()))
+    .filter(Boolean);
+  return selected.length ? selected.map(quoteIdentifier).join(', ') : '*';
+}
+
+function readMasterDb(db, schema) {
+  const contentColumns = [
+    'ID', 'FolderPath', 'FileNameL', 'FileNameS', 'Title', 'ArtistID', 'AlbumID', 'GenreID', 'BPM',
     'Length', 'TrackNo', 'BitRate', 'BitDepth', 'Commnt', 'FileType', 'Rating',
     'ReleaseYear', 'RemixerID', 'LabelID', 'KeyID', 'StockDate', 'ColorID',
     'DJPlayCount', 'AnalysisDataPath', 'FileSize', 'SampleRate', 'DateCreated',
     'ReleaseDate', 'ISRC', 'Subtitle', 'ComposerID',
-  ].join(', '), 'ID');
-  const cues = fetchRows(db, 'djmdCue', ['ID', 'ContentID', 'InMsec', 'InFrame', 'OutMsec', 'OutFrame', 'Kind', 'Color', 'ColorTableIndex', 'ActiveLoop', 'Comment', 'BeatLoopSize'], 'ID');
-  const artists = fetchRows(db, 'djmdArtist', 'ID, Name', 'Name');
-  const albums = fetchRows(db, 'djmdAlbum', 'ID, Name', 'Name');
-  const genres = fetchRows(db, 'djmdGenre', 'ID, Name', 'Name');
-  const keys = fetchRows(db, 'djmdKey', 'ID, ScaleName', 'Seq');
-  const labels = fetchRows(db, 'djmdLabel', 'ID, Name', 'Name');
-  const playlists = fetchRows(db, 'djmdPlaylist', 'ID, Name, ParentID, Attribute', 'ID');
-  const songPlaylists = fetchRows(db, 'djmdSongPlaylist', 'ID, PlaylistID, ContentID, TrackNo', 'ID');
+  ];
+  const cueColumns = [
+    'ID', 'ContentID', 'InMsec', 'InFrame', 'InMpegFrame', 'InMpegAbs',
+    'OutMsec', 'OutFrame', 'OutMpegFrame', 'OutMpegAbs', 'Kind', 'Color',
+    'ColorTableIndex', 'ActiveLoop', 'Comment', 'BeatLoopSize',
+  ];
+  const content = fetchRows(db, 'djmdContent', selectKnownColumns(schema, 'djmdContent', contentColumns), 'ID');
+  const cues = fetchRows(db, 'djmdCue', selectKnownColumns(schema, 'djmdCue', cueColumns), 'ID');
+  const artists = fetchRows(db, 'djmdArtist', selectKnownColumns(schema, 'djmdArtist', ['ID', 'Name']), 'Name');
+  const albums = fetchRows(db, 'djmdAlbum', selectKnownColumns(schema, 'djmdAlbum', ['ID', 'Name']), 'Name');
+  const genres = fetchRows(db, 'djmdGenre', selectKnownColumns(schema, 'djmdGenre', ['ID', 'Name']), 'Name');
+  const keys = fetchRows(db, 'djmdKey', selectKnownColumns(schema, 'djmdKey', ['ID', 'ScaleName', 'Seq']), 'Seq');
+  const labels = fetchRows(db, 'djmdLabel', selectKnownColumns(schema, 'djmdLabel', ['ID', 'Name']), 'Name');
+  const playlists = fetchRows(db, 'djmdPlaylist', selectKnownColumns(schema, 'djmdPlaylist', ['ID', 'Name', 'ParentID', 'Attribute']), 'ID');
+  const songPlaylists = fetchRows(db, 'djmdSongPlaylist', selectKnownColumns(schema, 'djmdSongPlaylist', ['ID', 'PlaylistID', 'ContentID', 'TrackNo']), 'ID');
   return { content, cues, artists, albums, genres, keys, labels, playlists, songPlaylists };
 }
 
@@ -227,9 +300,22 @@ function readRekordboxDatabase(filePath) {
 
   const { db, dbType } = opened;
   try {
-    const rows = dbType === 'MASTER_DB' ? readMasterDb(db) : readOneLibraryDb(db);
+    const schema = inspectDbSchema(db);
+    const rows = dbType === 'MASTER_DB' ? readMasterDb(db, schema) : readOneLibraryDb(db);
     const contentRows = Array.isArray(rows.content) ? rows.content : [];
     const warnings = [];
+    const requiredTable = dbType === 'MASTER_DB' ? 'djmdContent' : 'content';
+    const actualContentTable = schemaTable(schema, requiredTable);
+    const contentColumns = actualContentTable ? schema.columns[actualContentTable] || [] : [];
+    if (!actualContentTable) schema.missingRequired.push(requiredTable);
+    if (dbType === 'MASTER_DB') {
+      for (const required of ['ID', 'AnalysisDataPath']) {
+        if (!contentColumns.some((column) => column.toLowerCase() === required.toLowerCase())) {
+          schema.missingRequired.push(`${requiredTable}.${required}`);
+        }
+      }
+    }
+    if (schema.missingRequired.length) warnings.push(`Schema unvollständig: ${schema.missingRequired.join(', ')}.`);
     if (!Array.isArray(rows.content)) warnings.push('Tabelle djmdContent/content fehlt.');
     if (!Array.isArray(rows.cues)) warnings.push('Cue-Tabelle fehlt – Cues werden nicht importiert.');
 
@@ -243,6 +329,7 @@ function readRekordboxDatabase(filePath) {
       dbType,
       filePath,
       fileName: path.basename(filePath),
+      schema,
       stats: {
         tracks: Math.min(contentRows.length, 100_000),
         cues: Array.isArray(rows.cues) ? rows.cues.length : 0,
@@ -261,6 +348,230 @@ function readRekordboxDatabase(filePath) {
       },
       warnings,
     };
+  } finally {
+    db.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Selected master.db record → exact ANLZ sibling reader (read-only)
+// ---------------------------------------------------------------------------
+
+/** The repair/test contract deliberately accepts only the configured D: root. */
+const REKORDBOX_ROOT = 'D:\\';
+const ANLZ_EXTENSIONS = ['DAT', 'EXT', '2EX'];
+
+function normalizeWinAbsolute(input) {
+  let value = String(input || '').trim().replace(/\//g, '\\');
+  value = value.replace(/^\\\\\?\\/, '');
+  const match = value.match(/^([A-Za-z]):\\(.*)$/);
+  if (!match) return null;
+  const parts = [];
+  for (const part of match[2].split(/\\+/)) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (!parts.length) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `${match[1].toUpperCase()}:\\${parts.join('\\')}`;
+}
+
+function isWithinRekordboxRoot(candidate) {
+  const normalized = normalizeWinAbsolute(candidate);
+  return Boolean(normalized && (normalized === REKORDBOX_ROOT || normalized.toLowerCase().startsWith(REKORDBOX_ROOT.toLowerCase())));
+}
+
+function joinDbAudioPath(folderPath, fileName) {
+  const folder = typeof folderPath === 'string' ? folderPath.trim() : '';
+  const file = typeof fileName === 'string' ? fileName.trim() : '';
+  if (!folder) return file;
+  if (!file) return folder;
+  const stripped = folder.replace(/[\\/]+$/, '');
+  if (stripped.toLowerCase().endsWith(file.toLowerCase())) return stripped;
+  return `${stripped}${folder.includes('\\') ? '\\' : '/'}${file}`;
+}
+
+/**
+ * Derive exactly one analysis file from `djmdContent.AnalysisDataPath`.
+ * Device-relative values are anchored to the selected master.db sibling
+ * `share` tree; absolute values must stay below D:\.  No recursive scan and
+ * no filename/hash reconstruction is performed.
+ */
+function resolveAnalysisDataPathOnD(masterDbPath, analysisDataPath) {
+  let raw = typeof analysisDataPath === 'string' ? analysisDataPath.trim() : '';
+  if (!raw) return { path: null, reason: 'djmdContent.AnalysisDataPath ist leer.' };
+  const fileUrl = raw.match(/^file:\/\/(localhost)?\/?/i);
+  if (fileUrl) {
+    raw = raw.slice(fileUrl[0].length);
+    try { raw = decodeURIComponent(raw); } catch { /* preserve the DB value */ }
+  }
+
+  if (raw.split(/[\\/]+/).some((part) => part === '..')) {
+    return { path: null, reason: 'AnalysisDataPath enthält unzulässige ..-Segmente.' };
+  }
+
+  let candidate;
+  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
+    candidate = raw;
+  } else {
+    let relative = raw.replace(/^[\\/]+/, '').replace(/^share[\\/]+/i, '');
+    if (!/^PIONEER[\\/]USBANLZ[\\/]/i.test(relative)) {
+      return { path: null, reason: 'AnalysisDataPath ist weder absolut noch ein PIONEER/USBANLZ-Pfad.' };
+    }
+    const dbAbsolute = normalizeWinAbsolute(masterDbPath);
+    if (!dbAbsolute || !isWithinRekordboxRoot(dbAbsolute)) {
+      return { path: null, reason: `master.db liegt nicht unter dem verbindlichen Rekordbox-Root ${REKORDBOX_ROOT}.` };
+    }
+    candidate = path.win32.join(path.win32.dirname(dbAbsolute), 'share', relative);
+  }
+
+  const normalized = normalizeWinAbsolute(candidate);
+  if (!normalized || !isWithinRekordboxRoot(normalized)) {
+    return { path: null, reason: `AnalysisDataPath verlässt den verbindlichen Rekordbox-Root ${REKORDBOX_ROOT}.` };
+  }
+  if (!/\.((dat)|(ext)|(2ex))$/i.test(normalized)) {
+    return { path: null, reason: 'AnalysisDataPath verweist nicht auf eine DAT-, EXT- oder 2EX-Datei.' };
+  }
+  return { path: normalized, reason: null };
+}
+
+function siblingAnlzPath(filePath, extension) {
+  const ext = String(extension).replace(/^\./, '');
+  const current = path.win32.extname(filePath);
+  return current ? `${filePath.slice(0, -current.length)}.${ext}` : null;
+}
+
+function readAnlzFileSnapshot(filePath, kind) {
+  if (!filePath) return { kind, status: 'NOT_REQUESTED' };
+  try {
+    if (!isWithinRekordboxRoot(filePath)) {
+      return { kind, path: filePath, status: 'READ_ERROR', reason: `Datei liegt außerhalb von ${REKORDBOX_ROOT}.` };
+    }
+    const details = fs.statSync(filePath);
+    if (!details.isFile()) return { kind, path: filePath, status: 'NOT_FOUND', reason: 'Kein regulärer Datei-Eintrag.' };
+    if (details.size > 1024 * 1024 * 1024) {
+      return { kind, path: filePath, status: 'READ_ERROR', reason: 'ANLZ-Datei ist größer als 1 GB.' };
+    }
+    const data = fs.readFileSync(filePath);
+    return {
+      kind,
+      path: filePath,
+      status: 'FOUND',
+      size: details.size,
+      modifiedAt: details.mtimeMs,
+      // Copy the Buffer view so the IPC payload cannot include unrelated slab bytes.
+      data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    };
+  } catch (error) {
+    const code = error && error.code;
+    return {
+      kind,
+      path: filePath,
+      status: code === 'ENOENT' ? 'NOT_FOUND' : 'READ_ERROR',
+      reason: error && error.message ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Follow one selected master.db row all the way to its immutable ANLZ sibling
+ * snapshots. Each failure stage is explicit; callers must not present it as a
+ * successful Rekordbox-analysis import.
+ */
+function readRekordboxTrackAnalysis(masterDbPath, contentId) {
+  const base = {
+    available: false,
+    stage: 'MASTER_DB',
+    root: REKORDBOX_ROOT,
+    masterDbPath: String(masterDbPath || ''),
+    contentId: String(contentId || ''),
+    files: [],
+    warnings: [],
+  };
+  if (!contentId && contentId !== 0) return { ...base, reason: 'Keine djmdContent.ID übergeben.' };
+  if (!isWithinRekordboxRoot(masterDbPath)) {
+    return { ...base, reason: `master.db muss unter dem verbindlichen Rekordbox-Root ${REKORDBOX_ROOT} liegen.` };
+  }
+
+  const opened = openRekordboxDb(masterDbPath);
+  if (!opened.available) return { ...base, reason: opened.reason };
+  const { db, dbType } = opened;
+  try {
+    if (dbType !== 'MASTER_DB') {
+      return { ...base, reason: 'Die automatische ANLZ-Kette ist für Rekordbox master.db vorgesehen.' };
+    }
+    const schema = inspectDbSchema(db);
+    const table = schemaTable(schema, 'djmdContent');
+    const columns = table ? schema.columns[table] || [] : [];
+    const required = ['ID', 'AnalysisDataPath'];
+    const missing = required.filter((wanted) => !columns.some((column) => column.toLowerCase() === wanted.toLowerCase()));
+    if (!table || missing.length) {
+      return {
+        ...base,
+        stage: 'SCHEMA',
+        schema: { ...schema, missingRequired: missing.map((column) => `djmdContent.${column}`) },
+        reason: `Unbekanntes/unvollständiges master.db-Schema: ${missing.map((column) => `djmdContent.${column}`).join(', ') || 'djmdContent fehlt'}.`,
+      };
+    }
+    const wanted = ['ID', 'AnalysisDataPath', 'FolderPath', 'FileNameL'];
+    const selected = selectKnownColumns(schema, 'djmdContent', wanted);
+    const idColumn = columns.find((column) => column.toLowerCase() === 'id') || 'ID';
+    const row = db.prepare(`SELECT ${selected} FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(idColumn)} = ?`).get(contentId);
+    if (!row) {
+      return { ...base, stage: 'TRACK', schema, reason: `djmdContent.ID ${contentId} wurde nicht gefunden.` };
+    }
+    const normalizedRow = normalizeRow(row);
+    const analysisDataPath = normalizedRow.AnalysisDataPath ?? normalizedRow.analysisdatapath;
+    const audioPath = joinDbAudioPath(normalizedRow.FolderPath ?? normalizedRow.folderpath, normalizedRow.FileNameL ?? normalizedRow.filenamel);
+    const resolved = resolveAnalysisDataPathOnD(masterDbPath, analysisDataPath);
+    if (!resolved.path) {
+      return {
+        ...base,
+        stage: 'ANALYSIS_DATA_PATH',
+        schema,
+        analysisDataPath: analysisDataPath == null ? '' : String(analysisDataPath),
+        audioPath: audioPath || undefined,
+        reason: resolved.reason,
+      };
+    }
+
+    const files = ANLZ_EXTENSIONS.map((kind) => {
+      const requested = siblingAnlzPath(resolved.path, kind);
+      return readAnlzFileSnapshot(requested, kind);
+    });
+    const found = files.filter((file) => file.status === 'FOUND');
+    if (!found.length) {
+      return {
+        ...base,
+        stage: 'ANLZ_FILES',
+        schema,
+        analysisDataPath: String(analysisDataPath),
+        resolvedAnalysisFile: resolved.path,
+        resolvedAnalysisDirectory: path.win32.dirname(resolved.path),
+        audioPath: audioPath || undefined,
+        files,
+        reason: 'Keine der exakt abgeleiteten ANLZ-Dateien (DAT/EXT/2EX) wurde gefunden.',
+      };
+    }
+    return {
+      available: true,
+      stage: 'COMPLETE',
+      root: REKORDBOX_ROOT,
+      masterDbPath,
+      contentId: String(contentId),
+      schema,
+      analysisDataPath: String(analysisDataPath),
+      resolvedAnalysisFile: resolved.path,
+      resolvedAnalysisDirectory: path.win32.dirname(resolved.path),
+      audioPath: audioPath || undefined,
+      files,
+      warnings: files.filter((file) => file.status !== 'FOUND' && file.status !== 'NOT_FOUND').map((file) => `${file.kind}: ${file.reason || file.status}`),
+    };
+  } catch (error) {
+    return { ...base, stage: 'MASTER_DB', reason: error && error.message ? error.message : String(error) };
   } finally {
     db.close();
   }
@@ -471,7 +782,7 @@ function decodePpthBody(buf) {
 }
 
 /** ANLZ container file names (ANLZnnnn.DAT / .EXT). */
-const ANLZ_FILE_PATTERN = /^anlz.+\.(dat|ext)$/i;
+const ANLZ_FILE_PATTERN = /^anlz.+\.(dat|ext|2ex)$/i;
 
 /**
  * Reads the PPTH source path from an ANLZ container header. Only the file
@@ -530,7 +841,7 @@ async function scanAnlzForPaths(targetPaths, anlzFolders) {
       return { original: t, key, base: path.posix.basename(key) };
     });
 
-  // ppth key → { datPath, extPath }; basename → distinct ppth keys.
+  // ppth key → { datPath, extPath, ex2Path }; basename → distinct ppth keys.
   const byPath = new Map();
   const basenameKeys = new Map();
   let scanned = 0;
@@ -551,9 +862,10 @@ async function scanAnlzForPaths(targetPaths, anlzFolders) {
       if (!ppth) continue;
       if (ppthSample.length < 8) ppthSample.push(ppth);
       const key = normalizeAnlzPath(ppth);
-      const record = byPath.get(key) || { datPath: null, extPath: null };
+      const record = byPath.get(key) || { datPath: null, extPath: null, ex2Path: null };
       if (/\.dat$/i.test(entry.name) && !record.datPath) record.datPath = filePath;
       if (/\.ext$/i.test(entry.name) && !record.extPath) record.extPath = filePath;
+      if (/\.2ex$/i.test(entry.name) && !record.ex2Path) record.ex2Path = filePath;
       byPath.set(key, record);
       const base = path.posix.basename(key);
       if (!basenameKeys.has(base)) basenameKeys.set(base, new Set());
@@ -565,11 +877,12 @@ async function scanAnlzForPaths(targetPaths, anlzFolders) {
   for (const target of targets) {
     // Tier 1: exact path (case- and separator-insensitive).
     const exact = byPath.get(target.key);
-    if (exact && (exact.datPath || exact.extPath)) {
+    if (exact && (exact.datPath || exact.extPath || exact.ex2Path)) {
       matches.push({
         path: target.original,
         datPath: exact.datPath,
         extPath: exact.extPath,
+        ex2Path: exact.ex2Path,
         matchTier: 1,
         note: null,
       });
@@ -580,11 +893,12 @@ async function scanAnlzForPaths(targetPaths, anlzFolders) {
     if (candidates && candidates.size === 1) {
       const [key] = candidates;
       const record = byPath.get(key);
-      if (record && (record.datPath || record.extPath)) {
+      if (record && (record.datPath || record.extPath || record.ex2Path)) {
         matches.push({
           path: target.original,
           datPath: record.datPath,
           extPath: record.extPath,
+          ex2Path: record.ex2Path,
           matchTier: 2,
           note: 'PPTH verweist auf den alten Speicherort (Basisname eindeutig) – Zuordnung bitte verifizieren.',
         });
@@ -607,6 +921,9 @@ module.exports = {
   getOneLibraryKey,
   detectDbType,
   readRekordboxDatabase,
+  readRekordboxTrackAnalysis,
+  inspectDbSchema,
+  resolveAnalysisDataPathOnD,
   locateRekordboxDatabases,
   findAnlzFolders,
   findTargetDriveAnlzFolders,

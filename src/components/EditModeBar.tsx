@@ -50,8 +50,11 @@ interface EditModeBarProps {
   isMaxWaveform?: boolean;
   onToggleMaxWaveform?: () => void;
   stemVolumes?: number[];
-  stemIds?: string[];
   onStemVolumeChange?: (index: number, vol: number) => void;
+  stemLabels?: string[];
+  stemIds?: string[];
+  /** Ehrliche Herkunft der Stems für das Badge im ACTIVE-PART-Block. */
+  stemQualityTier?: 'TRAINED' | 'HEURISTIC';
   trackHasStems?: boolean;
 }
 
@@ -82,8 +85,10 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   isMaxWaveform = false,
   onToggleMaxWaveform,
   stemVolumes = [],
-  stemIds = [],
   onStemVolumeChange,
+  stemLabels = [],
+  stemIds = [],
+  stemQualityTier,
   trackHasStems = false
 }) => {
   const [timeStr, setTimeStr] = useState<string>('15:21');
@@ -215,7 +220,9 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               stemsActive={true}
               stemsAvailable={trackHasStems}
               stemVolumes={stemVolumes}
+              stemLabels={stemLabels}
               stemIds={stemIds}
+              qualityTier={stemQualityTier}
               onStemVolumeChange={onStemVolumeChange}
             />
           )}

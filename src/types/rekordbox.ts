@@ -1,10 +1,3 @@
-/** One separated stem: identity comes from the engine, not from list order. */
-export interface TrackStem {
-  id: string;
-  filePath: string;
-  buffer?: AudioBuffer;
-}
-
 /**
  * @license
  * Rekordbox DJ Audio Editor - Type Definitions
@@ -18,6 +11,9 @@ export enum DataOrigin {
   ANALYSIS_CACHE = 'ANALYSIS_CACHE',
   LOCAL_ANALYSIS = 'LOCAL_ANALYSIS',
   USER_EDIT = 'USER_EDIT',
+  /** Von der App erzeugte Stem-Daten (Separation) – klar getrennt von
+   * Rekordbox-Quellen, wie in der Roadmap als `PROJECT_DSP` vorgesehen. */
+  PROJECT_DSP = 'PROJECT_DSP',
   /** Own calculation used as a clearly labeled fallback when no Rekordbox
    * source (ANLZ/DB/audio) provides the data. */
   GENERATED_FALLBACK = 'GENERATED_FALLBACK',
@@ -79,12 +75,31 @@ export interface PhraseSection {
   origin?: DataOrigin;
 }
 
+export interface RekordboxAnalysisDiagnostics {
+  root: 'D:\\';
+  masterDbPath: string;
+  contentId: string;
+  stage: string;
+  analysisDataPath?: string;
+  resolvedAnalysisDirectory?: string;
+  audioPath?: string;
+  ppthPlausibility?: 'EXACT' | 'PLACEHOLDER_BASENAME' | 'MISMATCH';
+  selectedWaveformTag?: string;
+  waveformColumns?: number;
+  files: Array<{ kind: 'DAT' | 'EXT' | '2EX'; status: string; path?: string; reason?: string }>;
+  parsedTags: string[];
+  unknownTags: Array<{ fourcc: string; offset: number; lenHeader: number; lenTag: number }>;
+  warnings: string[];
+}
+
 export interface ExtractedDatabaseRecord {
   trackId: string;
   databaseSource: 'REKORDBOX_XML' | 'REKORDBOX_DB' | 'REKORDBOX_ANLZ' | 'LOCAL_EXTRACT';
   anlzTagsFound: string[];
   /** Non-fatal notices produced while decoding the analysis source. */
   anlzWarnings?: string[];
+  /** Read-only master.db → AnalysisDataPath → ANLZ trace for System Log/debug. */
+  rekordboxDiagnostics?: RekordboxAnalysisDiagnostics;
   memoryCuesCount: number;
   hotCuesCount: number;
   loopsCount: number;
@@ -124,6 +139,8 @@ export interface PaletteClip {
   miniLow?: number[];
   miniMid?: number[];
   miniHigh?: number[];
+  /** Immutable selection derived from the track's verified waveform source. */
+  waveform?: WaveformAnalysisData;
   origin: DataOrigin;
 }
 
@@ -171,6 +188,33 @@ export interface OriginalMediaReference {
   modifiedAt?: number;
 }
 
+/**
+ * Provenance of a stem set. The editor must always be able to tell the user
+ * whether the stems came from a trained model or from the built-in heuristic,
+ * so the metadata travels with the track instead of being guessed from the
+ * number of buffers.
+ */
+export interface StemSeparationInfo {
+  /** Herkunft der Stem-Daten: immer PROJECT_DSP (eigene Berechnung, nie Rekordbox). */
+  origin: DataOrigin.PROJECT_DSP;
+  /** 'desktop' = external trained CLI via Electron, 'builtin' = in-process DSP. */
+  engine: 'desktop' | 'builtin';
+  modelId: string;
+  trainedModel: boolean;
+  qualityTier: 'TRAINED' | 'HEURISTIC';
+  ids: string[];
+  labels: string[];
+  /** Absolute output paths, only for the desktop engine. */
+  paths?: string[];
+  notes: string[];
+  /** Reasons the desktop engine was skipped, in the order they occurred. */
+  fallbackReasons?: string[];
+  separatedAt: number;
+  durationMs: number;
+  /** Largest |mix − Σstems| deviation, when measured (builtin engine). */
+  recombinationMaxError?: number;
+}
+
 export interface TrackModel {
   id: string;
   title: string;
@@ -183,9 +227,11 @@ export interface TrackModel {
   year?: string;
   comments?: string;
   filePath?: string;
-  /** Separated stems with their real identity. Never rely on array position. */
-  stems?: TrackStem[];
+  /** Stem ids (or, for the external engine, the produced file paths). */
+  stems?: string[];
   stemBuffers?: AudioBuffer[];
+  /** Which engine produced `stemBuffers`, plus honest quality metadata. */
+  stemInfo?: StemSeparationInfo;
   dateAdded?: string;
   remixer?: string;
   isrc?: string;

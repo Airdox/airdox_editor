@@ -15,6 +15,8 @@ import {
   DataOrigin,
   EditHistoryEntry,
   CuePoint,
+  StemSeparationInfo,
+  WaveformAnalysisData,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { runMasterDbGate, TrackRequestGuard } from './rekordbox/masterDbPipeline';
@@ -23,6 +25,14 @@ import { generateAnalysisFromMetadata } from './waveform/metadataAnalysis';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, extractMiniPeaksFromAnalysis, estimateBpm } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
+import {
+  describeStemEngine,
+  separateStemsAuto,
+  toStemModelSelection,
+  type StemDesktopBridge,
+  type StemProgress,
+} from './audio/stemSeparation';
+import { BUILTIN_HEURISTIC_MODEL, DEFAULT_TRAINED_MODEL_ID, findStemModel } from './stems/modelCatalog';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
   parseRekordboxXml,
@@ -32,6 +42,8 @@ import {
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
+import { decodeRekordboxAnalysisFiles, isCurrentTrackAnalysisRequest } from './rekordbox/analysisPipeline';
+import { classifyPpthPlausibility } from './rekordbox/analysisResolver';
 import {
   serializeProject,
   deserializeProject,
@@ -56,6 +68,7 @@ import { ImportProgressModal } from './components/Modals/ImportProgressModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
+import { StemModelModal } from './components/Modals/StemModelModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
 import { editAssistant } from './audio/editAssistant';
@@ -76,6 +89,32 @@ import {
   executeOverdub,
   applyExecutionToTrack,
 } from './audio/editingEngine';
+
+/**
+ * Preserve a selection of an existing waveform source for Palette rendering.
+ * It never analyses the audio selection and carries the original ANLZ origin
+ * and source tag into the clip model.
+ */
+function extractPaletteWaveform(
+  analysis: WaveformAnalysisData,
+  start: number,
+  end: number,
+  columns = 48
+): WaveformAnalysisData {
+  const compact = extractMiniPeaksFromAnalysis(analysis, start, end, columns);
+  return {
+    length: compact.peaks.length,
+    peaks: Float32Array.from(compact.peaks),
+    peaksL: Float32Array.from(compact.peaks),
+    peaksR: Float32Array.from(compact.peaks),
+    lowEnergy: Float32Array.from(compact.low),
+    midEnergy: Float32Array.from(compact.mid),
+    highEnergy: Float32Array.from(compact.high),
+    origin: analysis.origin,
+    sourceTag: analysis.sourceTag,
+    secPerBucket: Math.max(0, end - start) / Math.max(1, compact.peaks.length),
+  };
+}
 
 /**
  * Shared conversion of a compact collection entry (XML or Rekordbox DB)
@@ -231,12 +270,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [meterL, setMeterL] = useState<number>(0);
   const [meterR, setMeterR] = useState<number>(0);
   const [stemVolumes, setStemVolumes] = useState<number[]>([]);
-  // Stem identity, parallel to stemVolumes/stemBuffers. Labels come from here,
-  // never from the index, so "VOCAL" is always actually the vocals stem.
-  const [stemIds, setStemIds] = useState<string[]>([]);
-  const [stemJobId, setStemJobId] = useState<string | null>(null);
-  const [stemProgress, setStemProgress] = useState<number | null>(null);
-  const [stemStatus, setStemStatus] = useState<{ kind: 'idle' | 'running' | 'done' | 'error'; message: string }>({ kind: 'idle', message: '' });
+  // Fortschritt + Herkunft der Stems: Nur die Puffer, die zum aktuell hörbaren
+  // Working-Buffer gehören, dürfen beim Abspielen den Mix ersetzen.
+  const [separationProgress, setSeparationProgress] = useState<StemProgress | null>(null);
+  // Modell-Wahl für die externe Inferenz (Gewichte) bzw. die interne Heuristik.
+  const [stemModelModalOpen, setStemModelModalOpen] = useState<boolean>(false);
+  const [selectedStemModelId, setSelectedStemModelId] = useState<string | null>(DEFAULT_TRAINED_MODEL_ID);
+  const [stemSourceBuffer, setStemSourceBuffer] = useState<AudioBuffer | null>(null);
+  const separationCancelledRef = useRef<boolean>(false);
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -299,6 +340,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
   const [isGlobalDragging, setIsGlobalDragging] = useState<boolean>(false);
   const dragCounterRef = useRef<number>(0);
+  // Every selection owns one generation. An older DB/ANLZ read is never
+  // allowed to replace the waveform after the user selected another track.
+  const trackSelectionRequestRef = useRef(0);
 
   // Edit Assistant State Manager (protects selection buffer & clipboard integrity)
   const { state: editAssistantState, summary: editAssistantSummary } = useEditAssistant(
@@ -331,106 +375,160 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
 
+  // Stems dürfen den Mix nur ersetzen, solange sie zum hörbaren Working-Buffer
+  // gehören. Entsteht durch einen Edit ein neuer Working-Buffer, sind die alten
+  // Stems automatisch ungültig, statt veraltete Separation abzuspielen.
+  const playableStemBuffers = useMemo<AudioBuffer[] | undefined>(() => {
+    if (!activeTrack || !activeTrack.stemBuffers?.length) return undefined;
+    if (!stemSourceBuffer || stemSourceBuffer !== workingAudioBuffer) return undefined;
+    return activeTrack.stemBuffers;
+  }, [activeTrack, stemSourceBuffer, workingAudioBuffer]);
+
+  const stemInfo = activeTrack?.stemInfo ?? null;
+  const stemsReady = Boolean(playableStemBuffers && playableStemBuffers.length > 0);
+
   // Chatbot Palette state
   const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
 
   // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
   // (Disabled on startup so the app opens with a completely empty project as requested)
   const handleSeparateStems = useCallback(async () => {
-    const sourcePath = activeTrack?.filePath || activeTrack?.originalMedia?.resolvedPath || activeTrack?.originalMedia?.location;
-    if (!activeTrack || !sourcePath) {
-      setStemStatus({ kind: 'error', message: 'Es muss zuerst eine echte Audiodatei geladen werden.' });
+    if (isSeparating) return;
+    if (!activeTrack) {
+      alert('Es muss zuerst ein Track geladen werden.');
       return;
     }
-    const bridge = window.rekordboxDesktop;
-    if (!bridge?.separateStems) {
-      setStemStatus({ kind: 'error', message: 'Desktop-Bridge nicht gefunden. Die App muss in Electron laufen.' });
+    const sourceBuffer = workingAudioBuffer ?? activeTrack.audioBuffer;
+    if (!sourceBuffer) {
+      alert('Für diesen Track ist keine Audiodatei verknüpft – bitte zuerst Audio laden.');
       return;
     }
 
-    // Preflight first: an actionable install hint beats a failure mid-track.
-    if (bridge.stemsPreflight) {
-      try {
-        const pre = await bridge.stemsPreflight();
-        if (!pre.available) {
-          setStemStatus({ kind: 'error', message: pre.reason || 'Separations-Engine nicht verfügbar.' });
-          return;
-        }
-      } catch {
-        // Preflight itself is best-effort; a hard failure still surfaces below.
-      }
-    }
+    const desktop = (window.rekordboxDesktop ?? null) as (StemDesktopBridge & typeof window.rekordboxDesktop) | null;
+    const selectedModel = findStemModel(selectedStemModelId) ?? BUILTIN_HEURISTIC_MODEL;
+    const useBuiltinEngine = !selectedModel.requiresExternalRuntime;
+    const sourcePath =
+      activeTrack.filePath ||
+      activeTrack.originalMedia?.resolvedPath ||
+      activeTrack.originalMedia?.location ||
+      null;
+    const audioCtx = audioEngine.getContext();
 
-    const jobId = `stem-${Date.now()}`;
+    separationCancelledRef.current = false;
     setIsSeparating(true);
-    setStemJobId(jobId);
-    setStemProgress(0);
-    setStemStatus({ kind: 'running', message: 'Separation läuft …' });
-
-    const unsubscribe = bridge.onStemsProgress?.((payload) => {
-      if (payload.jobId !== jobId) return;
-      if (typeof payload.percent === 'number') setStemProgress(payload.percent);
+    setSeparationProgress({ phase: 'prepare', ratio: 0, message: 'Stem-Separation wird vorbereitet …' });
+    logger.info('AUDIO_ENGINE', 'Stem-Separation gestartet', {
+      trackId: activeTrack.id,
+      sourcePath,
+      desktopBridge: Boolean(desktop?.separateStems),
+      gewaehltesModell: selectedModel.id,
+      engine: useBuiltinEngine ? 'builtin' : 'desktop-first',
+      durationSeconds: Number(sourceBuffer.duration.toFixed(2)),
     });
 
     try {
-      const result = await bridge.separateStems({ inputFilePath: sourcePath, jobId });
-
-      if (result.status === 'CANCELLED') {
-        setStemStatus({ kind: 'idle', message: 'Separation abgebrochen.' });
-        return;
-      }
-      if (result.status !== 'COMPLETED' || result.stems.length === 0) {
-        setStemStatus({ kind: 'error', message: result.error?.message || 'Separation fehlgeschlagen.' });
-        return;
-      }
-      if (result.originalUnchanged === false) {
-        setStemStatus({ kind: 'error', message: 'Die Originaldatei wurde verändert — Ergebnis verworfen.' });
-        return;
-      }
-
-      // Decode in parallel and keep each buffer bound to its stem id, so a
-      // failed decode can never shift the remaining stems onto wrong labels.
-      const audioCtx = audioEngine.getContext();
-      const decoded = await Promise.all(result.stems.map(async (stem) => {
-        try {
-          const source = await bridge.readOriginalAudio(stem.filePath);
-          return { id: stem.id, filePath: stem.filePath, buffer: await audioCtx.decodeAudioData(source.data) };
-        } catch (err) {
-          console.error('Stem konnte nicht dekodiert werden:', stem.filePath, err);
-          return { id: stem.id, filePath: stem.filePath, buffer: undefined };
-        }
-      }));
-
-      const usable = decoded.filter((s): s is { id: string; filePath: string; buffer: AudioBuffer } => !!s.buffer);
-      if (usable.length === 0) {
-        setStemStatus({ kind: 'error', message: 'Kein Stem konnte dekodiert werden.' });
-        return;
-      }
-
-      setTracks(prev => prev.map(t => t.id === activeTrack.id
-        ? { ...t, stems: usable.map(s => ({ id: s.id, filePath: s.filePath })), stemBuffers: usable.map(s => s.buffer) }
-        : t));
-      setStemIds(usable.map(s => s.id));
-      setStemVolumes(new Array(usable.length).fill(1.0));
-      const skipped = decoded.length - usable.length;
-      setStemStatus({
-        kind: 'done',
-        message: `${usable.length} Stems geladen (${usable.map(s => s.id).join(', ')})${skipped > 0 ? ` — ${skipped} übersprungen` : ''}.`,
+      // 1. Trainierter externer Separator (nur Desktop + echter Pfad + CLI),
+      //    sonst automatisch die eingebaute Heuristik – die läuft immer.
+      const result = await separateStemsAuto({
+        context: audioCtx,
+        buffer: sourceBuffer,
+        sourcePath,
+        desktop,
+        // Gewählte Gewichte nur durchreichen, wenn ein trainiertes Modell aktiv ist.
+        model: useBuiltinEngine ? null : toStemModelSelection(selectedModel),
+        preferBuiltin: useBuiltinEngine,
+        profile: selectedModel.profile ?? 'HIGH_QUALITY',
+        onProgress: (progress) => setSeparationProgress(progress),
+        isCancelled: () => separationCancelledRef.current,
       });
-    } catch (e: unknown) {
-      console.error('Separation error', e);
-      setStemStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
-    } finally {
-      unsubscribe?.();
-      setIsSeparating(false);
-      setStemJobId(null);
-      setStemProgress(null);
-    }
-  }, [activeTrack]);
 
-  const handleCancelSeparation = useCallback(() => {
-    if (stemJobId) void window.rekordboxDesktop?.cancelStems?.(stemJobId);
-  }, [stemJobId]);
+      if (!result.buffers.length) throw new Error('Die Separation hat keine Stems erzeugt.');
+
+      const volumes = result.buffers.map(() => 1);
+      audioEngine.setStemVolumes(volumes);
+      setStemVolumes(volumes);
+      setStemSourceBuffer(sourceBuffer);
+
+      const info: StemSeparationInfo = {
+        origin: DataOrigin.PROJECT_DSP,
+        engine: result.engine,
+        modelId: result.modelId,
+        trainedModel: result.trainedModel,
+        qualityTier: result.qualityTier,
+        ids: [...result.ids],
+        labels: [...result.labels],
+        paths: result.paths,
+        notes: [...result.notes],
+        fallbackReasons: [...result.fallbackReasons],
+        separatedAt: Date.now(),
+        durationMs: result.durationMs,
+        recombinationMaxError: result.recombinationMaxError,
+      };
+
+      setTracks((prevTracks) =>
+        prevTracks.map((t) =>
+          t.id === activeTrack.id
+            ? { ...t, stems: [...result.ids], stemBuffers: result.buffers, stemInfo: info }
+            : t
+        )
+      );
+
+      logger.info('AUDIO_ENGINE', `Stems erzeugt (${describeStemEngine(result)})`, {
+        trackId: activeTrack.id,
+        engine: result.engine,
+        trainedModel: result.trainedModel,
+        stems: result.labels,
+        durationMs: result.durationMs,
+        fallbackReasons: result.fallbackReasons,
+        recombinationMaxError: result.recombinationMaxError,
+      });
+
+      const honestNote = result.trainedModel
+        ? 'Trainiertes Modell über die Desktop-Bridge.'
+        : 'Interne Heuristik (Mid/Side + Transienten-Gate): brauchbar zum Vorhören, kein KI-Qualitätsnachweis.';
+      showOperationFeedback({
+        title: 'Stems getrennt',
+        operationType: 'EXPORT',
+        description: `${result.buffers.length} Stems (${result.labels.join(', ')}) für "${activeTrack.title}" in ${(result.durationMs / 1000).toFixed(1)} s erzeugt. Engine: ${describeStemEngine(result)}. ${honestNote}${
+          result.fallbackReasons.length ? ` Hinweis: ${result.fallbackReasons.join(' · ')}` : ''
+        } Das Original bleibt unverändert – die Stems summieren sich zurück zum Mix.`,
+        timeRangeSec: { start: 0, end: sourceBuffer.duration, duration: sourceBuffer.duration },
+        originalSha256: activeTrack.originalSha256 || 'NOT_COMPUTED_READ_ONLY_SOURCE',
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('AUDIO_ENGINE', 'Stem-Separation fehlgeschlagen', { trackId: activeTrack.id, message });
+      alert(`Stem-Separation fehlgeschlagen: ${message}`);
+    } finally {
+      separationCancelledRef.current = false;
+      setIsSeparating(false);
+      setSeparationProgress(null);
+    }
+  }, [activeTrack, workingAudioBuffer, isSeparating, selectedStemModelId, showOperationFeedback]);
+
+  // Progress des externen Separators (Electron → Renderer) sichtbar machen.
+  useEffect(() => {
+    const subscribe = window.rekordboxDesktop?.onStemSeparationProgress;
+    if (!subscribe) return;
+    const unsubscribe = subscribe((payload) => {
+      if (!payload) return;
+      setSeparationProgress({
+        phase: payload.phase === 'failed' ? 'prepare' : payload.phase === 'done' ? 'done' : 'separating',
+        ratio: typeof payload.ratio === 'number' ? payload.ratio : 0,
+        message: payload.message,
+      });
+    });
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  // Abbruch der externen Separation, falls der Renderer sie verlässt.
+  useEffect(() => () => {
+    separationCancelledRef.current = true;
+    void window.rekordboxDesktop?.cancelStemSeparation?.();
+  }, []);
 
   const handleLoadDemoTrack = useCallback(() => {
     try {
@@ -570,6 +668,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     audioEngine.setMasterVolume(vol);
   };
   
+  const handleCancelSeparation = useCallback(() => {
+    separationCancelledRef.current = true;
+    void window.rekordboxDesktop?.cancelStemSeparation?.();
+    setSeparationProgress({ phase: 'prepare', ratio: 0, message: 'Abbruch wird ausgeführt …' });
+  }, []);
+
   const handleStemVolumeChange = (index: number, vol: number) => {
     setStemVolumes(prev => {
       const next = [...prev];
@@ -607,7 +711,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         loopStart = selection.start;
         loopEnd = selection.end;
       }
-      audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd, activeTrack?.stemBuffers);
+      audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd, playableStemBuffers);
       setIsPlaying(true);
     }
   };
@@ -623,7 +727,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
     setCurrentTime(clamped);
     if (isPlaying && workingAudioBuffer) {
-      audioEngine.play(workingAudioBuffer, clamped, loopActive, 0, 0, activeTrack?.stemBuffers);
+      audioEngine.play(workingAudioBuffer, clamped, loopActive, 0, 0, playableStemBuffers);
     }
   };
 
@@ -909,14 +1013,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     if (previous.audioBuffer) {
       setWorkingAudioBuffer(previous.audioBuffer);
-      if (!previous.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
-      }
+      // Preserve the saved/verified waveform source. A buffer restore must
+      // never silently replace a Rekordbox ANLZ waveform with local analysis.
     } else if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
       setWorkingAudioBuffer(reRendered);
       activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+      // The visible waveform remains its verified source after an edit.
     }
     setTracks([...tracks]);
   };
@@ -951,14 +1054,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
     if (next.audioBuffer) {
       setWorkingAudioBuffer(next.audioBuffer);
-      if (!next.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
-      }
+      // `next.analysis` is restored only when the history record has one.
     } else if (activeTrack.audioBuffer) {
       const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
       setWorkingAudioBuffer(reRendered);
       activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
+      // The visible waveform remains its verified source after an edit.
     }
     setTracks([...tracks]);
   };
@@ -1073,16 +1174,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!selection || !activeTrack || !workingAudioBuffer) return;
     const sliced = audioEngine.sliceAudioBuffer(workingAudioBuffer, selection.start, selection.end);
     
-    let analysisData = {};
+    let analysisData: Partial<Pick<PaletteClip, 'waveform' | 'miniPeaks' | 'miniLow' | 'miniMid' | 'miniHigh'>> = {};
     if (activeTrack.analysis) {
-      const extracted = extractMiniPeaksFromAnalysis(activeTrack.analysis, selection.start, selection.end, 48);
+      const waveform = extractPaletteWaveform(activeTrack.analysis, selection.start, selection.end, 48);
       analysisData = {
-        miniPeaks: extracted.peaks,
-        miniLow: extracted.low,
-        miniMid: extracted.mid,
-        miniHigh: extracted.high
+        waveform,
+        miniPeaks: Array.from(waveform.peaks),
+        miniLow: Array.from(waveform.lowEnergy),
+        miniMid: Array.from(waveform.midEnergy),
+        miniHigh: Array.from(waveform.highEnergy),
       };
-    } else {
+    } else if (activeTrack.origin !== DataOrigin.REKORDBOX_DB && activeTrack.origin !== DataOrigin.REKORDBOX_XML && activeTrack.origin !== DataOrigin.REKORDBOX_ANLZ) {
+      // Local (non-Rekordbox) clips may use their local source buffer. For a
+      // Rekordbox track without ANLZ data, leave the Palette honestly empty.
       analysisData = { miniPeaks: extractMiniPeaks(sliced, 48) };
     }
 
@@ -1594,6 +1698,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!result.available || !result.rows) {
         throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
       }
+      if (result.dbType === 'MASTER_DB' && result.schema?.missingRequired?.length) {
+        throw new Error(`master.db-Schema unvollständig: ${result.schema.missingRequired.join(', ')}.`);
+      }
 
       const mapped = mapRekordboxDatabaseRows(
         {
@@ -1610,9 +1717,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
       );
 
-      const fullTrackModels = mapped.tracks.map((track, idx) =>
-        buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB)
-      );
+      const fullTrackModels = mapped.tracks.map((track, idx) => {
+        const collectionTrack = buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB);
+        // Keep the selected DB identity, not a guessed filesystem location.
+        // The native reader re-opens this exact master.db read-only and looks
+        // up this exact djmdContent.ID before it follows AnalysisDataPath.
+        collectionTrack.rawXmlAttributes = {
+          ...(collectionTrack.rawXmlAttributes || {}),
+          sourceMasterDbPath: result.filePath || dbPath,
+          rekordboxRoot: 'D:\\',
+        };
+        return collectionTrack;
+      });
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
@@ -1667,6 +1783,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // Request-Guard gegen Race Conditions: nur das Ergebnis der zuletzt
     // gestarteten Auswahl darf das Deck/die Waveform setzen.
     const generation = trackRequestGuard.current.begin();
+    const requestId = ++trackSelectionRequestRef.current;
+    const sourceMasterDbPath = selectedDef.rawXmlAttributes?.sourceMasterDbPath;
+    // Start the exact DB → ANLZ read immediately and in parallel with optional
+    // original-audio decoding. The Electron side accepts only D:\ and never
+    // writes master.db, WAL/SHM, ANLZ, or the audio source.
+    const autoAnalysisPromise =
+      selectedDef.origin === DataOrigin.REKORDBOX_DB &&
+      selectedDef.rawXmlAttributes?.databaseType === 'MASTER_DB' &&
+      sourceMasterDbPath &&
+      window.rekordboxDesktop
+        ? window.rekordboxDesktop.readRekordboxTrackAnalysis({
+            masterDbPath: sourceMasterDbPath,
+            contentId: selectedDef.id,
+          })
+        : Promise.resolve(null);
+
     try {
       const audioCtx = audioEngine.getContext();
       let originalAudio = selectedDef.audioBuffer || null;
@@ -1766,7 +1898,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         : (selectedDef.originalSha256 || 'missing-audio');
       const phrases = selectedDef.phrases || [];
 
-      const loadedTrack: TrackModel = {
+      let loadedTrack: TrackModel = {
         ...selectedDef,
         id: selectedDef.id || `track-${Date.now()}`,
         title: selectedDef.title || 'Rekordbox Track',
@@ -1816,6 +1948,112 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       // Ergebnis eines inzwischen überholten Requests niemals anwenden.
       if (!trackRequestGuard.current.isCurrent(generation)) return;
+
+      // Prefer the genuine Rekordbox source over any pre-existing analysis.
+      // `available` only says DAT/EXT/2EX were read. A result is considered a
+      // waveform success only if a verified PWV/PWAV block actually decodes.
+      const autoRead = await autoAnalysisPromise;
+      if (!isCurrentTrackAnalysisRequest(requestId, trackSelectionRequestRef.current)) {
+        logger.info('DATABASE', '[REKORDBOX] Veraltetes ANLZ-Ergebnis verworfen (Track wurde gewechselt).', {
+          requestedContentId: selectedDef.id,
+          currentRequestId: trackSelectionRequestRef.current,
+        });
+        return;
+      }
+      if (autoRead) {
+        const sourceFiles = autoRead.files.map((file) => ({
+          kind: file.kind,
+          status: file.status,
+          path: file.path,
+          reason: file.reason,
+        }));
+        const baseDiagnostic = {
+          root: autoRead.root,
+          masterDbPath: autoRead.masterDbPath,
+          contentId: autoRead.contentId,
+          stage: autoRead.stage,
+          analysisDataPath: autoRead.analysisDataPath,
+          resolvedAnalysisDirectory: autoRead.resolvedAnalysisDirectory,
+          audioPath: autoRead.audioPath,
+          files: sourceFiles,
+          parsedTags: [] as string[],
+          unknownTags: [],
+          warnings: [...autoRead.warnings, ...(autoRead.reason ? [autoRead.reason] : [])],
+        };
+        logger.info('DATABASE', '[REKORDBOX] Read-only Datenkette aufgelöst.', {
+          root: autoRead.root,
+          masterDb: autoRead.masterDbPath,
+          contentId: autoRead.contentId,
+          analysisDataPath: autoRead.analysisDataPath,
+          resolvedAnalysisDirectory: autoRead.resolvedAnalysisDirectory,
+          files: sourceFiles,
+          stage: autoRead.stage,
+        });
+
+        if (!autoRead.available) {
+          logger.warn('DATABASE', '[REKORDBOX] Keine erfolgreiche automatische Analyseübernahme.', baseDiagnostic);
+          loadedTrack.databaseRecord = {
+            ...(loadedTrack.databaseRecord || {
+              trackId: loadedTrack.id,
+              databaseSource: 'REKORDBOX_DB',
+              anlzTagsFound: [], memoryCuesCount: loadedTrack.cues.length,
+              hotCuesCount: 0, loopsCount: loadedTrack.loops.length,
+              waveformBuckets: loadedTrack.analysis?.length || 0,
+              waveformModeSupported: [], sampleRate: loadedTrack.sampleRate,
+              checksum: loadedTrack.originalSha256, extractedAt: Date.now(),
+            }),
+            rekordboxDiagnostics: baseDiagnostic,
+          };
+        } else {
+          const decoded = decodeRekordboxAnalysisFiles(autoRead.files);
+          const extraction = decoded.extraction;
+          const ppthPlausibility = classifyPpthPlausibility(extraction?.analysisPath, autoRead.audioPath);
+          const diagnostic = {
+            ...baseDiagnostic,
+            ppthPlausibility,
+            parsedTags: extraction?.tagsFound || [],
+            unknownTags: (extraction?.unknownTags || []).map((tag) => ({
+              fourcc: tag.fourcc, offset: tag.offset, lenHeader: tag.lenHeader, lenTag: tag.lenTag,
+            })),
+            warnings: [...baseDiagnostic.warnings, ...decoded.warnings],
+            selectedWaveformTag: extraction?.waveform?.sourceTag,
+            waveformColumns: extraction?.waveform?.length,
+          };
+          if (extraction?.waveform) {
+            const extractedTrack = applyAnlzExtractionToTrack(loadedTrack, extraction);
+            loadedTrack = {
+              ...extractedTrack,
+              databaseRecord: {
+                ...extractedTrack.databaseRecord!,
+                rekordboxDiagnostics: diagnostic,
+              },
+            };
+            logger.info('DATABASE', '[WAVEFORM] Echte Rekordbox-Waveform automatisch übernommen.', {
+              sourceTag: extraction.waveform.sourceTag,
+              columns: extraction.waveform.length,
+              duration: loadedTrack.duration,
+              ppthPlausibility,
+              tags: extraction.tagsFound,
+            });
+          } else {
+            // A container can be valid yet contain no waveform tag. Do not
+            // silently synthesize one from BPM/duration or audio in this path.
+            loadedTrack.databaseRecord = {
+              ...(loadedTrack.databaseRecord || {
+                trackId: loadedTrack.id, databaseSource: 'REKORDBOX_DB',
+                anlzTagsFound: extraction?.tagsFound || [], memoryCuesCount: loadedTrack.cues.length,
+                hotCuesCount: 0, loopsCount: loadedTrack.loops.length,
+                waveformBuckets: loadedTrack.analysis?.length || 0,
+                waveformModeSupported: [], sampleRate: loadedTrack.sampleRate,
+                checksum: loadedTrack.originalSha256, extractedAt: Date.now(),
+              }),
+              anlzWarnings: diagnostic.warnings,
+              rekordboxDiagnostics: diagnostic,
+            };
+            logger.warn('DATABASE', '[WAVEFORM] ANLZ-Datei gefunden, aber kein gültiger Waveform-Block dekodiert.', diagnostic);
+          }
+        }
+      }
 
       setTracks((prev) => {
         const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);
@@ -2558,6 +2796,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
+        onOpenStemModels={() => setStemModelModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
         hasHistory={undoStack.length > 0 || redoStack.length > 0}
         onCopy={handleCopy}
@@ -2600,9 +2839,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         isMaxWaveform={isMaxWaveform}
         onToggleMaxWaveform={handleToggleMaxWaveform}
         stemVolumes={stemVolumes}
-        stemIds={stemIds}
         onStemVolumeChange={handleStemVolumeChange}
-        trackHasStems={!!(activeTrack && activeTrack.stems && activeTrack.stems.length > 0)}
+        stemLabels={stemInfo?.labels ?? []}
+        stemIds={stemInfo?.ids ?? []}
+        stemQualityTier={stemsReady ? stemInfo?.qualityTier : undefined}
+        trackHasStems={stemsReady}
       />
 
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
@@ -2614,12 +2855,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSeek={handleSeek}
         onPanView={handlePanView}
         onSeparateStems={handleSeparateStems}
+        onCancelSeparateStems={handleCancelSeparation}
         isSeparating={isSeparating}
+        separationProgress={separationProgress}
         stemVolumes={stemVolumes}
-        stemIds={stemIds}
-        stemProgress={stemProgress}
-        stemStatus={stemStatus}
-        onCancelSeparation={handleCancelSeparation}
+        stemLabels={stemInfo?.labels ?? []}
+        stemInfo={stemInfo}
         onStemVolumeChange={handleStemVolumeChange}
       />
 
@@ -2772,6 +3013,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
+      {/* Stem-Modellverwaltung: Gewichte, CLI-Status, aktive Engine-Wahl */}
+      <StemModelModal
+        isOpen={stemModelModalOpen}
+        onClose={() => setStemModelModalOpen(false)}
+        selectedModelId={selectedStemModelId}
+        onSelectModel={(modelId) => setSelectedStemModelId(modelId)}
+      />
       <WorkspaceSettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}

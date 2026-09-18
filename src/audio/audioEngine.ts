@@ -24,6 +24,9 @@ class AudioEngine {
   private stemSources: AudioBufferSourceNode[] = [];
   private stemGains: GainNode[] = [];
   private stemsActive: boolean = false;
+  // Gewünschte Stem-Lautstärken der UI. Sie überleben play()/stop(), damit ein
+  // stummgeschalteter Stem nach dem nächsten Start nicht wieder laut ist.
+  private desiredStemVolumes: number[] = [];
   private loopActive: boolean = false;
   private loopStart: number = 0;
   private loopEnd: number = 0;
@@ -115,26 +118,34 @@ class AudioEngine {
     if (this.stemsActive) {
       // Create a source and gain for each stem
       this.stemSources = [];
-      
-      // Ensure we have enough gain nodes
+
+      // Gain-Bus exakt für dieses Stem-Set neu aufbauen: alte Gains eines
+      // anderen Tracks (oder einer anderen Stem-Anzahl) würden sonst hängen
+      // bleiben und weiter Klang an den Master schicken.
+      this.releaseStemGains();
       while (this.stemGains.length < this.stemBuffers.length) {
         const gain = ctx.createGain();
+        gain.gain.value = this.clampVolume(this.desiredStemVolumes[this.stemGains.length] ?? 1);
         gain.connect(this.masterGain || ctx.destination);
         this.stemGains.push(gain);
       }
 
       for (let i = 0; i < this.stemBuffers.length; i++) {
         const source = ctx.createBufferSource();
-        source.buffer = this.stemBuffers[i];
-        
+        const stemBuffer = this.stemBuffers[i];
+        source.buffer = stemBuffer;
+
+        // Stems können kürzer als der Hauptpuffer sein – Offset und Loop-Ende
+        // werden pro Stem geklemmt, sonst startet der Stem gar nicht.
+        const stemOffset = Math.max(0, Math.min(this.pauseOffset, stemBuffer.duration));
         if (this.loopActive && this.loopEnd > this.loopStart) {
           source.loop = true;
-          source.loopStart = this.loopStart;
-          source.loopEnd = this.loopEnd;
+          source.loopStart = Math.min(this.loopStart, stemBuffer.duration);
+          source.loopEnd = Math.min(this.loopEnd, stemBuffer.duration);
         }
-        
+
         source.connect(this.stemGains[i]);
-        source.start(0, this.pauseOffset);
+        source.start(0, stemOffset);
         this.stemSources.push(source);
       }
       
@@ -208,17 +219,66 @@ class AudioEngine {
     this.isPlaying = false;
   }
   
+  private clampVolume(volume: number): number {
+    const value = Number(volume);
+    if (!Number.isFinite(value)) return 1;
+    return Math.max(0, Math.min(2, value));
+  }
+
+  private releaseStemGains(): void {
+    for (const gain of this.stemGains) {
+      try {
+        gain.disconnect();
+      } catch {
+        // Gain war nie verbunden
+      }
+    }
+    this.stemGains = [];
+  }
+
+  /**
+   * Setzt die Stem-Lautstärke – auch im Pausen-Zustand. Der Wert wird
+   * gespeichert und beim nächsten play() auf den dann neu gebauten Gain-Bus
+   * angewendet, damit Mute/Solo über Transport-Stopps erhalten bleiben.
+   */
   public setStemVolume(index: number, volume: number) {
-    if (index >= 0 && index < this.stemGains.length) {
-      this.stemGains[index].gain.value = volume;
+    if (index < 0) return;
+    const value = this.clampVolume(volume);
+    while (this.desiredStemVolumes.length <= index) this.desiredStemVolumes.push(1);
+    this.desiredStemVolumes[index] = value;
+    if (index < this.stemGains.length && this.ctx) {
+      this.stemGains[index].gain.setValueAtTime(value, this.ctx.currentTime);
     }
   }
-  
+
   public getStemVolume(index: number): number {
     if (index >= 0 && index < this.stemGains.length) {
       return this.stemGains[index].gain.value;
     }
-    return 1.0;
+    return this.desiredStemVolumes[index] ?? 1.0;
+  }
+
+  /** Kompletten Stem-Mischer übernehmen (z. B. nach einer neuen Separation). */
+  public setStemVolumes(volumes: number[]): void {
+    this.desiredStemVolumes = (volumes ?? []).map((volume) => this.clampVolume(volume));
+    for (let i = 0; i < this.stemGains.length; i++) {
+      const value = this.desiredStemVolumes[i] ?? 1;
+      if (this.ctx) this.stemGains[i].gain.setValueAtTime(value, this.ctx.currentTime);
+      else this.stemGains[i].gain.value = value;
+    }
+  }
+
+  /** Stem-Bus vollständig zurücksetzen (Track ohne Stems). */
+  public clearStems(): void {
+    this.stop();
+    this.stemBuffers = [];
+    this.stemsActive = false;
+    this.desiredStemVolumes = [];
+    this.releaseStemGains();
+  }
+
+  public hasActiveStems(): boolean {
+    return this.stemsActive;
   }
 
   public getCurrentTime(): number {

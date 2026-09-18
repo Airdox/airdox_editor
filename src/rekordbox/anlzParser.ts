@@ -69,8 +69,22 @@ export interface AnlzPhraseEntry {
   beatFill: number;
 }
 
+export interface AnlzTagDiagnostic {
+  fourcc: string;
+  offset: number;
+  lenHeader: number;
+  lenTag: number;
+  /** First bytes of the untouched payload; capped to keep malformed files safe. */
+  rawBytes: Uint8Array;
+  rawByteLength: number;
+}
+
 export interface AnlzParsedResult {
   tagsFound: string[];
+  /** All validated ANLZ blocks, including blocks the app does not yet decode. */
+  tagBlocks: AnlzTagDiagnostic[];
+  /** Valid but unsupported FourCC sections kept for diagnostics/forward compatibility. */
+  unknownTags: AnlzTagDiagnostic[];
   analysisPath?: string;
   bpm?: number;
   firstBeat?: number;
@@ -126,11 +140,17 @@ const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
+  'P@V6': 5,
   PWV4: 4,
   PWV3: 3,
   PWV2: 2,
   PWAV: 1,
 };
+
+// Some tags are containers/metadata that do not currently feed the waveform
+// model, but they are known Rekordbox sections and must not be reported as
+// unknown merely because no UI field consumes them yet.
+const KNOWN_METADATA_TAGS = new Set(['PVBR', 'PCPT', 'PCP2']);
 
 interface WaveformSpec {
   entryBytes: number;
@@ -174,7 +194,7 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
     };
   }
 
-  if (tag === 'PWV6') {
+  if (tag === 'PWV6' || tag === 'P@V6') {
     // len_header 0x14: u4 len_entry_bytes, u4 len_entries, data
     if (lenHeader < 0x14 || offset + 0x14 > tagEnd) return null;
     const entryBytes = view.getUint32(offset + 0x0c, false);
@@ -253,19 +273,25 @@ function createWaveform(
       high = ((value >> 7) & 0x07) / 7;
       peak = ((value >> 2) & 0x1f) / 31;
     } else if (style === 'TRIPLE_BYTE') {
-      // PWV6 / PWV7 entries are stored as mid, high, low.
-      mid = view.getUint8(p) / 255;
-      high = view.getUint8(p + 1) / 255;
-      low = view.getUint8(p + 2) / 255;
+      // Sweep-verified on real Rekordbox analyses: PWV6, P@V6 and PWV7
+      // columns are low, mid, high. Earlier public format notes listed the
+      // inverse order; keeping it here would visibly swap kick and hi-hat
+      // energy in the 3-band renderer.
+      low = view.getUint8(p) / 255;
+      mid = view.getUint8(p + 1) / 255;
+      high = view.getUint8(p + 2) / 255;
       peak = Math.max(low, mid, high);
     } else if (style === 'COLOR_6BYTE') {
-      // PWV4: 6 bytes per column. The exact Rekordbox color mapping is not
-      // fully published; the final three bytes carry the dominant band
-      // energy and are used as a labeled visual approximation.
-      low = view.getUint8(p + 3) / 255;
-      mid = view.getUint8(p + 4) / 255;
-      high = view.getUint8(p + 5) / 255;
-      peak = Math.max(low, mid, high);
+      // PWV4 stores six 7-bit channel heights. Byte 1 is a brightness scale;
+      // bytes 3/4/5 are the red/green/blue (low/mid/high) front waveform.
+      // Byte 2 adds the blue/background height. This mapping is verified by
+      // the Rekordbox frequency-sweep reference implementation.
+      const brightness = (view.getUint8(p + 1) & 0x7f) / 127;
+      const background = (view.getUint8(p + 2) & 0x7f) / 127;
+      low = ((view.getUint8(p + 3) & 0x7f) / 127) * brightness;
+      mid = ((view.getUint8(p + 4) & 0x7f) / 127) * brightness;
+      high = ((view.getUint8(p + 5) & 0x7f) / 127) * brightness;
+      peak = Math.max(background, low, mid, high);
     }
 
     peaks[i] = peak;
@@ -576,6 +602,8 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
   const view = new DataView(buffer);
   const result: AnlzParsedResult = {
     tagsFound: [],
+    tagBlocks: [],
+    unknownTags: [],
     cues: [],
     loops: [],
     phrases: [],
@@ -608,25 +636,37 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     // legacy fixtures wrote the section length at +4, so both are accepted.
     const lenHeader = view.getUint32(offset + 4, false);
     const lenTag = view.getUint32(offset + 8, false);
-    let chunkSize = lenTag;
-    // Legacy PWV5 fixture: u32 count in the len_tag slot; the real section
-    // length lives in the len_header slot (12 + count * 3).
-    if (
-      tag === 'PWV5' &&
-      lenTag >= 1 &&
-      lenTag <= 20_000 &&
-      lenHeader === 12 + lenTag * 3
-    ) {
-      chunkSize = lenHeader;
-    }
+    const realLengthValid =
+      lenHeader >= 12 &&
+      lenTag >= lenHeader &&
+      lenTag >= 12 &&
+      offset + lenTag <= len;
+    // Compatibility with the project's pre-format fixtures is deliberately
+    // narrow.  A generic `len_header` fallback would turn any truncated real
+    // container into apparent success, so only the documented legacy shapes
+    // below may use it.
+    const legacyShape =
+      (tag === 'PWV5' && lenTag >= 1 && lenTag <= 20_000 && lenHeader === 12 + lenTag * 3) ||
+      (tag === 'PCOB' && lenTag <= 2_000 && lenHeader === 12 + lenTag * 24) ||
+      (tag === 'PQTZ' && lenHeader >= 12 && offset + lenHeader <= len &&
+        offset + 10 <= len && view.getUint16(offset + 8, false) >= 4_000 && view.getUint16(offset + 8, false) <= 35_000);
+    const chunkSize = realLengthValid ? lenTag : legacyShape ? lenHeader : 0;
+    // A tagged container is sequential: after an invalid length there is no
+    // safe offset from which to continue.  Do not resynchronise by scanning
+    // arbitrary payload bytes for FourCC-like sequences.
     if (chunkSize < 12 || offset + chunkSize > len) {
-      chunkSize = lenHeader;
-    }
-    if (chunkSize < 12 || offset + chunkSize > len) {
-      offset += 4;
-      continue;
+      result.warnings.push(
+        `${tag} @ 0x${offset.toString(16)}: ungültige Blocklänge (header=${lenHeader}, tag=${lenTag}); Parser angehalten.`
+      );
+      break;
     }
     const tagEnd = offset + chunkSize;
+    const payloadStart = Math.min(offset + lenHeader, tagEnd);
+    const rawByteLength = tagEnd - payloadStart;
+    const rawBytes = new Uint8Array(Math.min(rawByteLength, 4096));
+    for (let i = 0; i < rawBytes.length; i++) rawBytes[i] = view.getUint8(payloadStart + i);
+    const diagnostic: AnlzTagDiagnostic = { fourcc: tag, offset, lenHeader, lenTag, rawBytes, rawByteLength };
+    result.tagBlocks.push(diagnostic);
     result.tagsFound.push(tag);
 
     if (tag === 'PPTH') {
@@ -783,6 +823,14 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       } else {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
+    } else if (KNOWN_METADATA_TAGS.has(tag)) {
+      // Recognized auxiliary/nested Rekordbox section. It remains available in
+      // tagBlocks for diagnostics while the normalized model has no consumer.
+    } else {
+      // Unknown blocks are valid container members.  Preserve their bounds and
+      // a capped raw payload snapshot for diagnostics; never discard the rest
+      // of the file merely because a newer Rekordbox tag is not implemented.
+      result.unknownTags.push(diagnostic);
     }
 
     offset += chunkSize;
