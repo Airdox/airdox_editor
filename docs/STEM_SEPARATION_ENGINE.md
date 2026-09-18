@@ -3,6 +3,11 @@
 Nicht-destruktive KI-Stem-Separation für elektronische Musik (Techno, House,
 Deep/Progressive House, Trance, DnB, Dubstep, EDM, Electro, Synthwave).
 
+> Grafische Skizze & kompakter Aufbau-Abriss: [`STEM_ARCHITEKTUR.md`](./STEM_ARCHITEKTUR.md)
+> (SVG: [`assets/stem-architektur.svg`](./assets/stem-architektur.svg)). Dort sind auch
+> die Korrekturen der in diesem Dokument veralteten Angaben (Profilanzahl, Fehlercodes,
+> Content-Hash) zusammengefasst.
+
 **Status: TEIL 1 (technische Funktionalität) und TEIL 2 (Goldstandard-Testtrack,
 Qualitätsmetriken, Stem Isolation Gate) sind implementiert und automatisiert
 geprüft. Ein echtes Qualitäts-`PASS` ist in dieser Umgebung mangels

@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="1640" viewBox="0 0 1360 1640" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs><marker id="arw" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 z" fill="#37474f"/></marker><marker id="arwO" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 z" fill="#ef6c00"/></marker></defs>
+<rect width="1360" height="1640" fill="#ffffff"/>
+<text x="40" y="46" font-size="26" font-weight="700" fill="#202124">airdox_SMART_Editor — STEM-Architektur</text>
+<text x="40" y="70" font-size="14" fill="#5f6368">Schichten · Datenfluss · Verträge   |   Stand 18.09.2026, verifiziert gegen main @ e5fe650</text>
+<rect x="40" y="96" width="880" height="178" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+<text x="56" y="124" font-size="17" font-weight="700" fill="#202124">1 · RENDERER  —  React, Browser-Kontext, kein node:*</text>
+<text x="56" y="144" font-size="12.5" fill="#5f6368">UI und Client-Fassade: zeigt Verfügbarkeit und Fortschritt, entscheidet nichts über Qualität</text>
+<rect x="56" y="158" width="200" height="52" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="156.0" y="181.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">DeckStemsControl</text>
+<text x="156.0" y="198.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Profile · Solo · Fortschritt</text>
+<rect x="268" y="158" width="200" height="52" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="368.0" y="181.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">StemQualityWarning</text>
+<text x="368.0" y="198.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Modal: STEM AI UNAVAILABLE</text>
+<rect x="480" y="158" width="200" height="52" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="580.0" y="181.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">App.tsx</text>
+<text x="580.0" y="198.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Wiring · Original-sha256</text>
+<rect x="692" y="158" width="212" height="52" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="798.0" y="181.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">stemPlayback / audioEngine</text>
+<text x="798.0" y="198.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Acapella · Instrumental · Reset</text>
+<rect x="56" y="218" width="848" height="42" rx="6" fill="#ffffff" stroke="#4285f4" stroke-width="1.2"/>
+<text x="480.0" y="244.0" font-size="13.5" font-weight="600" fill="#202124" text-anchor="middle">src/audio/stemEngine.ts — Client-Fassade: checkAvailability · separateWithEngine · Cache · Abbruch</text>
+<rect x="40" y="292" width="880" height="48" rx="10" fill="#f1f3f4" stroke="#80868b" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="480.0" y="312" font-size="13.5" font-weight="700" fill="#202124" text-anchor="middle">Grenzvertrag:  src/stems/transportTypes.ts</text>
+<text x="480.0" y="330" font-size="11.5" fill="#5f6368" text-anchor="middle">StemJobView · StemServiceStatus · StemDesktopApi — strukturiert-klonierbar, browser-sicher (IPC-Contract-Test)</text>
+<line x1="480.0" y1="274" x2="480.0" y2="290" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="358" width="880" height="150" rx="10" fill="#fef7e0" stroke="#f9ab00" stroke-width="2"/>
+<text x="56" y="386" font-size="17" font-weight="700" fill="#202124">2 · TRANSPORT  —  zwei Wege, eine Implementierung</text>
+<text x="56" y="406" font-size="12.5" fill="#5f6368">Beide rufen dieselbe StemJobService auf; nur der Übertragungsweg unterscheidet sich</text>
+<rect x="56" y="420" width="415" height="72" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="263.5" y="446.0" font-size="13" font-weight="600" fill="#202124" text-anchor="middle">Desktop: Electron-IPC</text>
+<text x="263.5" y="463.0" font-size="10.5" fill="#5f6368" text-anchor="middle">preload.cjs → stemEngineBridge.cjs</text>
+<text x="263.5" y="476.0" font-size="10.5" fill="#5f6368" text-anchor="middle">11 Kanäle stems:* · dist/stems/node-bridge.cjs</text>
+<rect x="489" y="420" width="415" height="72" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="696.5" y="446.0" font-size="13" font-weight="600" fill="#202124" text-anchor="middle">Browser / Dev-Server: HTTP + SSE</text>
+<text x="696.5" y="463.0" font-size="10.5" fill="#5f6368" text-anchor="middle">server.ts (Express) · /api/stems/engine</text>
+<text x="696.5" y="476.0" font-size="10.5" fill="#5f6368" text-anchor="middle">/api/stems/jobs… · /jobs/:id/events</text>
+<line x1="480.0" y1="340" x2="480.0" y2="356" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="526" width="880" height="136" rx="10" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+<text x="56" y="554" font-size="17" font-weight="700" fill="#202124">3 · JOB-SCHICHT  —  src/stems/stemJobService.ts</text>
+<text x="56" y="574" font-size="12.5" fill="#5f6368">Job-Id sofort · Event-Stream · Pause/Resume/Cancel · Cache-Hit · Einzel-Stem-Download</text>
+<rect x="56" y="588" width="160" height="30" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="136.0" y="608.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">Working/</text>
+<rect x="228" y="588" width="160" height="30" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="308.0" y="608.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">Separation/</text>
+<rect x="400" y="588" width="160" height="30" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="480.0" y="608.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">Cache/</text>
+<rect x="572" y="588" width="160" height="30" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="652.0" y="608.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">Models/</text>
+<rect x="744" y="588" width="160" height="30" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="824.0" y="608.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">Staging/</text>
+<text x="56" y="638" font-size="12" fill="#37474f">Renderer-Bytes landen in Staging/ — die Quelldatei wird nie beschrieben.</text>
+<text x="56" y="654" font-size="12" fill="#37474f">Alte Läufe wandern nach Separation/&lt;track&gt;/.history/ statt überschrieben zu werden.</text>
+<line x1="480.0" y1="508" x2="480.0" y2="524" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="680" width="880" height="214" rx="10" fill="#fce8e6" stroke="#ea4335" stroke-width="2"/>
+<text x="56" y="708" font-size="17" font-weight="700" fill="#202124">4 · ENGINE-KERN  —  src/stems/stemSeparationEngine.ts (GUI-frei)</text>
+<text x="56" y="728" font-size="12.5" fill="#5f6368">Original-Hash → Arbeitskopie → Modell → Backend → Chunks → Overlap-Add → Validierung → Promotion</text>
+<rect x="56.0" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="112.28571428571428" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Original</text>
+<text x="112.28571428571428" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">sha256 read-only</text>
+<line x1="168.57142857142856" y1="770" x2="178.57142857142856" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="178.57142857142856" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="234.85714285714283" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Working-Copy</text>
+<text x="234.85714285714283" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">44,1 kHz float32</text>
+<line x1="291.1428571428571" y1="770" x2="301.1428571428571" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="301.1428571428571" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="357.4285714285714" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Chunk-Plan</text>
+<text x="357.4285714285714" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">+ Lückenprüfung</text>
+<line x1="413.71428571428567" y1="770" x2="423.71428571428567" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="423.7142857142857" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="480.0" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Inferenz</text>
+<text x="480.0" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">je Chunk</text>
+<line x1="536.2857142857143" y1="770" x2="546.2857142857143" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="546.2857142857142" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="602.5714285714286" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Overlap-Add</text>
+<text x="602.5714285714286" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">+ Postprocessing</text>
+<line x1="658.8571428571428" y1="770" x2="668.8571428571428" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="668.8571428571429" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="725.1428571428572" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">Validierung</text>
+<text x="725.1428571428572" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">vor Promotion</text>
+<line x1="781.4285714285714" y1="770" x2="791.4285714285714" y2="770" stroke="#ea4335" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="791.4285714285714" y="740" width="112.57142857142857" height="60" rx="6" fill="#ffffff" stroke="#ea4335" stroke-width="1.2"/>
+<text x="847.7142857142858" y="767.0" font-size="11.5" fill="#202124" text-anchor="middle">job.json</text>
+<text x="847.7142857142858" y="784.0" font-size="10.5" fill="#5f6368" text-anchor="middle">+ Cache, sha256</text>
+<text x="56" y="822" font-size="12.5" font-weight="600" fill="#202124">Helfer-Module</text>
+<rect x="56" y="832" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="136.0" y="850.0" font-size="12" fill="#202124" text-anchor="middle">modelRegistry</text>
+<rect x="228" y="832" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="308.0" y="850.0" font-size="12" fill="#202124" text-anchor="middle">modelManager</text>
+<rect x="400" y="832" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="480.0" y="850.0" font-size="12" fill="#202124" text-anchor="middle">stemRegistry</text>
+<rect x="572" y="832" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="652.0" y="850.0" font-size="12" fill="#202124" text-anchor="middle">chunkProcessor</text>
+<rect x="744" y="832" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="824.0" y="850.0" font-size="12" fill="#202124" text-anchor="middle">reconstructor</text>
+<rect x="56" y="862" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="136.0" y="880.0" font-size="12" fill="#202124" text-anchor="middle">qualityValidator</text>
+<rect x="228" y="862" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="308.0" y="880.0" font-size="12" fill="#202124" text-anchor="middle">separationJob</text>
+<rect x="400" y="862" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="480.0" y="880.0" font-size="12" fill="#202124" text-anchor="middle">separationCache</text>
+<rect x="572" y="862" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="652.0" y="880.0" font-size="12" fill="#202124" text-anchor="middle">wavIo</text>
+<rect x="744" y="862" width="160" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="824.0" y="880.0" font-size="12" fill="#202124" text-anchor="middle">preprocessor</text>
+<line x1="480.0" y1="662" x2="480.0" y2="678" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="912" width="880" height="146" rx="10" fill="#f3e8fd" stroke="#a142f4" stroke-width="2"/>
+<text x="56" y="940" font-size="17" font-weight="700" fill="#202124">5 · BACKENDS  —  src/stems/backends/  ·  einziges Interface: IStemSeparator</text>
+<text x="56" y="960" font-size="12.5" fill="#5f6368">Reihenfolge: natives C++-Binary (audiocpp_cli) → Python/Torch → BACKEND_UNAVAILABLE</text>
+<rect x="56" y="972" width="200" height="46" rx="6" fill="#ffffff" stroke="#a142f4" stroke-width="1.2"/>
+<text x="156.0" y="992.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">BSRoFormerSeparator</text>
+<text x="156.0" y="1009.0" font-size="10.5" fill="#5f6368" text-anchor="middle">primär (HIGH / MAX)</text>
+<rect x="268" y="972" width="200" height="46" rx="6" fill="#ffffff" stroke="#a142f4" stroke-width="1.2"/>
+<text x="368.0" y="992.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">MelBandRoFormer</text>
+<text x="368.0" y="1009.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Vergleichsfamilie</text>
+<rect x="480" y="972" width="200" height="46" rx="6" fill="#ffffff" stroke="#a142f4" stroke-width="1.2"/>
+<text x="580.0" y="992.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">HTDemucsSeparator</text>
+<text x="580.0" y="1009.0" font-size="10.5" fill="#5f6368" text-anchor="middle">nur PREVIEW (Legacy)</text>
+<rect x="692" y="972" width="212" height="46" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="798.0" y="992.0" font-size="12.5" font-weight="600" fill="#202124" text-anchor="middle">PipelineDouble</text>
+<text x="798.0" y="1009.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Test-Double, kein Modell</text>
+<rect x="56" y="1024" width="848" height="26" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="480.0" y="1042.0" font-size="12" fill="#202124" text-anchor="middle">processTransport.ts — JSONL: progress / stem / log / error / done · Exit-Codes 0·130·2·3·4·5 · SIGTERM</text>
+<line x1="480.0" y1="894" x2="480.0" y2="910" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="1076" width="880" height="176" rx="10" fill="#e0f7fa" stroke="#00838f" stroke-width="2"/>
+<text x="56" y="1104" font-size="17" font-weight="700" fill="#202124">6 · RUNTIME &amp; MODELLE  —  src/stems/runtime/</text>
+<text x="56" y="1124" font-size="12.5" fill="#5f6368">Deterministische Pfadauflösung — in Produktion nie app.asar/.venv</text>
+<rect x="56" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="122.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">pathResolver</text>
+<text x="122.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">deterministisch</text>
+<rect x="199" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="265.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">pythonRuntime</text>
+<text x="265.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">3.9 – 3.13</text>
+<rect x="342" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="408.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">modelRegistry v2</text>
+<text x="408.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">AVAILABLE …</text>
+<rect x="485" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="551.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">checkpointIntegrity</text>
+<text x="551.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">sha256</text>
+<rect x="628" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="694.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">preflight</text>
+<text x="694.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">11 Checks, 10 krit.</text>
+<rect x="771" y="1136" width="133" height="50" rx="6" fill="#ffffff" stroke="#00838f" stroke-width="1.2"/>
+<text x="837.5" y="1158.0" font-size="11.5" font-weight="600" fill="#202124" text-anchor="middle">diagnostics</text>
+<text x="837.5" y="1175.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Report + CLI</text>
+<text x="56" y="1212" font-size="12" fill="#37474f">Gewichte: resources/models/ (prod) · ~/.cache/airdox-stems/checkpoints/ (dev) · sha256 gegen den Katalog</text>
+<text x="56" y="1230" font-size="12" fill="#37474f">Interpreter: resources/stem-runtime/python.exe (prod) · .venv (dev) · Python 3.14 ⇒ PYTHON_VERSION_UNSUPPORTED</text>
+<line x1="480.0" y1="1058" x2="480.0" y2="1074" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<rect x="40" y="1270" width="880" height="108" rx="10" fill="#eceff1" stroke="#546e7a" stroke-width="2"/>
+<text x="56" y="1298" font-size="17" font-weight="700" fill="#202124">7 · INFERENZ</text>
+<text x="56" y="1318" font-size="12.5" fill="#5f6368">python/bsroformer_inference.py → models.bs_roformer.BSRoformer (PyTorch); Quelle: AIRODOX_MSST_DIR oder PyPI msst</text>
+<rect x="56" y="1332" width="415" height="32" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="263.5" y="1353.0" font-size="12.5" fill="#202124" text-anchor="middle">CPU / CUDA — bei OOM: CPU-Retry (cpuFallback)</text>
+<rect x="489" y="1332" width="415" height="32" rx="6" fill="#ffffff" stroke="#9aa0a6" stroke-width="1.2"/>
+<text x="696.5" y="1353.0" font-size="12.5" fill="#202124" text-anchor="middle">Ziel: natives C++-Binary (Vertrag steht, Binary fehlt)</text>
+<line x1="480.0" y1="1252" x2="480.0" y2="1268" stroke="#37474f" stroke-width="2" marker-end="url(#arw)"/>
+<text x="488.0" y="1264.0" font-size="12" fill="#37474f">JSONL / Exit-Codes</text>
+<rect x="945" y="680" width="375" height="410" rx="10" fill="#fff3e0" stroke="#ef6c00" stroke-width="2"/>
+<text x="961" y="708" font-size="17" font-weight="700" fill="#202124">QUALITÄTSGATES</text>
+<text x="961" y="728" font-size="12.5" fill="#5f6368">quer zum Kern — entscheiden über Freigabe</text>
+<rect x="961" y="744" width="343" height="88" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.2"/>
+<text x="1132.5" y="771.0" font-size="13" font-weight="600" fill="#202124" text-anchor="middle">Gate 1 · technisch</text>
+<text x="1132.5" y="788.0" font-size="10.5" fill="#5f6368" text-anchor="middle">qualityValidator + qualityGate (10 Checks)</text>
+<text x="1132.5" y="801.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Header/Frames/Rate/Kanäle/NaN/Peak/DC</text>
+<text x="1132.5" y="814.0" font-size="10.5" fill="#5f6368" text-anchor="middle">Rekombination · Chunk-Grenzen · Stereo</text>
+<rect x="961" y="842" width="343" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.2"/>
+<text x="1132.5" y="863.0" font-size="13" font-weight="600" fill="#202124" text-anchor="middle">Gate 2 · Job-Identität</text>
+<text x="1132.5" y="880.0" font-size="10.5" fill="#5f6368" text-anchor="middle">separationJob + separationCache</text>
+<text x="1132.5" y="893.0" font-size="10.5" fill="#5f6368" text-anchor="middle">job.json reproduzierbar · .partial → Promotion</text>
+<text x="1132.5" y="906.0" font-size="10.5" fill="#5f6368" text-anchor="middle">.history/ statt Überschreiben</text>
+<rect x="961" y="928" width="343" height="88" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.2"/>
+<text x="1132.5" y="955.0" font-size="13" font-weight="600" fill="#202124" text-anchor="middle">Gate 3 · Isolation (Release)</text>
+<text x="1132.5" y="972.0" font-size="10.5" fill="#5f6368" text-anchor="middle">stemIsolationGate + metrics + goldStandard</text>
+<text x="1132.5" y="985.0" font-size="10.5" fill="#5f6368" text-anchor="middle">30-s-Goldstandard · Seed 20260913 · 6 Stems</text>
+<text x="1132.5" y="998.0" font-size="10.5" fill="#5f6368" text-anchor="middle">RELEASE_READY / TECHNICAL_PASS_QUALITY_FAIL</text>
+<text x="961" y="1042" font-size="13" font-weight="700" fill="#b23c00">Anti-Fake-Regel</text>
+<text x="961" y="1062" font-size="12" fill="#5f6368">Zufallsgewichte / Test-Double ⇒ qualityPass = false.</text>
+<text x="961" y="1078" font-size="12" fill="#5f6368">Kein Qualitäts-PASS ohne trainierte Separation.</text>
+<line x1="920" y1="787" x2="941" y2="787" stroke="#ef6c00" stroke-width="2" marker-end="url(#arwO)"/>
+<line x1="941" y1="976" x2="920" y2="992" stroke="#ef6c00" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arwO)"/>
+<rect x="945" y="1110" width="375" height="258" rx="10" fill="#f1f3f4" stroke="#80868b" stroke-width="1.5"/>
+<text x="961" y="1138" font-size="16" font-weight="700" fill="#202124">MODELL-KATALOG</text>
+<text x="961" y="1158" font-size="12" fill="#5f6368">modelCatalog.json · Content-Hash eb1d74049ca9225f</text>
+<text x="961" y="1184" font-size="12" font-weight="600" fill="#202124">bsroformer-musdb18hq-4stem-zfturbo</text>
+<text x="961" y="1198" font-size="11" fill="#5f6368">primär · sha256 3e9daecd… gepinnt</text>
+<text x="961" y="1216" font-size="12" font-weight="600" fill="#202124">bsroformer-viperx-vocals-1297</text>
+<text x="961" y="1230" font-size="11" fill="#5f6368">vocals/other · unverified</text>
+<text x="961" y="1248" font-size="12" font-weight="600" fill="#202124">melbandroformer-viperx-vocals-3005</text>
+<text x="961" y="1262" font-size="11" fill="#5f6368">vocals/other · unverified</text>
+<text x="961" y="1280" font-size="12" font-weight="600" fill="#202124">htdemucs-ft-4stem</text>
+<text x="961" y="1294" font-size="11" fill="#5f6368">nur PREVIEW · unverified</text>
+<text x="961" y="1312" font-size="12" font-weight="600" fill="#202124">pipeline-double-v1</text>
+<text x="961" y="1326" font-size="11" fill="#5f6368">Test-Double · synthetic</text>
+<text x="961" y="1342" font-size="11.5" fill="#37474f">stemOrder · numOverlap · Ensemble · Präzision</text>
+<text x="961" y="1358" font-size="11.5" fill="#37474f">kommen aus dem Deskriptor, nie hardcoded</text>
+<rect x="40" y="1398" width="1280" height="176" rx="10" fill="#f8f9fa" stroke="#5f6368" stroke-width="1.5"/>
+<text x="56" y="1426" font-size="17" font-weight="700" fill="#202124">INVARIANTEN</text>
+<text x="56" y="1454" font-size="12.5" fill="#202124">1   Original read-only — sha256 vor/nach; ORIGINAL_MODIFIED ist ein harter Fehler, auch bei Abbruch.</text>
+<text x="56" y="1475" font-size="12.5" fill="#202124">2   Separation = trainiertes Modell — kein Regelwerk, kein Spektral-Filter; stftSeparator ist aus dem Produktionspfad entfernt.</text>
+<text x="56" y="1496" font-size="12.5" fill="#202124">3   Kein stiller Qualitäts-Downgrade — fehlende Engine ⇒ STEM AI UNAVAILABLE + Diagnose, nie ein Pseudo-Stem.</text>
+<text x="56" y="1517" font-size="12.5" fill="#202124">4   Qualität vor Tempo — HIGH / MAXIMUM_QUALITY wählt nie automatisch die schnellsten Parameter (6 Overlaps + 3 Ensemble-Pässe).</text>
+<text x="56" y="1538" font-size="12.5" fill="#202124">5   Keine Checkpoint-Hardkodierung — Modell, Stems, Overlap, Präzision aus der Registry; UI zeigt stemIds aus dem Deskriptor.</text>
+<text x="56" y="1559" font-size="12.5" fill="#202124">6   Validierung vor Sichtbarkeit — Stems liegen zuerst in .partial/ und werden erst nach bestandenem Gate promoted.</text>
+<text x="40" y="1604" font-size="11.5" fill="#9aa0a6">Verifiziert: run-tests --group stems 10/10 · tsc --noEmit sauber · stems:diagnose = UNAVAILABLE (kein Checkpoint in der Sandbox) · Details: docs/STEM_ARCHITEKTUR.md</text>
+</svg>

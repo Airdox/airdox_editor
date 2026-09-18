@@ -3,8 +3,9 @@
 > **Neu:** Die modulare, nicht-destruktive Stem-Engine (BS-RoFormer als
 > High-Quality-Engine, Modell-Registry, Chunking/Overlap-Add, Validierung,
 > Cache, Abbruch) ist in [`STEM_SEPARATION_ENGINE.md`](./STEM_SEPARATION_ENGINE.md)
-> beschrieben. Dieser Text dokumentiert weiterhin den heute ausgelieferten
-> Demucs-Pfad der Editor-UI.
+> beschrieben; der kompakte Aufbau- und Schichten-Abriss samt Skizze steht in
+> [`STEM_ARCHITEKTUR.md`](./STEM_ARCHITEKTUR.md). Dieser Text dokumentiert weiterhin
+> den heute ausgelieferten Demucs-Pfad der Editor-UI.
 
 ## Warum ein Modell nötig ist
 
