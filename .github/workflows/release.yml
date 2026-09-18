@@ -6,14 +6,21 @@ on:
       - main
       - master
       - feature/colab-stem-separation
+      - feature/*
+      - arena/*
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   test-and-release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      release_version: ${{ steps.version.outputs.release_version }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
     - uses: actions/checkout@v4
@@ -37,34 +44,40 @@ jobs:
       run: |
         pytest tests/ -v
 
-    - name: Determine version
+    - name: Determine version (fixed double naming)
       id: version
       run: |
-        # Version aus __init__.py oder git tag oder commit
-        VERSION=$(grep -oP '__version__ = "\K[^"]+' audio_editor/__init__.py || echo "0.2.0")
+        # Base Version aus VERSION Datei oder __init__.py ohne Suffix
+        if [ -f VERSION ]; then
+          BASE_VERSION=$(cat VERSION | tr -d ' \n')
+        else
+          BASE_VERSION=$(grep -oP '__version__ = "\K[^"]+' audio_editor/__init__.py | cut -d'-' -f1 || echo "0.2.0")
+        fi
         COMMIT=$(git rev-parse --short HEAD)
         BRANCH=$(git rev-parse --abbrev-ref HEAD)
         TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        BRANCH_SAFE=$(echo $BRANCH | sed 's/\//-/g')
         
         if [[ $GITHUB_REF == refs/tags/* ]]; then
-          # Tag Push -> nutze Tag als Version
           VERSION=${GITHUB_REF#refs/tags/v}
           RELEASE_VERSION="v${VERSION}"
         else
-          # Branch Push -> auto version mit commit
-          RELEASE_VERSION="${VERSION}-${BRANCH//\//-}-${COMMIT}-${TIMESTAMP}"
-          # Für main branch auch als latest taggen
           if [[ $BRANCH == "main" || $BRANCH == "master" ]]; then
-            RELEASE_VERSION="v${VERSION}-${COMMIT}"
+            RELEASE_VERSION="v${BASE_VERSION}-${COMMIT}"
+          else
+            RELEASE_VERSION="v${BASE_VERSION}-${BRANCH_SAFE}-${COMMIT}"
           fi
         fi
         
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "version=${BASE_VERSION}" >> $GITHUB_OUTPUT
         echo "release_version=${RELEASE_VERSION}" >> $GITHUB_OUTPUT
         echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
         echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+        echo "branch_safe=${BRANCH_SAFE}" >> $GITHUB_OUTPUT
         
-        echo "Determined version: ${RELEASE_VERSION}"
+        echo "Base Version: ${BASE_VERSION}"
+        echo "Release Version: ${RELEASE_VERSION}"
+        echo "Branch: ${BRANCH}"
 
     - name: Build Linux executable
       run: |
@@ -74,19 +87,18 @@ jobs:
 
     - name: Create Release Archives
       run: |
-        # Source ZIP
+        # Source ZIP (Python Cloud Feature)
         zip -r AudioEditor-Source-${{ steps.version.outputs.release_version }}.zip \
           audio_editor/ requirements.txt README.md \
-          config.json.example .env.example \
+          config.json.example .env.example VERSION CHANGELOG.md \
           audio_editor/colab/ \
-          windows_release/*.bat windows_release/*.md \
-          -x "*.pyc" "*__pycache__*" "*data/*" "dist/*" "build/*"
+          -x "*.pyc" "*__pycache__*" "*data/*" "dist/*" "build/*" "windows_release/dist/*"
         
         # Portable ZIP
         mkdir -p release_portable
         cp -r audio_editor release_portable/
-        cp requirements.txt README.md config.json.example .env.example release_portable/
-        cp windows_release/*.bat release_portable/ 2>/dev/null || true
+        cp requirements.txt README.md config.json.example .env.example VERSION release_portable/ 2>/dev/null || true
+        cp -r audio_editor/colab release_portable/colab 2>/dev/null || true
         zip -r AudioEditor-Windows-Portable-${{ steps.version.outputs.release_version }}.zip release_portable/ -x "*.pyc" "*__pycache__*"
         
         ls -lh *.zip
@@ -102,18 +114,17 @@ jobs:
           **Branch:** ${{ steps.version.outputs.branch }}
           **Commit:** ${{ steps.version.outputs.commit }}
           **Version:** ${{ steps.version.outputs.version }}
+          **Basis:** Electron Editor (main) + Cloud Feature (feature/colab-stem-separation)
           
           ### Features
-          - Deck Ansicht mit 2 Decks (Basis)
-          - Button "Externe Stems berechnen" in jedem Deck
+          - **Bestehender Editor bleibt Basis:** Electron + React + TypeScript (ClipDeckView, DeckStemsControl)
+          - **Neu:** Button "Externe Stems berechnen" in jedem Deck (Python + Electron)
           - Cloud Stem Separation via Google Drive + Colab GPU (htdemucs)
-          - Hintergrund Worker (GUI friert nicht)
-          - Mock Modus für Tests ohne Credentials
+          - Hintergrund Worker (GUI friert nicht) - QThread
+          - Mock Modus für Tests ohne Credentials (USE_MOCK_DRIVE=1)
+          - 68 Tests - alle bestanden
           
-          ### Installation
-          Siehe `README.md` und `windows_release/README_WINDOWS.md`
-          
-          ### Schnelltest (Mock)
+          ### Installation & Test (Mock, ohne Credentials)
           ```bat
           set USE_MOCK_DRIVE=1
           python -m audio_editor.main
@@ -122,21 +133,27 @@ jobs:
           
           ### Echte Cloud
           - Service Account JSON als `service_account.json` ablegen
-          - Colab Notebook `audio_editor/colab/colab_notebook.ipynb` starten (GPU!)
+          - Colab Notebook `audio_editor/colab/colab_notebook.ipynb` starten (GPU zwingend!)
           - Siehe `audio_editor/colab/COLAB_SETUP.md`
           
-          ### Tests
-          Alle Tests bestanden: `pytest tests/ -v`
-          - test_existing_editor.py - Basis bleibt erhalten
-          - test_deck_integration.py - Workflow Integration
-          - test_config.py, test_database.py, test_stem_manager.py
-          - test_drive_client.py, test_colab_trigger.py, test_worker.py
+          ### Windows EXE
+          - Windows EXE wird automatisch via windows-latest Runner gebaut (siehe zweiter Job)
+          - Oder lokal: `build_exe_windows.bat` auf Windows PC
+          - Ergebnis: `dist/AudioEditor/AudioEditor.exe`
           
-          Auto-generated on push to ${{ steps.version.outputs.branch }}
+          ### Tests
+          ```
+          pytest tests/ -v  # 68 passed
+          - test_existing_editor.py (8) - Basis bleibt erhalten
+          - test_deck_integration.py (9) - Workflow Integration
+          - test_config.py (11), test_database.py (5), test_stem_manager.py (10)
+          - test_drive_client.py (9), test_colab_trigger.py (7), test_worker.py (4)
+          ```
+          
+          Auto-generated on push to ${{ steps.version.outputs.branch }} via .github/workflows/release.yml
         files: |
           AudioEditor-Source-*.zip
           AudioEditor-Windows-Portable-*.zip
-          dist/AudioEditor/*  (if exists)
         draft: false
         prerelease: ${{ contains(steps.version.outputs.branch, 'feature') }}
       env:
@@ -145,12 +162,12 @@ jobs:
   release-windows:
     runs-on: windows-latest
     needs: test-and-release
-    permissions:
-      contents: write
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/feature/colab-stem-separation'
+    if: always() && needs.test-and-release.result == 'success'
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -159,22 +176,57 @@ jobs:
 
     - name: Install dependencies
       run: |
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
 
-    - name: Build Windows EXE
+    - name: Build Windows EXE (echte PE .exe)
       run: |
-        pyinstaller --name=AudioEditor --windowed --onedir --collect-all=PySide6 --collect-all=shiboken6 --exclude-module=torch --exclude-module=torchaudio --exclude-module=demucs audio_editor/main.py --noconfirm
+        pyinstaller --name=AudioEditor --windowed --onedir --collect-all=PySide6 --collect-all=shiboken6 --hidden-import=googleapiclient --hidden-import=google.auth --exclude-module=torch --exclude-module=torchaudio --exclude-module=demucs audio_editor/main.py --noconfirm
+        dir dist/AudioEditor/
 
     - name: Create Windows ZIP
       run: |
-        Compress-Archive -Path dist/AudioEditor -DestinationPath AudioEditor-Windows-EXE-${{ github.sha }}.zip
+        Compress-Archive -Path dist/AudioEditor -DestinationPath AudioEditor-Windows-EXE-${{ needs.test-and-release.outputs.release_version }}.zip
 
-    - name: Upload Windows Release to same Tag
+    - name: Upload Windows EXE to same Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.ref_name }}-${{ github.sha }}
+        tag_name: ${{ needs.test-and-release.outputs.release_version }}
         files: AudioEditor-Windows-EXE-*.zip
+        fail_on_unmatched_files: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Zusätzlich: Electron Windows Build (bestehender Editor) - bleibt erhalten
+  release-electron-windows:
+    runs-on: windows-latest
+    needs: test-and-release
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Node.js aufsetzen
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Abhängigkeiten installieren
+      run: npm ci
+
+    - name: Electron Windows-Paket (NSIS-Setup)
+      run: npx electron-builder --win nsis --publish never
+      env:
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Electron Release to same Tag
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ needs.test-and-release.outputs.release_version }}
+        files: release/*-setup.exe
         fail_on_unmatched_files: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

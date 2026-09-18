@@ -2,12 +2,12 @@ name: CI - Tests & Build
 
 on:
   push:
-    branches: [ main, master, feature/*, develop ]
+    branches: [ main, master, feature/*, arena/*, develop ]
   pull_request:
     branches: [ main, master ]
 
 jobs:
-  test:
+  test-python:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,40 +33,33 @@ jobs:
       env:
         USE_MOCK_DRIVE: "1"
       run: |
-        pytest tests/ -v --cov=audio_editor --cov-report=term-missing --cov-report=xml
+        pytest tests/ -v --cov=audio_editor --cov-report=term-missing
 
     - name: Test existing editor basis still works
       env:
         USE_MOCK_DRIVE: "1"
       run: |
-        pytest tests/test_existing_editor.py -v
-        pytest tests/test_deck_integration.py -v
+        pytest tests/test_existing_editor.py tests/test_deck_integration.py -v
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: false
-
-  lint:
+  test-electron:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
       with:
-        python-version: "3.11"
-    - name: Install lint tools
-      run: |
-        pip install flake8 black isort
-    - name: Lint with flake8
-      run: |
-        flake8 audio_editor/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
-        flake8 audio_editor/ --count --max-complexity=15 --max-line-length=120 --statistics || true
+        node-version: '20'
+        cache: 'npm'
+    - name: Install dependencies
+      run: npm ci
+    - name: TypeScript Check
+      run: npm run lint || true
+    - name: Package.json valid
+      run: npm run test:package
 
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    needs: test
+    needs: test-python
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
@@ -79,17 +72,18 @@ jobs:
         pip install pyinstaller
     - name: Build executable (Linux)
       run: |
-        python build_windows.py || echo "Build script failed, trying direct pyinstaller"
         pyinstaller --name=AudioEditor --windowed --onedir audio_editor/main.py --noconfirm || true
+        ls -lh dist/ || echo "No dist"
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AudioEditor-Linux
+        name: AudioEditor-Linux-${{ github.sha }}
         path: dist/
+        retention-days: 7
 
-  build-windows:
+  build-windows-python:
     runs-on: windows-latest
-    needs: test
+    needs: test-python
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
@@ -101,14 +95,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
-    - name: Build Windows EXE
+    - name: Build Windows EXE (Python Cloud Feature)
       run: |
         pyinstaller --name=AudioEditor --windowed --onedir --collect-all=PySide6 --collect-all=shiboken6 --exclude-module=torch --exclude-module=torchaudio --exclude-module=demucs audio_editor/main.py --noconfirm
-    - name: Create Windows Release ZIP
+        dir dist/AudioEditor/
+    - name: Create Windows ZIP
       run: |
-        Compress-Archive -Path dist/AudioEditor -DestinationPath AudioEditor-Windows-${{ github.sha }}.zip
+        Compress-Archive -Path dist/AudioEditor -DestinationPath AudioEditor-Windows-Python-${{ github.sha }}.zip
     - name: Upload Windows artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AudioEditor-Windows
-        path: AudioEditor-Windows-*.zip
+        name: AudioEditor-Windows-Python-${{ github.sha }}
+        path: AudioEditor-Windows-Python-*.zip
+        retention-days: 7
