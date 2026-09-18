@@ -14,10 +14,16 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 1. **Node.js** (LTS, ≥ 20) – https://nodejs.org
 2. **Git** (für den Klon aus GitHub)
 
-Der Basis-Build benötigt **kein** Visual Studio: XML-/ANLZ-Import, Audio-Editor
-und Export funktionieren vollständig. Das optionale SQLCipher-Modul ist per
-`"npmRebuild": false` abgeschaltet, sodass der Build auch in Pfaden **mit
-Leerzeichen** und ohne C++-Toolchain durchläuft.
+Für den vollständigen Desktop-Build mit Master-DB-Unterstützung werden
+Visual Studio 2022 Build Tools mit **Desktopentwicklung mit C++**, MSVC und
+Windows SDK sowie Python 3 benötigt. Das Binding
+`better-sqlite3-multiple-ciphers` muss gegen die Electron-ABI gebaut werden;
+ein Build mit normalem Node.js reicht für die Desktop-App nicht aus.
+
+Der Renderer-/XML-/ANLZ-Build kann weiterhin ohne SQLCipher-Toolchain laufen.
+`npmRebuild` bleibt in `package.json` bewusst `false`; der Native-Rebuild wird
+stattdessen explizit und reproduzierbar über `npm run rebuild:electron`
+aufgerufen.
 
 ## Bauen (PowerShell – Windows)
 
@@ -53,7 +59,8 @@ Der Build ist robust gegen unvollständige Commits: Fehlt die
 `package-lock.json` oder ist sie nicht synchron mit der `package.json`
 (passiert bei parallelen Branches), schaltet der Workflow automatisch auf
 `npm install` ohne Cache um und baut trotzdem – mit einer Warnung im
-Build-Protokoll statt eines Abruchs. Die CI nutzt Node.js 22.
+Build-Protokoll statt eines Abruchs. Die CI nutzt Node.js 20 und baut das
+Native-Binding vor dem Electron-Packaging automatisch gegen die Electron-ABI.
 
 Hinweis: Die Qualitäts-Gates (`TypeScript-Prüfung`, `Waveform-Gates`) laufen
 bei jedem Build mit und bleiben sichtbar, blockieren den WIN-Build aber
