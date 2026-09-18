@@ -32,6 +32,7 @@ import {
   PhraseSection,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export interface AnlzCueEntry {
   /** 0 = memory point, 1..N = hot cue number (A=1, B=2, ...) */
@@ -79,8 +80,6 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
-  /** Every decoded PWV variant with its source tag; `waveform` is the best of these. */
-  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -123,9 +122,7 @@ function readUtf16Be(view: DataView, offset: number, byteLength: number): string
   return String.fromCharCode(...chars);
 }
 
-// Decoded-variant priority (which PWV section becomes `waveform`): shared
-// with the DAT+EXT merge in databaseExtractor.ts.
-export const WAVEFORM_PRIORITY: Record<string, number> = {
+const WAVEFORM_PRIORITY: Record<string, number> = {
   PWV7: 7,
   PWV5: 6,
   PWV6: 5,
@@ -224,8 +221,7 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
 
 function createWaveform(
   spec: WaveformSpec,
-  view: DataView,
-  sourceTag: string
+  view: DataView
 ): WaveformAnalysisData {
   const { entryCount, entryBytes, dataOffset, style } = spec;
   const peaks = new Float32Array(entryCount);
@@ -288,7 +284,6 @@ function createWaveform(
     midEnergy,
     highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
-    sourceTag,
   };
 }
 
@@ -582,7 +577,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
-    waveformVariants: [],
     warnings: [],
   };
 
@@ -651,11 +645,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
-          // Honest gap report: scalars without beat nodes never replace a
-          // stored grid — the missing PQTZ nodes are logged, not hidden.
-          result.warnings.push(
-            `${tag}: keine Beat-Knoten lesbar (Legacy-Skalare) – nur BPM/First-Beat übernommen, Grid bleibt unverändert.`
-          );
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -780,16 +769,10 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec) {
-        // Every decoded PWV variant is kept (zoom selection happens at render
-        // time); the highest-priority variant additionally becomes `waveform`.
-        const variant = createWaveform(spec, view, tag);
-        result.waveformVariants.push(variant);
-        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-          result.waveform = variant;
-          waveformPriority = WAVEFORM_PRIORITY[tag];
-        }
-      } else {
+      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+        result.waveform = createWaveform(spec, view);
+        waveformPriority = WAVEFORM_PRIORITY[tag];
+      } else if (!spec) {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }
@@ -806,6 +789,18 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
   const memModel = entriesToModel(rawMemoryCues, false, bpm, firstBeat);
   result.cues = [...memModel.cues, ...hotModel.cues];
   result.loops = [...memModel.loops, ...hotModel.loops];
+
+  logger.debug('XML_IMPORT', `ANLZ binär geparst (${(len / 1024).toFixed(1)} KB)`, {
+    byteLength: len,
+    tags: result.tagsFound,
+    cues: result.cues.length,
+    loops: result.loops.length,
+    phrases: result.phrases.length,
+    bpm: result.bpm,
+    hasWaveform: Boolean(result.waveform),
+    waveformBuckets: result.waveform?.length,
+    warnings: result.warnings,
+  });
 
   return result;
 }

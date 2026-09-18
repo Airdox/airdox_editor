@@ -29,28 +29,33 @@ function isProtectedTarget(targetPath, protectedPaths) {
 }
 
 /**
- * Converts a Rekordbox LOCATION string into a local filesystem path:
- * file:// URLs are decoded (percent-encoding resolved), plain absolute and
- * drive-letter paths resolve without a search, and anything non-local
- * (remote URLs, empty, null/undefined) yields null.
+ * Main-process-owned registry of every source path opened read-only. Renderer
+ * payloads are not a security boundary, so save/export checks must also use
+ * this authoritative list even if a renderer accidentally omits a source.
  */
-function toLocalPath(location) {
-  if (typeof location !== 'string' || !location.trim()) return null;
+class OriginalSourceRegistry {
+  constructor() {
+    this.paths = new Map();
+  }
 
-  try {
-    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
-      return path.resolve(location);
-    }
+  register(filePath) {
+    if (typeof filePath !== 'string' || !filePath.trim()) return false;
+    this.paths.set(normalizeForCompare(filePath), path.resolve(filePath));
+    return true;
+  }
 
-    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
-      const url = new URL(location);
-      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
-    }
+  registerMany(filePaths) {
+    if (!Array.isArray(filePaths)) return;
+    for (const filePath of filePaths) this.register(filePath);
+  }
 
-    return path.resolve(location);
-  } catch {
-    return null;
+  isProtected(targetPath, additionalPaths = []) {
+    return isProtectedTarget(targetPath, [...this.values(), ...(Array.isArray(additionalPaths) ? additionalPaths : [])]);
+  }
+
+  values() {
+    return Array.from(this.paths.values());
   }
 }
 
-module.exports = { normalizeForCompare, isProtectedTarget, toLocalPath };
+module.exports = { normalizeForCompare, isProtectedTarget, OriginalSourceRegistry };

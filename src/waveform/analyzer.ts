@@ -6,6 +6,7 @@
  */
 
 import { DataOrigin, WaveformAnalysisData } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export function analyzeAudioBuffer(
   buffer: AudioBuffer,
@@ -79,6 +80,14 @@ export function analyzeAudioBuffer(
       highEnergy[b] = Math.min(1.0, (highSum / count) * 3.8);
     }
   }
+
+  logger.debug('WAVEFORM', `Wellenform analysiert: ${(length / sampleRate).toFixed(2)}s @ ${sampleRate} Hz → ${totalBuckets} Buckets (${origin})`, {
+    duration: length / sampleRate,
+    sampleRate,
+    buckets: totalBuckets,
+    channels: buffer.numberOfChannels,
+    origin,
+  });
 
   return {
     length: totalBuckets,
@@ -263,50 +272,7 @@ export function estimateBpm(buffer: AudioBuffer): number {
     }
   }
 
-  return Math.round(bestBpm * 10) / 10;
-}
-
-/**
- * Extracts a downsampled 64-bucket representation of the waveform
- * directly from the Rekordbox ANLZ analysis data, avoiding audio buffer processing.
- */
-export function extractMiniPeaksFromAnalysis(
-  analysis: WaveformAnalysisData,
-  startSec: number,
-  endSec: number,
-  numBuckets: number = 64
-): { peaks: number[]; low: number[]; mid: number[]; high: number[] } {
-  const secPerBucket = analysis.secPerBucket || 0.02;
-  const startIndex = Math.max(0, Math.floor(startSec / secPerBucket));
-  const endIndex = Math.min(analysis.length, Math.ceil(endSec / secPerBucket));
-  
-  const span = endIndex - startIndex;
-  const step = Math.max(1, span / numBuckets);
-  
-  const peaks: number[] = [];
-  const low: number[] = [];
-  const mid: number[] = [];
-  const high: number[] = [];
-
-  for (let b = 0; b < numBuckets; b++) {
-    const s = Math.floor(startIndex + b * step);
-    const e = Math.floor(startIndex + (b + 1) * step);
-    const safeStart = Math.min(analysis.length - 1, s);
-    const safeEnd = Math.min(analysis.length, Math.max(safeStart + 1, e));
-    
-    let maxP = 0, maxL = 0, maxM = 0, maxH = 0;
-    for (let i = safeStart; i < safeEnd; i++) {
-      if (analysis.peaks[i] > maxP) maxP = analysis.peaks[i];
-      if (analysis.lowEnergy && analysis.lowEnergy[i] > maxL) maxL = analysis.lowEnergy[i];
-      if (analysis.midEnergy && analysis.midEnergy[i] > maxM) maxM = analysis.midEnergy[i];
-      if (analysis.highEnergy && analysis.highEnergy[i] > maxH) maxH = analysis.highEnergy[i];
-    }
-    
-    peaks.push(maxP);
-    low.push(maxL);
-    mid.push(maxM);
-    high.push(maxH);
-  }
-
-  return { peaks, low, mid, high };
+  const estimated = Math.round(bestBpm * 10) / 10;
+  logger.debug('BEATGRID', `BPM geschätzt: ${estimated} (Korrelation ${maxCorr.toExponential(2)})`);
+  return estimated;
 }

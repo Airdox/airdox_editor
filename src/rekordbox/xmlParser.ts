@@ -6,6 +6,7 @@
  */
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
@@ -271,29 +272,12 @@ function parseSingleTrackNode(
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
 
-  // Robust cue intake: only marks with a parseable position become cues or
-  // loops. Junk entries without a position attribute are ignored, and
-  // alternative exporters that write <CUE Position="…"> instead of
-  // <POSITION_MARK Start="…"> are recognized (foreign-export guard).
-  const positionOf = (mEl: any): number | null => {
-    const raw = mEl.getAttribute('Start') ?? mEl.getAttribute('Position');
-    if (raw === null || raw.trim() === '') return null;
-    const value = parseFloat(raw);
-    return Number.isFinite(value) && value >= 0 ? value : null;
-  };
-
-  const markElements = [
-    ...Array.from(el.querySelectorAll('POSITION_MARK')),
-    ...Array.from(el.querySelectorAll('CUE')),
-  ];
+  const markElements = el.querySelectorAll('POSITION_MARK');
   let firstBeatCueAnchor: number | null = null;
   markElements.forEach((mEl: any) => {
     const name = (mEl.getAttribute('Name') || '').toLowerCase();
-    const start = positionOf(mEl);
-    if (
-      start !== null &&
-      (name.includes('first beat') || name.includes('1.1') || name === 'grid')
-    ) {
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
+    if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
       firstBeatCueAnchor = start;
     }
   });
@@ -319,10 +303,7 @@ function parseSingleTrackNode(
       };
   markElements.forEach((mEl: any, mIdx: number) => {
     const type = mEl.getAttribute('Type') || '0';
-    const start = positionOf(mEl);
-    // A mark without a genuine position carries no information — skip it
-    // instead of inventing a cue at 0.0.
-    if (start === null) return;
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
     const name = mEl.getAttribute('Name') || `Cue ${mIdx + 1}`;
     const numStr = mEl.getAttribute('Num') || '-1';
     const num = parseInt(numStr, 10);
@@ -424,6 +405,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur: ${parserError.textContent}`);
       throw new Error('Invalid Rekordbox XML structure: ' + parserError.textContent);
     }
 
@@ -439,6 +421,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
   const rawVersion = djPlaylists?.getAttribute('Version') || '1.0.0';
   const tracks: Partial<TrackModel>[] = trackElements.map((el, idx) => parseSingleTrackNode(el, idx));
+  logger.debug('XML_IMPORT', `XML synchron geparst: ${tracks.length} Track(s), Schema ${rawVersion}`);
 
   return { tracks, rawVersion };
 }
@@ -477,6 +460,7 @@ export async function parseRekordboxXmlAsync(
     const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur (async): ${parserError.textContent}`);
       throw new Error('Ungültige Rekordbox-XML-Struktur: ' + parserError.textContent);
     }
     djPlaylists = xmlDoc.querySelector('DJ_PLAYLISTS');
@@ -568,6 +552,14 @@ export async function parseRekordboxXmlAsync(
     logMessages: [...logs.slice(-15)],
   });
 
+  logger.info('XML_IMPORT', `XML-Async-Import abgeschlossen: ${tracks.length} Tracks`, {
+    schemaVersion: rawVersion,
+    tracks: tracks.length,
+    memoryCues: totalMemoryCues,
+    hotCues: totalHotCues,
+    loops: totalLoops,
+  });
+
   return { tracks, rawVersion };
 }
 
@@ -598,6 +590,7 @@ ${track.loops
     </TRACK>
   </COLLECTION>
 </DJ_PLAYLISTS>`;
+  logger.debug('XML_IMPORT', `Track "${track.title}" nach Rekordbox-XML serialisiert (${xml.length} Zeichen, ${track.cues.length} Cues, ${track.loops.length} Loops).`);
   return xml;
 }
 
