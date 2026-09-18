@@ -20,6 +20,12 @@ interface StemQualityWarningModalProps {
   onProceedWithFallback: () => void;
   onEngineInstalled?: () => void;
   onRunWithInstalledEngine?: () => void;
+  /**
+   * Das im Einstellungsmenü gewählte, noch nicht installierte Modell. Dann
+   * installiert der Button exakt dieses Modell; ohne Angabe bleibt das
+   * primäre BS-RoFormer-Modell (Legacy-Verhalten).
+   */
+  installModel?: { id: string; label: string } | null;
 }
 
 type InstallState =
@@ -35,6 +41,7 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
   onProceedWithFallback,
   onEngineInstalled,
   onRunWithInstalledEngine,
+  installModel = null,
 }) => {
   const [install, setInstall] = useState<InstallState>({ phase: 'IDLE' });
   const installing = install.phase === 'RUNNING';
@@ -52,13 +59,16 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
   const handleInstall = useCallback(async () => {
     setInstall({ phase: 'RUNNING', progress: null, lastLog: '' });
     try {
-      const result = await installStemEngineWithProgress((progress) => {
-        setInstall((prev) => ({
-          phase: 'RUNNING',
-          progress,
-          lastLog: progress.logLine || (prev.phase === 'RUNNING' ? prev.lastLog : ''),
-        }));
-      });
+      const result = await installStemEngineWithProgress(
+        (progress) => {
+          setInstall((prev) => ({
+            phase: 'RUNNING',
+            progress,
+            lastLog: progress.logLine || (prev.phase === 'RUNNING' ? prev.lastLog : ''),
+          }));
+        },
+        installModel ? { modelId: installModel.id } : {}
+      );
       if (result.ok) {
         setInstall({ phase: 'DONE', restartRequired: result.restartRequired });
         if (!result.restartRequired) onEngineInstalled?.();
@@ -71,11 +81,12 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [onEngineInstalled]);
+  }, [onEngineInstalled, installModel]);
 
   if (!isOpen) return null;
 
   const isUnavailable = reason.includes('STEM_ENGINE_UNAVAILABLE') || reason.includes('BS-RoFormer') || reason.includes('nicht verfügbar');
+  const installLabel = installModel ? installModel.label : 'BS-RoFormer';
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 select-none p-4">
@@ -128,10 +139,14 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
             <div className="bg-[#0b1a12] border border-[#10b981]/30 rounded-xs p-2.5 space-y-2">
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <Download size={12} />
-                <span className="font-bold text-[10.5px] uppercase tracking-wider">Empfohlen: BS-RoFormer jetzt installieren</span>
+                <span className="font-bold text-[10.5px] uppercase tracking-wider">
+                  {installModel ? `Gewähltes Modell jetzt installieren: ${installLabel}` : 'Empfohlen: BS-RoFormer jetzt installieren'}
+                </span>
               </div>
               <p className="text-[11px] text-neutral-300 leading-relaxed">
-                Installiert eine isolierte Python-Umgebung, PyTorch (CPU), die BS-RoFormer-Architektur, Checkpoint (~503 MiB) und Config. Internet und mehrere GB freier Speicher werden benötigt. Anschließend werden SHA256 und eine kurze Test-Inferenz geprüft.
+                {installModel
+                  ? `Installiert exakt das im Einstellungsmenü gewählte Modell (${installModel.id}). PyTorch-Modelle richten eine isolierte Python-Umgebung inkl. Gewichten ein; ONNX-Modelle werden als hashgeprüfte Modelldatei abgelegt. Internet und freier Speicher werden benötigt; anschließend wird SHA256 bzw. eine Test-Inferenz geprüft.`
+                  : 'Installiert eine isolierte Python-Umgebung, PyTorch (CPU), die BS-RoFormer-Architektur, Checkpoint (~503 MiB) und Config. Internet und mehrere GB freier Speicher werden benötigt. Anschließend werden SHA256 und eine kurze Test-Inferenz geprüft.'}
               </p>
               <p className="text-[10px] text-neutral-500">
                 Kein Terminal erforderlich. Falls Python fehlt, zuerst Python 3.11 (64-Bit) installieren.
@@ -162,7 +177,7 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
             <div className="bg-[#0b1a12] border border-[#10b981]/60 rounded-xs p-2.5 space-y-1.5">
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <CheckCircle2 size={14} />
-                <span className="font-bold text-[11px]">BS-RoFormer erfolgreich installiert und verifiziert!</span>
+                <span className="font-bold text-[11px]">{installLabel} erfolgreich installiert und verifiziert!</span>
               </div>
               <p className="text-[11px] text-neutral-300">{install.restartRequired ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.' : 'Modell SHA256 geprüft, kurze Test-Inferenz erfolgreich. Starte jetzt erneut.'}</p>
             </div>
@@ -206,7 +221,7 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
                 className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] text-black text-xs font-bold disabled:opacity-60"
               >
                 {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-                <span>{installing ? 'Installiert…' : 'BS-RoFormer installieren'}</span>
+                <span>{installing ? 'Installiert…' : `${installLabel} installieren`}</span>
               </button>
             </>
           )}

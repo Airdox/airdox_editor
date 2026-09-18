@@ -1,13 +1,29 @@
- 'use strict';
+'use strict';
 
-// Installs BS-RoFormer into persistent user data, never into app.asar or the
+// Catalog-driven stem-model installer. Installs EXACTLY the model the caller
+// selected (options.modelId) – the settings menu chooses, this executes.
+// Without options.modelId the primary BS-RoFormer model is installed, which
+// keeps the legacy one-click behavior.
+//
+// Models are installed into persistent user data, never into app.asar or the
 // portable executable's temporary extraction directory. No shell/git/npm needed.
+//
+// Per checkpoint format:
+//   pytorch-ckpt / demucs-th  -> Python venv + PyTorch + family packages +
+//                                weights (+ config) + verification (6 steps).
+//   onnx                      -> pure file download into the model store,
+//                                SHA256-verified when the catalog carries a
+//                                verifiable hash (3 steps, no Python).
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { getAppDataStemsRoot, getPythonCandidates, getResourcesPath, PRIMARY_MODEL_ID } = require('./stemRuntime.cjs');
 const TOTAL_STEPS = 6;
+const ONNX_TOTAL_STEPS = 3;
 const SUPPORTED_WINDOWS_VERSIONS = ['3.11', '3.12', '3.10'];
+const SHA256_RE = /^[a-f0-9]{64}$/i;
+const INSTALLABLE_FORMATS = ['pytorch-ckpt', 'demucs-th', 'onnx'];
 
 function unpackedPath(file) {
   return file.replace(/app\.asar([\\/]|$)/g, 'app.asar.unpacked$1');
@@ -95,17 +111,133 @@ async function locateBasePython(run = runStreaming, repoRoot = path.join(__dirna
   return null;
 }
 
-async function installStemEngine(repoRoot, onProgress, options = {}) {
+/**
+ * Loads the catalog entry for the requested model and refuses everything the
+ * installer cannot honestly install (unknown id, test doubles, formats without
+ * a download URL).
+ */
+function loadSelectedModel(paths, modelId) {
+  let catalog;
+  try {
+    catalog = JSON.parse(fs.readFileSync(paths.catalog, 'utf8'));
+  } catch (error) {
+    throw new Error(`Modell-Katalog nicht lesbar: ${error.message}`);
+  }
+  const model = (catalog.models || []).find((entry) => entry.id === modelId);
+  if (!model) {
+    throw new Error(`Modell "${modelId}" fehlt im Modell-Katalog. Bitte im Einstellungsmenü ein bekanntes Modell wählen.`);
+  }
+  const format = model.checkpoint?.format;
+  if (format === 'synthetic') {
+    throw new Error(`Modell "${modelId}" ist ein Test-Double und kann nicht installiert werden.`);
+  }
+  if (!INSTALLABLE_FORMATS.includes(format)) {
+    throw new Error(`Modell "${modelId}" hat ein nicht installierbares Checkpoint-Format: ${String(format)}`);
+  }
+  if (!model.checkpoint?.url || !/^https:\/\//.test(model.checkpoint.url)) {
+    throw new Error(`Modell "${modelId}" hat keine HTTPS-Download-URL im Katalog.`);
+  }
+  return model;
+}
+
+/** Marker the Python verification step must print for this model. */
+function verifiedMarker(model) {
+  return model.family === 'htdemucs' ? 'DEMUXC_VERIFIED' : 'BSROFORMER_VERIFIED';
+}
+
+async function streamDownload(fetchImpl, ref, target, onPercent) {
+  const response = await fetchImpl(ref.url, { headers: { 'user-agent': 'airdox-stem-installer' } });
+  if (!response.ok || !response.body) {
+    throw new Error(`Download fehlgeschlagen (HTTP ${response.status}): ${ref.url}`);
+  }
+  const contentLength = Number(response.headers.get?.('content-length')) || 0;
+  const partial = `${target}.part`;
+  const hash = crypto.createHash('sha256');
+  let received = 0;
+  let lastPercent = -1;
+  try {
+    const reader = response.body.getReader();
+    const writer = fs.createWriteStream(partial);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      hash.update(value);
+      received += value.length;
+      if (!writer.write(Buffer.from(value))) await new Promise((resolve) => writer.once('drain', resolve));
+      if (contentLength > 0) {
+        const percent = Math.min(99, Math.floor((received / contentLength) * 100));
+        if (percent !== lastPercent) {
+          lastPercent = percent;
+          onPercent(percent);
+        }
+      }
+    }
+    await new Promise((resolve) => writer.end(resolve));
+    if (received === 0) throw new Error(`Leerer Download: ${ref.file}`);
+    if (SHA256_RE.test(ref.sha256 || '') && hash.digest('hex').toLowerCase() !== String(ref.sha256).toLowerCase()) {
+      throw new Error(`SHA256 stimmt nicht: ${ref.file}. Datei wird nicht aktiviert.`);
+    }
+    fs.renameSync(partial, target);
+  } catch (error) {
+    try { fs.rmSync(partial, { force: true }); } catch { /* already renamed or absent */ }
+    throw error;
+  }
+  return received;
+}
+
+/** ONNX path: no Python, no venv – just a verified file in the model store. */
+async function installOnnxModel(paths, model, onProgress, options) {
+  const report = (step, label, logLine) => onProgress?.({
+    step, totalSteps: ONNX_TOTAL_STEPS, percent: Math.min(99, Math.round((step - 1) / ONNX_TOTAL_STEPS * 100)), label, logLine,
+  });
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  try {
+    fs.mkdirSync(paths.root, { recursive: true });
+    fs.mkdirSync(paths.modelDir, { recursive: true });
+    const target = path.join(paths.modelDir, model.checkpoint.file);
+    const verifiable = SHA256_RE.test(model.checkpoint.sha256 || '');
+    report(1, `ONNX-Modell ${model.id} wird vorbereitet (kein Python erforderlich)…`);
+    const exists = fs.existsSync(target) && fs.statSync(target).isFile();
+    let hashOk = true;
+    if (exists && verifiable) {
+      const digest = crypto.createHash('sha256');
+      for (const chunk of fs.createReadStream(target)) digest.update(chunk);
+      hashOk = digest.digest('hex').toLowerCase() === String(model.checkpoint.sha256).toLowerCase();
+    }
+    if (exists && (!verifiable || hashOk)) {
+      report(2, `${model.checkpoint.file} ist bereits installiert${verifiable ? ' (SHA256 geprüft)' : ''}.`);
+    } else {
+      report(2, `${model.checkpoint.file} wird heruntergeladen…`);
+      if (exists) fs.rmSync(target);
+      await streamDownload(fetchImpl, model.checkpoint, target, (percent) => report(2, `${model.checkpoint.file} wird heruntergeladen… ${percent} %`));
+    }
+    report(3, 'Datei wird final geprüft…');
+    const finalStat = fs.statSync(target);
+    if (!finalStat.isFile() || finalStat.size === 0) throw new Error(`ONNX-Datei fehlt oder ist leer: ${target}`);
+    if (verifiable) {
+      const digest = crypto.createHash('sha256');
+      for (const chunk of fs.createReadStream(target)) digest.update(chunk);
+      if (digest.digest('hex').toLowerCase() !== String(model.checkpoint.sha256).toLowerCase()) {
+        throw new Error(`SHA256 stimmt nicht: ${model.checkpoint.file}. Datei wird nicht aktiviert.`);
+      }
+    }
+    onProgress?.({
+      step: ONNX_TOTAL_STEPS, totalSteps: ONNX_TOTAL_STEPS, percent: 100,
+      label: `ONNX-Modell ${model.id} installiert${verifiable ? ' und SHA256-geprüft' : ''} (${Math.round(finalStat.size / 1048576)} MiB).`,
+    });
+    return { ok: true, model: model.id, modelDir: paths.modelDir, weightsReady: true };
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
+}
+
+/** PyTorch path (BS-RoFormer, Mel-Band RoFormer, HT-Demucs): venv + deps + weights + verification. */
+async function installTorchModel(repoRoot, paths, model, onProgress, options) {
   const run = options.run || runStreaming;
   const report = (step, label, logLine) => onProgress?.({
     step, totalSteps: TOTAL_STEPS, percent: Math.min(99, Math.round((step - 1) / TOTAL_STEPS * 100)), label, logLine,
   });
   try {
-    const paths = installationPaths(repoRoot, options);
-    // Read via Electron's fs, then materialize outside ASAR for Python.
-    const catalog = JSON.parse(fs.readFileSync(paths.catalog, 'utf8'));
-    const model = catalog.models.find((entry) => entry.id === PRIMARY_MODEL_ID);
-    if (!model || !/^[a-f0-9]{64}$/i.test(model.checkpoint.sha256)) throw new Error('Verifizierbarer BS-RoFormer-Katalog fehlt.');
     fs.mkdirSync(paths.root, { recursive: true });
     fs.mkdirSync(paths.modelDir, { recursive: true });
     report(1, 'Python 3.10–3.12 wird gesucht (empfohlen: 3.11, 64-Bit)…');
@@ -121,19 +253,41 @@ async function installStemEngine(repoRoot, onProgress, options = {}) {
     }
     const descriptor = path.join(paths.root, 'install-model.json');
     fs.writeFileSync(descriptor, JSON.stringify(model));
-    const labels = { 3: 'PyTorch und Audio-Pakete werden installiert…', 4: 'BS-RoFormer-Architektur wird installiert…', 5: 'Checkpoint und Config werden geladen und geprüft…', 6: 'Modell wird geladen und mit Test-Audio geprüft…' };
+    const architecture = model.architecture || model.family;
+    const labels = {
+      3: 'PyTorch und Audio-Pakete werden installiert…',
+      4: model.family === 'htdemucs' ? 'Demucs wird installiert…' : `${architecture}-Abhängigkeiten werden installiert…`,
+      5: model.config ? 'Checkpoint und Config werden geladen und geprüft…' : 'Checkpoint wird geladen und geprüft…',
+      6: model.family === 'htdemucs' ? 'Modell wird geladen und mit der Architektur abgeglichen…' : 'Modell wird geladen und mit Test-Inferenz geprüft…',
+    };
+    const marker = verifiedMarker(model);
     for (const step of [3, 4, 5, 6]) {
       report(step, labels[step]);
       const result = await run(paths.python, [paths.script, '--step', String(step), '--descriptor', descriptor, '--model-dir', paths.modelDir, '--adapter', paths.adapter], line => report(step, labels[step], line));
-      if (!result.ok || (step === 6 && !result.output.includes('BSROFORMER_VERIFIED'))) {
+      if (!result.ok || (step === 6 && !result.output.includes(marker))) {
         throw new Error(`${labels[step]} Fehlgeschlagen: ${result.error || result.output.slice(-1600)}`);
       }
     }
-    onProgress?.({ step: TOTAL_STEPS, totalSteps: TOTAL_STEPS, percent: 100, label: 'BS-RoFormer installiert und Test-Inferenz erfolgreich.' });
+    onProgress?.({ step: TOTAL_STEPS, totalSteps: TOTAL_STEPS, percent: 100, label: `${architecture} installiert und verifiziert (${model.id}).` });
     return { ok: true, python: paths.python, model: model.id, modelDir: paths.modelDir, weightsReady: true };
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   }
 }
 
-module.exports = { installStemEngine, locateBasePython, installationPaths, unpackedPath, probeVersion, runStreaming, TOTAL_STEPS };
+async function installStemEngine(repoRoot, onProgress, options = {}) {
+  const paths = installationPaths(repoRoot, options);
+  const modelId = typeof options.modelId === 'string' && options.modelId.length > 0 ? options.modelId : PRIMARY_MODEL_ID;
+  let model;
+  try {
+    model = loadSelectedModel(paths, modelId);
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
+  if (model.checkpoint.format === 'onnx') {
+    return installOnnxModel(paths, model, onProgress, options);
+  }
+  return installTorchModel(repoRoot, paths, model, onProgress, options);
+}
+
+module.exports = { installStemEngine, locateBasePython, installationPaths, unpackedPath, probeVersion, runStreaming, loadSelectedModel, verifiedMarker, streamDownload, TOTAL_STEPS, ONNX_TOTAL_STEPS };
