@@ -25,7 +25,8 @@
     "test:stems:all": "npm run test:stems && npm run test:stems:live",
     "build:stems": "esbuild src/stems/desktopEntry.ts --bundle --platform=node --format=cjs --target=node20 --external:electron --outfile=electron/stemsEngine.cjs",
     "stems:setup": "bash scripts/setup-bsroformer-model.sh",
-    "test:masterdb": "node tests/master-db-gate.test.mjs && tsx tests/rekordbox-waveform-pipeline.test.ts"
+    "test:masterdb": "node tests/master-db-gate.test.mjs && tsx tests/rekordbox-waveform-pipeline.test.ts",
+    "test:masterdb:real": "node scripts/sqlcipher-native-gate.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

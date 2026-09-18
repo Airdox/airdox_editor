@@ -10,6 +10,9 @@ release/
 release-current/
 *.zip
 
+# Nur im CI erzeugte SQLCipher-Nachweise (keine Testdaten einchecken)
+ci-artifacts/
+
 # Stem-Separation-Modelle: niemals ins Repo (Groesse + ungeklaerte Gewichte-Lizenz)
 models/
 *.ckpt
