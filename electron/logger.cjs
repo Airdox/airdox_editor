@@ -18,7 +18,7 @@
  *
  * Log file location:
  *  - Desktop : <userData>/logs/airdox-editor-YYYY-MM-DD.log
- *              (Windows: %APPDATA%/airdox_SMART_Editor/logs)
+ *              (Windows, strikt D:: D:/airdox_SMART_Editor/Data/logs)
  *  - Dev     : <repo>/logs/airdox-editor-YYYY-MM-DD.log
  */
 

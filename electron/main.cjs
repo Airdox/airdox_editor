@@ -1,8 +1,10 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { assertWindowsDriveReady, getWindowsDataRoot } = require('./windowsPaths.cjs');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
@@ -20,10 +22,36 @@ const APP_PROTOCOL = 'airdox';
 const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
 
 // ---------------------------------------------------------------------------
+// Windows: striktes D:-Layout – alle Laufzeitdaten (Logs, Stems, Modelle,
+// Runtime, ANLZ-Index) liegen unter D:\airdox_SMART_Editor\Data. Ohne D:
+// startet die App nicht (klare Meldung statt stiller C:-Ablage).
+// setPath('userData') muss VOR app.ready() und vor jeder Pfadnutzung stehen.
+// ---------------------------------------------------------------------------
+let windowsDataRoot = null;
+let windowsDriveError = null;
+if (process.platform === 'win32') {
+  try {
+    assertWindowsDriveReady();
+    windowsDataRoot = getWindowsDataRoot();
+    app.setPath('userData', windowsDataRoot);
+  } catch (error) {
+    windowsDriveError = error;
+  }
+}
+
+/** App-Datenwurzel: D:\airdox_SMART_Editor\Data auf Windows, sonst %APPDATA%/… */
+function getAppDataRoot() {
+  if (windowsDataRoot) return windowsDataRoot;
+  return path.join(app.getPath('appData'), app.getName());
+}
+
+// ---------------------------------------------------------------------------
 // Logging-System so früh wie möglich aktivieren – noch vor dem ersten
 // Fenster und vor allen IPC-Registrierungen, damit kein Ereignis verloren geht.
 // ---------------------------------------------------------------------------
-const bootLogDir = path.join(app.getPath('appData'), app.getName(), 'logs');
+const bootLogDir = windowsDriveError
+  ? path.join(os.tmpdir(), 'airdox_SMART_Editor-logs')
+  : path.join(app.getPath('userData'), 'logs');
 logger.configure({
   logDirectory: bootLogDir,
   processName: 'main',
@@ -39,7 +67,11 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
   chrome: process.versions.chrome,
   node: process.version,
   dev: IS_DEV,
+  dataRoot: windowsDriveError ? null : getAppDataRoot(),
 });
+if (windowsDriveError) {
+  logger.fatal('SYSTEM', `Start abgebrochen: ${windowsDriveError.message}`);
+}
 
 /**
  * Automatisches Audit-Protokoll für JEDEN ipcMain.handle-Kanal: Aufruf mit
@@ -349,7 +381,7 @@ ipcMain.handle('stems:install-engine', async (event) => {
       try {
         event.sender.send('stems:install-progress', progress);
       } catch { /* window may be closing */ }
-    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems') });
+    }, { stemsRoot: path.join(getAppDataRoot(), 'stems') });
     if (result.ok && stemEngineHost.refreshRuntime && !stemEngineHost.refreshRuntime()) {
       return { ...result, restartRequired: true };
     }
@@ -393,8 +425,9 @@ ipcMain.handle('stems:separate', async (_event, wavBytes) => {
 // bekommt Fortschritt über `stems:job-progress` und lädt Stems einzeln.
 const stemEngineHost = registerStemEngineIpc({
   repoRoot: path.join(__dirname, '..'),
-  // Dieselbe Lage wie der Log-Ordner: %APPDATA%/airdox_SMART_Editor/stems/…
-  userDataDir: path.join(app.getPath('appData'), app.getName()),
+  // Dieselbe Lage wie der Log-Ordner: D:\airdox_SMART_Editor\Data\stems (Windows),
+  // sonst %APPDATA%/airdox_SMART_Editor/stems/…
+  userDataDir: getAppDataRoot(),
   logger,
   ipcMain,
   broadcast: (channel, payload) => {
@@ -634,6 +667,16 @@ ipcMain.handle('logs:open-log-folder', async () => {
 });
 
 app.whenReady().then(() => {
+  // Strikt D:: Ohne Laufwerk kein Fenster, keine Jobs – nur die klare Meldung.
+  if (windowsDriveError) {
+    try {
+      dialog.showErrorBox('airdox SMART Editor – Laufwerk D: fehlt', windowsDriveError.message);
+    } catch {
+      /* ignore */
+    }
+    app.exit(1);
+    return;
+  }
   // Offizielles userData-Logverzeichnis übernehmen, falls es beim Boot noch
   // nicht zur Verfügung stand (Normalfall: beide Pfade sind identisch).
   const officialDir = path.join(app.getPath('userData'), 'logs');

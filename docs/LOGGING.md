@@ -9,7 +9,7 @@ gemeinsamen Tagesdateien zusammenlaufen.
 
 | Umgebung | Verzeichnis |
 | --- | --- |
-| Windows-Desktop (installiert/portabel) | `%APPDATA%\airdox_SMART_Editor\logs\` |
+| Windows-Desktop (installiert/portabel) | `D:\airdox_SMART_Editor\Data\logs\` (strikt D:, siehe BUILD_WINDOWS.md) |
 | macOS-Desktop | `~/Library/Application Support/airdox_SMART_Editor/logs/` |
 | Linux-Desktop | `~/.config/airdox_SMART_Editor/logs/` |
 | Entwicklung (`npm run dev`) | `<Repository>/logs/` |

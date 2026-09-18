@@ -10,6 +10,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 import { StemJobService } from './src/stems/stemJobService';
+import { resolveWindowsDataRoot } from './src/stems/runtime/pathResolver';
 // Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
 // Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
 // und im esbuild-CJS-Bundle (dist/server.cjs).
@@ -204,7 +205,13 @@ async function startServer() {
   // dieselbenKontrakt über IPC. Ein eigener Body-Parser, weil ein float32-Stereo-
   // Mix schnell zweistellige MB-Zahlen erreicht und der globale Limit bei 10 MB
   // liegt.
-  const stemsDataRoot = process.env.AIRDOX_STEMS_ROOT || path.join(process.cwd(), 'stem-engine-data');
+  // Windows: strikt D:\airdox_SMART_Editor\Data\stems (wirft mit klarer Meldung,
+  // wenn D: fehlt) – sonst wie bisher neben dem Repo. AIRDOX_STEMS_ROOT gewinnt immer.
+  const stemsDataRoot =
+    process.env.AIRDOX_STEMS_ROOT ||
+    (process.platform === 'win32'
+      ? path.join(resolveWindowsDataRoot(), 'stems')
+      : path.join(process.cwd(), 'stem-engine-data'));
   const createStemJobs = () => new StemJobService({
     root: stemsDataRoot,
     env: process.env as Record<string, string | undefined>,

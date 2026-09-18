@@ -8,10 +8,10 @@
  *   project/.venv/Scripts/python.exe (win) or project/.venv/bin/python3 (posix)
  *   project/models or ~/.cache/airdox-stems
  *
- * PRODUCTION (Windows):
+ * PRODUCTION (Windows, strikt D: – siehe electron/windowsPaths.cjs):
  *   resources/stem-runtime/python.exe
  *   resources/stem-runtime/Lib/...
- *   resources/models/ OR %APPDATA%/airdox_SMART_Editor/stems/Models
+ *   resources/models/ OR D:\airdox_SMART_Editor\Data\stems/Models
  *
  * Portable builds resolve relative to executable, not hardcoded Program Files.
  */
@@ -91,14 +91,58 @@ function getResourcesPath(): string | null {
   return null;
 }
 
-function getAppDataStemsRoot(): string {
-  // %APPDATA%/airdox_SMART_Editor/stems or ~/.config equivalent
-  if (process.env.AIRDOX_STEMS_ROOT) return process.env.AIRDOX_STEMS_ROOT;
-  const appName = 'airdox_SMART_Editor';
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(appData, appName, 'stems');
+// Windows-Pflichtlayout (strikt D:) – Spiegel von electron/windowsPaths.cjs
+// (dort die Single Source of Truth; das TS-Runtime muss ohne CJS-Import
+// bündelbar bleiben, daher hier dupliziert – bei Änderungen beidseitig pflegen).
+const WINDOWS_APP_ROOT_DEFAULT = 'D:\\airdox_SMART_Editor';
+
+/**
+ * Datenwurzel auf Windows: strikt D:\airdox_SMART_Editor\Data.
+ * Wirft mit klarer Meldung, wenn das Laufwerk fehlt oder nicht beschreibbar ist.
+ * fs-Funktionen sind injizierbar (Tests).
+ */
+export function resolveWindowsDataRoot(options: {
+  env?: NodeJS.ProcessEnv;
+  existsSync?: (p: string) => boolean;
+  mkdirSync?: (p: string, opts?: { recursive?: boolean }) => void;
+} = {}): string {
+  const env = options.env ?? process.env;
+  const existsSync = options.existsSync ?? fs.existsSync;
+  const mkdirSync = options.mkdirSync ?? fs.mkdirSync;
+  const override = (env.AIRDOX_WINDOWS_ROOT || '').trim();
+  const root = override || WINDOWS_APP_ROOT_DEFAULT;
+  const driveRoot = path.win32.parse(root).root || 'D:\\';
+  let present = false;
+  try {
+    present = existsSync(driveRoot) === true;
+  } catch {
+    present = false;
   }
+  if (!present) {
+    throw new Error(
+      `airdox SMART Editor benötigt Laufwerk D:. ` +
+        `Der Ordner ${root} ist nicht erreichbar – bitte stelle sicher, dass Laufwerk D: verfügbar ist. ` +
+        `(Alternative für Rechner ohne D:: Umgebungsvariable AIRDOX_WINDOWS_ROOT auf einen vorhandenen Ordner setzen.)`
+    );
+  }
+  try {
+    mkdirSync(root, { recursive: true });
+  } catch (error) {
+    throw new Error(
+      `airdox SMART Editor kann nicht nach ${root} schreiben: ${error instanceof Error ? error.message : String(error)}. ` +
+        `Bitte stelle sicher, dass Laufwerk D: verfügbar und beschreibbar ist.`
+    );
+  }
+  return path.join(root, 'Data');
+}
+
+function getAppDataStemsRoot(): string {
+  // D:\airdox_SMART_Editor\Data\stems (Windows, strikt) or ~/.config equivalent
+  if (process.env.AIRDOX_STEMS_ROOT) return process.env.AIRDOX_STEMS_ROOT;
+  if (process.platform === 'win32') {
+    return path.join(resolveWindowsDataRoot(), 'stems');
+  }
+  const appName = 'airdox_SMART_Editor';
   if (process.platform === 'darwin') {
     return path.join(os.homedir(), 'Library', 'Application Support', appName, 'stems');
   }
@@ -295,7 +339,7 @@ export function resolveStemModel(options: {
     }
   }
 
-  // 3. AppData: %APPDATA%/airdox_SMART_Editor/stems/Models
+  // 3. App-Daten: D:\airdox_SMART_Editor\Data\stems\Models (Windows) bzw. ~/.config-Äquivalent
   const appDataRoot = getAppDataStemsRoot();
   const appDataDirs = [
     path.join(appDataRoot, 'Models'),

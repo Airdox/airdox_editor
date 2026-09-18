@@ -74,6 +74,11 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: npm test
 
+      # Striktes D:-Layout: Der Build bricht mit klarer Meldung ab, wenn D: fehlt.
+      # (GitHub-Hosted-Windows-Runner haben ein D:-Laufwerk.)
+      - name: Windows-Laufwerk prüfen (strikt D:)
+        run: node scripts/win-drive-preflight.mjs
+
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never
         env:
@@ -86,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
-          path: release/*.exe
+          path: D:/airdox_SMART_Editor/Setup/*.exe
           retention-days: 30
 
       - name: GitHub-Release bei Tag
@@ -94,5 +99,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: airdox_SMART_Editor ${{ github.ref_name }}
-          files: release/*.exe
+          files: D:/airdox_SMART_Editor/Setup/*.exe
           generate_release_notes: true

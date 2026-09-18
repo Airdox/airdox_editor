@@ -12,12 +12,12 @@
  * Does NOT rely on global python/python3 in production.
  * Handles Python 3.14 as unsupported (needs 3.9-3.13).
  *
- * Production paths (Windows):
+ * Production paths (Windows, strikt D: – siehe windowsPaths.cjs):
  *   resources/stem-runtime/python.exe
  *   resources/models/model_bs_roformer_ep_17_sdr_9.6568.ckpt
  *   resources/models/config_bs_roformer_384_8_2_485100.yaml
  * OR
- *   %APPDATA%/airdox_SMART_Editor/stems/Models/...
+ *   D:\airdox_SMART_Editor\Data\stems\Models/...
  *
  * DEV:
  *   project/.venv/Scripts/python.exe
@@ -31,6 +31,7 @@ const { createReadStream } = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
+const { assertWindowsDriveReady, getWindowsDataRoot } = require('./windowsPaths.cjs');
 
 const SUPPORTED_PYTHON_RANGE = { minMinor: 9, maxMinor: 13 };
 const PRIMARY_MODEL_ID = 'bsroformer-musdb18hq-4stem-zfturbo';
@@ -61,11 +62,12 @@ function getResourcesPath(repoRoot) {
 
 function getAppDataStemsRoot() {
   if (process.env.AIRDOX_STEMS_ROOT) return process.env.AIRDOX_STEMS_ROOT;
-  const appName = 'airdox_SMART_Editor';
   if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(appData, appName, 'stems');
+    // Strikt D: (wirft mit klarer Meldung, wenn D: fehlt) – siehe windowsPaths.cjs.
+    assertWindowsDriveReady();
+    return path.join(getWindowsDataRoot(), 'stems');
   }
+  const appName = 'airdox_SMART_Editor';
   if (process.platform === 'darwin') {
     return path.join(os.homedir(), 'Library', 'Application Support', appName, 'stems');
   }
