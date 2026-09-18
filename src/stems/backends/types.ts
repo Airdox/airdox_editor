@@ -116,6 +116,15 @@ export interface BackendCapabilities {
    * `chunk_NNNN.wav`, no per-chunk output directory, no temporary stem files.
    */
   inMemory: boolean;
+  /**
+   * True when the backend wants the whole file in a single call (python-torch,
+   * native CLIs). These transports window internally (num_overlap hop) and –
+   * crucially – start one expensive process (interpreter + torch import +
+   * checkpoint load) per invocation. Handing them 3 s engine chunks meant
+   * paying that startup cost hundreds of times per track; the engine gives
+   * them one plan spanning the whole working copy instead.
+   */
+  processesWholeFile?: boolean;
 }
 
 /**

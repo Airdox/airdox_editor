@@ -79,6 +79,33 @@ export interface RoFormerSeparatorOptions extends RoFormerTransportConfig {
   sessionPrefix: string;
 }
 
+/**
+ * Übersetzt Engine-Geräte in das Vokabular des Python-Adapters
+ * (`--device choices = auto/cpu/cuda/cuda:0/mps`). Alles andere – vor allem
+ * `directml` (ONNX-Laufzeit-Begriff!) und `vulkan` – spricht der PyTorch-
+ * Adapter nicht; argparse lehnte das bisher mit Exit-Code 2 ab und der Job
+ * endete als „Backend beendete sich mit Code 2“. `auto` löst pythonseitig
+ * selbst cuda/cpu auf, auf dem Mac ist `mps` die CoreML-nahe Wahl.
+ */
+export function pythonDeviceFor(device: ComputeDevice | undefined): string {
+  switch (device) {
+    case 'cpu':
+      return 'cpu';
+    case 'cuda':
+      return 'cuda';
+    case 'coreml':
+    case 'metal':
+      return 'mps';
+    case 'auto':
+    case 'directml':
+    case 'vulkan':
+    default:
+      // Kein fake-Mapping auf cuda: ohne CUDA-GPU fängt der Adapter das
+      // sauber selbst ab (Warnung + CPU), mit CUDA ist auto ohnehin cuda.
+      return 'auto';
+  }
+}
+
 export class RoFormerSeparator implements IStemSeparator {
   readonly kind: BackendKind;
   readonly family: ModelFamily;
@@ -118,6 +145,10 @@ export class RoFormerSeparator implements IStemSeparator {
       cancellable: true,
       trainedModel: true,
       inMemory: false,
+      // Ein Prozess für den ganzen Track: Interpeter-Start + torch-Import +
+      // Checkpoint-Laden kosten einige Sekunden – je 3-s-Motor-Chunk gezahlt
+      // war das die mit Abstand teuerste Wartezeit im Python-Pfad.
+      processesWholeFile: true,
     };
   }
 
@@ -246,7 +277,7 @@ export class RoFormerSeparator implements IStemSeparator {
       '--precision',
       request.precision,
       '--device',
-      request.device,
+      pythonDeviceFor(request.device),
     ];
     if (descriptor.config?.file && store) {
       args.push('--config', path.join(store, descriptor.config.file));
@@ -313,8 +344,17 @@ export class RoFormerSeparator implements IStemSeparator {
       backend: this.kind,
       stems,
       device: result.device,
-      cpuFallback: device !== request.device,
-      report: { ...result.report, backendName: this.name, processMs: result.durationMs, logs: result.logs.slice(-20) },
+      // Rückfall ist, was der Adapter am Ende meldet: wurde etwas anderes als
+      // CPU angefragt (auch 'auto' auf einer GPU-losen Kiste zählt nicht) und
+      // trotzdem auf CPU gerechnet, muss der Job das sehen.
+      cpuFallback: result.device === 'cpu' && request.device !== 'cpu' && request.device !== 'auto',
+      report: {
+        ...result.report,
+        backendName: this.name,
+        processMs: result.durationMs,
+        logs: result.logs.slice(-20),
+        ...(pythonDeviceFor(device) !== device ? { deviceMappedFrom: device } : {}),
+      },
     };
   }
 
