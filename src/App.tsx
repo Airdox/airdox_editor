@@ -76,6 +76,8 @@ import {
   StemSeparationProgress,
   StemEngineInfo,
   StemQualityProfile,
+  ModelFamily,
+  SELECTABLE_MODEL_FAMILIES,
   DEFAULT_STEMS_MIXER_STATE,
   STEM_TYPES,
 } from './audio/stemEngine';

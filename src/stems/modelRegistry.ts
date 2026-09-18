@@ -32,7 +32,8 @@ export interface RegistryValidationResult {
   accepted: ModelDescriptor[];
 }
 
-const KNOWN_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
+/** Every model family the catalog schema accepts. Exported so callers never hard code this list. */
+export const KNOWN_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
 const KNOWN_BACKENDS: BackendKind[] = ['native-cli', 'python-torch', 'in-process', 'onnx'];
 const KNOWN_PRECISION: ModelPrecision[] = ['native', 'f32', 'f16', 'bf16', 'q8_0'];
 const SHA256_RE = /^[a-f0-9]{64}$/;

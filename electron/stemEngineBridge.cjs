@@ -36,6 +36,11 @@ const CHANNELS = {
 /** Obergrenze für den Mix, den der Renderer hochreicht (float32-Stereo-WAV). */
 const MAX_INPUT_BYTES = 1024 * 1024 * 1024;
 const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+// Muss KNOWN_FAMILIES aus src/stems/modelRegistry.ts widerspiegeln. `pipeline_double`
+// ist absichtlich dabei (der Kern lehnt es ohne allowPipelineDouble ab), damit ein
+// Test-Double-Request nicht schon hier verworfen, sondern mit dem echten Fehlercode
+// des Kerns beantwortet wird.
+const FAMILIES = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
 /** Rechengeräte und Validierungstiefe, die ein Job aus dem Renderer wählen darf. */
 const DEVICES = ['auto', 'cpu', 'cuda', 'vulkan', 'metal', 'directml', 'coreml'];
 const MODES = ['fast_dj', 'studio_master'];
@@ -115,6 +120,7 @@ function sanitizeRequest(raw) {
   if (typeof raw.trackName === 'string' && raw.trackName.length) request.trackName = raw.trackName.slice(0, 120);
   if (typeof raw.modelId === 'string' && raw.modelId.length) request.modelId = raw.modelId.slice(0, 120);
   if (PROFILES.includes(raw.profile)) request.profile = raw.profile;
+  if (FAMILIES.includes(raw.family)) request.family = raw.family;
   if (typeof raw.device === 'string' && DEVICES.includes(raw.device)) request.device = raw.device;
   if (MODES.includes(raw.mode)) request.mode = raw.mode;
   if (typeof raw.precision === 'string') request.precision = raw.precision;

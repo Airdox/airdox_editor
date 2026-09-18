@@ -19,7 +19,10 @@
 import { BufferFactory } from './editingEngine';
 import { logger } from '../utils/logger';
 import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
+import type { ModelFamily } from '../stems/types';
 import { describeArchitectures, type StemArchitectureOption } from './stemArchitectures';
+
+export type { ModelFamily } from '../stems/types';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 export const STEM_TYPES: StemType[] = ['vocals', 'drums', 'bass', 'other'];
@@ -62,19 +65,63 @@ export interface TrackStems {
 export type StemQualityProfile = 'PREVIEW' | 'BALANCED' | 'HIGH' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
 export const STEM_QUALITY_PROFILES: StemQualityProfile[] = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
 
+/** Selectable architectures, mirrored here so the settings menu has labels even offline. */
+export const SELECTABLE_MODEL_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs'];
+
+const FAMILY_LABEL: Record<ModelFamily, string> = {
+  bs_roformer: 'BS-RoFormer',
+  mel_band_roformer: 'Mel-Band-RoFormer',
+  htdemucs: 'HTDemucs',
+  pipeline_double: 'Pipeline-Double (Test)',
+};
+
+const FAMILY_DESCRIPTION: Record<ModelFamily, string> = {
+  bs_roformer: 'Primäre Engine – beste Trennqualität für Vocals/Drums/Bass/Other.',
+  mel_band_roformer: 'Alternative RoFormer-Architektur für A/B-Vergleiche, v. a. Vocals/Other.',
+  htdemucs: 'Legacy-Engine, schneller aber weniger präzise als BS-RoFormer.',
+  pipeline_double: 'Test-Double – kein trainiertes Modell.',
+};
+
+/** Used whenever the engine cannot be reached at all: every family is "unavailable" with the same reason. */
+function fallbackFamilies(reason?: string): StemEngineFamilyInfo[] {
+  return SELECTABLE_MODEL_FAMILIES.map((family) => ({
+    family,
+    label: FAMILY_LABEL[family],
+    description: FAMILY_DESCRIPTION[family],
+    available: false,
+    reason,
+    serves: [],
+    modelIds: [],
+  }));
+}
+
 export interface StemEngineProfileInfo {
   profile: StemQualityProfile;
   modelId: string;
+  family?: ModelFamily;
   stems: { id: string; displayName: string }[];
   available: boolean;
   reason?: string;
   description: string;
 }
 
+/** One selectable stem-separation architecture, as shown in the settings menu. */
+export interface StemEngineFamilyInfo {
+  family: ModelFamily;
+  label: string;
+  description: string;
+  available: boolean;
+  reason?: string;
+  serves: StemQualityProfile[];
+  modelIds: string[];
+}
+
 export interface StemEngineInfo {
   ok: boolean;
   usable: boolean;
   profiles: StemEngineProfileInfo[];
+  /** Selectable architectures (model families) for the settings menu. */
+  families: StemEngineFamilyInfo[];
   defaultProfile: StemQualityProfile;
   transport: 'desktop-ipc' | 'http' | 'none';
   reason?: string;
@@ -94,6 +141,8 @@ export interface EngineSeparationOptions {
   profile?: StemQualityProfile;
   /** Fest gewählte Architektur (Modell-ID). Ohne Angabe entscheidet das Profil. */
   modelId?: string;
+  /** Explicit architecture (model family) to use; ignored when `modelId` is set. */
+  family?: ModelFamily;
   /** Rechengerät der in-process-Engine (ONNX): auto/cpu/directml/cuda/coreml. */
   device?: StemComputeDevice;
   /** Validierungstiefe: live (fast_dj) oder Studio (volle Grenzanalyse). */
@@ -393,6 +442,7 @@ class StemEngine {
             {
               profile: 'BALANCED',
               modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+              family: 'bs_roformer',
               stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
               available: false,
               reason: result.message,
@@ -401,6 +451,7 @@ class StemEngine {
             {
               profile: 'HIGH',
               modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+              family: 'bs_roformer',
               stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
               available: false,
               reason: result.message,
@@ -409,12 +460,14 @@ class StemEngine {
             {
               profile: 'MAXIMUM_QUALITY',
               modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+              family: 'bs_roformer',
               stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
               available: false,
               reason: result.message,
               description: 'Maximum Quality – BS-RoFormer with verification',
             },
           ],
+          families: fallbackFamilies(result.message),
           defaultProfile: 'HIGH',
           transport: 'desktop-ipc',
           reason: result.message,
@@ -431,6 +484,7 @@ class StemEngine {
         data?: StemServiceStatus;
       };
       if (!response.ok || payload.ok !== true || !payload.data) {
+        const reason = payload.message ?? `Stem-Service HTTP ${response.status}`;
         return {
           ok: false,
           usable: false,
@@ -438,20 +492,23 @@ class StemEngine {
             {
               profile: 'BALANCED',
               modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+              family: 'bs_roformer',
               stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
               available: false,
-              reason: payload.message ?? `Stem-Service HTTP ${response.status}`,
+              reason,
               description: 'Balanced – BS-RoFormer',
             },
             {
               profile: 'HIGH',
               modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+              family: 'bs_roformer',
               stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
               available: false,
-              reason: payload.message ?? `Stem-Service HTTP ${response.status}`,
+              reason,
               description: 'High – BS-RoFormer',
             },
           ],
+          families: fallbackFamilies(reason),
           defaultProfile: 'HIGH',
           transport: 'http',
           reason: payload.message ?? `Stem-Service antwortet mit HTTP ${response.status}.`,
@@ -460,6 +517,7 @@ class StemEngine {
       }
       return this.mapEngineStatus(payload.data, 'http');
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
         usable: false,
@@ -467,31 +525,35 @@ class StemEngine {
           {
             profile: 'BALANCED',
             modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+            family: 'bs_roformer',
             stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
             available: false,
-            reason: error instanceof Error ? error.message : String(error),
+            reason,
             description: 'Balanced – BS-RoFormer (Engine not reachable)',
           },
           {
             profile: 'HIGH',
             modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+            family: 'bs_roformer',
             stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
             available: false,
-            reason: error instanceof Error ? error.message : String(error),
+            reason,
             description: 'High – BS-RoFormer (Engine not reachable)',
           },
           {
             profile: 'MAXIMUM_QUALITY',
             modelId: 'bsroformer-musdb18hq-4stem-zfturbo',
+            family: 'bs_roformer',
             stems: [{ id: 'vocals', displayName: 'Vocals' }, { id: 'drums', displayName: 'Drums' }, { id: 'bass', displayName: 'Bass' }, { id: 'other', displayName: 'Other' }],
             available: false,
-            reason: error instanceof Error ? error.message : String(error),
+            reason,
             description: 'Max – BS-RoFormer (Engine not reachable)',
           },
         ],
+        families: fallbackFamilies(reason),
         defaultProfile: 'HIGH',
         transport: 'none',
-        reason: error instanceof Error ? error.message : String(error),
+        reason,
         code: 'STEM_ENGINE_UNAVAILABLE',
       };
     }
@@ -502,6 +564,7 @@ class StemEngine {
     const profiles = status.profiles.map((profile) => ({
       profile: profile.profile as StemQualityProfile,
       modelId: profile.modelId,
+      family: profile.family as ModelFamily,
       stems: profile.stems.map((stem) => ({ id: stem.id, displayName: stem.displayName })),
       available: profile.available,
       reason: profile.reason,
@@ -517,12 +580,23 @@ class StemEngine {
       }
     }
 
+    const families: StemEngineFamilyInfo[] = (status.families ?? []).map((family) => ({
+      family: family.family as ModelFamily,
+      label: family.label,
+      description: family.description,
+      available: family.available,
+      reason: family.reason,
+      serves: family.serves as StemQualityProfile[],
+      modelIds: [...family.modelIds],
+    }));
+
     return {
       ok: status.ok,
       usable: status.usable,
       defaultProfile: (status.defaultProfile as StemQualityProfile) ?? 'HIGH',
       transport,
       profiles,
+      families,
     };
   }
 
@@ -595,7 +669,15 @@ class StemEngine {
 
       let job: StemJobView;
       if (desktop?.startStemJob) {
-        const started = await desktop.startStemJob({ bytes: wav, trackName, profile, modelId: options.modelId, device: options.device, mode: options.mode });
+        const started = await desktop.startStemJob({
+          bytes: wav,
+          trackName,
+          profile,
+          modelId: options.modelId,
+          family: options.modelId ? undefined : options.family,
+          device: options.device,
+          mode: options.mode,
+        });
         if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
         job = started.data;
         this.activeJobId = job.jobId;
@@ -619,7 +701,15 @@ class StemEngine {
         const response = await fetch('/api/stems/jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bytes: base64FromBytes(wav), trackName, profile, modelId: options.modelId, device: options.device, mode: options.mode }),
+          body: JSON.stringify({
+            bytes: base64FromBytes(wav),
+            trackName,
+            profile,
+            modelId: options.modelId,
+            family: options.modelId ? undefined : options.family,
+            device: options.device,
+            mode: options.mode,
+          }),
         });
         const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; code?: string; data?: StemJobView };
         if (!response.ok || !payload.ok || !payload.data) {

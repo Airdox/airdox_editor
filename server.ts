@@ -248,6 +248,7 @@ async function startServer() {
         trackName?: string;
         profile?: 'PREVIEW' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
         modelId?: string;
+        family?: 'bs_roformer' | 'mel_band_roformer' | 'htdemucs' | 'pipeline_double';
         stems?: string[];
         // Architektur-/Gerätewahl aus dem Einstellungsmenü. Explizit gewählte
         // Werte schlagen die Umgebungs-Defaults (AIRDOX_STEM_MODE/DEVICE).
@@ -266,6 +267,7 @@ async function startServer() {
         trackName: typeof body.trackName === 'string' ? body.trackName.slice(0, 120) : undefined,
         profile: body.profile,
         modelId: body.modelId,
+        family: body.family,
         stems: Array.isArray(body.stems) ? body.stems : undefined,
         device: body.device,
         mode: body.mode,
