@@ -185,6 +185,56 @@ async function streamDownload(fetchImpl, ref, target, onPercent) {
   return received;
 }
 
+/**
+ * Ist die in-process-ONNX-Runtime im App-Prozess ladbar? Ohne sie ist ein
+ * installierter ONNX-Graph nicht ausführbar – und genau das muss die App
+ * sagen, statt „installiert und verifiziert“ zu melden.
+ */
+function defaultOnnxRuntimeCheck() {
+  try {
+    require('onnxruntime-node');
+    return { available: true };
+  } catch (error) {
+    return { available: false, reason: error && error.message ? error.message : String(error) };
+  }
+}
+
+/** sha256 einer vorhandenen Datei (Stream, damit 166 MiB nicht im RAM landen). */
+function sha256OfFile(file, fsImpl = fs) {
+  const digest = crypto.createHash('sha256');
+  const fd = fsImpl.openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(1024 * 1024);
+    for (;;) {
+      const read = fsImpl.readSync(fd, buffer, 0, buffer.length, null);
+      if (read <= 0) break;
+      digest.update(buffer.subarray(0, read));
+    }
+  } finally {
+    fsImpl.closeSync(fd);
+  }
+  return digest.digest('hex');
+}
+
+/** Merkt sich, welche Datei mit welchem Hash installiert wurde (Nachvollziehbarkeit). */
+function writeInstallManifest(modelDir, model, sha256, fsImpl = fs) {
+  const file = path.join(modelDir, 'installed-models.json');
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fsImpl.readFileSync(file, 'utf8'));
+    if (typeof manifest !== 'object' || manifest === null) manifest = {};
+  } catch {
+    manifest = {};
+  }
+  manifest[model.id] = {
+    file: model.checkpoint.file,
+    sha256,
+    catalogSha256: model.checkpoint.sha256 || null,
+    installedAt: new Date().toISOString(),
+  };
+  fsImpl.writeFileSync(file, JSON.stringify(manifest, null, 2));
+}
+
 /** ONNX path: no Python, no venv – just a verified file in the model store. */
 async function installOnnxModel(paths, model, onProgress, options) {
   const report = (step, label, logLine) => onProgress?.({
@@ -199,10 +249,12 @@ async function installOnnxModel(paths, model, onProgress, options) {
     report(1, `ONNX-Modell ${model.id} wird vorbereitet (kein Python erforderlich)…`);
     const exists = fs.existsSync(target) && fs.statSync(target).isFile();
     let hashOk = true;
-    if (exists && verifiable) {
-      const digest = crypto.createHash('sha256');
-      for (const chunk of fs.createReadStream(target)) digest.update(chunk);
-      hashOk = digest.digest('hex').toLowerCase() === String(model.checkpoint.sha256).toLowerCase();
+    let existingSha;
+    if (exists) {
+      // Der Hash wird bei jedem Installationsversuch geprüft (bzw. berechnet):
+      // ein vorhandener Download unbekannter Herkunft ist kein Beleg.
+      existingSha = sha256OfFile(target);
+      if (verifiable) hashOk = existingSha.toLowerCase() === String(model.checkpoint.sha256).toLowerCase();
     }
     if (exists && (!verifiable || hashOk)) {
       report(2, `${model.checkpoint.file} ist bereits installiert${verifiable ? ' (SHA256 geprüft)' : ''}.`);
@@ -214,18 +266,42 @@ async function installOnnxModel(paths, model, onProgress, options) {
     report(3, 'Datei wird final geprüft…');
     const finalStat = fs.statSync(target);
     if (!finalStat.isFile() || finalStat.size === 0) throw new Error(`ONNX-Datei fehlt oder ist leer: ${target}`);
-    if (verifiable) {
-      const digest = crypto.createHash('sha256');
-      for (const chunk of fs.createReadStream(target)) digest.update(chunk);
-      if (digest.digest('hex').toLowerCase() !== String(model.checkpoint.sha256).toLowerCase()) {
-        throw new Error(`SHA256 stimmt nicht: ${model.checkpoint.file}. Datei wird nicht aktiviert.`);
-      }
+    // Hash wird IMMER berechnet: bei verifizierbarem Katalog-Hash als Prüfung,
+    // bei "unverified" als Beleg, den der Nutzer in den Katalog eintragen kann.
+    const sha256 = (existingSha ?? sha256OfFile(target)).toLowerCase();
+    if (verifiable && sha256 !== String(model.checkpoint.sha256).toLowerCase()) {
+      throw new Error(`SHA256 stimmt nicht: ${model.checkpoint.file}. Datei wird nicht aktiviert.`);
     }
+    writeInstallManifest(paths.modelDir, model, sha256);
+
+    // Der Graph allein reicht nicht: die in-process-Runtime muss ihn auch
+    // ausführen können. Fehlt sie (optionalDependency in npm übersprungen),
+    // muss die App das sagen – nicht „verifiziert“.
+    const runtime = options.checkOnnxRuntime ? options.checkOnnxRuntime() : defaultOnnxRuntimeCheck();
+    const sizeMiB = Math.round(finalStat.size / 1048576);
+    const label = verifiable
+      ? `ONNX-Modell ${model.id} installiert und SHA256-geprüft (${sizeMiB} MiB).`
+      : `ONNX-Modell ${model.id} installiert – SHA256 ${sha256.slice(0, 12)}… berechnet (${sizeMiB} MiB; Katalog führt das Modell noch als "unverified").`;
+    const warning = runtime.available
+      ? verifiable
+        ? undefined
+        : `Der Katalog-Hash des Modells ist noch "unverified". Berechneter SHA256: ${sha256}. Eintragen in src/stems/modelCatalog.json (checkpoint.sha256, checkpointSha256, modelHash), dann prüft die Engine die Datei bei jedem Start.`
+      : `Die ONNX-Runtime (onnxruntime-node) ist im App-Prozess nicht ladbar: ${runtime.reason}. Die Modelldatei liegt bereit, der In-Process-Pfad kann sie aber nicht ausführen. Abhilfe: Abhängigkeiten vollständig installieren (npm ci – die optionale onnxruntime-node bringt die nativen Binaries mit) und die App neu bauen.`;
     onProgress?.({
-      step: ONNX_TOTAL_STEPS, totalSteps: ONNX_TOTAL_STEPS, percent: 100,
-      label: `ONNX-Modell ${model.id} installiert${verifiable ? ' und SHA256-geprüft' : ''} (${Math.round(finalStat.size / 1048576)} MiB).`,
+      step: ONNX_TOTAL_STEPS, totalSteps: ONNX_TOTAL_STEPS, percent: 100, label,
+      logLine: warning,
     });
-    return { ok: true, model: model.id, modelDir: paths.modelDir, weightsReady: true };
+    return {
+      ok: true,
+      model: model.id,
+      modelDir: paths.modelDir,
+      weightsReady: true,
+      sha256,
+      hashVerified: verifiable,
+      runtimeAvailable: runtime.available,
+      label,
+      warning,
+    };
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   }
@@ -268,8 +344,9 @@ async function installTorchModel(repoRoot, paths, model, onProgress, options) {
         throw new Error(`${labels[step]} Fehlgeschlagen: ${result.error || result.output.slice(-1600)}`);
       }
     }
-    onProgress?.({ step: TOTAL_STEPS, totalSteps: TOTAL_STEPS, percent: 100, label: `${architecture} installiert und verifiziert (${model.id}).` });
-    return { ok: true, python: paths.python, model: model.id, modelDir: paths.modelDir, weightsReady: true };
+    const label = `${architecture} installiert und verifiziert (${model.id}).`;
+    onProgress?.({ step: TOTAL_STEPS, totalSteps: TOTAL_STEPS, percent: 100, label });
+    return { ok: true, python: paths.python, model: model.id, modelDir: paths.modelDir, weightsReady: true, label, hashVerified: true, runtimeAvailable: true };
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   }
@@ -290,4 +367,19 @@ async function installStemEngine(repoRoot, onProgress, options = {}) {
   return installTorchModel(repoRoot, paths, model, onProgress, options);
 }
 
-module.exports = { installStemEngine, locateBasePython, installationPaths, unpackedPath, probeVersion, runStreaming, loadSelectedModel, verifiedMarker, streamDownload, TOTAL_STEPS, ONNX_TOTAL_STEPS };
+module.exports = {
+  installStemEngine,
+  locateBasePython,
+  installationPaths,
+  unpackedPath,
+  probeVersion,
+  runStreaming,
+  loadSelectedModel,
+  verifiedMarker,
+  streamDownload,
+  defaultOnnxRuntimeCheck,
+  sha256OfFile,
+  writeInstallManifest,
+  TOTAL_STEPS,
+  ONNX_TOTAL_STEPS,
+};

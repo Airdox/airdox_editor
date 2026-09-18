@@ -12,24 +12,34 @@
 import path from 'node:path';
 import { readdir } from 'node:fs/promises';
 import { StemSeparationError } from '../errors';
-import { runBackendProcess, probeExecutable } from './processTransport';
-import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator } from './types';
+import { runBackendProcess } from './processTransport';
+import { probeTorchRuntime } from './runtimeProbe';
+import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator, BackendAvailabilityOptions } from './types';
 import type { ComputeDevice, ModelDescriptor, ModelFamily } from '../types';
 
 export interface HTDemucsSeparatorOptions {
   pythonCommand?: string;
   modelStoreDir?: string;
   env?: Record<string, string>;
+  /** Persistenter Probe-Cache (siehe runtimeProbe.ts). */
+  probeCacheDir?: string;
 }
 
 export class HTDemucsSeparator implements IStemSeparator {
   readonly kind = 'python-torch' as const;
   readonly family: ModelFamily = 'htdemucs';
   readonly name = 'htdemucs:python-torch';
+  readonly availabilityKey: string;
   private readonly options: HTDemucsSeparatorOptions;
 
   constructor(options: HTDemucsSeparatorOptions = {}) {
     this.options = options;
+    this.availabilityKey = [
+      this.kind,
+      this.family,
+      options.pythonCommand ?? 'python3',
+      options.modelStoreDir ?? '',
+    ].join('|');
   }
 
   capabilities(): BackendCapabilities {
@@ -50,13 +60,32 @@ export class HTDemucsSeparator implements IStemSeparator {
     return descriptor.family === 'htdemucs';
   }
 
-  async isAvailable(): Promise<BackendAvailability> {
+  async isAvailable(options: BackendAvailabilityOptions = {}): Promise<BackendAvailability> {
     const python = this.options.pythonCommand ?? 'python3';
-    const probe = await probeExecutable(python, ['-c', 'import demucs, torch; print("ok")'], 60000, this.options.env);
+    // Derselbe gecachte, zweistufige Probe wie beim RoFormer-Pfad: erst
+    // `find_spec`, dann ein echter Import – beides höchstens einmal je
+    // Interpreter (statt 60 s Interpreter-Start pro Statusabfrage).
+    const probe = await probeTorchRuntime({
+      command: python,
+      env: this.options.env,
+      requireImport: true,
+      modules: ['demucs', 'torch'],
+      cacheDir: this.options.probeCacheDir,
+      mode: options.fast ? 'fast' : 'strict',
+    });
     return {
-      available: probe.found,
-      reason: probe.found ? undefined : `Demucs ist in ${python} nicht importierbar${probe.detail ? `: ${probe.detail}` : ''}`,
-      probes: [{ name: python, found: probe.found, detail: probe.detail }],
+      available: probe.available,
+      reason: probe.available
+        ? undefined
+        : `${probe.reason ?? 'Demucs ist nicht importierbar'}${probe.detail ? `: ${probe.detail}` : ''}`,
+      probes: [{ name: python, found: probe.available, detail: probe.detail ?? probe.torchVersion }],
+      detail: {
+        torchVersion: probe.torchVersion,
+        interpreterVersion: probe.interpreterVersion,
+        verification: probe.verification,
+        probeCached: probe.cached,
+        probeMs: probe.durationMs,
+      },
     };
   }
 

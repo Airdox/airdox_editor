@@ -491,3 +491,33 @@ Original anzufassen“.
   Engine und werden als Job sauber validiert, aber `buildTrackStems` bricht mit
   klarer Meldung ab, statt Stems still zu ignorieren – ein 6-Stem-oder
   2-Stem-Mixer ist ein eigener UI-Schritt.
+
+### 15.1 Status-Pfad, Prüftiefe und lauffähige Auswahl (Repair 2026-09-18)
+
+Der Produktionslog `renderer-20260918-153836` zeigte drei zusammenhängende Probleme:
+`stems:engine-status` brauchte 7–21 s, ein Lauf mit fehlender Laufzeit wurde trotzdem
+angenommen und scheiterte erst nach 263 s, und ein installierter ONNX-Graph wurde nie
+angeboten, weil die Auswahl nur die *Datei-Präsenz* prüfte. Die Regeln sind jetzt:
+
+1. **Lauffähig statt vorhanden.** `StemSeparationEngine.selectRunnableModel()` geht die
+   Rangfolge eines Profils durch und nimmt das erste Modell, dessen Backend **startklar**
+   ist (gecachte Probe). Gewichte ohne Laufzeit bewerben kein Profil mehr; der Grund steht
+   in der Statusantwort. `defaultProfile` ist das beste *lauffähige* Profil.
+2. **Fail-fast.** `StemJobService.start()` lehnt im freien Auto-Pfad sofort mit
+   `BACKEND_UNAVAILABLE` ab (Modell, Profil, Grund). Eine explizit gewählte Architektur
+   scheitert im Kern **vor** der Arbeitskopie (`separate()`: Gewichte → Backend → Decode).
+3. **Zwei Prüftiefen.** `BackendAvailabilityOptions.fast` (Statuspfad) prüft mit **einem**
+   Interpreterstart Version und `find_spec` – kein `import torch`. `strict` (Jobstart) macht
+   danach den echten Import, wiederverwendet aber die Vorprüfung. Verdikte liegen im
+   geteilten `BackendAvailabilityCache` (positiv 5 min / negativ 15 s) über der
+   Probe-Cache-Schicht (`<Cache>/runtime-probe.json`, Interpreter-Schlüssel aus Pfad,
+   Größe und mtime; Timeouts werden nicht persistiert).
+4. **Installation wirkt sofort.** `clearRuntimeCaches()` verwirft nach jeder Installation
+   die **negativen** Verdikte (Speicher und Platte), positive bleiben. Aufgerufen von
+   `electron/stemEngineBridge.cjs::refreshRuntime()` und `server.ts`.
+5. **Ehrliche Installationsmeldung.** PyTorch meldet „installiert und verifiziert“
+   (Test-Inferenz), ONNX meldet „installiert und SHA256-geprüft“ bzw. „SHA256 … berechnet“
+   und warnt, wenn die in-process Runtime fehlt.
+
+Damit ist ein Statusaufruf reine Abfrage (Millisekunden warm, ein Prozessstart kalt) und
+ein Lauf ohne Laufzeit endet in Millisekunden mit einer Begründung statt nach Minuten.

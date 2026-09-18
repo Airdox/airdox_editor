@@ -118,12 +118,29 @@ export interface BackendCapabilities {
   inMemory: boolean;
 }
 
+/**
+ * Prüftiefe der Verfügbarkeit. `fast` ist für Statusabfragen gedacht: der
+ * Interpreter wird billig geprüft (Version + `find_spec`), der echte
+ * Modul-Import bleibt dem Jobstart überlassen. Die Verdikte werden getrennt
+ * gecacht, damit ein strenges Ergebnis immer auch für `fast` gilt.
+ */
+export interface BackendAvailabilityOptions {
+  fast?: boolean;
+}
+
 export interface IStemSeparator {
   readonly kind: BackendKind;
   readonly family: ModelFamily;
   readonly name: string;
+  /**
+   * Stabile Identität für den Verfügbarkeits-Cache: alles, was das Ergebnis
+   * von `isAvailable()` verändert (Interpreter-Pfad, Model-Store, Gerät).
+   * Ohne Angabe greift `kind:name` – bei Subprozess-Backends also nur der
+   * Backend-Typ.
+   */
+  readonly availabilityKey?: string;
   capabilities(): BackendCapabilities;
-  isAvailable(): Promise<BackendAvailability>;
+  isAvailable(options?: BackendAvailabilityOptions): Promise<BackendAvailability>;
   separate(request: BackendSeparationRequest): Promise<BackendSeparationResponse>;
 }
 

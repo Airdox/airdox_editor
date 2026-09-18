@@ -16,6 +16,7 @@
  */
 import { spawn } from 'node:child_process';
 import { StemSeparationError, classifyFailure } from '../errors';
+import { probeCommand } from './runtimeProbe';
 import type { CancellationToken } from '../chunkProcessor';
 import type { ComputeDevice } from '../types';
 
@@ -255,46 +256,20 @@ export async function runBackendProcess(options: RunProcessOptions): Promise<Pro
   });
 }
 
-/** Probes an executable with `--version` style arguments without failing. */
+/**
+ * Probes an executable with `--version` style arguments without failing.
+ *
+ * Delegiert an `probeCommand` (runtimeProbe.ts), damit Transport und
+ * Laufzeitprüfung dieselbe Prozess-/Timeout-Semantik haben: nur ein sauberer
+ * Exit (Code 0) zählt als gefunden – eine Runtime, die eine ImportError auf
+ * stderr schreibt, ist nicht verfügbar.
+ */
 export async function probeExecutable(
   command: string,
   args: string[] = ['--version'],
   timeoutMs = 8000,
   env?: Record<string, string>
 ): Promise<{ found: boolean; detail?: string }> {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn(command, args, { windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
-    } catch (error) {
-      resolve({ found: false, detail: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    let out = '';
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-      resolve({ found: false, detail: 'Zeitüberschreitung' });
-    }, timeoutMs);
-    timer.unref?.();
-    child.stdout?.on('data', (chunk: Buffer) => {
-      out += chunk.toString();
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      out += chunk.toString();
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      resolve({ found: false, detail: error.message });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      // Only a clean exit counts: a runtime that prints an ImportError to
-      // stderr is not available, no matter how much it printed.
-      resolve({ found: code === 0, detail: out.trim().slice(0, 200) });
-    });
-  });
+  const probe = await probeCommand(command, args, { timeoutMs, env });
+  return { found: probe.found, detail: (probe.detail ?? probe.output.slice(0, 200)) || undefined };
 }

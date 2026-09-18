@@ -10,6 +10,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 import { StemJobService } from './src/stems/stemJobService';
+import { clearRuntimeCaches } from './src/stems/runtimeCaches';
 // Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
 // Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
 // und im esbuild-CJS-Bundle (dist/server.cjs).
@@ -144,6 +145,10 @@ async function startServer() {
         ...(requestedModelId ? { modelId: requestedModelId } : {}),
       });
       if (result.ok) {
+        // Erst die Verdikte verwerfen, dann den Dienst neu aufbauen: sonst
+        // beantwortet der prozessweite Probe-Cache die Frage „läuft das
+        // Backend?“ minutenlang mit dem Stand von vor der Installation.
+        await clearRuntimeCaches();
         if (stemJobs.listJobs().length === 0) stemJobs = createStemJobs();
         else result.restartRequired = true;
       }

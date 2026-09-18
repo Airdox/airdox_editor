@@ -54,11 +54,13 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
     'stems:install-engine': 60 * 60 * 1000,
     'stems:job-wait': 60 * 60 * 1000,
     'stems:separate': 60 * 60 * 1000,
-    // Status/preflight may cold-load PyTorch once; warn only when truly stuck.
-    'stems:engine-status': 15 * 1000,
-    'stems:get-status': 15 * 1000,
-    'stems:diagnostics': 15 * 1000,
-    'stems:preflight': 15 * 1000,
+    // Status/preflight sind reine Abfragen und inzwischen gecacht (Backend-Probes,
+    // ONNX-Runtime, Statusantwort). Mehr als drei Sekunden heißt: etwas probt
+    // erneut, was längst gemessen ist – das soll im Log auffallen.
+    'stems:engine-status': 3 * 1000,
+    'stems:get-status': 3 * 1000,
+    'stems:diagnostics': 5 * 1000,
+    'stems:preflight': 5 * 1000,
   };
   ipcMain.handle = function auditedHandle(channel, listener) {
     return originalHandle(channel, async (event, ...args) => {

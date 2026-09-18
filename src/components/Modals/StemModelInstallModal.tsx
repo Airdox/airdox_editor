@@ -17,6 +17,7 @@ import { AlertTriangle, CheckCircle2, Cpu, Download, Loader2, X } from 'lucide-r
 import {
   installStemEngineWithProgress,
   type StemInstallProgressUpdate,
+  type StemInstallResult,
 } from '../../audio/stemEngineInstaller';
 
 export interface StemInstallModelInfo {
@@ -30,13 +31,13 @@ interface StemModelInstallModalProps {
   model: StemInstallModelInfo | null;
   onClose: () => void;
   /** Nach erfolgreicher Installation aufrufen (Architekturliste neu prüfen). */
-  onInstalled?: (modelId: string) => void;
+  onInstalled?: (modelId: string, result?: StemInstallResult) => void;
 }
 
 type InstallState =
   | { phase: 'IDLE' }
   | { phase: 'RUNNING'; progress: StemInstallProgressUpdate | null; lastLog: string }
-  | { phase: 'DONE'; modelId: string; restartRequired?: boolean }
+  | { phase: 'DONE'; modelId: string; restartRequired?: boolean; label?: string; warning?: string }
   | { phase: 'FAILED'; error: string };
 
 export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
@@ -73,8 +74,14 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
         { modelId: model.id }
       );
       if (result.ok) {
-        setInstall({ phase: 'DONE', modelId: result.model || model.id, restartRequired: result.restartRequired });
-        onInstalled?.(result.model || model.id);
+        setInstall({
+          phase: 'DONE',
+          modelId: result.model || model.id,
+          restartRequired: result.restartRequired,
+          label: result.label,
+          warning: result.warning,
+        });
+        onInstalled?.(result.model || model.id, result);
       } else {
         setInstall({ phase: 'FAILED', error: result.error || 'Unbekannter Installationsfehler.' });
       }
@@ -165,7 +172,9 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <CheckCircle2 size={14} />
                 <span className="font-bold text-[11px]">
-                  {model.label} erfolgreich installiert und verifiziert!
+                  {/* Wortlaut kommt aus dem Installer: PyTorch = verifiziert (Test-Inferenz),
+                      ONNX = Datei + SHA256, ggf. ohne Katalog-Pin. */}
+                  {install.label ?? `${model.label} installiert und verifiziert!`}
                 </span>
               </div>
               <p className="text-[11px] text-neutral-300">
@@ -173,6 +182,9 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
                   ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.'
                   : <>Modell <span className="font-mono text-[10px]">{install.modelId}</span> ist bereit – neue Separationen laufen mit genau dieser Architektur.</>}
               </p>
+              {install.warning && (
+                <p className="text-[10.5px] text-[#f5d78e] font-mono break-all leading-relaxed">{install.warning}</p>
+              )}
             </div>
           )}
 

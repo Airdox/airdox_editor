@@ -28,6 +28,19 @@ export interface StemInstallResult {
   python?: string;
   model?: string;
   restartRequired?: boolean;
+  /**
+   * Wahrheitsgemäße Abschlussmeldung des Installers. PyTorch-Modelle melden
+   * „installiert und verifiziert“ (Test-Inferenz lief), ONNX-Modelle melden
+   * getrennt, ob der Katalog-Hash sie prüfen kann und ob die In-Process-Runtime
+   * ladbar ist.
+   */
+  label?: string;
+  /** Handlungsrelevanter Hinweis, z. B. „Runtime nicht ladbar“ oder „Hash noch unverified“. */
+  warning?: string;
+  /** Berechneter SHA256 der Modelldatei (ONNX-Pfad). */
+  sha256?: string;
+  hashVerified?: boolean;
+  runtimeAvailable?: boolean;
 }
 
 /** Installationsziel: exakt das im Einstellungsmenü gewählte Modell. */

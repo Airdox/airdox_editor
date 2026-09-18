@@ -26,6 +26,7 @@ import { isStemError, StemSeparationError } from './errors';
 import { KNOWN_FAMILIES, ModelRegistry } from './modelRegistry';
 import { SeparationCancellationToken } from './chunkProcessor';
 import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
+import { availabilityCacheKey, BackendAvailabilityCache } from './backends/availabilityCache';
 import type { BackendAvailability, IStemSeparator } from './backends/types';
 import {
   createDefaultBackendFactory,
@@ -100,6 +101,12 @@ export interface StemJobServiceOptions {
   onnxRuntime?: OnnxRuntimeLike;
   /** Loader override for onnxruntime-node. */
   loadOnnxRuntime?: () => Promise<OnnxRuntimeLike>;
+  /** Persistenter Cache für Interpreter-Probes (Default: `<root>/Cache`). */
+  probeCacheDir?: string;
+  /** Geteilter Verfügbarkeits-Cache (Tests; Default: eigener Cache des Kerns). */
+  availabilityCache?: BackendAvailabilityCache;
+  /** TTL des Gesamt-Status (Default 2000 ms, `AIRODOX_STEM_STATUS_TTL_MS`). */
+  statusTtlMs?: number;
   /** Keep `Working/` + chunk slices after a run (debugging). */
   keepTemporaries?: boolean;
   logger?: StemServiceLogger;
@@ -165,7 +172,14 @@ export class StemJobService {
   readonly roots: StemServiceStatus['roots'];
   private readonly options: StemJobServiceOptions;
   private readonly backendFactory: BackendFactory;
-  private readonly backendAvailabilityCache = new Map<string, { at: number; report: BackendAvailability }>();
+  /**
+   * Kurzlebiger Cache der Gesamtantwort. Der Editor fragt den Status beim
+   * Öffnen der Einstellungen, im Preflight und nach jedem Installationsschritt
+   * ab – teils dreimal in zehn Sekunden. Ohne diesen Cache lief die komplette
+   * Matrix (inkl. Hashing und Laufzeit-Probes) dreimal.
+   */
+  private statusCache?: { at: number; value: StemServiceStatus };
+  private statusInflight?: Promise<StemServiceStatus>;
   private readonly jobs = new Map<string, JobRecord>();
   private readonly tokens = new Map<string, SeparationCancellationToken>();
   private readonly listeners = new Set<(event: StemServiceEvent) => void>();
@@ -190,6 +204,7 @@ export class StemJobService {
         device: options.device,
         onnxRuntime: options.onnxRuntime,
         loadOnnxRuntime: options.loadOnnxRuntime,
+        probeCacheDir: options.probeCacheDir ?? this.roots.cache,
       });
     this.engine = new StemSeparationEngine({
       registry: this.registry,
@@ -206,6 +221,8 @@ export class StemJobService {
       externalDecoder: options.externalDecoder,
       env: options.env as NodeJS.ProcessEnv | undefined,
       backendFactory: this.backendFactory,
+      probeCacheDir: options.probeCacheDir ?? this.roots.cache,
+      availabilityCache: options.availabilityCache,
     });
   }
 
@@ -236,28 +253,16 @@ export class StemJobService {
     });
   }
 
-  private async cachedBackendAvailability(candidate: IStemSeparator): Promise<BackendAvailability> {
-    const key = [candidate.kind, candidate.name, this.roots.models, this.options.device ?? 'auto'].join('|');
-    const now = Date.now();
-    const cached = this.backendAvailabilityCache.get(key);
-    if (cached && now - cached.at < 30_000) return cached.report;
-    const report = await candidate.isAvailable();
-    this.backendAvailabilityCache.set(key, { at: now, report });
-    return report;
-  }
-
-  private async runtimeAvailabilityForDescriptor(descriptor: ModelDescriptor): Promise<BackendAvailability> {
-    const candidates = this.candidatesForDescriptor(descriptor);
-    if (!candidates.length) {
-      return { available: false, reason: `Kein Backend-Kandidat für ${descriptor.id} konfiguriert.` };
-    }
-    const failures: string[] = [];
-    for (const candidate of candidates) {
-      const report = await this.cachedBackendAvailability(candidate);
-      if (report.available) return { ...report, detail: { ...(report.detail ?? {}), backendName: candidate.name } };
-      failures.push(`${candidate.name}: ${report.reason ?? 'nicht verfügbar'}`);
-    }
-    return { available: false, reason: failures.join(' | ') || 'Kein Backend verfügbar.' };
+  /**
+   * Laufzeit-Verfügbarkeit kommt aus dem *geteilten* Cache des Kerns. Damit
+   * gilt dieselbe Antwort für Statusmatrix, Job-Start und Fehlermeldung – und
+   * ein Statusaufruf startet nicht mehrfach denselben Interpreter.
+   */
+  private runtimeAvailabilityForDescriptor(descriptor: ModelDescriptor): Promise<BackendAvailability> {
+    // `fast`: der Statusaufruf darf nie an einem echten `import torch` hängen
+    // (im Produktionslog bis zu 21 s pro Abfrage). Beim Jobstart gilt weiterhin
+    // das strenge Verdikt – derselbe Cache, single-flight.
+    return this.engine.backendAvailability(descriptor, { fast: true });
   }
 
   /**
@@ -266,26 +271,56 @@ export class StemJobService {
    * produces two entries and a future six-stem model produces six.
    */
   async status(): Promise<StemServiceStatus> {
+    const ttl = this.options.statusTtlMs ?? Number(this.options.env?.AIRODOX_STEM_STATUS_TTL_MS ?? 2000);
+    if (this.statusCache && Date.now() - this.statusCache.at < ttl) return this.statusCache.value;
+    if (this.statusInflight) return this.statusInflight;
+    const promise = this.computeStatus()
+      .then((value) => {
+        this.statusCache = { at: Date.now(), value };
+        return value;
+      })
+      .finally(() => {
+        if (this.statusInflight === promise) this.statusInflight = undefined;
+      });
+    this.statusInflight = promise;
+    return promise;
+  }
+
+  /** Verwirft den Status-Cache (nach Installation/Diagnose). */
+  invalidateStatus(): void {
+    this.statusCache = undefined;
+  }
+
+  private async computeStatus(): Promise<StemServiceStatus> {
     const engineStatus = await this.engine.status();
     const availability = new Map(engineStatus.models.map((model) => [model.modelId, model]));
     const runtimeAvailability = new Map<string, BackendAvailability>();
-    for (const descriptor of this.registry.list()) {
-      const model = availability.get(descriptor.id);
-      if (!model?.available) continue;
-      runtimeAvailability.set(descriptor.id, await this.runtimeAvailabilityForDescriptor(descriptor));
-    }
+    const installedDescriptors = this.registry.list().filter((descriptor) => availability.get(descriptor.id)?.available);
+    // Parallel statt sequenziell: die Probes sind gecacht/single-flight, aber
+    // ein kalter Lauf soll nicht die Summe aller Interpreter-Starts warten.
+    const probed = await Promise.all(
+      installedDescriptors.map(async (descriptor) => [descriptor.id, await this.runtimeAvailabilityForDescriptor(descriptor)] as const)
+    );
+    for (const [id, report] of probed) runtimeAvailability.set(id, report);
     const profiles: StemServiceStatus['profiles'] = [];
 
     for (const profile of QUALITY_PROFILES) {
       let descriptor: ModelDescriptor | null = null;
+      let selectionReason: string | undefined;
+      let selectionRunnable = false;
       try {
-        // Same rule as `start()`/`resolveModel`: the profile the UI advertises
-        // must be the model a job actually uses. `isSelectable` is what turns
-        // "Vorschau" green after a BS-RoFormer install even though the optional
-        // Demucs weights are missing.
-        descriptor = this.registry.selectForProfile(profile, undefined, {
-          isAvailable: (candidate) => this.engine.isSelectable(candidate),
-        });
+        /*
+         * Dieselbe Regel wie im Job: die Matrix bewirbt genau das Modell, das
+         * ein Lauf nimmt – und zwar inklusive Laufzeit. Vorher entschied hier
+         * nur die Datei-Präsenz: mit installiertem BS-RoFormer-Checkpoint, aber
+         * ohne Python/PyTorch wurde BALANCED/HIGH weiter auf BS-RoFormer
+         * gemappt (und rot), obwohl der installierte ONNX-Graph dasselbe Profil
+         * hätte bedienen können.
+         */
+        const selection = await this.engine.selectRunnableModel(profile, undefined, { fast: true });
+        descriptor = selection.descriptor;
+        selectionRunnable = selection.runnable;
+        selectionReason = selection.reason;
       } catch {
         descriptor = null;
       }
@@ -305,7 +340,7 @@ export class StemJobService {
       const model = availability.get(descriptor.id);
       const runtime = runtimeAvailability.get(descriptor.id);
       const parameters = this.registry.parametersFor(descriptor, profile);
-      const runnable = Boolean(model?.available && runtime?.available);
+      const runnable = selectionRunnable && Boolean(model?.available && runtime?.available);
       profiles.push({
         profile,
         modelId: descriptor.id,
@@ -314,9 +349,10 @@ export class StemJobService {
         available: runnable,
         reason: runnable
           ? undefined
-          : model?.available
-            ? runtime?.reason ?? 'Kein Backend für dieses Modell verfügbar'
-            : model?.reason ?? engineStatus.profiles[profile] ?? 'Modell nicht installiert',
+          : selectionReason ??
+            (model?.available
+              ? runtime?.reason ?? 'Kein Backend für dieses Modell verfügbar'
+              : model?.reason ?? engineStatus.profiles[profile] ?? 'Modell nicht installiert'),
         description: PROFILE_DESCRIPTION[profile],
         parameters,
       });
@@ -357,14 +393,21 @@ export class StemJobService {
       }
     );
 
+    // Qualität zuerst, aber nur unter dem, was läuft: der Standard muss ein
+    // Profil sein, das ein Job auch wirklich fahren kann (§3) – sonst zeigt
+    // die UI „bereit“ und der Lauf scheitert an einer fehlenden Laufzeit.
+    const defaultProfile: QualityProfile = usable
+      ? (['HIGH_QUALITY', 'HIGH', 'BALANCED', 'PREVIEW', 'MAXIMUM_QUALITY'] as QualityProfile[]).find(
+          (profile) => profiles.find((entry) => entry.profile === profile)?.available
+        ) ?? 'PREVIEW'
+      : 'PREVIEW';
+
     return {
       ok: true,
       usable,
       profiles,
       families,
-      // Quality first: the editor defaults to HIGH_QUALITY whenever a trained
-      // model is installed and only then falls back to PREVIEW (§3).
-      defaultProfile: usable ? 'HIGH_QUALITY' : 'PREVIEW',
+      defaultProfile,
       models: engineStatus.models.map((model) => {
         const descriptor = this.registry.list().find((entry) => entry.id === model.modelId);
         const runtime = runtimeAvailability.get(model.modelId);
@@ -405,8 +448,13 @@ export class StemJobService {
         if (!seen.has(key)) seen.set(key, candidate);
       }
     }
+    const resolvedAvailability = (candidate: IStemSeparator) =>
+      this.engine.availability.resolve(
+        availabilityCacheKey(candidate, candidate.name, this.options.device, { fast: true }),
+        () => candidate.isAvailable({ fast: true })
+      );
     for (const candidate of seen.values()) {
-      const availability = await this.cachedBackendAvailability(candidate);
+      const availability = await resolvedAvailability(candidate);
       notes.push({
         kind: candidate.kind,
         name: candidate.name,
@@ -479,8 +527,21 @@ export class StemJobService {
   async start(request: StartStemJobRequest): Promise<StemJobView> {
     const profile = request.profile ?? 'HIGH_QUALITY';
     let descriptor: ModelDescriptor;
+    let selectionReason: string | undefined;
+    let selectionRunnable = true;
     try {
-      descriptor = this.engine.resolveModel(profile, request.modelId, request.family);
+      if (request.modelId || request.family) {
+        // Fest gewählte Architektur: genau dieses Modell, kein Ausweichen.
+        descriptor = this.engine.resolveModel(profile, request.modelId, request.family);
+      } else {
+        // Freie Profilwahl: das erste Modell, das das Profil bedienen *kann*
+        // (Gewichte vorhanden UND Backend startklar) – nicht nur das erste
+        // Modell, dessen Dateien zufällig auf der Platte liegen.
+        const selection = await this.engine.selectRunnableModel(profile, undefined, { fast: true });
+        descriptor = selection.descriptor;
+        selectionRunnable = selection.runnable;
+        selectionReason = selection.reason;
+      }
     } catch (error) {
       throw this.asServiceError(error, 'MODEL_INCOMPATIBLE');
     }
@@ -490,11 +551,52 @@ export class StemJobService {
     const stems = request.stems ?? [...descriptor.stemOrder];
 
     let inputPath = request.inputPath;
-    if (!inputPath) {
-      if (!request.bytes) {
-        throw new StemSeparationError('AUDIO_MISSING', 'Stem-Job benötigt inputPath oder bytes als Mix-Quelle.');
+    if (!inputPath && !request.bytes) {
+      throw new StemSeparationError('AUDIO_MISSING', 'Stem-Job benötigt inputPath oder bytes als Mix-Quelle.');
+    }
+
+    /*
+     * Fail-fast VOR dem Job (§14): fehlende Gewichte oder eine fehlende
+     * Laufzeit sind vor dem ersten Sample bekannt. Ohne diese Prüfung nahm
+     * `start()` den Job an, das Backend wurde erst im Lauf geprobt, und der
+     * Renderer wartete im `stems:job-wait` 263 s auf ein BACKEND_UNAVAILABLE,
+     * das von Anfang an feststand.
+     */
+    const autoSelected = !request.modelId && !request.family;
+    if (autoSelected) {
+      /*
+       * Der freie Auto-Pfad lehnt hier ab, wenn *kein* Modell des Profils
+       * rechenbar ist – sonst wäre der Job von Anfang an zwecklos, und der
+       * Grund ist in Millisekunden verfügbar (gecachter Backend-Probe).
+       *
+       * Eine fest gewählte Architektur (modelId/family) wird weiterhin
+       * angenommen: sie gehört dem Nutzer. Der Kern prüft sie jetzt aber
+       * *vor* dem Decodieren (selectBackend in `separate()`), sodass auch
+       * dieser Weg in Sekunden statt nach Minuten scheitert.
+       */
+      if (selectionRunnable) {
+        // Die Auswahl war lauffähig – die Begründung wird nur für die Ablehnung
+        // gebraucht, also nichts nachproben („no duplicate probes“).
+        selectionReason = undefined;
+      } else {
+        selectionReason ??= 'Kein Backend-Kandidat konfiguriert.';
       }
-      inputPath = await this.stageBytes(request.bytes, request.trackName ?? 'renderer-mix');
+      if (selectionReason) {
+        const message = `Kein Backend für ${descriptor.id} verfügbar. ${selectionReason}`;
+        this.options.logger?.warn?.('STEMS', 'Stem-Job abgelehnt – kein lauffähiges Backend', {
+          profile,
+          modelId: descriptor.id,
+          reason: selectionReason,
+        });
+        throw new StemSeparationError('BACKEND_UNAVAILABLE', message, {
+          modelId: descriptor.id,
+          profile,
+        });
+      }
+    }
+
+    if (!inputPath) {
+      inputPath = await this.stageBytes(request.bytes!, request.trackName ?? 'renderer-mix');
     }
     const trackName = request.trackName ?? path.basename(inputPath, path.extname(inputPath));
     const jobId = `stem_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;

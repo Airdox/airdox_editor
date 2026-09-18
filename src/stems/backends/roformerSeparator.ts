@@ -17,7 +17,8 @@
 import path from 'node:path';
 import { StemSeparationError, classifyFailure } from '../errors';
 import { runBackendProcess, probeExecutable, EXIT_MODEL } from './processTransport';
-import type { BackendAvailability, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator } from './types';
+import { probeTorchRuntime } from './runtimeProbe';
+import type { BackendAvailability, BackendAvailabilityOptions, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator } from './types';
 import type { BackendCapabilities } from './types';
 import type { BackendKind, ComputeDevice, ModelDescriptor, ModelFamily, ModelPrecision } from '../types';
 
@@ -62,6 +63,14 @@ export interface RoFormerTransportConfig {
    * `false` – they still exercise the real transport code.
    */
   requireTorch?: boolean;
+  /**
+   * Persistenter Probe-Cache (Engine-`Cache/`). Der Torch-Import kostet auf
+   * Windows 5–20 s; das Ergebnis wird deshalb einmal gemessen und danach aus
+   * `runtime-probe.json` beantwortet.
+   */
+  probeCacheDir?: string;
+  /** Budget für den echten torch-Import (Tests/Diagnose). */
+  torchProbeTimeoutMs?: number;
 }
 
 export interface RoFormerSeparatorOptions extends RoFormerTransportConfig {
@@ -74,6 +83,8 @@ export class RoFormerSeparator implements IStemSeparator {
   readonly kind: BackendKind;
   readonly family: ModelFamily;
   readonly name: string;
+  /** Interpreter + Adapter + Store identifizieren die Laufzeit eindeutig. */
+  readonly availabilityKey: string;
   private readonly sessionPrefix: string;
   private readonly config: RoFormerSeparatorOptions;
 
@@ -86,6 +97,14 @@ export class RoFormerSeparator implements IStemSeparator {
       options.transport === 'native-cli'
         ? `${options.family}:${options.nativeDialect ?? 'audio.cpp'}`
         : `${options.family}:python-torch`;
+    this.availabilityKey = [
+      this.kind,
+      this.family,
+      options.transport === 'native-cli' ? options.nativeCommand ?? 'audiocpp_cli' : options.pythonCommand ?? 'python3',
+      options.adapterScript ?? '',
+      options.modelStoreDir ?? '',
+      options.requireTorch === false ? 'no-torch' : 'torch',
+    ].join('|');
   }
 
   capabilities(): BackendCapabilities {
@@ -114,7 +133,7 @@ export class RoFormerSeparator implements IStemSeparator {
     return descriptor.stemOrder.every((_stem, index) => supported.has(index)) && descriptor.stemOrder.length <= 2;
   }
 
-  async isAvailable(): Promise<BackendAvailability> {
+  async isAvailable(options: BackendAvailabilityOptions = {}): Promise<BackendAvailability> {
     if (this.kind === 'native-cli') {
       const command = this.config.nativeCommand ?? 'audiocpp_cli';
       const probe = await probeExecutable(command, ['--help'], 8000, this.config.env);
@@ -126,25 +145,39 @@ export class RoFormerSeparator implements IStemSeparator {
     }
     const python = this.config.pythonCommand ?? 'python3';
     const requiresTorch = this.config.requireTorch !== false;
-    const probe = await probeExecutable(
-      python,
-      requiresTorch ? ['-c', 'import torch; print(torch.__version__)'] : ['-c', 'print(1)'],
-      requiresTorch ? 60000 : 8000,
-      this.config.env
-    );
     const adapter = this.config.adapterScript;
+    // Gemessen statt geraten: die Probe ist gecacht (siehe runtimeProbe.ts),
+    // damit ein Statusaufruf nicht bei jeder Abfrage einen Interpreter startet.
+    const probe = await probeTorchRuntime({
+      command: python,
+      env: this.config.env,
+      requireImport: requiresTorch,
+      cacheDir: this.config.probeCacheDir,
+      timeoutMs: this.config.torchProbeTimeoutMs,
+      // Statusaufruf: billiges Verdikt; der echte Import passiert beim Jobstart
+      // (gleicher Cache, single-flight).
+      mode: options.fast ? 'fast' : 'strict',
+    });
     const detail = probe.detail ? `: ${probe.detail}` : '';
+    const versionSuffix = probe.torchVersion ? ` (torch ${probe.torchVersion})` : '';
     return {
-      available: probe.found && Boolean(adapter),
-      reason: !probe.found
-        ? requiresTorch
-          ? `Python/PyTorch-Laufzeit nicht verfügbar (${python})${detail}`
-          : `Python-Laufzeit nicht verfügbar (${python})${detail}`
+      available: probe.available && Boolean(adapter),
+      reason: !probe.available
+        ? `${probe.reason ?? (requiresTorch ? 'Python/PyTorch-Laufzeit nicht verfügbar' : 'Python-Laufzeit nicht verfügbar')} (${python})${detail}`
         : !adapter
           ? 'Adapter-Skript python/bsroformer_inference.py ist nicht konfiguriert'
           : undefined,
-      probes: [{ name: python, found: probe.found, detail: probe.detail }],
-      detail: { adapterScript: adapter, referenceSourceDir: this.config.referenceSourceDir },
+      probes: [{ name: python, found: probe.available, detail: probe.detail ?? probe.torchVersion }],
+      detail: {
+        interpreterVersion: probe.interpreterVersion,
+        verification: probe.verification,
+        probeCached: probe.cached,
+        adapterScript: adapter,
+        referenceSourceDir: this.config.referenceSourceDir,
+        torchVersion: probe.torchVersion,
+        probeMs: probe.durationMs,
+        ...(probe.available ? {} : { hint: `${python}${versionSuffix}` }),
+      },
     };
   }
 
