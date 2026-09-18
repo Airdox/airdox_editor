@@ -220,6 +220,15 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
               <p className="font-mono text-[10px] text-[#ff8a80] leading-relaxed break-all">
                 {install.error}
               </p>
+              {/^.*(kein unterst|python).*$/i.test(install.error ?? '') ? (
+                <p className="text-[10.5px] text-neutral-400">
+                  Die App installiert Python normalerweise selbst. Klappt das nicht (kein
+                  Internet, gesperrte Firmen-Installation), bitte{' '}
+                  <span className="font-mono text-[#4ade80]">Python 3.12 (64-Bit)</span> von
+                  python.org installieren — Haken bei „Add python.exe to PATH“ — und hier erneut
+                  auf Installieren klicken.
+                </p>
+              ) : null}
               <p className="text-[10.5px] text-neutral-400">
                 Manuelle Alternative im Projektordner:{' '}
                 <span className="font-mono text-[#4ade80]">{setupCommand}</span>

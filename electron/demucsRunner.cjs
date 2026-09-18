@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { access, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { engineSearchRoots, venvPython, venvPythonAlias } = require('./stemPaths.cjs');
 
 /**
  * Stem-Namen des Vorschau-Pfads – NICHT mehr als Konstante hartgeschrieben.
@@ -62,18 +63,17 @@ async function exists(file) {
 }
 
 function defaultPythonCandidates(repoRoot) {
-  return process.platform === 'win32'
-    ? [
-        path.join(repoRoot, '.venv', 'Scripts', 'python.exe'),
-        'python',
-        'python3',
-      ]
-    : [
-        path.join(repoRoot, '.venv', 'bin', 'python3'),
-        path.join(repoRoot, '.venv', 'bin', 'python'),
-        'python3',
-        'python',
-      ];
+  // Zuerst jede projekt- bzw. benutzereigene venv (gepackte App kann nicht in
+  // resources/app.asar schreiben – dort liegt die Engine im Benutzerordner),
+  // erst danach ein System-Python.
+  const candidates = [];
+  for (const root of engineSearchRoots(repoRoot)) {
+    candidates.push(venvPython(root));
+    const alias = venvPythonAlias(root);
+    if (alias !== venvPython(root)) candidates.push(alias);
+  }
+  candidates.push('python', 'python3');
+  return [...new Set(candidates)];
 }
 
 function captureProcess(command, args, timeoutMs = 15000) {

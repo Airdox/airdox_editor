@@ -17,17 +17,12 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const { inspectDemucsEnvironment } = require('./demucsRunner.cjs');
+const { resolveInstallRoot, venvPython, isInsideAsar } = require('./stemPaths.cjs');
 
 const SUPPORTED_WINDOWS_VERSIONS = ['3.12', '3.11', '3.10', '3.9'];
 
 /** Total user-visible steps for percent computation. */
 const TOTAL_STEPS = 6;
-
-function venvPython(repoRoot) {
-  return process.platform === 'win32'
-    ? path.join(repoRoot, '.venv', 'Scripts', 'python.exe')
-    : path.join(repoRoot, '.venv', 'bin', 'python3');
-}
 
 function runStreaming(command, args, onLine, timeoutMs = 45 * 60 * 1000) {
   return new Promise((resolve) => {
@@ -79,11 +74,46 @@ async function probeVersion(command, args) {
   return null;
 }
 
+/** Weitere übliche Installationsorte, die nicht im PATH stehen müssen. */
+function windowsPythonPaths() {
+  const roots = [
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Python'),
+    process.env.ProgramFiles,
+    'C:\\',
+  ].filter(Boolean);
+  const files = [];
+  for (const version of SUPPORTED_WINDOWS_VERSIONS) {
+    const folder = `Python${version.replace('.', '')}`;
+    for (const root of roots) files.push(path.join(root, folder, 'python.exe'));
+  }
+  return files.filter((file) => {
+    try { return fs.existsSync(file); } catch { return false; }
+  });
+}
+
+/** Installierte Interpreter laut Python-Launcher (`py -0p`). */
+async function launcherPythonPaths() {
+  const listed = await runStreaming('py', ['-0p'], null, 20000);
+  if (!listed.ok) return [];
+  return listed.output
+    .split(/\r?\n/)
+    .map((line) => (line.match(/([A-Za-z]:\\[^\s].*?python\.exe)/i) || [])[1])
+    .filter(Boolean);
+}
+
 /** Find a base Python interpreter that Demucs/PyTorch wheels support. */
 async function locateBasePython() {
   if (process.platform === 'win32') {
     for (const version of SUPPORTED_WINDOWS_VERSIONS) {
       const probe = await probeVersion('py', [`-${version}`]);
+      if (probe) return probe;
+    }
+    for (const file of await launcherPythonPaths()) {
+      const probe = await probeVersion(file, []);
+      if (probe) return probe;
+    }
+    for (const file of windowsPythonPaths()) {
+      const probe = await probeVersion(file, []);
       if (probe) return probe;
     }
     for (const candidate of ['python', 'python3']) {
@@ -96,7 +126,30 @@ async function locateBasePython() {
     const probe = await probeVersion(candidate, []);
     if (probe) return probe;
   }
+  for (const minor of [13, 12, 11, 10, 9]) {
+    const probe = await probeVersion(`python3.${minor}`, []);
+    if (probe) return probe;
+  }
   return null;
+}
+
+/**
+ * Letzte Rettung unter Windows: Python 3.12 automatisch per winget
+ * installieren, damit der Nutzer die App nicht verlassen muss.
+ */
+async function autoInstallWindowsPython(report) {
+  if (process.platform !== 'win32') return null;
+  report(1, 'Kein passendes Python gefunden – Python 3.12 wird automatisch installiert…');
+  const install = await runStreaming(
+    'winget',
+    ['install', '--id', 'Python.Python.3.12', '--source', 'winget',
+     '--accept-package-agreements', '--accept-source-agreements', '--silent',
+     '--scope', 'user', '--disable-interactivity'],
+    (line) => report(1, 'Python 3.12 wird automatisch installiert…', line),
+    20 * 60 * 1000
+  );
+  if (!install.ok) return null;
+  return locateBasePython();
 }
 
 /**
@@ -104,6 +157,10 @@ async function locateBasePython() {
  * onProgress receives { step, totalSteps, percent, label, logLine? }.
  */
 async function installStemEngine(repoRoot, onProgress) {
+  // In der gepackten App liegt repoRoot in resources/app.asar und ist
+  // schreibgeschützt (WinError 3 beim venv-Anlegen). Dann installieren wir in
+  // einen beschreibbaren Benutzerordner.
+  const installRoot = resolveInstallRoot(repoRoot);
   const report = (step, label, logLine) => {
     onProgress?.({
       step,
@@ -117,7 +174,8 @@ async function installStemEngine(repoRoot, onProgress) {
 
   // Step 1: locate Python
   report(1, 'Unterstütztes Python (3.9–3.13) wird gesucht…');
-  const base = await locateBasePython();
+  let base = await locateBasePython();
+  if (!base) base = await autoInstallWindowsPython(report);
   if (!base) {
     return fail(
       'Kein unterstütztes Python (3.9–3.13) gefunden. Bitte Python 3.11 oder 3.12 (64-Bit) von python.org installieren — danach hier erneut auf Installieren klicken.'
@@ -127,11 +185,15 @@ async function installStemEngine(repoRoot, onProgress) {
 
   // Step 2: create venv
   report(2, 'Isolierte Python-Umgebung (.venv) wird erstellt…');
-  const venvPy = venvPython(repoRoot);
+  const venvPy = venvPython(installRoot);
+  if (isInsideAsar(installRoot)) {
+    return fail('Installationsziel liegt im schreibgeschützten Programmarchiv. Bitte AIRDOX_STEM_ENGINE_HOME auf einen beschreibbaren Ordner setzen.');
+  }
+  report(2, `Zielordner: ${installRoot}`);
   if (!fs.existsSync(venvPy)) {
     const venv = await runStreaming(
       base.command,
-      [...base.args, '-m', 'venv', path.join(repoRoot, '.venv')],
+      [...base.args, '-m', 'venv', path.join(installRoot, '.venv')],
       (line) => report(2, 'Isolierte Python-Umgebung (.venv) wird erstellt…', line),
       5 * 60 * 1000
     );
@@ -182,12 +244,12 @@ async function installStemEngine(repoRoot, onProgress) {
 
   // Step 6: end-to-end verification through the same probe used at runtime.
   report(6, 'Installation wird verifiziert…');
-  const status = await inspectDemucsEnvironment(repoRoot);
+  const status = await inspectDemucsEnvironment(repoRoot, [venvPy]);
   if (!status.available) {
     return fail(`Verifikation fehlgeschlagen: ${status.reason || 'Umgebung unvollständig.'}`);
   }
   onProgress?.({ step: TOTAL_STEPS, totalSteps: TOTAL_STEPS, percent: 100, label: 'KI-Stem-Engine einsatzbereit.' });
-  return { ok: true, python: status.python, model: status.model, weightsReady: status.weightsReady };
+  return { ok: true, python: status.python, model: status.model, weightsReady: status.weightsReady, installRoot };
 }
 
-module.exports = { installStemEngine, locateBasePython, TOTAL_STEPS };
+module.exports = { installStemEngine, locateBasePython, windowsPythonPaths, TOTAL_STEPS };
