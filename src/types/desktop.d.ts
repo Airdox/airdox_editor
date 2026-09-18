@@ -32,6 +32,24 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      /**
+       * Deterministic ANLZ lookup without SQLCipher: reads only the PPTH
+       * header of every ANLZ container in the Rekordbox analysis folders and
+       * returns exact audio-path matches (DAT + EXT pair). Read-only.
+       */
+      scanAnlzPaths(targetPaths: string[]): Promise<{
+        scanned: number;
+        elapsedMs: number;
+        folders: string[];
+        ppthSample: string[];
+        matches: Array<{
+          path: string;
+          datPath: string | null;
+          extPath: string | null;
+          matchTier: 1 | 2;
+          note: string | null;
+        }>;
+      }>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;

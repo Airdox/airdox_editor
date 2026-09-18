@@ -41,6 +41,8 @@ function sourceContractAgent() {
   const overview = readFileSync(resolve(root, 'src/components/TrackOverview.tsx'), 'utf8');
   const palette = readFileSync(resolve(root, 'src/components/PalettePanel.tsx'), 'utf8');
   const dbReader = readFileSync(resolve(root, 'electron/dbReader.cjs'), 'utf8');
+  const main = readFileSync(resolve(root, 'electron', 'main.cjs'), 'utf8');
+  const preload = readFileSync(resolve(root, 'electron', 'preload.cjs'), 'utf8');
   const checks = [
     ['renderer selects original analysis', /selectTrackWaveform\(track/.test(detail) && /selectTrackWaveform\(track/.test(overview)],
     ['no edit-time analysis replacement', !/activeTrack\.analysis\s*=\s*analyzeAudioBuffer/.test(app) && !/analysisVariants\s*=\s*undefined/.test(app)],
@@ -48,10 +50,21 @@ function sourceContractAgent() {
     ['ANLZ scan walks nested folders', /maxDepth\s*=\s*6/.test(dbReader) && /isDirectory\(\)/.test(dbReader)],
     ['ANLZ scan checks target media drives', /findTargetDriveAnlzFolders/.test(dbReader) && /PIONEER.*USBANLZ/.test(dbReader)],
     ['database discovery checks D partition', /findDatabaseFilesOnWindowsVolume/.test(dbReader) && /D:/.test(dbReader)],
+    // Regression guard (builds after v0.5.10 shipped an empty waveform bar):
+    // the ANLZ assignment must stay wired end to end — renderer → preload →
+    // main-process IPC → dbReader scan. Removing any link silently drops the
+    // Rekordbox waveform, because an XML export carries no waveform data.
+    ['ANLZ auto-assignment wired in renderer', /tryAutoLoadAnlz\(/.test(app) && /ensureAnlzPpthIndex\(/.test(app)],
+    ['ANLZ scan exposed over IPC', /scanAnlzPaths/.test(preload) && /rekordbox:scan-anlz-paths/.test(main)],
+    ['ANLZ scan discovers folders from the collection drives', /findAllAnlzFolders/.test(main) && /findAllAnlzFolders/.test(dbReader)],
+    ['ANLZ sibling (DAT+EXT) is merged', /mergeAnlzExtractions\(/.test(app) && /deriveSiblingExtension\(/.test(app)],
+    // The deck must never render an empty bar, and the provenance of what it
+    // draws must stay explicit (ANLZ → collection → own audio → tagged preview).
+    ['deck waveform fallback is provenance-tagged', /resolveDeckWaveform\(/.test(app) && /GENERATED_FALLBACK/.test(readFileSync(resolve(root, 'src', 'waveform', 'deckWaveformSource.ts'), 'utf8'))],
   ];
   const failed = checks.filter(([, ok]) => !ok).map(([label]) => label);
   if (failed.length) {
-    failures.push({ name: 'Source provenance gate', reason: failed.join(', '), next: 'Restore the original ANLZ-only render path; do not add a local analysis fallback for Rekordbox tracks.' });
+    failures.push({ name: 'Source provenance gate', reason: failed.join(', '), next: 'Restore the ANLZ render + auto-assignment path; keep every fallback provenance-tagged (see src/waveform/deckWaveformSource.ts).' });
     console.error(`[GATE FAIL] Source provenance gate: ${failed.join('; ')}`);
   } else {
     console.log('[GATE PASS] Source provenance gate');
@@ -66,6 +79,8 @@ runAgent('Resolver + nested ANLZ scan agent', tsxCommand, [...tsxPrefix, resolve
 runAgent('Binary ANLZ/PQTZ/EXT provenance agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'anlz-real-format.test.ts')]);
 runAgent('Waveform variants + renderer agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'waveform-variants.test.ts')]);
 runAgent('Renderer no-synthesis + palette contract agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'renderer-original-data.test.ts')]);
+runAgent('Deck waveform source (ANLZ → audio → tagged preview) agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'deck-waveform-source.test.ts')]);
+runAgent('ANLZ PPTH scan + drive discovery agent', tsxCommand, [resolve(root, 'tests', 'anlz-ppth-scan.test.mjs')]);
 runAgent('XML/DB integration agent', tsxCommand, [...tsxPrefix, resolve(root, 'tests', 'xml-exclusive-import.test.ts')]);
 runAgent('TypeScript gatekeeper', npmCommand, ['run', 'lint']);
 runAgent('Production build gatekeeper', npmCommand, ['run', 'build']);

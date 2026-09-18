@@ -443,6 +443,58 @@ function findTargetDriveAnlzFolders() {
   return found;
 }
 
+/**
+ * Drive letters referenced by a list of audio paths (`D:\Music\a.wav`,
+ * `file://localhost/E:/Music/b.wav`, `\\?\F:\…`). Used to probe the media
+ * drives that actually hold the collection — a library on `E:` is analysed on
+ * `E:\PIONEER\…`, which a fixed drive list can miss.
+ */
+function driveLettersFromPaths(paths) {
+  const letters = new Set();
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    if (typeof raw !== 'string') continue;
+    let value = raw.trim();
+    if (!value) continue;
+    value = value.replace(/^file:\/\/(localhost)?\/?/i, '').replace(/^\\{2}\?\\/, '');
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      // keep the raw value – an undecodable escape sequence is still matchable
+    }
+    const match = /([A-Za-z]):[\\/]/.exec(value);
+    if (match) letters.add(match[1].toUpperCase());
+  }
+  return [...letters].sort();
+}
+
+/**
+ * ANLZ folders on the drives the given audio paths live on, plus the standard
+ * Rekordbox application-data tree and the common media drives. Read-only;
+ * duplicates are removed so one scan never reads a container twice.
+ */
+function findAllAnlzFolders(targetPaths) {
+  const folders = [];
+  const push = (list) => {
+    for (const folder of Array.isArray(list) ? list : []) {
+      if (typeof folder !== 'string' || !folder.trim()) continue;
+      const resolved = path.resolve(folder);
+      if (!folders.includes(resolved)) folders.push(resolved);
+    }
+  };
+  // 1) drives referenced by the collection itself (works for any layout)
+  if (process.platform === 'win32') {
+    for (const letter of driveLettersFromPaths(targetPaths)) {
+      const pioneerRoot = path.join(`${letter}:\\`, 'PIONEER');
+      if (fs.existsSync(pioneerRoot)) push(findAnlzFolders(pioneerRoot));
+    }
+  }
+  // 2) the Rekordbox application-data tree (%APPDATA%\Pioneer\…)
+  push(findAnlzFolders());
+  // 3) the common media/data drives as a last resort
+  push(findTargetDriveAnlzFolders());
+  return folders;
+}
+
 /** Normalizes a path for case-insensitive ANLZ matching (compare only). */
 function normalizeAnlzPath(p) {
   let s = String(p);
@@ -610,6 +662,8 @@ module.exports = {
   locateRekordboxDatabases,
   findAnlzFolders,
   findTargetDriveAnlzFolders,
+  findAllAnlzFolders,
+  driveLettersFromPaths,
   scanAnlzForPaths,
   isCipherAvailable: () => getCipherModule() !== null,
 };
