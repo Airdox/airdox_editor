@@ -65,6 +65,7 @@ import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/
 import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { InitialSetupModal } from './components/Modals/InitialSetupModal';
+import { RemoteSetupModal } from './components/Modals/RemoteSetupModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
 import { DeleteModeModal } from './components/Modals/DeleteModeModal';
@@ -485,12 +486,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
   const [stemEngineUnavailableReason, setStemEngineUnavailableReason] = useState<string | null>(null);
   /**
-   * Fernpfad (High Quality extern): Der Nutzer wählt nur „extern rechnen“; hier
-   * stehen Machbarkeit/Status des Transports und der laufende Fern-Job. Es gibt
+   * Fernpfad (externe Zerlegung auf Google Colab): Der Button „Externe
+   * Zerlegung (Google Colab)" ist der einzige Zielumschalter; hier stehen
+   * Machbarkeit/Status des Transports und der laufende Fern-Job. Es gibt
    * keine Colab-/Python-Bedienung und keine Zugangsdaten in der UI (§13, §23).
+   * Die Wahl überlebt einen Neustart (lokale Persistenz).
    */
-  const [stemRemoteEnabled, setStemRemoteEnabled] = useState(false);
+  const [stemRemoteEnabled, setStemRemoteEnabledState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('airdox.stemRemoteEnabled') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setStemRemoteEnabled = useCallback((value: boolean) => {
+    setStemRemoteEnabledState(value);
+    try {
+      window.localStorage.setItem('airdox.stemRemoteEnabled', value ? '1' : '0');
+    } catch {
+      /* Persistenz ist Komfort, kein Pfand */
+    }
+  }, []);
   const [stemRemoteStatus, setStemRemoteStatus] = useState<RemoteServiceStatus | null>(null);
+  const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
   // Separationen und wird wie die übrigen Settings lokal persistiert.
   const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
@@ -1274,8 +1292,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         // Kein Python-/Colab-Text in der UI (§13): der Nutzer bekommt eine
         // verständliche Ursache und den Hinweis, lokal weiterzurechnen.
         setStemQualityWarning(
-          `High Quality extern konnte nicht abgeschlossen werden: ${message}\n` +
-            'Die Arbeitskopie und das Original bleiben unverändert. Sie können „Schnell“ wählen oder „Extern rechnen“ ausschalten und lokal rechnen.'
+          `Externe Zerlegung (Google Colab) konnte nicht abgeschlossen werden: ${message}\n` +
+            'Die Arbeitskopie und das Original bleiben unverändert. Sie können den Colab-Button in der Deck-Leiste erneut klicken (lokal) und „Stems jetzt trennen“ oder „Schnell“ wählen.'
         );
       } finally {
         setIsSeparatingStems(false);
@@ -1285,6 +1303,29 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     },
     [activeTrack, workingAudioBuffer, showOperationFeedback]
   );
+
+  /**
+   * Klick auf den eindeutigen Button „Externe Zerlegung (Google Colab)":
+   * Hochladen der Arbeitskopie nach Google Drive, Übergabe an den
+   * Colab-Worker, Rückimport der Stems – der Editor speichert sie dauerhaft
+   * und verknüpft sie mit dem Original-Track (Original, rekordbox.xml und
+   * master.db bleiben unverändert). Ohne eingerichtete Jobablage öffnet der
+   * Klick den Einrichtungs-Dialog statt stillschweigend lokal zu rechnen.
+   */
+  const handleStartExternalSeparation = useCallback(async () => {
+    if (!activeTrack || !workingAudioBuffer) {
+      alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    if (!stemRemoteStatus?.configured) {
+      logger.info('STEM-REMOTE', 'Externe Zerlegung gewählt, aber keine Jobablage eingerichtet – Einrichtungs-Dialog öffnen.');
+      setRemoteSetupOpen(true);
+      return;
+    }
+    setStemRemoteEnabled(true);
+    setStemProfile('HIGH_QUALITY');
+    await runRemoteStemSeparation('HIGH_QUALITY');
+  }, [activeTrack, workingAudioBuffer, stemRemoteStatus, runRemoteStemSeparation, setStemRemoteEnabled]);
 
   const handleCancelStemSeparation = useCallback(() => {
     // Ein laufender Fern-Job wird über denselben Knopf abgebrochen (§37).
@@ -4055,6 +4096,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         remoteStatus={stemRemoteStatus}
         remoteEnabled={stemRemoteEnabled}
         onRemoteEnabledChange={setStemRemoteEnabled}
+        onStartExternalSeparation={() => { void handleStartExternalSeparation(); }}
+        onOpenRemoteSetup={() => setRemoteSetupOpen(true)}
         engineUnavailableReason={stemEngineUnavailableReason}
         onShowDiagnostics={() => {
           logger.info('STEMS', 'Diagnose angefordert – npm run stems:diagnose');
@@ -4273,6 +4316,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         error={recorderError}
         savedPath={recorderSavedPath}
         stats={recorderStats}
+      />
+      <RemoteSetupModal
+        isOpen={remoteSetupOpen}
+        onClose={() => setRemoteSetupOpen(false)}
+        remoteStatus={stemRemoteStatus}
+        onStatus={(status) => setStemRemoteStatus(status)}
       />
       <WorkspaceSettingsModal
         isOpen={settingsModalOpen}

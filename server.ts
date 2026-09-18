@@ -265,7 +265,9 @@ async function startServer() {
   let remoteStemJobs = createRemoteJobs();
 
   app.use('/api/stems/jobs', express.json({ limit: '500mb' }));
-  app.use('/api/stems/remote', express.json({ limit: '1mb' }));
+  // Der Fern-Job-Start trägt dieselbe Arbeitskopie (base64) wie der lokale
+  // Job-Start – dieselbe Obergrenze, sonst bricht der Upload mit HTTP 413 ab.
+  app.use('/api/stems/remote', express.json({ limit: '500mb' }));
 
   const stemErrorPayload = (error: unknown) => {
     const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : 'INFERENCE_FAILED';
