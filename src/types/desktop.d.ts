@@ -49,7 +49,13 @@ declare global {
           matchTier: 1 | 2;
           note: string | null;
         }>;
-      }>;
+      }>;      /** Verbindliches Master-DB-/SQLCipher-Gate für einen einzelnen Track. */
+      resolveTrackFromMasterDb(request: {
+        dbPath?: string;
+        trackId?: string | number;
+        audioPath?: string;
+        location?: string;
+      }): Promise<unknown>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;

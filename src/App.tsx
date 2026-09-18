@@ -26,6 +26,9 @@ import {
   DbAnalysisRef,
   deriveSiblingExtension,
 } from './rekordbox/analysisResolver';
+import { runMasterDbGate, TrackRequestGuard } from './rekordbox/masterDbPipeline';
+import { buildDeckTrackAfterGate } from './rekordbox/deckTrackPipeline';
+import { generateAnalysisFromMetadata } from './waveform/metadataAnalysis';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, extractMiniPeaksFromAnalysis, estimateBpm } from './waveform/analyzer';
 import { selectTrackWaveform } from './waveform/renderModel';
@@ -396,6 +399,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
   const [xmlImportedTracks, setXmlImportedTracks] = useState<TrackModel[]>([]);
   const [xmlFileName, setXmlFileName] = useState<string>('rekordbox_collection.xml');
+  // Pfad der zuletzt geöffneten Rekordbox Master Database (Pipeline-Gate).
+  const [masterDbPath, setMasterDbPath] = useState<string | null>(null);
+  // Request-Guard: verhindert, dass ein spät eintreffendes Ergebnis eines
+  // früheren Tracks die Waveform des inzwischen gewählten Tracks überschreibt.
+  const trackRequestGuard = useRef(new TrackRequestGuard());
 
   // Real-time Transparency Modals (Non-blocking parser & operation feedback)
   const [importProgress, setImportProgress] = useState<XmlImportProgress | null>(null);
@@ -1933,6 +1941,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
+      setMasterDbPath(result.filePath || dbPath);
       setXmlCollectionModalOpen(true);
 
       showOperationFeedback({
@@ -1980,10 +1989,58 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
+    // Request-Guard gegen Race Conditions: nur das Ergebnis der zuletzt
+    // gestarteten Auswahl darf das Deck/die Waveform setzen.
+    const generation = trackRequestGuard.current.begin();
     try {
       const audioCtx = audioEngine.getContext();
       let originalAudio = selectedDef.audioBuffer || null;
       let originalMedia = selectedDef.originalMedia;
+
+      // ---- VERPFLICHTENDES MASTER-DB-/SQLCIPHER-GATE ----------------------
+      // Rekordbox → master.db → SQLCipher → geöffnet → Schema → Track →
+      // Trackdaten. Erst danach darf die Waveform-/Analysis-Pipeline laufen.
+      // Kein stiller XML-Fallback, keine erfundenen Werte.
+      let dbGateTrack: TrackModel | null = null;
+      let masterDbGateFailure: string | null = null;
+      if (window.rekordboxDesktop) {
+        const gate = await runMasterDbGate({
+          dbPath: masterDbPath || undefined,
+          trackId: selectedDef.origin === DataOrigin.REKORDBOX_DB ? selectedDef.id : undefined,
+          audioPath: selectedDef.originalMedia?.location,
+          location: selectedDef.originalMedia?.location,
+        });
+        if (!trackRequestGuard.current.isCurrent(generation)) return;
+        if (gate.ok === false) {
+          // Das Gate bleibt verbindlich und wird unverändert gemeldet – es darf
+          // nur keine erfundenen Rekordbox-Daten erzeugen. Der Track wird
+          // deshalb NICHT mehr verworfen: die SQLCipher-unabhängige Kette
+          // (ANLZ über AnalysisDataPath/PPTH-Scan, dann Originalaudio, dann
+          // gekennzeichnete Vorschau) läuft weiter, jede Quelle bleibt getaggt.
+          masterDbGateFailure = `${gate.errorCode}: ${gate.reason}`;
+          console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${masterDbGateFailure}`);
+          logger.warn('DATABASE', `[Pipeline] MASTER_DB_GATE_FAILED: ${masterDbGateFailure}`);
+        } else {
+          const built = buildDeckTrackAfterGate({
+            gate,
+            supplementary: selectedDef,
+            anlzAnalysis: selectedDef.analysis ?? null,
+            firstBeat: selectedDef.beatGrid?.firstBeat ?? null,
+          });
+          if (built.ok === false) {
+            masterDbGateFailure = `${built.errorCode}: ${built.reason}`;
+            console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${masterDbGateFailure}`);
+            logger.warn('DATABASE', `[Pipeline] MASTER_DB_GATE_FAILED: ${masterDbGateFailure}`);
+          } else {
+            dbGateTrack = built.track;
+            console.info(
+              `[RekordboxDB] track ${built.provenance.trackId} aus Master DB übernommen (matchedBy=${built.provenance.matchedBy}, analysis=${built.analysisSource})`
+            );
+            selectedDef = { ...selectedDef, ...dbGateTrack, audioBuffer: selectedDef.audioBuffer ?? null };
+            originalMedia = selectedDef.originalMedia;
+          }
+        }
+      }
 
       // The native bridge can resolve the XML Location and only ever opens the
       // original audio read-only. In a browser or when no Location exists, the
@@ -2168,6 +2225,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         anlzLookup,
       });
 
+      // Ergebnis eines inzwischen überholten Requests niemals anwenden.
+      if (!trackRequestGuard.current.isCurrent(generation)) return;
+
       setTracks((prev) => {
         const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);
         if (existingIdx >= 0) {
@@ -2195,6 +2255,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         operationType: 'CUE',
         description:
           `"${loadedTrack.title}": Beatgrid, Cues und Loops stammen aus den Rekordbox-Importdaten. ` +
+          (masterDbGateFailure
+            ? `Master-DB-Gate fehlgeschlagen (${masterDbGateFailure}) – es werden keine DB-Werte als Rekordbox-Daten ausgegeben. `
+            : '') +
           describeDeckWaveformSource(waveformSource) +
           (loadedTrack.analysis
             ? ` ${loadedTrack.analysis.length} Buckets` +

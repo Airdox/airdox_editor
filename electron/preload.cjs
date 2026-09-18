@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   readAnalysisFile: (filePath) => ipcRenderer.invoke('rekordbox:read-analysis-file', filePath),
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
+  // Master-DB-Gate: gibt ein strukturiertes Gate-Ergebnis zurück (ok/errorCode).
+  resolveTrackFromMasterDb: (request) => ipcRenderer.invoke('rekordbox:resolve-track-master-db', request),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
   // SQLCipher-unabhängige ANLZ-Zuordnung über die PPTH-Header (read-only).
   scanAnlzPaths: (targetPaths) => ipcRenderer.invoke('rekordbox:scan-anlz-paths', targetPaths),
