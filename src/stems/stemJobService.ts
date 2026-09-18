@@ -271,7 +271,7 @@ export class StemJobService {
    * produces two entries and a future six-stem model produces six.
    */
   async status(): Promise<StemServiceStatus> {
-    const ttl = this.options.statusTtlMs ?? Number(this.options.env?.AIRODOX_STEM_STATUS_TTL_MS ?? 2000);
+    const ttl = this.options.statusTtlMs ?? Number(this.options.env?.AIRODOX_STEM_STATUS_TTL_MS ?? 5000);
     if (this.statusCache && Date.now() - this.statusCache.at < ttl) return this.statusCache.value;
     if (this.statusInflight) return this.statusInflight;
     const promise = this.computeStatus()
@@ -292,7 +292,7 @@ export class StemJobService {
   }
 
   private async computeStatus(): Promise<StemServiceStatus> {
-    const engineStatus = await this.engine.status();
+    const engineStatus = await this.engine.status({ fast: true });
     const availability = new Map(engineStatus.models.map((model) => [model.modelId, model]));
     const runtimeAvailability = new Map<string, BackendAvailability>();
     const installedDescriptors = this.registry.list().filter((descriptor) => availability.get(descriptor.id)?.available);
@@ -453,15 +453,18 @@ export class StemJobService {
         availabilityCacheKey(candidate, candidate.name, this.options.device, { fast: true }),
         () => candidate.isAvailable({ fast: true })
       );
-    for (const candidate of seen.values()) {
-      const availability = await resolvedAvailability(candidate);
-      notes.push({
-        kind: candidate.kind,
-        name: candidate.name,
-        available: availability.available,
-        reason: availability.reason,
-      });
-    }
+    const results = await Promise.all(
+      [...seen.values()].map(async (candidate) => {
+        const availability = await resolvedAvailability(candidate);
+        return {
+          kind: candidate.kind,
+          name: candidate.name,
+          available: availability.available,
+          reason: availability.reason,
+        };
+      })
+    );
+    notes.push(...results);
     if (!notes.some((entry) => entry.kind === 'native-cli')) {
       notes.push({
         kind: 'native-cli',

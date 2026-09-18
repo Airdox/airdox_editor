@@ -428,7 +428,7 @@ export class StemSeparationEngine {
   }
 
   /** Environment status: models, registry issues, cache contents. */
-  async status(): Promise<SeparationEngineStatus> {
+  async status(options?: { fast?: boolean }): Promise<SeparationEngineStatus> {
     const profiles = {} as Record<QualityProfile, string>;
     for (const profile of ['PREVIEW', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'] as QualityProfile[]) {
       try {
@@ -438,7 +438,7 @@ export class StemSeparationEngine {
       }
     }
     return {
-      models: await this.modelManager.listStatus(),
+      models: await this.modelManager.listStatus(options),
       registryIssues: this.registry.issues,
       profiles,
       cacheEntries: await this.cache.entries(),

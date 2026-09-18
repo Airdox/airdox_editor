@@ -29,12 +29,12 @@
  * `import torch` geklappt hat – nur eben gemessen statt geraten.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const PROBE_CACHE_VERSION = 1;
 const POSITIVE_TTL_MS = 10 * 60 * 1000;
-const NEGATIVE_TTL_MS = 20 * 1000;
+const NEGATIVE_TTL_MS = 60 * 1000;
 const PERSISTED_POSITIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PERSISTED_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_FAST_TIMEOUT_MS = 5000;
@@ -69,6 +69,16 @@ export function probeCommand(
 ): Promise<CommandProbeResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_INTERPRETER_TIMEOUT_MS;
   const started = Date.now();
+  if (path.isAbsolute(command) && !existsSync(command)) {
+    return Promise.resolve({
+      found: false,
+      exitCode: null,
+      output: '',
+      detail: `Datei nicht gefunden: ${command}`,
+      timedOut: false,
+      durationMs: 0,
+    });
+  }
   return new Promise<CommandProbeResult>((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -354,9 +364,10 @@ async function stage1Probe(
     env: options.env,
   });
   const entry = { at: now, info: parseFastProbe(probe.output), probe };
-  // Eine Zeitüberschreitung wird nicht gemerkt: der nächste Aufruf soll den
-  // Interpreter wirklich erneut fragen (langsamer Start ≠ kaputte Runtime).
-  if (!probe.timedOut) stage1Cache.set(signature, entry);
+  // Auch Zeitüberschreitungen werden im Prozess (stage1Cache) gemerkt,
+  // damit parallele oder unmittelbar folgende Statusaufrufe nicht erneut blockieren.
+  // Auf Platte wird eine Zeitüberschreitung aber weiterhin nicht geschrieben.
+  stage1Cache.set(signature, entry);
   return entry;
 }
 
@@ -426,6 +437,19 @@ export async function probeTorchRuntime(options: TorchProbeOptions): Promise<Tor
       if (persist) rememberProbe(key, options, snapshot);
       return { ...fromSnapshot(snapshot), durationMs: now() - started, cached: false };
     };
+
+    // Wenn ein absoluter Pfad angegeben ist und die Datei nicht existiert:
+    // sofort als nicht verfügbar melden, ohne Prozessstart oder Timeout.
+    if (path.isAbsolute(options.command) && !existsSync(options.command)) {
+      const snapshot: ProbeSnapshot = {
+        at: now(),
+        available: false,
+        verification: 'none',
+        reason: `Python-Laufzeit nicht verfügbar (${commandLabel})`,
+        detail: `Datei nicht gefunden: ${options.command}`,
+      };
+      return remember(snapshot, { persist: true });
+    }
 
     // Nur-Interpreter (Protokoll-Stubs der Vertragstests).
     if (!requireImport) {

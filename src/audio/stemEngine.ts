@@ -307,8 +307,10 @@ class StemEngine {
         if (result.ok === true) {
           const data = result.data;
           if (data.usable) {
-            const hq = data.profiles.find((p) => p.profile === 'HIGH' || p.profile === 'HIGH_QUALITY' || p.profile === 'MAXIMUM_QUALITY');
-            return { available: true, engine: 'BS_ROFORMER', model: hq?.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo' };
+            const chosen = data.profiles.find((p) => p.profile === data.defaultProfile && p.available)
+              ?? data.profiles.find((p) => p.available);
+            const engine = chosen?.family === 'htdemucs' ? 'DEMUCS_HTDEMUCS_FT' : 'BS_ROFORMER';
+            return { available: true, engine, model: chosen?.modelId ?? 'htdemucs-onnx-4stem-fp16' };
           }
           return {
             available: false,
@@ -331,8 +333,11 @@ class StemEngine {
         if (response.ok) {
           const payload = await response.json().catch(() => ({})) as { ok?: boolean; data?: StemServiceStatus; message?: string };
           if (payload.ok && payload.data?.usable) {
-            const hq = payload.data.profiles.find((p) => p.profile === 'HIGH' || p.profile === 'HIGH_QUALITY' || p.profile === 'MAXIMUM_QUALITY');
-            return { available: true, engine: 'BS_ROFORMER', model: hq?.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo' };
+            const data = payload.data;
+            const chosen = data.profiles.find((p) => p.profile === data.defaultProfile && p.available)
+              ?? data.profiles.find((p) => p.available);
+            const engine = chosen?.family === 'htdemucs' ? 'DEMUCS_HTDEMUCS_FT' : 'BS_ROFORMER';
+            return { available: true, engine, model: chosen?.modelId ?? 'htdemucs-onnx-4stem-fp16' };
           }
           return {
             available: false,

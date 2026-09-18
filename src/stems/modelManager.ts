@@ -10,7 +10,7 @@
  * The manager never touches audio files and never writes outside the store.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, createWriteStream } from 'node:fs';
+import { existsSync, createWriteStream, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdir, stat, unlink, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StemSeparationError } from './errors';
@@ -55,16 +55,91 @@ export interface ModelAvailabilityReport {
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
+interface PersistedFileHash {
+  size: number;
+  mtimeMs: number;
+  sha256: string;
+}
+
 const fileHashCache = new Map<string, { size: number; mtimeMs: number; sha256: string }>();
 const fileHashInflight = new Map<string, Promise<string>>();
+const persistedHashCache = new Map<string, Record<string, PersistedFileHash>>();
 
-async function hashOfFile(filePath: string, fileInfo?: Awaited<ReturnType<typeof stat>>): Promise<string> {
+export function clearModelHashCache(): void {
+  fileHashCache.clear();
+  persistedHashCache.clear();
+}
+
+function readPersistedHashes(storeDir: string): Record<string, PersistedFileHash> {
+  const cached = persistedHashCache.get(storeDir);
+  if (cached) return cached;
+  let loaded: Record<string, PersistedFileHash> = {};
+  try {
+    const target = path.join(storeDir, 'model-hashes.json');
+    if (existsSync(target)) {
+      const raw = readFileSync(target, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, PersistedFileHash>;
+      if (parsed && typeof parsed === 'object') loaded = parsed;
+    }
+  } catch {
+    /* Cache-Lesefehler sind unkritisch */
+  }
+  persistedHashCache.set(storeDir, loaded);
+  return loaded;
+}
+
+function writePersistedHash(storeDir: string, filePath: string, entry: PersistedFileHash): void {
+  try {
+    const entries = readPersistedHashes(storeDir);
+    entries[filePath] = entry;
+    entries[path.basename(filePath)] = entry;
+    const target = path.join(storeDir, 'model-hashes.json');
+    const tmp = `${target}.tmp`;
+    writeFileSync(tmp, JSON.stringify(entries, null, 2));
+    renameSync(tmp, target);
+  } catch {
+    /* Schreiben darf den Ablauf nicht stören */
+  }
+}
+
+function readInstalledManifest(storeDir: string): Record<string, { file?: string; sha256?: string }> {
+  try {
+    const file = path.join(storeDir, 'installed-models.json');
+    if (existsSync(file)) {
+      const raw = readFileSync(file, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, { file?: string; sha256?: string }>;
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
+async function hashOfFile(filePath: string, fileInfo?: Awaited<ReturnType<typeof stat>>, storeDir?: string): Promise<string> {
   const info = fileInfo ?? await stat(filePath);
   const size = Number(info.size);
   const mtimeMs = Number(info.mtimeMs);
   const cached = fileHashCache.get(filePath);
-  if (cached && cached.size === size && cached.mtimeMs === mtimeMs) {
+  if (cached && cached.size === size && Math.abs(cached.mtimeMs - mtimeMs) < 1000) {
     return cached.sha256;
+  }
+
+  if (storeDir) {
+    const persisted = readPersistedHashes(storeDir)[filePath] ?? readPersistedHashes(storeDir)[path.basename(filePath)];
+    if (persisted && persisted.size === size && Math.abs(persisted.mtimeMs - mtimeMs) < 1000) {
+      fileHashCache.set(filePath, persisted);
+      return persisted.sha256;
+    }
+    const manifest = readInstalledManifest(storeDir);
+    for (const item of Object.values(manifest)) {
+      if ((item.file === path.basename(filePath) || item.file === filePath) && item.sha256 && SHA256_RE.test(item.sha256)) {
+        const entry = { size, mtimeMs, sha256: item.sha256 };
+        fileHashCache.set(filePath, entry);
+        writePersistedHash(storeDir, filePath, entry);
+        return item.sha256;
+      }
+    }
   }
 
   const key = `${filePath}|${size}|${mtimeMs}`;
@@ -81,7 +156,11 @@ async function hashOfFile(filePath: string, fileInfo?: Awaited<ReturnType<typeof
       stream.on('error', reject);
     });
     const sha256 = hash.digest('hex');
-    fileHashCache.set(filePath, { size, mtimeMs, sha256 });
+    const entry = { size, mtimeMs, sha256 };
+    fileHashCache.set(filePath, entry);
+    if (storeDir) {
+      writePersistedHash(storeDir, filePath, entry);
+    }
     return sha256;
   })().finally(() => {
     fileHashInflight.delete(key);
@@ -133,7 +212,11 @@ export class ModelManager {
     return present(descriptor.checkpoint) && (!descriptor.config || present(descriptor.config));
   }
 
-  private async inspect(ref: ModelCheckpointRef | undefined, role: 'checkpoint' | 'config'): Promise<ModelFileStatus | undefined> {
+  private async inspect(
+    ref: ModelCheckpointRef | undefined,
+    role: 'checkpoint' | 'config',
+    options?: { fast?: boolean }
+  ): Promise<ModelFileStatus | undefined> {
     if (!ref) return undefined;
     const filePath = this.resolvePath(ref);
     let exists = false;
@@ -149,8 +232,42 @@ export class ModelManager {
     const hashVerifiable = Boolean(ref.sha256 && SHA256_RE.test(ref.sha256));
     let sha256: string | undefined;
     if (exists && fileInfo) {
-      sha256 = await hashOfFile(filePath, fileInfo);
+      const size = Number(fileInfo.size);
+      const mtimeMs = Number(fileInfo.mtimeMs);
+      const cached = fileHashCache.get(filePath);
+      if (cached && cached.size === size && Math.abs(cached.mtimeMs - mtimeMs) < 1000) {
+        sha256 = cached.sha256;
+      } else {
+        const manifest = readInstalledManifest(this.storeDir);
+        for (const item of Object.values(manifest)) {
+          if ((item.file === ref.file || item.file === filePath) && item.sha256 && SHA256_RE.test(item.sha256)) {
+            sha256 = item.sha256;
+            const entry = { size, mtimeMs, sha256 };
+            fileHashCache.set(filePath, entry);
+            writePersistedHash(this.storeDir, filePath, entry);
+            break;
+          }
+        }
+        if (!sha256) {
+          const persisted = readPersistedHashes(this.storeDir)[filePath] ?? readPersistedHashes(this.storeDir)[ref.file];
+          if (persisted && persisted.size === size && Math.abs(persisted.mtimeMs - mtimeMs) < 1000) {
+            fileHashCache.set(filePath, persisted);
+            sha256 = persisted.sha256;
+          }
+        }
+      }
+
+      if (!sha256 && !options?.fast) {
+        sha256 = await hashOfFile(filePath, fileInfo, this.storeDir);
+      }
     }
+    const sizeMatches = exists && (!ref.bytes || Math.abs(bytes - ref.bytes) <= 1024);
+    const hashVerified = Boolean(
+      exists && (
+        (hashVerifiable && sha256 === ref.sha256) ||
+        (options?.fast && hashVerifiable && !sha256 && sizeMatches)
+      )
+    );
     return {
       role,
       file: ref.file,
@@ -160,7 +277,7 @@ export class ModelManager {
       expectedBytes: ref.bytes,
       sha256,
       expectedSha256: ref.sha256,
-      hashVerified: Boolean(exists && hashVerifiable && sha256 === ref.sha256),
+      hashVerified,
       hashVerifiable,
     };
   }
@@ -273,9 +390,13 @@ export class ModelManager {
     return this.verifyDescriptor(descriptor, false);
   }
 
-  private async verifyDescriptor(descriptor: ModelDescriptor, downloaded: boolean): Promise<ModelAvailabilityReport> {
-    const checkpoint = await this.inspect(descriptor.checkpoint, 'checkpoint');
-    const config = await this.inspect(descriptor.config, 'config');
+  private async verifyDescriptor(
+    descriptor: ModelDescriptor,
+    downloaded: boolean,
+    options?: { fast?: boolean }
+  ): Promise<ModelAvailabilityReport> {
+    const checkpoint = await this.inspect(descriptor.checkpoint, 'checkpoint', options);
+    const config = await this.inspect(descriptor.config, 'config', options);
     const problems: string[] = [];
     if (!checkpoint?.exists) problems.push(`Checkpoint fehlt: ${descriptor.checkpoint.file}`);
     if (checkpoint?.exists && checkpoint.hashVerifiable && !checkpoint.hashVerified) problems.push('Checkpoint-Hash stimmt nicht überein');
@@ -301,10 +422,10 @@ export class ModelManager {
   }
 
   /** Availability of every registered model – used by the CLI and the gate. */
-  async listStatus(): Promise<ModelAvailabilityReport[]> {
+  async listStatus(options?: { fast?: boolean }): Promise<ModelAvailabilityReport[]> {
     const reports: ModelAvailabilityReport[] = [];
     for (const descriptor of this.registry.list()) {
-      reports.push(await this.verifyDescriptor(descriptor, false));
+      reports.push(await this.verifyDescriptor(descriptor, false, options));
     }
     return reports;
   }

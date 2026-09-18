@@ -41,7 +41,7 @@ export class BackendAvailabilityCache {
 
   constructor(options: BackendAvailabilityCacheOptions = {}) {
     this.ttlMs = options.ttlMs ?? 5 * 60 * 1000;
-    this.negativeTtlMs = options.negativeTtlMs ?? 15 * 1000;
+    this.negativeTtlMs = options.negativeTtlMs ?? 60 * 1000;
     this.now = options.now ?? Date.now;
   }
 
