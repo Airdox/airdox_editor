@@ -23,7 +23,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isStemError, StemSeparationError } from './errors';
-import { ModelRegistry } from './modelRegistry';
+import { KNOWN_FAMILIES, ModelRegistry } from './modelRegistry';
 import { SeparationCancellationToken } from './chunkProcessor';
 import {
   createDefaultBackendFactory,
@@ -34,6 +34,7 @@ import {
 import type { ExternalDecoder } from './wavIo';
 import type {
   ModelDescriptor,
+  ModelFamily,
   QualityProfile,
   SeparationJobSummary,
   SeparationProgress,
@@ -43,6 +44,7 @@ import type {
 import { QUALITY_PROFILES } from './types';
 import type {
   StartStemJobPayload,
+  StemFamilyInfo,
   StemJobView,
   StemServiceEvent,
   StemServiceEventType,
@@ -50,6 +52,7 @@ import type {
 } from './transportTypes';
 
 export type {
+  StemFamilyInfo,
   StemJobStemView,
   StemJobView,
   StemProfileInfo,
@@ -100,6 +103,20 @@ interface JobRecord {
   summary?: SeparationJobSummary;
   promise?: Promise<StemJobView>;
 }
+
+const FAMILY_LABEL: Record<ModelFamily, string> = {
+  bs_roformer: 'BS-RoFormer',
+  mel_band_roformer: 'Mel-Band-RoFormer',
+  htdemucs: 'HTDemucs',
+  pipeline_double: 'Pipeline-Double (Test)',
+};
+
+const FAMILY_DESCRIPTION: Record<ModelFamily, string> = {
+  bs_roformer: 'Primäre Engine – Band-Split-RoFormer, beste Trennqualität für Vocals/Drums/Bass/Other.',
+  mel_band_roformer: 'Alternative RoFormer-Architektur (Mel-Band-Split) – A/B-Vergleich, v. a. für Vocals/Other.',
+  htdemucs: 'Legacy-Engine (Hybrid-Transformer-Demucs) – schnellere, ältere Architektur, nur für die Vorschau gedacht.',
+  pipeline_double: 'Deterministisches Test-Double – kein trainiertes Modell, nicht für echte Trennung gedacht.',
+};
 
 const PROFILE_DESCRIPTION: Record<QualityProfile, string> = {
   PREVIEW: 'Schneller Vorschau-Pfad – gut, um die Verteilung zu prüfen; nicht als Master-Qualität gemeint.',
@@ -228,10 +245,39 @@ export class StemJobService {
     }
 
     const usable = profiles.some((profile) => profile.available);
+
+    // Architecture switcher (settings menu): one entry per model family, so the
+    // UI never has to know which profiles a family serves or hard code labels.
+    // The pipeline double is a test fixture, not a selectable architecture.
+    const families: StemFamilyInfo[] = KNOWN_FAMILIES.filter((family) => family !== 'pipeline_double').map(
+      (family) => {
+        const models = this.registry.byFamily(family);
+        const serves = [...new Set(models.flatMap((model) => model.qualityProfile.serves))].sort(
+          (a, b) => QUALITY_PROFILES.indexOf(a) - QUALITY_PROFILES.indexOf(b)
+        );
+        const available = models.some((model) => availability.get(model.id)?.available);
+        const reason = available
+          ? undefined
+          : models.length === 0
+            ? `Kein Modell im Katalog für Familie ${family}.`
+            : models.map((model) => availability.get(model.id)?.reason).find(Boolean) ?? 'Modell nicht installiert';
+        return {
+          family,
+          label: FAMILY_LABEL[family],
+          description: FAMILY_DESCRIPTION[family],
+          available,
+          reason,
+          serves,
+          modelIds: models.map((model) => model.id),
+        };
+      }
+    );
+
     return {
       ok: true,
       usable,
       profiles,
+      families,
       // Quality first: the editor defaults to HIGH_QUALITY whenever a trained
       // model is installed and only then falls back to PREVIEW (§3).
       defaultProfile: usable ? 'HIGH_QUALITY' : 'PREVIEW',
@@ -303,7 +349,7 @@ export class StemJobService {
     const profile = request.profile ?? 'HIGH_QUALITY';
     let descriptor: ModelDescriptor;
     try {
-      descriptor = this.engine.resolveModel(profile, request.modelId);
+      descriptor = this.engine.resolveModel(profile, request.modelId, request.family);
     } catch (error) {
       throw this.asServiceError(error, 'MODEL_INCOMPATIBLE');
     }
@@ -332,6 +378,7 @@ export class StemJobService {
         totalSeconds: 0,
         profile,
         modelId: descriptor.id,
+        family: descriptor.family,
         stems,
         chunkCount: 0,
         cacheHit: false,
@@ -369,7 +416,10 @@ export class StemJobService {
       .separate({
         inputPath,
         profile,
-        modelId: request.modelId,
+        // Re-resolved above (honours `family` when only that was given); pass the
+        // concrete id down so the engine does not have to repeat the resolution
+        // without the family hint.
+        modelId: descriptor.id,
         stems,
         device: request.device,
         precision: request.precision,

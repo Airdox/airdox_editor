@@ -76,6 +76,8 @@ import {
   StemSeparationProgress,
   StemEngineInfo,
   StemQualityProfile,
+  ModelFamily,
+  SELECTABLE_MODEL_FAMILIES,
   DEFAULT_STEMS_MIXER_STATE,
   STEM_TYPES,
 } from './audio/stemEngine';
@@ -467,6 +469,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
   const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
   const [stemEngineUnavailableReason, setStemEngineUnavailableReason] = useState<string | null>(null);
+  // Architektur-Auswahl (Settings-Menü): welche Modell-Familie die Separation
+  // verwenden soll. `null` = automatische Auswahl der Engine (bisheriges Verhalten).
+  const [stemFamily, setStemFamily] = useState<ModelFamily | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = window.localStorage.getItem('airdox.stemFamily');
+    return stored && (SELECTABLE_MODEL_FAMILIES as string[]).includes(stored) ? (stored as ModelFamily) : null;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (stemFamily) window.localStorage.setItem('airdox.stemFamily', stemFamily);
+    else window.localStorage.removeItem('airdox.stemFamily');
+  }, [stemFamily]);
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
@@ -1047,6 +1062,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       const separated = await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
         profile,
+        family: stemFamily ?? undefined,
         onProgress: (prog) => setSeparationProgress(prog),
       });
       setActiveTrackStems(separated);
@@ -1075,7 +1091,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setIsSeparatingStems(false);
       setSeparationProgress(null);
     }
-  }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
+  }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemFamily]);
 
   const handleCancelStemSeparation = useCallback(() => {
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
@@ -1120,8 +1136,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       );
       return;
     }
+    if (stemFamily) {
+      const family = info.families.find((entry) => entry.family === stemFamily);
+      if (family && !family.available) {
+        logger.warn('EDITING', `Stem-Preflight: Architektur ${family.label} nicht nutzbar — ${family.reason}`);
+        setStemEngineUnavailableReason(family.reason || `Architektur ${family.label} nicht verfügbar`);
+        setStemQualityWarning(
+          `Architektur ${family.label} nicht verfügbar: ${family.reason || 'Engine nicht erreichbar'}. ` +
+            'Wähle in den Einstellungen eine andere Stem-Architektur oder installiere das fehlende Modell.'
+        );
+        return;
+      }
+    }
     await runStemSeparation(profile);
-  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile]);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile, stemFamily]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -3991,6 +4019,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSetConfirmDestructiveEdits={setConfirmDestructiveEdits}
         autoSaveProject={autoSaveProject}
         onSetAutoSaveProject={setAutoSaveProject}
+        stemFamilies={stemEngineInfo?.families}
+        stemFamily={stemFamily}
+        onSetStemFamily={setStemFamily}
       />
       {activeTrack && (
         <>

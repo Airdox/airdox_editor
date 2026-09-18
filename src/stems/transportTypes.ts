@@ -8,7 +8,7 @@
  * browser bundle free of the engine's file system code, and it is asserted by
  * `tests/stem-engine-ipc-contract.test.ts`.
  */
-import type { JobStatus, QualityProfile, StemId } from './types';
+import type { JobStatus, ModelFamily, QualityProfile, StemId } from './types';
 
 /** Serializable per-stem result of a finished job. */
 export interface StemJobStemView {
@@ -34,6 +34,8 @@ export interface StemJobView {
   totalSeconds: number;
   profile: QualityProfile;
   modelId: string;
+  /** Model family that actually ran this job (e.g. `bs_roformer`, `htdemucs`). */
+  family: ModelFamily;
   /** Stem ids exactly as the model descriptor declares them – never a constant. */
   stems: StemId[];
   chunkCount: number;
@@ -66,12 +68,29 @@ export interface StemProfileInfo {
   parameters: { numOverlap: number; ensemblePasses: number };
 }
 
+/** One selectable model family (architecture) as the settings UI sees it. */
+export interface StemFamilyInfo {
+  family: ModelFamily;
+  /** Human readable label, e.g. "BS-RoFormer". Never hard coded in the UI. */
+  label: string;
+  description: string;
+  /** True when at least one model of this family is installed and usable. */
+  available: boolean;
+  reason?: string;
+  /** Profiles at least one model of this family can serve. */
+  serves: QualityProfile[];
+  /** Model ids belonging to this family, best (primary) first. */
+  modelIds: string[];
+}
+
 export interface StemServiceStatus {
   ok: boolean;
   /** False when no profile can run (missing model or missing runtime). */
   usable: boolean;
   profiles: StemProfileInfo[];
   defaultProfile: QualityProfile;
+  /** Every model family registered in the catalog, with availability per family. */
+  families: StemFamilyInfo[];
   models: {
     id: string;
     family: string;
@@ -104,6 +123,13 @@ export interface StartStemJobPayload {
   trackName?: string;
   profile?: QualityProfile;
   modelId?: string;
+  /**
+   * Explicit model family (architecture) to use, e.g. `bs_roformer`,
+   * `mel_band_roformer`, `htdemucs`. When set without `modelId`, the engine
+   * resolves the best model of that family for `profile`; when set together
+   * with `modelId`, a mismatch is rejected with `MODEL_INCOMPATIBLE`.
+   */
+  family?: ModelFamily;
   stems?: StemId[];
   device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
   precision?: 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';

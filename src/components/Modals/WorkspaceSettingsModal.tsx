@@ -1,6 +1,7 @@
 import React from 'react';
-import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves } from 'lucide-react';
+import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves, Cpu } from 'lucide-react';
 import { WaveformMode } from '../../types/rekordbox';
+import type { ModelFamily, StemEngineFamilyInfo } from '../../audio/stemEngine';
 
 export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
 export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3';
@@ -38,6 +39,11 @@ interface WorkspaceSettingsModalProps {
   onSetConfirmDestructiveEdits: (value: boolean) => void;
   autoSaveProject: boolean;
   onSetAutoSaveProject: (value: boolean) => void;
+  /** Verfügbare Stem-Separation-Architekturen (Modell-Familien), `undefined` bis der Engine-Status geladen ist. */
+  stemFamilies?: StemEngineFamilyInfo[];
+  /** `null` = automatische Auswahl der Engine (empfohlen). */
+  stemFamily: ModelFamily | null;
+  onSetStemFamily: (family: ModelFamily | null) => void;
 }
 
 export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
@@ -73,6 +79,9 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onSetConfirmDestructiveEdits,
   autoSaveProject,
   onSetAutoSaveProject,
+  stemFamilies,
+  stemFamily,
+  onSetStemFamily,
 }) => {
   if (!isOpen) return null;
 
@@ -192,6 +201,62 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                 <label className="flex items-center justify-between text-xs text-neutral-200"><span>Vor destruktiven Befehlen bestätigen</span><input type="checkbox" checked={confirmDestructiveEdits} onChange={(e) => onSetConfirmDestructiveEdits(e.target.checked)} /></label>
                 <label className="flex items-center justify-between text-xs text-neutral-200"><span>Projekt automatisch sichern</span><input type="checkbox" checked={autoSaveProject} onChange={(e) => onSetAutoSaveProject(e.target.checked)} /></label>
               </div>
+            </div>
+          </div>
+
+          {/* Section: Stem Separation Architecture */}
+          <div className="space-y-3">
+            <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center space-x-1.5 border-b border-[#1f222d] pb-1">
+              <Cpu size={12} />
+              <span>Stem-Separation Engine</span>
+            </h3>
+            <div className="bg-[#161820] border border-[#22242d] rounded-xs p-3 space-y-2.5">
+              <div>
+                <div className="text-xs font-semibold text-white">Stem-Architektur</div>
+                <div className="text-[10.5px] text-neutral-500">
+                  Wähle das KI-Modell, das für die Stem-Trennung (Vocals/Drums/Bass/Other) verwendet wird.
+                  „Automatisch“ überlässt der Engine die beste verfügbare Wahl je Qualitätsprofil.
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5 bg-[#0f1015] p-1 rounded-xs border border-[#1d1f27]">
+                <button
+                  onClick={() => onSetStemFamily(null)}
+                  className={`px-3 py-1.5 rounded-xs text-[11px] font-bold transition-colors ${
+                    stemFamily === null
+                      ? 'bg-[#2a2d3a] text-white shadow-sm'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                  title="Die Engine wählt je Qualitätsprofil automatisch die beste verfügbare Architektur (Standard)."
+                >
+                  Automatisch
+                </button>
+                {(stemFamilies ?? []).map((entry) => (
+                  <button
+                    key={entry.family}
+                    onClick={() => onSetStemFamily(entry.family)}
+                    disabled={!entry.available}
+                    className={`px-3 py-1.5 rounded-xs text-[11px] font-bold transition-colors ${
+                      stemFamily === entry.family
+                        ? 'bg-[#2a2d3a] text-white shadow-sm'
+                        : entry.available
+                          ? 'text-neutral-500 hover:text-neutral-300'
+                          : 'text-neutral-700 cursor-not-allowed'
+                    }`}
+                    title={entry.available ? entry.description : `Nicht verfügbar: ${entry.reason ?? 'Modell nicht installiert'}`}
+                  >
+                    {entry.label}
+                    {!entry.available && ' (nicht installiert)'}
+                  </button>
+                ))}
+              </div>
+              {stemFamily && (
+                <div className="text-[10px] text-neutral-500">
+                  {(stemFamilies ?? []).find((entry) => entry.family === stemFamily)?.description}
+                </div>
+              )}
+              {!stemFamilies && (
+                <div className="text-[10px] text-neutral-600">Lade Engine-Status…</div>
+              )}
             </div>
           </div>
 
