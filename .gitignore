@@ -3,6 +3,7 @@ node_modules/
 build/
 dist/
 coverage/
+__pycache__/
 .DS_Store
 *.log
 stem-test-output/

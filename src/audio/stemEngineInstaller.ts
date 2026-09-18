@@ -1,13 +1,17 @@
 /**
  * @license
- * airdox In-App-Installer-Client für die BS-RoFormer KI-Stem-Engine.
+ * airdox In-App-Installer-Client für die KI-Stem-Engine.
  *
  * Ein Aufruf, zwei Transportwege:
  *  - Desktop (Electron): IPC `installStemEngine` + Progress-Events.
  *  - Browser/Dev-Server: POST /api/stems/install als Server-Sent-Events-Stream.
  *
- * Beide führen lokal exakt die Schritte des Setup-Skripts aus (Python-Suche,
- * Benutzer-Runtime, torch/torchaudio, BS-RoFormer, Checkpoint, Test-Inferenz).
+ * Installiert exakt das Modell, das im Einstellungsmenü gewählt wurde
+ * (`StemInstallOptions.modelId`). Ohne `modelId` bleibt das primäre
+ * BS-RoFormer-Modell (Legacy-Verhalten). Je Checkpoint-Format führt der
+ * Host die passenden Schritte aus: PyTorch-Modelle (Python-Suche,
+ * Benutzer-Runtime, torch/torchaudio, Familien-Pakete, Checkpoint,
+ * Test-Inferenz) und ONNX-Modelle (reiner, hashgeprüfter Download).
  */
 
 export interface StemInstallProgressUpdate {
@@ -26,8 +30,15 @@ export interface StemInstallResult {
   restartRequired?: boolean;
 }
 
+/** Installationsziel: exakt das im Einstellungsmenü gewählte Modell. */
+export interface StemInstallOptions {
+  /** Modell-ID aus dem Katalog (settings menu). Ohne Angabe: primäres Modell. */
+  modelId?: string;
+}
+
 export async function installStemEngineWithProgress(
-  onProgress: (progress: StemInstallProgressUpdate) => void
+  onProgress: (progress: StemInstallProgressUpdate) => void,
+  options: StemInstallOptions = {}
 ): Promise<StemInstallResult> {
   const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop : undefined;
 
@@ -36,14 +47,18 @@ export async function installStemEngineWithProgress(
       ? desktop.onStemInstallProgress((progress) => onProgress(progress))
       : undefined;
     try {
-      return await desktop.installStemEngine();
+      return await desktop.installStemEngine(options.modelId ? { modelId: options.modelId } : undefined);
     } finally {
       unsubscribe?.();
     }
   }
 
   // Browser path: consume the SSE stream from the local dev/production server.
-  const response = await fetch('/api/stems/install', { method: 'POST' });
+  const response = await fetch('/api/stems/install', {
+    method: 'POST',
+    headers: options.modelId ? { 'Content-Type': 'application/json' } : undefined,
+    body: options.modelId ? JSON.stringify({ modelId: options.modelId }) : undefined,
+  });
   if (!response.ok || !response.body) {
     let detail = `HTTP ${response.status}`;
     try {

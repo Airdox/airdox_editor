@@ -21,6 +21,7 @@ import {
   Cpu,
   Radio,
   AlertTriangle,
+  Download,
 } from 'lucide-react';
 import {
   StemEngineProfileInfo,
@@ -56,6 +57,13 @@ interface DeckStemsControlProps {
   engineUnavailableReason?: string | null;
   /** New: show diagnostics button */
   onShowDiagnostics?: () => void;
+  /**
+   * Das im Einstellungsmenü gewählte Modell, wenn es noch nicht installiert
+   * ist. Dann zeigt die Leiste den Button, um genau dieses Modell zu installieren.
+   */
+  missingModel?: { id: string; label: string } | null;
+  /** Öffnet den Installations-Dialog für `missingModel`. */
+  onInstallModel?: () => void;
 }
 
 const PROFILE_LABELS: Record<StemQualityProfile, string> = {
@@ -152,6 +160,8 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   onProfileChange,
   engineUnavailableReason,
   onShowDiagnostics,
+  missingModel = null,
+  onInstallModel,
 }) => {
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
@@ -247,7 +257,29 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
       </div>
 
       {!stems ? (
-        showUnavailable ? (
+        missingModel && onInstallModel ? (
+          <div className="flex items-center justify-between p-2 bg-[#1d1808] rounded border border-[#f0b429]/50">
+            <div className="flex items-center space-x-2.5 min-w-0">
+              <Download size={18} className="text-[#f0b429] shrink-0" />
+              <div className="flex flex-col min-w-0">
+                <span className="text-[#f5d78e] text-xs font-bold truncate">
+                  Gewähltes Modell nicht installiert: {missingModel.label}
+                </span>
+                <span className="text-neutral-400 text-[10px] truncate">
+                  Genau das im Einstellungsmenü gewählte Modell installieren, um mit dieser Architektur zu trennen.
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={onInstallModel}
+              title={`Modell "${missingModel.id}" installieren`}
+              className="flex items-center space-x-1.5 px-3 py-1 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] hover:from-[#34d399] hover:to-[#6ee7b7] text-black font-bold text-xs shadow-md shrink-0 cursor-pointer"
+            >
+              <Download size={13} />
+              <span>Modell installieren</span>
+            </button>
+          </div>
+        ) : showUnavailable ? (
           <div className="flex items-center justify-between p-2 bg-[#1a1212] rounded border border-[#7f1d1d]/50">
             <div className="flex items-center space-x-2.5">
               <AlertTriangle size={18} className="text-[#ef4444]" />
