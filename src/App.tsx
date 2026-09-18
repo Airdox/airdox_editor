@@ -61,6 +61,7 @@ import { EditAssistantModal } from './components/Modals/EditAssistantModal';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
+import { initFileLogging } from './utils/fileLog';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
@@ -310,6 +311,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const showOperationFeedback = useCallback((telemetry: OperationTelemetry) => {
     setFeedbackTelemetry(telemetry);
     setFeedbackModalOpen(true);
+  }, []);
+
+  // Das zuvor vorhandene Diagnose-/Datei-Logging wird beim App-Start
+  // ausdrücklich aktiviert. Ohne diesen Aufruf blieb der Logger nur im
+  // flüchtigen Renderer-Speicher und <userData>/airdox-smart-editor.log wurde
+  // nicht mehr geschrieben.
+  useEffect(() => {
+    const stopFileLogging = initFileLogging();
+    logger.info('SYSTEM', 'Airdox-Diagnoselogger aktiviert.', {
+      maxEntries: 1000,
+      durableFileLog: Boolean(window.rekordboxDesktop?.appendLog),
+    });
+    return stopFileLogging;
   }, []);
 
   // Original source paths that the export/save bridge must never overwrite.
@@ -1474,6 +1488,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Non-blocking async Rekordbox XML file loading
   const loadXmlFile = async (file: File) => {
+    logger.info('XML_IMPORT', 'Rekordbox-XML-Lesen gestartet.', {
+      fileName: file.name,
+      size: file.size,
+      type: file.type || 'unknown',
+    });
     try {
       setImportProgressModalOpen(true);
       setImportProgress({
@@ -1501,6 +1520,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(file.name);
+      logger.info('XML_IMPORT', 'Rekordbox-XML-Lesen abgeschlossen.', {
+        fileName: file.name,
+        tracks: fullTrackModels.length,
+        firstTrackId: fullTrackModels[0]?.id || null,
+        tracksWithLocation: fullTrackModels.filter((track) => Boolean(track.originalMedia?.location)).length,
+      });
 
       // The XML is a collection browser: never put an arbitrary first track in
       // the deck. The user explicitly selects the record whose metadata should
@@ -1514,6 +1539,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }, 1200);
 
     } catch (err: any) {
+      logger.error('XML_IMPORT', 'Rekordbox-XML-Lesen fehlgeschlagen.', err);
       console.error('Fehler beim Einlesen der Rekordbox XML-Datei:', err);
       setImportProgress({
         phase: 'ERROR',
@@ -1589,8 +1615,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // returns only rows; the renderer never touches the source file.
   const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
     if (!window.rekordboxDesktop) return;
+    logger.info('DATABASE', 'Master-DB-Lesen angefordert.', {
+      dbPath,
+      sourceLabel: sourceLabel || null,
+      readMode: 'READ_ONLY',
+    });
     try {
       const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
+      logger.info('DATABASE', 'Master-DB-Leseantwort erhalten.', {
+        dbPath,
+        available: result.available,
+        dbType: result.dbType || null,
+        fileName: result.fileName || null,
+        stats: result.stats || null,
+        warnings: result.warnings || [],
+        reason: result.reason || null,
+      });
       if (!result.available || !result.rows) {
         throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
       }
@@ -1630,9 +1670,27 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
+        logger.warn('DATABASE', 'Master-DB wurde mit Hinweisen gelesen.', {
+          dbPath,
+          warnings,
+        });
         console.warn('[Rekordbox DB] Hinweise:', warnings);
       }
+      logger.info('DATABASE', 'Master-DB-Import in die Track-Auswahl abgeschlossen.', {
+        dbPath: result.filePath || dbPath,
+        dbType: result.dbType || 'MASTER_DB',
+        tracks: mapped.stats.tracks,
+        memoryCues: mapped.stats.memoryCues,
+        hotCues: mapped.stats.hotCues,
+        loops: mapped.stats.loops,
+        warnings: warnings.length,
+      });
     } catch (error) {
+      logger.error('DATABASE', 'Master-DB-Lesen/Mapping fehlgeschlagen.', {
+        dbPath,
+        sourceLabel: sourceLabel || null,
+        error,
+      });
       console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1678,14 +1736,44 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Kein stiller XML-Fallback, keine erfundenen Werte.
       let dbGateTrack: TrackModel | null = null;
       if (window.rekordboxDesktop) {
-        const gate = await runMasterDbGate({
+        const gateRequest = {
           dbPath: masterDbPath || undefined,
           trackId: selectedDef.origin === DataOrigin.REKORDBOX_DB ? selectedDef.id : undefined,
           audioPath: selectedDef.originalMedia?.location,
           location: selectedDef.originalMedia?.location,
+        };
+        logger.info('DATABASE', 'Master-DB-Gate gestartet.', {
+          source: selectedDef.origin,
+          selectedTrackId: selectedDef.id,
+          request: gateRequest,
+          title: selectedDef.title,
+          artist: selectedDef.artist,
+        });
+        const gate = await runMasterDbGate(gateRequest);
+        logger.info('DATABASE', 'Master-DB-Gate-Antwort erhalten.', {
+          ok: gate.ok,
+          errorCode: 'errorCode' in gate ? gate.errorCode : null,
+          dbPath: gate.dbPath || gateRequest.dbPath || null,
+          dbType: gate.dbType || null,
+          matchedBy: gate.ok ? gate.matchedBy : null,
+          trackId: gate.ok ? gate.trackId : gateRequest.trackId || null,
+          masterDbFound: gate.masterDbFound,
+          sqlcipherAvailable: gate.sqlcipherAvailable,
+          databaseOpened: gate.databaseOpened,
+          schemaValidated: gate.schemaValidated,
+          trackQueryExecuted: gate.trackQueryExecuted,
+          trackFound: gate.trackFound,
+          identifiers: gate.ok ? null : (gate as any).identifiers || null,
         });
         if (!trackRequestGuard.current.isCurrent(generation)) return;
         if (gate.ok === false) {
+          logger.error('DATABASE', `MASTER_DB_GATE_FAILED: ${gate.errorCode}`, {
+            reason: gate.reason,
+            dbPath: gate.dbPath || gateRequest.dbPath || null,
+            dbType: gate.dbType || null,
+            request: gateRequest,
+            result: gate,
+          });
           console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${gate.errorCode} – ${gate.reason}`);
           showOperationFeedback({
             title: 'Rekordbox Master-DB-Gate fehlgeschlagen',
@@ -1703,10 +1791,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           firstBeat: selectedDef.beatGrid?.firstBeat ?? null,
         });
         if (built.ok === false) {
+          logger.error('DATABASE', `Master-DB-Trackaufbau fehlgeschlagen: ${built.errorCode}`, {
+            reason: built.reason,
+            request: gateRequest,
+          });
           console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${built.errorCode} – ${built.reason}`);
           return;
         }
         dbGateTrack = built.track;
+        logger.info('DATABASE', 'Track erfolgreich aus Master DB übernommen.', {
+          trackId: built.provenance.trackId,
+          dbPath: built.provenance.dbPath,
+          matchedBy: built.provenance.matchedBy,
+          analysisSource: built.analysisSource,
+        });
         console.info(
           `[RekordboxDB] track ${built.provenance.trackId} aus Master DB übernommen (matchedBy=${built.provenance.matchedBy}, analysis=${built.analysisSource})`
         );

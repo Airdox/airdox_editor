@@ -162,6 +162,43 @@ const desktopLogWriter = createLogWriter(
   path.join(app.getPath('userData'), 'airdox-smart-editor.log')
 );
 
+function appendDiagnosticLog(level, message, data) {
+  // Native-Main-Prozess und Renderer schreiben in dieselbe durable Datei.
+  // Niemals SQLCipher-Schlüssel oder vollständige Datenbankinhalte loggen.
+  try {
+    desktopLogWriter.append(
+      formatLogLine({
+        ts: Date.now(),
+        level,
+        category: 'DATABASE',
+        message,
+        data,
+      })
+    );
+  } catch {
+    // Logging darf den DB-Zugriff niemals verändern oder blockieren.
+  }
+}
+
+function summarizeGateResult(result) {
+  if (!result || typeof result !== 'object') return { resultType: typeof result };
+  return {
+    ok: result.ok,
+    errorCode: result.errorCode || null,
+    dbPath: result.dbPath || null,
+    dbType: result.dbType || null,
+    matchedBy: result.matchedBy || null,
+    trackId: result.trackId || null,
+    masterDbFound: result.masterDbFound,
+    sqlcipherAvailable: result.sqlcipherAvailable,
+    databaseOpened: result.databaseOpened,
+    schemaValidated: result.schemaValidated,
+    trackQueryExecuted: result.trackQueryExecuted,
+    trackFound: result.trackFound,
+    identifiers: result.identifiers || null,
+  };
+}
+
 ipcMain.handle('rekordbox:append-log', (_event, entry) => {
   return desktopLogWriter.append(formatLogLine(entry));
 });
@@ -221,7 +258,27 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   if (typeof dbPath !== 'string' || !dbPath.trim()) {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
-  return readRekordboxDatabase(dbPath);
+  appendDiagnosticLog('INFO', 'Native Master-DB-Lesen gestartet.', {
+    dbPath,
+    readMode: 'READ_ONLY',
+  });
+  try {
+    const result = readRekordboxDatabase(dbPath);
+    appendDiagnosticLog(result.available ? 'INFO' : 'WARN', 'Native Master-DB-Lesen abgeschlossen.', {
+      ...summarizeGateResult(result),
+      fileName: result.fileName || null,
+      stats: result.stats || null,
+      warnings: result.warnings || [],
+      reason: result.reason || null,
+    });
+    return result;
+  } catch (error) {
+    appendDiagnosticLog('ERROR', 'Native Master-DB-Lesen hat eine Exception ausgelöst.', {
+      dbPath,
+      error: error?.message || String(error),
+    });
+    throw error;
+  }
 });
 
 // Verbindliches Master-DB-Pipeline-Gate: Rekordbox → master.db → SQLCipher →
@@ -229,15 +286,31 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
 // Handler ein Fehlerergebnis mit eindeutigem Code – kein stiller Fallback.
 ipcMain.handle('rekordbox:resolve-track-master-db', async (_event, request) => {
   const payload = request && typeof request === 'object' ? request : {};
-  return resolveTrackFromMasterDb(
-    {
-      dbPath: typeof payload.dbPath === 'string' ? payload.dbPath : undefined,
-      trackId: payload.trackId,
-      audioPath: typeof payload.audioPath === 'string' ? payload.audioPath : undefined,
-      location: typeof payload.location === 'string' ? payload.location : undefined,
-    },
-    { locate: locateRekordboxDatabases }
-  );
+  const gateRequest = {
+    dbPath: typeof payload.dbPath === 'string' ? payload.dbPath : undefined,
+    trackId: payload.trackId,
+    audioPath: typeof payload.audioPath === 'string' ? payload.audioPath : undefined,
+    location: typeof payload.location === 'string' ? payload.location : undefined,
+  };
+  appendDiagnosticLog('INFO', 'Native Master-DB-Gate gestartet.', {
+    request: gateRequest,
+    driver: 'better-sqlite3-multiple-ciphers',
+    readMode: 'READ_ONLY',
+  });
+  try {
+    const result = resolveTrackFromMasterDb(gateRequest, { locate: locateRekordboxDatabases });
+    appendDiagnosticLog(result.ok ? 'INFO' : 'WARN', result.ok ? 'Native Master-DB-Gate erfolgreich.' : 'Native Master-DB-Gate fehlgeschlagen.', {
+      ...summarizeGateResult(result),
+      reason: result.reason || null,
+    });
+    return result;
+  } catch (error) {
+    appendDiagnosticLog('ERROR', 'Native Master-DB-Gate hat eine Exception ausgelöst.', {
+      request: gateRequest,
+      error: error?.message || String(error),
+    });
+    throw error;
+  }
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
