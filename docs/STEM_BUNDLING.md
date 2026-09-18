@@ -58,6 +58,13 @@ npm run stems:runtime
 #    BS-RoFormer-Checkpoint + Config (503 MiB, sha256-geprüft) und
 #    HT-Demucs-ONNX für den Fast-Path (166 MiB)
 npm run stems:bundle
+
+# Für einen vollständig offline-fähigen Build mit allen installierbaren
+# Katalogmodellen (mehrere zusätzliche GB, je nach Modellquellen):
+npm run stems:bundle:all
+
+# Oder alles in einem Schritt: Runtime + alle Modelle + Bestandsprüfung
+npm run stems:prepare:offline
 npm run stems:bundle -- --models bsroformer-musdb18hq-4stem-zfturbo   # nur Studio
 npm run stems:bundle -- --models htdemucs-onnx-4stem-fp16             # nur Fast-Path
 
@@ -108,7 +115,9 @@ der App selbst: Stems-Leiste → **Preflight prüfen**.
 
 Gepinnt sind dieselben Versionen wie im In-App-Installer
 (`python/install_bsroformer.py`): **torch 2.5.1 / torchaudio 2.5.1 (CPU)**,
-`msst 0.1.0`, `soundfile 0.13.1`, `numpy 1.26.4`, `PyYAML 6.0.2` u. a.
+`msst 0.1.0`, `demucs 4.0.1`, `soundfile 0.13.1`, `numpy 1.26.4`,
+`PyYAML 6.0.2` u. a. Damit enthält die gebündelte Runtime auch die
+Abhängigkeiten für HT-Demucs und nicht nur für BS-RoFormer.
 
 ### Gewichte (`npm run stems:bundle`)
 

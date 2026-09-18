@@ -52,6 +52,8 @@ const SUPPORT_PINS = [
   'soundfile==0.13.1',
   'PyYAML==6.0.2',
   'ml-collections==1.1.0',
+  // Included for the offline HT-Demucs model bundle as well as BS-RoFormer.
+  'demucs==4.0.1',
 ];
 const TORCH_CPU_INDEX = 'https://download.pytorch.org/whl/cpu';
 /** Überschreibbar für Spiegel/Proxies (`--torch-index <url>` oder `pypi`). */

@@ -19,6 +19,7 @@
  *   npm run stems:bundle                        # Standard-Set (669 MiB):
  *                                               #   BS-RoFormer (503 MiB) + ONNX-Fast-Path (166 MiB)
  *   npm run stems:bundle -- --models id1,id2
+ *   npm run stems:bundle -- --all              # alle installierbaren Katalogmodelle
  *   npm run stems:bundle -- --source D:\\downloads   # lokale Kopien statt Netz
  *   npm run stems:bundle -- --check-only
  *   npm run stems:bundle -- --dry-run
@@ -48,12 +49,14 @@ const DEFAULT_MODEL_IDS = ['bsroformer-musdb18hq-4stem-zfturbo', 'htdemucs-onnx-
 
 export interface BundleFileRef {
   file: string;
+  format?: string;
   url?: string;
   sha256?: string;
 }
 
 export interface BundleModel {
   id: string;
+  family?: string;
   checkpoint?: BundleFileRef;
   config?: BundleFileRef;
   modelHash?: string;
@@ -314,6 +317,7 @@ function arg(name: string, fallback?: string): string | undefined {
 async function main(): Promise<void> {
   const target = path.resolve(String(arg('target', DEFAULT_TARGET)));
   const models = arg('models')?.split(',').map((entry) => entry.trim()).filter(Boolean);
+  const allModels = Boolean(arg('all', undefined));
   const source = arg('source');
   const checkOnly = Boolean(arg('check-only', undefined));
   const dryRun = Boolean(arg('dry-run', undefined));
@@ -327,7 +331,11 @@ async function main(): Promise<void> {
   process.stdout.write(`  Ziel:    ${target}\n`);
   process.stdout.write(`  Modus:   ${checkOnly ? 'check-only' : dryRun ? 'dry-run' : 'bundle'}\n`);
 
-  const result = await bundleStemModels({ catalog, target, models, source: source && source !== 'true' ? source : undefined, checkOnly, dryRun, force });
+  const requestedModels = allModels
+    ? catalog.models.filter((model) => model.checkpoint?.format !== 'synthetic').map((model) => model.id)
+    : models;
+  if (allModels) process.stdout.write(`  Auswahl:  alle installierbaren Modelle (${requestedModels.length})\n`);
+  const result = await bundleStemModels({ catalog, target, models: requestedModels, source: source && source !== 'true' ? source : undefined, checkOnly, dryRun, force });
 
   process.stdout.write('\n  Auflösung wie in der gepackten App:\n');
   const resolution = verifyBundleResolution(target, catalog, models?.[0]);
