@@ -21,8 +21,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
   // Preflight and inference are separate so missing/unsupported Python is known
   // before a large audio buffer is handed to the model process.
+  // Legacy Demucs path – now optional, BS-RoFormer is primary per §26
   getStemEngineStatus: () => ipcRenderer.invoke('stems:get-status'),
   separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
+  // New: BS-RoFormer diagnostics per §13, §14
+  getStemDiagnostics: () => ipcRenderer.invoke('stems:diagnostics'),
+  getStemPreflight: () => ipcRenderer.invoke('stems:preflight'),
 
   // --- Neue Stem-Engine (src/stems) als Jobs -------------------------------
   // Verschachtelt als `stemEngine`, damit der Vertrag exakt

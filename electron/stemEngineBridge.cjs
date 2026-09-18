@@ -35,7 +35,36 @@ const CHANNELS = {
 
 /** Obergrenze für den Mix, den der Renderer hochreicht (float32-Stereo-WAV). */
 const MAX_INPUT_BYTES = 1024 * 1024 * 1024;
-const PROFILES = ['PREVIEW', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+
+/** New: resolve bundled runtime via stemRuntime.cjs */
+function resolveBundledPython(repoRoot) {
+  try {
+    const { getPythonCandidates } = require('./stemRuntime.cjs');
+    const resourcesPath = process.resourcesPath || null;
+    const candidates = getPythonCandidates(repoRoot, resourcesPath);
+    for (const c of candidates) {
+      try {
+        if (require('node:fs').existsSync(c)) return c;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+function resolveBundledModelDir(repoRoot) {
+  try {
+    const { getModelCandidates } = require('./stemRuntime.cjs');
+    const resourcesPath = process.resourcesPath || null;
+    const candidates = getModelCandidates(repoRoot, resourcesPath);
+    for (const c of candidates) {
+      try {
+        if (require('node:fs').existsSync(c)) return c;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
 
 function log(logger, level, message, details) {
   try {
@@ -131,16 +160,22 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     return { available: false, reason: loaded.reason, bundlePath: loaded.bundlePath, channels: CHANNELS, bridge: null };
   }
 
+  // Resolve bundled runtime deterministically per §9, §34
+  const bundledPython = resolveBundledPython(repoRoot) || process.env.AIRODOX_STEM_PYTHON;
+  const bundledModelDir = resolveBundledModelDir(repoRoot);
+
   const bridge = loaded.bridge({
     root: roots.root,
     env: process.env,
     // Das Test-Double ist ausschließlich Sache der Automatisierung.
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    modelStoreDir: bundledModelDir || path.join(roots.root, 'Models'),
     backend: {
-      pythonCommand: process.env.AIRODOX_STEM_PYTHON,
+      pythonCommand: bundledPython || process.env.AIRODOX_STEM_PYTHON,
       nativeCommand: process.env.AIRODOX_AUDIOCPP_CLI,
       adapterScript: process.env.AIRODOX_STEM_ADAPTER || path.join(repoRoot, 'python', 'bsroformer_inference.py'),
       referenceSourceDir: process.env.AIRODOX_MSST_DIR,
+      modelStoreDir: bundledModelDir || path.join(roots.root, 'Models'),
     },
     logger: {
       debug: (category, message, details) => log(logger, 'debug', `[bridge] ${message}`, details),

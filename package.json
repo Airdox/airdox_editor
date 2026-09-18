@@ -18,6 +18,7 @@
     "preview": "vite preview",
     "stems:setup": "bash scripts/setup-stem-model.sh",
     "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
+    "stems:diagnose": "node --loader tsx scripts/stems-diagnose.mjs || npx tsx scripts/stems-diagnose.ts",
     "stems:gate:archive": "node scripts/build-stem-gate-tarball.mjs",
     "stems:gate:notebook": "node scripts/md-to-notebook.mjs",
     "test:stems": "node scripts/run-tests.mjs --group stems",
@@ -74,17 +75,42 @@
       "dist/**/*",
       "electron/**/*",
       "package.json",
-      "src/stems/modelCatalog.json"
+      "src/stems/modelCatalog.json",
+      "python/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/stem-runtime",
+        "to": "stem-runtime",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/models",
+        "to": "models",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "src/stems/modelCatalog.json",
+        "to": "modelCatalog.json"
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node-bridge.cjs",
+      "**/stem-runtime/**/*",
+      "**/models/**/*",
+      "**/*.node",
+      "**/*.dll",
+      "**/*.so",
+      "**/*.dylib",
+      "python/**/*"
     ],
     "directories": {
       "output": "release"
     },
     "npmRebuild": false,
     "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ]
+      "target": ["nsis", "portable"]
     },
     "nsis": {
       "oneClick": false,
