@@ -1,0 +1,19 @@
+# Core GUI
+PySide6>=6.6.0
+
+# Audio
+pydub>=0.25.1
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# Database
+# sqlite3 is builtin
+
+# For future cloud feature (not required in main)
+# google-api-python-client>=2.0.0
+# google-auth>=2.0.0
+# google-auth-oauthlib>=1.0.0
+# requests>=2.31.0
+# torch>=2.0.0
+# torchaudio>=2.0.0
+# demucs>=4.0.0
