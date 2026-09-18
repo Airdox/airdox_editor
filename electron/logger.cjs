@@ -520,7 +520,11 @@ class FileLogger {
             .join(' ')
             .replace(/%c|color:[^;'\"]+/g, '')
             .trim();
-          if (message) this.write(level, 'CONSOLE', message);
+          const effectiveLevel =
+            level === 'ERROR' && /(?:\bWarning:|\[DEP\d+\]|DeprecationWarning|ExperimentalWarning)/i.test(message)
+              ? 'WARN'
+              : level;
+          if (message) this.write(effectiveLevel, 'CONSOLE', message);
           original(...args);
         } catch {
           original(...args);

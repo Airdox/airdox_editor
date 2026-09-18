@@ -48,6 +48,18 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
  */
 (function installIpcAudit() {
   const originalHandle = ipcMain.handle.bind(ipcMain);
+  const SLOW_IPC_THRESHOLDS_MS = {
+    // These handlers are intentionally long-lived: they represent a foreground
+    // install or a running inference job, not a blocked UI bug.
+    'stems:install-engine': 60 * 60 * 1000,
+    'stems:job-wait': 60 * 60 * 1000,
+    'stems:separate': 60 * 60 * 1000,
+    // Status/preflight may cold-load PyTorch once; warn only when truly stuck.
+    'stems:engine-status': 15 * 1000,
+    'stems:get-status': 15 * 1000,
+    'stems:diagnostics': 15 * 1000,
+    'stems:preflight': 15 * 1000,
+  };
   ipcMain.handle = function auditedHandle(channel, listener) {
     return originalHandle(channel, async (event, ...args) => {
       const startedAt = Date.now();
@@ -62,7 +74,8 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
           durationMs,
           result: summarizeForLog(result),
         });
-        if (durationMs >= 2000) {
+        const slowThresholdMs = SLOW_IPC_THRESHOLDS_MS[channel] ?? 2000;
+        if (durationMs >= slowThresholdMs) {
           logger.warn('PERFORMANCE', `Langsamer IPC-Handler ›${channel}‹: ${durationMs} ms`);
         }
         return result;
@@ -161,12 +174,25 @@ function createWindow() {
   });
   // Renderer-Konsolenmeldungen, die nicht über den Logger laufen, trotzdem
   // dauerhaft im Datei-Protokoll sichern (keine stillen Fehler mehr).
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    // 0=verbose 1=info 2=warning 3=error
-    if (level === 3) {
-      logger.error('UI', `[renderer-console] ${message}`, { line, source: sourceId });
-    } else if (level === 2) {
-      logger.warn('UI', `[renderer-console] ${message}`, { line, source: sourceId });
+  mainWindow.webContents.on('console-message', function onConsoleMessage(_event, details) {
+    // Electron 44 passes a WebContentsConsoleMessageEventParams object. Older
+    // versions pass legacy positional arguments; keep a small compatibility
+    // shim without declaring the deprecated listener arity (which itself emits
+    // a warning in current Electron).
+    const legacy = arguments;
+    const params = details && typeof details === 'object'
+      ? details
+      : { level: legacy[1], message: legacy[2], lineNumber: legacy[3], sourceId: legacy[4] };
+    const level = params.level;
+    const message = String(params.message ?? '');
+    const line = params.lineNumber ?? params.line;
+    const source = params.sourceId ?? params.sourceURL ?? params.url;
+    // 0=verbose 1=info 2=warning 3=error (Electron numeric levels). Some
+    // builds stringify levels; handle both forms for durable file logs.
+    if (level === 3 || level === 'error') {
+      logger.error('UI', `[renderer-console] ${message}`, { line, source });
+    } else if (level === 2 || level === 'warning' || level === 'warn') {
+      logger.warn('UI', `[renderer-console] ${message}`, { line, source });
     }
   });
 

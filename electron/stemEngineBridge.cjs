@@ -241,9 +241,14 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
 
   return { available: true, reason: undefined, bundlePath: loaded.bundlePath, channels: CHANNELS, get bridge() { return bridge; },
     refreshRuntime() {
-      // Keep all job handles/history alive; a restart can adopt new paths later.
+      // Keep active job handles alive; completed/failed jobs must not force a
+      // full app restart after an engine install because the renderer can read
+      // their result files independently.
       const jobs = bridge.jobs();
-      if (!jobs.ok || jobs.data.length > 0) {
+      const active = jobs.ok
+        ? jobs.data.filter((job) => ['PENDING', 'PREPARING', 'RUNNING', 'RECONSTRUCTING', 'VALIDATING'].includes(job.status))
+        : [];
+      if (!jobs.ok || active.length > 0) {
         return false;
       }
       bridge.close();
