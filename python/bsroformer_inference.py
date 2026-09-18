@@ -130,6 +130,16 @@ def _reference_roots(reference_source_dir: str) -> List[str]:
 
 def import_model_class(family: str, reference_source_dir: str):
     """Returns (model class, source root) or raises with an actionable message."""
+    try:
+        if family == "bs_roformer":
+            from msst.models.bs_roformer.bs_roformer import BSRoformer as ModelClass
+        else:
+            from msst.models.bs_roformer.mel_band_roformer import MelBandRoformer as ModelClass
+        import msst
+        return ModelClass, os.path.dirname(msst.__file__)
+    except Exception:
+        pass
+
     errors: List[str] = []
     for root in _reference_roots(reference_source_dir):
         if root not in sys.path:

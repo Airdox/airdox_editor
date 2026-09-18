@@ -93,13 +93,19 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
       {/* Left section: EDIT mode dropdown, Project tools, Transport */}
       <div className="flex items-center space-x-3">
         {/* EDIT Mode selector */}
-        <div className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027]">
+        <div
+          className="flex items-center space-x-1 font-bold text-white tracking-wider text-[12px] bg-[#16171d] px-2 py-1 border border-[#2b2d38] rounded-sm cursor-pointer hover:bg-[#1f2027]"
+          title="Aktiver Arbeitsmodus: EDIT (Nicht-destruktiver DJ-Audio-Editor für Rekordbox)"
+        >
           <span>EDIT</span>
           <ChevronDown size={12} className="text-neutral-400" />
         </div>
 
         {/* Project Name dropdown */}
-        <div className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]">
+        <div
+          className="flex items-center space-x-1 text-neutral-200 font-medium text-[12px] hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-[#191b22]"
+          title={`Aktuelles Projekt: ${projectName}`}
+        >
           <span>{projectName}</span>
           <ChevronDown size={11} className="text-neutral-500" />
         </div>
@@ -110,7 +116,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
           <button
             onClick={onReturnToStart}
             className="w-6 h-6 flex items-center justify-center text-neutral-300 hover:text-white hover:bg-[#242630] rounded transition-colors"
-            title="Return to Cue / Start (|<)"
+            title="Zum CUE-Startpunkt zurückkehren (Taste: Pos1 / C)"
           >
             <div className="flex items-center">
               <div className="w-[2px] h-3 bg-current mr-[1px]"></div>
@@ -126,7 +132,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
                 ? 'bg-[#00c853] text-black shadow-[0_0_10px_rgba(0,200,83,0.4)]'
                 : 'text-neutral-200 hover:text-white hover:bg-[#282a34]'
             }`}
-            title="Play / Pause"
+            title={isPlaying ? 'Wiedergabe pausieren (Leertaste)' : 'Wiedergabe starten (Leertaste)'}
           >
             {isPlaying ? (
               <div className="flex space-x-[2px]">
@@ -141,8 +147,12 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
           {onOpenRecorder && (
             <button
               onClick={onOpenRecorder}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold tracking-wide transition-colors ${recorderActive ? 'border-[#ff3b30] bg-[#3a1517] text-[#ff625b]' : 'border-[#3b2830] bg-[#21151a] text-[#ff5147] hover:bg-[#3a1517] hover:text-white'}`}
-              title="Pro Recorder für Rekordbox-/Set-Aufnahmen öffnen"
+              className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold tracking-wide transition-colors ${
+                recorderActive
+                  ? 'border-[#ff3b30] bg-[#3a1517] text-[#ff625b] animate-pulse'
+                  : 'border-[#3b2830] bg-[#21151a] text-[#ff5147] hover:bg-[#3a1517] hover:text-white'
+              }`}
+              title="Pro Recorder für Rekordbox- und DJ-Set-Aufnahmen öffnen (Taste: F9)"
             >
               <CircleStop size={12} /> REC
             </button>
@@ -154,7 +164,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
               loopActive ? 'text-[#ff9500] bg-[#332200]' : 'text-neutral-400 hover:text-white hover:bg-[#242630]'
             }`}
-            title="Loop"
+            title={loopActive ? 'Loop-Wiedergabe aktiv (Taste: L)' : 'Loop-Wiedergabe des Auswahlbereichs aktivieren (Taste: L)'}
           >
             <RotateCcw size={13} />
           </button>
@@ -164,10 +174,14 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             onClick={onToggleQuantize}
             className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors ${
               quantizeActive
-                ? 'border-[#ff3b30]/60 bg-[#281414] text-neutral-200'
+                ? 'border-[#ff3b30]/60 bg-[#281414] text-neutral-200 shadow-[0_0_8px_rgba(255,59,48,0.2)]'
                 : 'border-transparent text-neutral-500 hover:text-neutral-300'
             }`}
-            title="Quantize Mode"
+            title={
+              quantizeActive
+                ? 'Quantisierung AKTIV: Alle Schnitte und Loops rasten automatisch am Rekordbox Beatgrid ein'
+                : 'Quantisierung INAKTIV: Freie Bearbeitung ohne Taktraster-Bindung'
+            }
           >
             <span className="text-[#ff3b30] font-bold">Q</span>
             <span className="text-neutral-300 font-sans text-[11px]">: AUTO</span>
@@ -183,13 +197,16 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
         <button
           onClick={onOpenSettings}
           className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#242630] rounded transition-colors"
-          title="Workspace Settings & Utilities"
+          title="Workspace Settings & KI-Stem-Architekturen öffnen"
         >
           <Settings size={14} />
         </button>
 
         {/* Master Meter & Level */}
-        <div className="flex items-center space-x-2 bg-[#121317] px-2.5 py-1 rounded border border-[#22242d]">
+        <div
+          className="flex items-center space-x-2 bg-[#121317] px-2.5 py-1 rounded border border-[#22242d]"
+          title={`Master-Lautstärke: ${Math.round(masterVolume * 100)}% · Stereo Pegelanzeige`}
+        >
           {/* Rotary indicator */}
           <div className="w-4 h-4 rounded-full border border-neutral-500 relative flex items-center justify-center">
             <div
@@ -205,7 +222,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
           {/* Dual Stereo LED Meter (Left / Right) */}
           <div className="flex flex-col space-y-[2px] w-14">
             {/* L */}
-            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex" title={`Peak L: ${Math.round(meterL * 100)}%`}>
               <div
                 className="h-full transition-all duration-75"
                 style={{
@@ -220,7 +237,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
               />
             </div>
             {/* R */}
-            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex">
+            <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex" title={`Peak R: ${Math.round(meterR * 100)}%`}>
               <div
                 className="h-full transition-all duration-75"
                 style={{
@@ -250,7 +267,7 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
         </div>
 
         {/* Digital Time display matching screenshot (e.g. 15:21) */}
-        <div className="font-mono text-[11.5px] text-neutral-300 pl-1 font-semibold">
+        <div className="font-mono text-[11.5px] text-neutral-300 pl-1 font-semibold" title="Systemzeit">
           {timeStr}
         </div>
       </div>

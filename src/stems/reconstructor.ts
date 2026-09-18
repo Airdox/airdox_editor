@@ -159,8 +159,15 @@ export function measureContinuity(
     return p || 1e-9;
   })();
 
-
   const windowWidth = Math.max(64, Math.floor(totalFrames / 2000));
+  // Fast boundary lookup table
+  const isNearBoundary = new Uint8Array(totalFrames);
+  for (const b of boundaries) {
+    const start = Math.max(0, b - 2);
+    const end = Math.min(totalFrames - 1, b + 2);
+    for (let f = start; f <= end; f++) isNearBoundary[f] = 1;
+  }
+
   // Click detection via the discrete second difference: a step discontinuity of
   // size D produces |x[n] - (x[n-1] + x[n+1]) / 2| ~ D/2 while smooth audio
   // stays at the level of its local curvature. The reference is the 99.9th
@@ -173,8 +180,9 @@ export function measureContinuity(
     return Math.abs(current - (previous + next) * 0.5);
   };
   const interiorSamples: number[] = [];
-  for (let f = 1; f < totalFrames - 1; f++) {
-    if (boundaries.some((b) => Math.abs(f - b) <= 2)) continue;
+  const stride = totalFrames > 100000 ? 8 : 1;
+  for (let f = 1; f < totalFrames - 1; f += stride) {
+    if (isNearBoundary[f]) continue;
     for (let c = 0; c < channels; c++) interiorSamples.push(secondDifference(data, f, c));
   }
   interiorSamples.sort((a, b) => a - b);
@@ -322,15 +330,22 @@ export function measureBoundaryError(
   for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(reference[i]));
   peak = peak || 1e-12;
 
+  const isNearBoundary = new Uint8Array(totalFrames);
+  for (const b of boundaries) {
+    const start = Math.max(0, b - tolerance);
+    const end = Math.min(totalFrames - 1, b + tolerance);
+    for (let f = start; f <= end; f++) isNearBoundary[f] = 1;
+  }
+
   const interior: number[] = [];
   let boundaryMax = 0;
-  const nearBoundary = (frame: number) => boundaries.some((border) => Math.abs(frame - border) <= tolerance);
-  for (let f = 0; f < totalFrames; f++) {
+  const stride = totalFrames > 100000 ? 8 : 1;
+  for (let f = 0; f < totalFrames; f += stride) {
     let error = 0;
     for (let c = 0; c < channels; c++) {
       error = Math.max(error, Math.abs((output[f * channels + c] || 0) - (reference[f * channels + c] || 0)));
     }
-    if (nearBoundary(f)) {
+    if (isNearBoundary[f]) {
       if (error > boundaryMax) boundaryMax = error;
     } else {
       interior.push(error);

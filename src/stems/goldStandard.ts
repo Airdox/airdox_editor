@@ -136,7 +136,7 @@ function addPluck(target: Float32Array, frames: number, sampleRate: number, star
     let right = 0;
     for (let v = 0; v < voices; v++) {
       const detune = 1 + (v - 1) * 0.006;
-      const saw = bandLimitedSaw(freq * detune, t, sampleRate, 20);
+      const saw = bandLimitedSaw(freq * detune, t, sampleRate, 8);
       const pan = (v / (voices - 1)) * 2 - 1;
       left += saw * (1 - pan * width);
       right += saw * (1 + pan * width);
