@@ -249,7 +249,7 @@ class StemEngine {
       // New engine path first
       if (desktop?.stemEngine?.getStemEngineStatus) {
         const result = await desktop.stemEngine.getStemEngineStatus();
-        if (result.ok) {
+        if (result.ok === true) {
           const data = result.data;
           if (data.usable) {
             const hq = data.profiles.find((p) => p.profile === 'HIGH' || p.profile === 'HIGH_QUALITY' || p.profile === 'MAXIMUM_QUALITY');

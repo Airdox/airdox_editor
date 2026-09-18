@@ -103,6 +103,8 @@ interface JobRecord {
 
 const PROFILE_DESCRIPTION: Record<QualityProfile, string> = {
   PREVIEW: 'Schneller Vorschau-Pfad – gut, um die Verteilung zu prüfen; nicht als Master-Qualität gemeint.',
+  BALANCED: 'BS-RoFormer mit ausgewogenen Qualitätseinstellungen.',
+  HIGH: 'BS-RoFormer mit hohem Overlap für hochwertige Stems.',
   HIGH_QUALITY: 'BS-RoFormer mit Modell-Empfehlung – Standard für produktionsreife Stems.',
   MAXIMUM_QUALITY: 'BS-RoFormer mit maximalem Overlap und Ensemble-Pässen – langsamste, beste Variante.',
 };

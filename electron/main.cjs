@@ -337,8 +337,7 @@ ipcMain.handle('stems:preflight', async () => {
   };
 });
 
-// One-click in-app installation of the complete Demucs environment
-// (Python venv, torch, demucs, htdemucs_ft weights) with progress events.
+// One-click BS-RoFormer setup in persistent, writable user data.
 let stemInstallRunning = false;
 ipcMain.handle('stems:install-engine', async (event) => {
   if (stemInstallRunning) {
@@ -346,11 +345,15 @@ ipcMain.handle('stems:install-engine', async (event) => {
   }
   stemInstallRunning = true;
   try {
-    return await installStemEngine(path.join(__dirname, '..'), (progress) => {
+    const result = await installStemEngine(path.join(__dirname, '..'), (progress) => {
       try {
         event.sender.send('stems:install-progress', progress);
       } catch { /* window may be closing */ }
-    });
+    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems') });
+    if (result.ok && stemEngineHost.refreshRuntime && !stemEngineHost.refreshRuntime()) {
+      return { ...result, restartRequired: true };
+    }
+    return result;
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   } finally {

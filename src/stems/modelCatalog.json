@@ -22,9 +22,9 @@
       "checkpointSha256": "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb",
       "sampleRate": 44100,
       "inputChannels": 2,
-      "outputStems": ["vocals", "bass", "drums", "other"],
-      "stemOrder": ["vocals", "bass", "drums", "other"],
-      "supportedStems": ["vocals", "bass", "drums", "other"],
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
       "stemDisplayNames": {
         "vocals": "Vocals",
         "bass": "Bass",
@@ -58,7 +58,7 @@
         },
         "rationale": "Primäre 4-Stem BS-RoFormer Engine. BALANCED=4 overlaps, HIGH=4, MAXIMUM_QUALITY=6 overlaps + 3 ensemble. Publiziert: MUSDB avg 9.65 SDR."
       },
-      "notes": "Primärer 4-Stem-Kandidat. Echte modellbasierte AI-Separation. Kein Spectral-Fallback."
+      "notes": "Primärer 4-Stem-Kandidat. Output-Reihenfolge entspricht training.instruments der Release-Config v1.0.12: drums, bass, other, vocals. Kein Spectral-Fallback."
     },
     {
       "id": "bsroformer-viperx-vocals-1297",

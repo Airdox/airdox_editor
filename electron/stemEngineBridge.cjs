@@ -37,33 +37,27 @@ const CHANNELS = {
 const MAX_INPUT_BYTES = 1024 * 1024 * 1024;
 const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
 
-/** New: resolve bundled runtime via stemRuntime.cjs */
-function resolveBundledPython(repoRoot) {
-  try {
-    const { getPythonCandidates } = require('./stemRuntime.cjs');
-    const resourcesPath = process.resourcesPath || null;
-    const candidates = getPythonCandidates(repoRoot, resourcesPath);
-    for (const c of candidates) {
-      try {
-        if (require('node:fs').existsSync(c)) return c;
-      } catch {}
-    }
-  } catch {}
-  return null;
-}
-
-function resolveBundledModelDir(repoRoot) {
-  try {
-    const { getModelCandidates } = require('./stemRuntime.cjs');
-    const resourcesPath = process.resourcesPath || null;
-    const candidates = getModelCandidates(repoRoot, resourcesPath);
-    for (const c of candidates) {
-      try {
-        if (require('node:fs').existsSync(c)) return c;
-      } catch {}
-    }
-  } catch {}
-  return null;
+/** Shared by the desktop and HTTP hosts; directories alone are not models. */
+function resolveEnginePaths(repoRoot, stemsRoot) {
+  const { getPythonCandidates, getModelCandidates, getResourcesPath, PRIMARY_CHECKPOINT, PRIMARY_CONFIG } = require('./stemRuntime.cjs');
+  const { installationPaths, unpackedPath } = require('./stemInstaller.cjs');
+  const install = installationPaths(repoRoot, { stemsRoot });
+  const resources = getResourcesPath(repoRoot);
+  const python = process.env.AIRODOX_STEM_PYTHON || process.env.DEMUCS_PYTHON ||
+    (fs.existsSync(install.python) ? install.python : getPythonCandidates(repoRoot, resources).find(c => fs.existsSync(c))) || install.python;
+  const candidates = [install.modelDir, ...getModelCandidates(repoRoot, resources)];
+  const modelStoreDir = process.env.AIRODOX_STEM_MODEL_DIR || process.env.AIRODOX_STEM_CHECKPOINT_DIR ||
+    candidates.find(c => fs.existsSync(path.join(c, PRIMARY_CHECKPOINT)) && fs.existsSync(path.join(c, PRIMARY_CONFIG))) || install.modelDir;
+  return {
+    modelStoreDir,
+    backend: {
+      pythonCommand: python,
+      nativeCommand: process.env.AIRODOX_AUDIOCPP_CLI,
+      adapterScript: unpackedPath(process.env.AIRODOX_STEM_ADAPTER || path.join(repoRoot, 'python', 'bsroformer_inference.py')),
+      referenceSourceDir: process.env.AIRODOX_MSST_DIR,
+      modelStoreDir,
+    },
+  };
 }
 
 function log(logger, level, message, details) {
@@ -160,23 +154,11 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     return { available: false, reason: loaded.reason, bundlePath: loaded.bundlePath, channels: CHANNELS, bridge: null };
   }
 
-  // Resolve bundled runtime deterministically per §9, §34
-  const bundledPython = resolveBundledPython(repoRoot) || process.env.AIRODOX_STEM_PYTHON;
-  const bundledModelDir = resolveBundledModelDir(repoRoot);
-
-  const bridge = loaded.bridge({
+  const createBridge = () => loaded.bridge({
     root: roots.root,
     env: process.env,
-    // Das Test-Double ist ausschließlich Sache der Automatisierung.
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
-    modelStoreDir: bundledModelDir || path.join(roots.root, 'Models'),
-    backend: {
-      pythonCommand: bundledPython || process.env.AIRODOX_STEM_PYTHON,
-      nativeCommand: process.env.AIRODOX_AUDIOCPP_CLI,
-      adapterScript: process.env.AIRODOX_STEM_ADAPTER || path.join(repoRoot, 'python', 'bsroformer_inference.py'),
-      referenceSourceDir: process.env.AIRODOX_MSST_DIR,
-      modelStoreDir: bundledModelDir || path.join(roots.root, 'Models'),
-    },
+    ...resolveEnginePaths(repoRoot, roots.root),
     logger: {
       debug: (category, message, details) => log(logger, 'debug', `[bridge] ${message}`, details),
       info: (category, message, details) => log(logger, 'info', `[bridge] ${message}`, details),
@@ -185,16 +167,20 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     },
   });
 
-  if (typeof bridge.onEvent === 'function') {
-    bridge.onEvent((event) => {
-      if (!broadcast) return;
-      try {
-        broadcast(CHANNELS.progress, event);
-      } catch (error) {
-        log(logger, 'warn', 'Fortschritts-Event konnte nicht verteilt werden', { error: error.message });
-      }
-    });
+  let bridge = createBridge();
+  function attachEvents() {
+    if (typeof bridge.onEvent === 'function') {
+      bridge.onEvent((event) => {
+        if (!broadcast) return;
+        try {
+          broadcast(CHANNELS.progress, event);
+        } catch (error) {
+          log(logger, 'warn', 'Fortschritts-Event konnte nicht verteilt werden', { error: error.message });
+        }
+      });
+    }
   }
+  attachEvents();
 
   ipcMain.handle(CHANNELS.status, async () => {
     const status = await bridge.status();
@@ -237,7 +223,19 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
 
   log(logger, 'info', 'Stem-Engine IPC registriert', { bundle: loaded.bundlePath, root: roots.root });
 
-  return { available: true, reason: undefined, bundlePath: loaded.bundlePath, channels: CHANNELS, bridge };
+  return { available: true, reason: undefined, bundlePath: loaded.bundlePath, channels: CHANNELS, get bridge() { return bridge; },
+    refreshRuntime() {
+      // Keep all job handles/history alive; a restart can adopt new paths later.
+      const jobs = bridge.jobs();
+      if (!jobs.ok || jobs.data.length > 0) {
+        return false;
+      }
+      bridge.close();
+      bridge = createBridge();
+      attachEvents();
+      return true;
+    },
+  };
 }
 
-module.exports = { CHANNELS, MAX_INPUT_BYTES, registerStemEngineIpc, loadStemBridge, sanitizeRequest };
+module.exports = { resolveEnginePaths, CHANNELS, MAX_INPUT_BYTES, registerStemEngineIpc, loadStemBridge, sanitizeRequest };

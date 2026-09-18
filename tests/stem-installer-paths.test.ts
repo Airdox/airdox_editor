@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
 
 console.log('=== INSTALLER & PATH RESOLUTION TEST – §9, §34, §35 ===');
 
@@ -53,6 +54,28 @@ async function run() {
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   assert.ok(pkg.scripts['stems:diagnose'], 'stems:diagnose script exists');
   console.log('  [PASS] npm run stems:diagnose exists');
+
+  // Reproduce the actual packaged layout rather than merely testing dev paths.
+  const root = mkdtempSync(path.join(os.tmpdir(), 'stem-asar-paths-'));
+  const previousRoot = process.env.AIRDOX_STEMS_ROOT;
+  try {
+    const resourcesPath = path.join(root, 'resources');
+    const repoRoot = path.join(resourcesPath, 'app.asar');
+    process.env.AIRDOX_STEMS_ROOT = path.join(root, 'User Data', 'stems');
+    const models = path.join(process.env.AIRDOX_STEMS_ROOT, 'Models');
+    mkdirSync(path.join(resourcesPath, 'models'), { recursive: true });
+    mkdirSync(models, { recursive: true });
+    writeFileSync(path.join(models, mod.PRIMARY_CHECKPOINT), 'fixture');
+    writeFileSync(path.join(models, mod.PRIMARY_CONFIG), 'fixture');
+    const resolved = resolveStemModel({ env: {}, repoRoot, resourcesPath, checkpointFile: mod.PRIMARY_CHECKPOINT, configFile: mod.PRIMARY_CONFIG });
+    assert.equal(resolved.modelStoreDir, models, 'empty bundled folder must not mask user installation');
+    const absent = resolveStemRuntime({ env: {}, repoRoot, resourcesPath });
+    assert.ok(absent.candidates.every(c => !/app\.asar[\\/]/.test(c)), 'no executable paths inside ASAR');
+  } finally {
+    if (previousRoot === undefined) delete process.env.AIRDOX_STEMS_ROOT;
+    else process.env.AIRDOX_STEMS_ROOT = previousRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
 
   console.log('Installer & path resolution test passed – §9, §34, §35');
 }

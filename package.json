@@ -18,7 +18,7 @@
     "preview": "vite preview",
     "stems:setup": "bash scripts/setup-stem-model.sh",
     "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
-    "stems:diagnose": "node --loader tsx scripts/stems-diagnose.mjs || npx tsx scripts/stems-diagnose.ts",
+    "stems:diagnose": "tsx scripts/stems-diagnose.ts",
     "stems:gate:archive": "node scripts/build-stem-gate-tarball.mjs",
     "stems:gate:notebook": "node scripts/md-to-notebook.mjs",
     "test:stems": "node scripts/run-tests.mjs --group stems",

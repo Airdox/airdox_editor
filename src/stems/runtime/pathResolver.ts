@@ -93,6 +93,7 @@ function getResourcesPath(): string | null {
 
 function getAppDataStemsRoot(): string {
   // %APPDATA%/airdox_SMART_Editor/stems or ~/.config equivalent
+  if (process.env.AIRDOX_STEMS_ROOT) return process.env.AIRDOX_STEMS_ROOT;
   const appName = 'airdox_SMART_Editor';
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -135,7 +136,7 @@ export function resolveStemRuntime(options: {
 
   // 1. Explicit env override – highest priority
   const explicit = env.AIRODOX_STEM_PYTHON || env.DEMUCS_PYTHON;
-  if (explicit) {
+  if (explicit && !/(^|[\\/])app\.asar([\\/]|$)/i.test(explicit)) {
     candidates.push(explicit);
     if (fs.existsSync(explicit)) {
       return {
@@ -179,6 +180,7 @@ export function resolveStemRuntime(options: {
   const appDataRoot = getAppDataStemsRoot();
   const appDataCandidates = process.platform === 'win32'
     ? [
+        path.join(appDataRoot, 'stem-runtime', 'Scripts', 'python.exe'),
         path.join(appDataRoot, 'stem-runtime', 'python.exe'),
         path.join(appDataRoot, 'runtime', 'python.exe'),
       ]
@@ -211,7 +213,7 @@ export function resolveStemRuntime(options: {
         path.join(repoRoot, '.venv', 'bin', 'python'),
         path.join(repoRoot, 'venv', 'bin', 'python3'),
       ];
-  for (const c of devCandidates) {
+  for (const c of devCandidates.filter(c => !/(^|[\\/])app\.asar([\\/]|$)/i.test(c))) {
     candidates.push(c);
     if (fs.existsSync(c)) {
       return {
@@ -254,6 +256,11 @@ export function resolveStemModel(options: {
 } = {}): StemModelPaths {
   const env = options.env ?? process.env;
   const candidates: string[] = [];
+  // Placeholder directories shipped by electron-builder are not installations.
+  const containsModel = (dir: string) =>
+    fs.existsSync(path.join(dir, options.checkpointFile ?? 'model_bs_roformer_ep_17_sdr_9.6568.ckpt')) &&
+    fs.existsSync(path.join(dir, options.configFile ?? 'config_bs_roformer_384_8_2_485100.yaml'));
+
 
   // 1. Env override wins
   const envDir = env.AIRODOX_STEM_MODEL_DIR || env.AIRODOX_STEM_CHECKPOINT_DIR;
@@ -277,7 +284,7 @@ export function resolveStemModel(options: {
     ];
     for (const dir of prodDirs) {
       candidates.push(dir);
-      if (fs.existsSync(dir)) {
+      if (containsModel(dir)) {
         return {
           modelStoreDir: dir,
           checkpointPath: options.checkpointFile ? path.join(dir, options.checkpointFile) : null,
@@ -297,7 +304,7 @@ export function resolveStemModel(options: {
   ];
   for (const dir of appDataDirs) {
     candidates.push(dir);
-    if (fs.existsSync(dir)) {
+    if (containsModel(dir)) {
       return {
         modelStoreDir: dir,
         checkpointPath: options.checkpointFile ? path.join(dir, options.checkpointFile) : null,
@@ -320,7 +327,7 @@ export function resolveStemModel(options: {
   ];
   for (const dir of devDirs) {
     candidates.push(dir);
-    if (fs.existsSync(dir)) {
+    if (containsModel(dir)) {
       return {
         modelStoreDir: dir,
         checkpointPath: options.checkpointFile ? path.join(dir, options.checkpointFile) : null,

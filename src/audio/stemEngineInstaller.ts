@@ -1,13 +1,13 @@
 /**
  * @license
- * airdox In-App-Installer-Client für die Demucs KI-Stem-Engine.
+ * airdox In-App-Installer-Client für die BS-RoFormer KI-Stem-Engine.
  *
  * Ein Aufruf, zwei Transportwege:
  *  - Desktop (Electron): IPC `installStemEngine` + Progress-Events.
  *  - Browser/Dev-Server: POST /api/stems/install als Server-Sent-Events-Stream.
  *
  * Beide führen lokal exakt die Schritte des Setup-Skripts aus (Python-Suche,
- * .venv, torch/torchaudio, demucs 4.0.1, htdemucs_ft-Gewichte, Verifikation).
+ * Benutzer-Runtime, torch/torchaudio, BS-RoFormer, Checkpoint, Test-Inferenz).
  */
 
 export interface StemInstallProgressUpdate {
@@ -23,6 +23,7 @@ export interface StemInstallResult {
   error?: string;
   python?: string;
   model?: string;
+  restartRequired?: boolean;
 }
 
 export async function installStemEngineWithProgress(

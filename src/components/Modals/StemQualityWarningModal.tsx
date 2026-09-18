@@ -7,7 +7,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { AlertTriangle, X, Cpu, Sparkles, ShieldAlert, Download, CheckCircle2, Loader2 } from 'lucide-react';
+import { AlertTriangle, X, Cpu, ShieldAlert, Download, CheckCircle2, Loader2 } from 'lucide-react';
 import {
   installStemEngineWithProgress,
   StemInstallProgressUpdate,
@@ -25,7 +25,7 @@ interface StemQualityWarningModalProps {
 type InstallState =
   | { phase: 'IDLE' }
   | { phase: 'RUNNING'; progress: StemInstallProgressUpdate | null; lastLog: string }
-  | { phase: 'DONE' }
+  | { phase: 'DONE'; restartRequired?: boolean }
   | { phase: 'FAILED'; error: string };
 
 export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = ({
@@ -60,8 +60,8 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
         }));
       });
       if (result.ok) {
-        setInstall({ phase: 'DONE' });
-        onEngineInstalled?.();
+        setInstall({ phase: 'DONE', restartRequired: result.restartRequired });
+        if (!result.restartRequired) onEngineInstalled?.();
       } else {
         setInstall({ phase: 'FAILED', error: result.error || 'Unbekannter Installationsfehler.' });
       }
@@ -75,17 +75,12 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
 
   if (!isOpen) return null;
 
-  const setupCommand =
-    typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
-      ? 'npm run stems:setup:bsroformer'
-      : 'npm run stems:setup:bsroformer';
-
   const isUnavailable = reason.includes('STEM_ENGINE_UNAVAILABLE') || reason.includes('BS-RoFormer') || reason.includes('nicht verfügbar');
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 select-none p-4">
-      <div className="w-full max-w-lg bg-[#13151c] border border-[#ef4444]/40 rounded shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs animate-in fade-in zoom-in-95 duration-150">
-        <div className="h-10 bg-[#1d1010] border-b border-[#3a1414] flex items-center justify-between px-3">
+      <div className="w-full max-w-lg max-h-[calc(100dvh-2rem)] bg-[#13151c] border border-[#ef4444]/40 rounded shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs animate-in fade-in zoom-in-95 duration-150">
+        <div className="h-10 shrink-0 bg-[#1d1010] border-b border-[#3a1414] flex items-center justify-between px-3">
           <div className="flex items-center space-x-2">
             <div className="w-6 h-6 rounded bg-[#ef4444]/20 border border-[#ef4444]/50 flex items-center justify-center text-[#ef4444]">
               <AlertTriangle size={14} />
@@ -94,12 +89,12 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
               {isUnavailable ? 'STEM AI UNAVAILABLE – BS-RoFormer nicht bereit' : 'KI-Stem-Engine nicht verfügbar'}
             </span>
           </div>
-          <button onClick={onClose} className="p-1 hover:text-white text-neutral-400 hover:bg-[#252834] rounded">
+          <button onClick={onClose} disabled={installing} aria-label="Schließen" className="p-1 hover:text-white text-neutral-400 hover:bg-[#252834] rounded">
             <X size={14} />
           </button>
         </div>
 
-        <div className="p-4 space-y-3.5">
+        <div className="p-4 space-y-3.5 overflow-y-auto min-h-0">
           <div className="bg-[#241010] border border-[#ef4444]/30 p-3 rounded flex items-start space-x-2.5">
             <ShieldAlert size={18} className="text-[#ef4444] flex-shrink-0 mt-0.5" />
             <div className="space-y-1">
@@ -111,9 +106,9 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
                 <span className="font-mono text-[#00c8ff]">model_bs_roformer_ep_17_sdr_9.6568.ckpt</span> (BS-RoFormer, 4 Stems, SDR 9.65).
                 <br />
                 <br />
-                Pfad (Production): <span className="font-mono text-[#4ade80]">resources/stem-runtime/python.exe</span> + <span className="font-mono text-[#4ade80]">resources/models/</span>
+                Nachinstallation: im beschreibbaren Benutzerdatenordner unter <span className="font-mono text-[#4ade80]">stems/stem-runtime</span> und <span className="font-mono text-[#4ade80]">stems/Models</span>. Bestehende gebündelte Modelle werden ebenfalls erkannt.
                 <br />
-                Python 3.9–3.13 erforderlich, 3.14 wird abgelehnt. Torch/torchaudio pinned.
+                Installer: Python 3.10–3.12 (64-Bit), empfohlen 3.11. PyTorch/torchaudio 2.5.1.
               </p>
             </div>
           </div>
@@ -121,7 +116,7 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
           <div className="bg-[#0b0c10] border border-[#1d1f2a] rounded-xs p-2.5 space-y-1.5">
             <div className="flex items-center space-x-1.5 text-neutral-400">
               <Cpu size={12} />
-              <span className="font-bold text-[10.5px] uppercase tracking-wider">Diagnose – npm run stems:diagnose</span>
+              <span className="font-bold text-[10.5px] uppercase tracking-wider">Diagnose</span>
             </div>
             <p className="font-mono text-[10.5px] text-[#ff8a80] leading-relaxed break-all">{reason}</p>
             <p className="text-[10px] text-neutral-500 mt-2">
@@ -136,10 +131,10 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
                 <span className="font-bold text-[10.5px] uppercase tracking-wider">Empfohlen: BS-RoFormer jetzt installieren</span>
               </div>
               <p className="text-[11px] text-neutral-300 leading-relaxed">
-                Python 3.11 venv + torch + torchaudio + BS-RoFormer Checkpoint (~400MB) + Config. Danach läuft jede Trennung lokal in echter AI-Qualität – CUDA wenn verfügbar, CPU Fallback bei wenig VRAM, niemals spektral.
+                Installiert eine isolierte Python-Umgebung, PyTorch (CPU), die BS-RoFormer-Architektur, Checkpoint (~503 MiB) und Config. Internet und mehrere GB freier Speicher werden benötigt. Anschließend werden SHA256 und eine kurze Test-Inferenz geprüft.
               </p>
               <p className="text-[10px] text-neutral-500">
-                Manuell: <span className="font-mono text-[#4ade80]">{setupCommand}</span> – danach <span className="font-mono">npm run stems:diagnose</span>
+                Kein Terminal erforderlich. Falls Python fehlt, zuerst Python 3.11 (64-Bit) installieren.
               </p>
             </div>
           )}
@@ -169,7 +164,7 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
                 <CheckCircle2 size={14} />
                 <span className="font-bold text-[11px]">BS-RoFormer erfolgreich installiert und verifiziert!</span>
               </div>
-              <p className="text-[11px] text-neutral-300">Modell SHA256 geprüft, Test-Inferenz erfolgreich. Starte jetzt erneut.</p>
+              <p className="text-[11px] text-neutral-300">{install.restartRequired ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.' : 'Modell SHA256 geprüft, kurze Test-Inferenz erfolgreich. Starte jetzt erneut.'}</p>
             </div>
           )}
 
@@ -181,20 +176,20 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
               </div>
               <p className="font-mono text-[10px] text-[#ff8a80] break-all">{install.error}</p>
               <p className="text-[10.5px] text-neutral-400">
-                Manuell: <span className="font-mono text-[#4ade80]">{setupCommand}</span>
+                Internetverbindung, freien Speicher und Python 3.11 (64-Bit) prüfen, dann erneut versuchen.
               </p>
             </div>
           )}
         </div>
 
-        <div className="h-12 bg-[#10121a] border-t border-[#1e2130] flex items-center justify-end px-3 space-x-2">
+        <div className="h-12 shrink-0 bg-[#10121a] border-t border-[#1e2130] flex items-center justify-end px-3 space-x-2">
           {install.phase === 'DONE' ? (
             <button
-              onClick={() => (onRunWithInstalledEngine ? onRunWithInstalledEngine() : onClose())}
+              onClick={() => (!install.restartRequired && onRunWithInstalledEngine ? onRunWithInstalledEngine() : onClose())}
               className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-[#10b981] hover:bg-[#34d399] text-black text-xs font-bold"
             >
               <CheckCircle2 size={13} />
-              <span>Fertig — jetzt in KI-Qualität trennen</span>
+              <span>{install.restartRequired ? 'Fertig — Schließen' : 'Fertig — jetzt in KI-Qualität trennen'}</span>
             </button>
           ) : (
             <>

@@ -60,3 +60,43 @@ DB-Import nachvollziehbar. Zum Aktivieren:
   `airdox://app/`, sodass CORS-/File-Probleme (weisser Bildschirm) auch bei
   Installation in Programme-Ordner mit Leerzeichen nicht mehr auftreten.
 - Die Build-Artefakte (`dist/`, `release/`) sind per `.gitignore` ausgenommen.
+
+## BS-RoFormer in der gepackten App nachinstallieren
+
+Der Button **„BS-RoFormer installieren“** installiert die primäre Engine, nicht
+mehr den alten Demucs-Pfad. Voraussetzung: **Python 3.10–3.12, 64-Bit**
+(empfohlen 3.11), Internetzugang und mehrere GB freier Speicher. Der Installer
+verwendet zunächst CPU-Wheels von torch/torchaudio 2.5.1; CUDA ist nicht nötig.
+
+- Runtime: `%APPDATA%/airdox_SMART_Editor/stems/stem-runtime/Scripts/python.exe`
+- Checkpoint und Config: `%APPDATA%/airdox_SMART_Editor/stems/Models/`
+- Python-Hilfsskripte: `resources/app.asar.unpacked/python/` (im Build enthalten).
+
+Es wird weder in `app.asar` noch in das temporäre Entpackverzeichnis einer
+portablen EXE installiert. Der Benutzerdatenordner bleibt bei einem App-Update
+bzw. Neustart erhalten. Ein leerer mitgelieferter `resources/models/`-Ordner
+blockiert die Nachinstallation nicht mehr. Die Architektur wird als `msst`
+installiert; auf dem Zielrechner sind weder npm, Bash noch Git erforderlich.
+
+Downloads werden als `.part` geschrieben. Erst ein zum Modellkatalog passender
+SHA256 aktiviert den Checkpoint. Der letzte Installationsschritt lädt die
+Gewichte mit dem produktiven Adapter und prüft einen kurzen CPU-Forward-Pass
+inklusive Output-Form und endlicher Samples. Ein bloßes Vorhandensein der Dateien
+zählt nicht als erfolgreiche Installation. Die primäre Stem-Reihenfolge folgt
+`training.instruments` der [originalen Release-Config v1.0.12](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/config_bs_roformer_384_8_2_485100.yaml):
+**drums, bass, other, vocals**.
+
+Nach erfolgreicher Installation wird die Engine neu aufgelöst. Existieren
+bereits Jobs in dieser Sitzung, bleibt deren Zustand erhalten und die UI fordert
+stattdessen zum Speichern und Neustarten auf. Der Browser-/Serverbetrieb nutzt
+denselben Installer unter `AIRDOX_STEMS_ROOT` bzw. `stem-engine-data/`.
+
+### Prüfung der Reparatur
+
+`npm run lint`, `npm run build` und `npm test` sind erfolgreich
+(44 Tests bestanden, 3 hardware-/modellabhängige Live-Tests übersprungen).
+Die neuen Regressionstests prüfen den ASAR-/Windows-Pfad, Wiederholung nach
+Fehlern, Download-/Hash-Fehler und die Neuauflösung der Engine ohne echte Downloads.
+Der vollständige Installer mit echten Gewichten und die gepackte Windows-EXE
+müssen zusätzlich auf Windows geprüft werden; der Linux-Testlauf ersetzt das nicht.
+Die bestehende EXE erhält die Reparatur erst durch einen neuen Windows-Build.

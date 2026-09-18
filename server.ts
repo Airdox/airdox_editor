@@ -46,12 +46,14 @@ logger.configure({
 logger.installProcessHandlers();
 
 import stemInstaller from './electron/stemInstaller.cjs';
+import stemEngineHost from './electron/stemEngineBridge.cjs';
 
 const { installStemEngine } = stemInstaller as {
   installStemEngine: (
     repoRoot: string,
-    onProgress?: (p: { step: number; totalSteps: number; percent: number; label: string; logLine?: string }) => void
-  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string }>;
+    onProgress?: (p: { step: number; totalSteps: number; percent: number; label: string; logLine?: string }) => void,
+    options?: { stemsRoot: string }
+  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string; restartRequired?: boolean }>;
 };
 
 const { separateWav, inspectDemucsEnvironment } = demucsRunner as {
@@ -134,7 +136,11 @@ async function startServer() {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress));
+      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress), { stemsRoot: stemsDataRoot });
+      if (result.ok) {
+        if (stemJobs.listJobs().length === 0) stemJobs = createStemJobs();
+        else result.restartRequired = true;
+      }
       send('done', result);
     } catch (error) {
       send('done', { ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -199,18 +205,13 @@ async function startServer() {
   // Mix schnell zweistellige MB-Zahlen erreicht und der globale Limit bei 10 MB
   // liegt.
   const stemsDataRoot = process.env.AIRDOX_STEMS_ROOT || path.join(process.cwd(), 'stem-engine-data');
-  const stemJobs = new StemJobService({
+  const createStemJobs = () => new StemJobService({
     root: stemsDataRoot,
     env: process.env as Record<string, string | undefined>,
     // Dasselbe (und nur per Env gesetzte) Test-Double-Gate wie im
     // Electron-Host: Produktionsläufe können es nicht erreichen.
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
-    backend: {
-      pythonCommand: process.env.AIRODOX_STEM_PYTHON,
-      nativeCommand: process.env.AIRODOX_AUDIOCPP_CLI,
-      adapterScript: path.join(process.cwd(), 'python', 'bsroformer_inference.py'),
-      referenceSourceDir: process.env.AIRODOX_MSST_DIR,
-    },
+    ...stemEngineHost.resolveEnginePaths(process.cwd(), stemsDataRoot),
     logger: {
       debug: (category, message, details) => logger.debug(category, message, details),
       info: (category, message, details) => logger.info(category, message, details),
@@ -218,6 +219,7 @@ async function startServer() {
       error: (category, message, details) => logger.error(category, message, details),
     },
   });
+  let stemJobs = createStemJobs();
   app.use('/api/stems/jobs', express.json({ limit: '500mb' }));
 
   const stemErrorPayload = (error: unknown) => {

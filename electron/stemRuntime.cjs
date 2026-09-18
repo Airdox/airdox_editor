@@ -60,6 +60,7 @@ function getResourcesPath(repoRoot) {
 }
 
 function getAppDataStemsRoot() {
+  if (process.env.AIRDOX_STEMS_ROOT) return process.env.AIRDOX_STEMS_ROOT;
   const appName = 'airdox_SMART_Editor';
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -92,6 +93,7 @@ function getPythonCandidates(repoRoot, resourcesPath) {
 
   const appDataRoot = getAppDataStemsRoot();
   if (process.platform === 'win32') {
+    candidates.push(path.join(appDataRoot, 'stem-runtime', 'Scripts', 'python.exe'));
     candidates.push(path.join(appDataRoot, 'stem-runtime', 'python.exe'));
   } else {
     candidates.push(path.join(appDataRoot, 'stem-runtime', 'bin', 'python3'));
@@ -235,7 +237,7 @@ print(json.dumps(result))
   }
 
   try {
-    const last = proc.stdout.trim().split(/\\r?\\n/).pop();
+    const last = proc.stdout.trim().split(/\r?\n/).pop();
     const details = JSON.parse(last);
     const [major, minor, patch] = details.version || [0,0,0];
     if (major !== 3 || minor < SUPPORTED_PYTHON_RANGE.minMinor || minor > SUPPORTED_PYTHON_RANGE.maxMinor) {
@@ -321,7 +323,7 @@ async function verifyCheckpoint(checkpointPath, expectedSha256, onLog) {
     if (expectedSha256 === 'unverified') {
       return { exists: true, verified: false, reason: `model_hash unverified – berechnet ${actual}`, sha256: actual, size: info.size };
     }
-    return { exists: true, verified: true, sha256: actual, size: info.size };
+    return { exists: true, verified: Boolean(verified), reason: verified ? undefined : 'Kein vertrauenswürdiger SHA256 hinterlegt', sha256: actual, size: info.size };
   } catch (e) {
     return { exists: false, verified: false, reason: `Nicht lesbar: ${e.message}`, sha256: null };
   }
@@ -475,7 +477,7 @@ async function inspectStemRuntime(repoRoot, candidateOverride, onLog) {
     status,
     engine: 'bsroformer',
     model: PRIMARY_MODEL_ID,
-    python: diagnostics.pythonVersion ?? 'not found',
+    pythonVersion: diagnostics.pythonVersion ?? 'not found',
     torch: diagnostics.torchVersion ?? 'not found',
     device: cudaAvailable ? 'cuda' : 'cpu',
     checkpointVerified: Boolean(checkpointVerification.verified),
@@ -490,6 +492,8 @@ async function inspectStemRuntime(repoRoot, candidateOverride, onLog) {
 }
 
 module.exports = {
+  getAppDataStemsRoot,
+  getResourcesPath,
   inspectStemRuntime,
   getPythonCandidates,
   getModelCandidates,

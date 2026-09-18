@@ -110,7 +110,7 @@ async function run() {
   // die trainierten Gewichte nicht geladen wurden (TEIL 2, Pinning).
   const unverifiedWarnings = (status.registryIssues as { code?: string }[]).filter((issue) => issue.code === 'MODEL_HASH_UNVERIFIED');
   assert.ok(unverifiedWarnings.length <= status.models.length);
-  assert.equal(status.profiles.length, 3, 'genau die drei Profile aus dem Kern');
+  assert.deepEqual(status.profiles.map(p => p.profile), ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'], 'alle fünf Profile aus dem Kern');
 
   const preview = status.profiles.find((entry) => entry.profile === 'PREVIEW')!;
   const high = status.profiles.find((entry) => entry.profile === 'HIGH_QUALITY')!;
@@ -122,10 +122,10 @@ async function run() {
     'PREVIEW-Stems folgen dem htdemucs-Deskriptor (stemOrder), nicht der alten Konstanten'
   );
   assert.equal(high.modelId, 'bsroformer-musdb18hq-4stem-zfturbo');
-  assert.deepEqual(high.stems.map((stem) => stem.id), ['vocals', 'bass', 'drums', 'other']);
+  assert.deepEqual(high.stems.map((stem) => stem.id), ['drums', 'bass', 'other', 'vocals']);
   assert.deepEqual(
     high.stems.map((stem) => stem.displayName),
-    ['Vocals', 'Bass', 'Drums', 'Other'],
+    ['Drums', 'Bass', 'Other', 'Vocals'],
     'Anzeigenamen kommen aus stemDisplayNames'
   );
   assert.equal(maximum.parameters.numOverlap > high.parameters.numOverlap, true, 'MAXIMUM_QUALITY erhöht num_overlap');
@@ -135,7 +135,7 @@ async function run() {
   const trainedUsable = high.available;
   assert.equal(status.usable, status.profiles.some((entry) => entry.available));
   assert.equal(status.defaultProfile, trainedUsable ? 'HIGH_QUALITY' : 'PREVIEW');
-  console.log(`  ✓ 3 Profile, Stems je Profil aus dem Deskriptor (HQ: ${high.stems.map((s) => s.id).join(',')})`);
+  console.log(`  ✓ 5 Profile, Stems je Profil aus dem Deskriptor (HQ: ${high.stems.map((s) => s.id).join(',')})`);
   console.log(`  ✓ usable=${status.usable} → defaultProfile=${status.defaultProfile} (Grund: ${high.reason ?? 'Modell installiert'})`);
   assert.ok(status.models.length >= 5, 'alle Katalogmodelle werden gemeldet');
   assert.ok(status.models.every((model) => model.stems.length > 0), 'jedes Modell meldet seine Stems');
@@ -303,7 +303,7 @@ async function run() {
   assert.equal(bridge.version, STEM_BRIDGE_VERSION);
   const bridgeStatus = await bridge.status();
   assert.equal(bridgeStatus.ok, true);
-  assert.equal(bridgeStatus.ok && bridgeStatus.data.profiles.length, 3);
+  assert.equal(bridgeStatus.ok && bridgeStatus.data.profiles.length, 5);
   const bridgeStarted = await bridge.start({
     inputPath: probe.inputPath,
     profile: 'PREVIEW',
