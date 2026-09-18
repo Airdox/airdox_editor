@@ -8,6 +8,7 @@ import React from 'react';
 import { FileAudio, Check, Layers } from 'lucide-react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
+import { APP_BUILD } from '../utils/appVersion';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
@@ -140,6 +141,12 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   : track.origin === 'REKORDBOX_XML'
                   ? 'REKORDBOX XML'
                   : 'EDIT WORKING COPY'}
+              </span>
+              <span>•</span>
+              {/* Build-Identität: Version + Git-Commit, damit jeder ausgelieferte
+                  Build eindeutig zuordenbar ist. */}
+              <span className="text-neutral-500 font-mono text-[9px]" title="Build-Version (Version+Commit)">
+                v{APP_BUILD}
               </span>
             </div>
           </div>

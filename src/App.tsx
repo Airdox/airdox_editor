@@ -2352,15 +2352,31 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             duration: originalAudio.duration || activeTrack.duration,
             sampleRate: originalAudio.sampleRate,
             channels: originalAudio.numberOfChannels,
-            analysis: analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
           };
-          const working = audioEngine.renderWorkingAudio(originalAudio, withAudio.workingSegments);
+          // Same guarantee as a fresh deck load: real ANLZ data first (the
+          // project file stores no waveform), then the track's own audio, then
+          // a clearly tagged beatgrid preview.
+          const withAnlz = await tryAutoLoadAnlz(withAudio);
+          const resolved = resolveDeckWaveform({ ...withAnlz, analysis: withAnlz.analysis ?? null });
+          const finalTrack = resolved.track;
+          logger.info('WAVEFORM', `[Projekt] ${finalTrack.title}: Waveform-Quelle = ${resolved.source}`);
+          const working = audioEngine.renderWorkingAudio(originalAudio, finalTrack.workingSegments);
           setWorkingAudioBuffer(working);
-          setTracks((prev) => prev.map((t) => (t.id === withAudio.id ? withAudio : t)));
+          setTracks((prev) => prev.map((t) => (t.id === finalTrack.id ? finalTrack : t)));
         } else if (activeTrack.audioBuffer) {
           setWorkingAudioBuffer(
             audioEngine.renderWorkingAudio(activeTrack.audioBuffer, activeTrack.workingSegments)
           );
+          const resolved = resolveDeckWaveform(activeTrack);
+          if (resolved.source !== 'NONE' && resolved.track !== activeTrack) {
+            setTracks((prev) => prev.map((t) => (t.id === resolved.track.id ? resolved.track : t)));
+          }
+        } else {
+          // No audio at all: still never an empty bar.
+          const resolved = resolveDeckWaveform(activeTrack);
+          if (resolved.source !== 'NONE' && resolved.track !== activeTrack) {
+            setTracks((prev) => prev.map((t) => (t.id === resolved.track.id ? resolved.track : t)));
+          }
         }
       }
 
