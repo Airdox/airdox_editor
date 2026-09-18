@@ -467,6 +467,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
   const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
   const [stemEngineUnavailableReason, setStemEngineUnavailableReason] = useState<string | null>(null);
+  // Guards against double-clicks / parallel separations (second run would
+  // allocate another ~100 MB WAV + base64 and freeze the UI) and carries the
+  // abort flag through preparation, IPC wait and stem decoding.
+  const separationRunningRef = useRef<boolean>(false);
+  const separationAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
@@ -1042,12 +1047,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
     }
+    if (separationRunningRef.current) {
+      logger.warn('EDITING', 'Stem-Separation: Bereits ein Lauf aktiv – Doppelstart ignoriert.');
+      return;
+    }
+    separationRunningRef.current = true;
+    separationAbortRef.current = { aborted: false };
     setIsSeparatingStems(true);
     setStemEngineUnavailableReason(null);
     try {
       const separated = await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
         profile,
         onProgress: (prog) => setSeparationProgress(prog),
+        signal: separationAbortRef.current,
       });
       setActiveTrackStems(separated);
       const stemList = (separated.stemIds ?? STEM_TYPES).join(', ');
@@ -1062,7 +1074,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     } catch (err: any) {
       const message = err?.message || String(err);
       const code = err?.code || (message.includes('STEM_ENGINE_UNAVAILABLE') ? 'STEM_ENGINE_UNAVAILABLE' : undefined);
-      if (code === 'STEM_ENGINE_UNAVAILABLE' || message.includes('STEM_ENGINE_UNAVAILABLE') || message.includes('Spektrale Fallback')) {
+      if (code === 'INFERENCE_CANCELLED') {
+        logger.info('EDITING', 'Stem-Separation: Vom Benutzer abgebrochen – keine Stems übernommen.');
+      } else if (code === 'STEM_ENGINE_UNAVAILABLE' || message.includes('STEM_ENGINE_UNAVAILABLE') || message.includes('Spektrale Fallback')) {
         logger.warn('EDITING', `Stem-Separation: Engine nicht verfügbar – ${message}`);
         setStemEngineUnavailableReason(message);
         setStemQualityWarning(message);
@@ -1072,14 +1086,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         setStemQualityWarning(message);
       }
     } finally {
+      separationRunningRef.current = false;
       setIsSeparatingStems(false);
       setSeparationProgress(null);
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback]);
 
   const handleCancelStemSeparation = useCallback(() => {
+    // Local abort flag cancels preparation/decoding/wait phases immediately;
+    // the engine job (if already started) is cancelled on top.
+    separationAbortRef.current.aborted = true;
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
-    logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
+    logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: Abbruch angefordert (Vorbereitung wird gestoppt).');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
   }, []);
 
@@ -1088,7 +1106,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
       return;
     }
+    if (separationRunningRef.current || isSeparatingStems) {
+      logger.warn('EDITING', 'Stem-Separation: Bereits ein Lauf aktiv – Doppelstart ignoriert.');
+      return;
+    }
     const profile = resolvedStemProfile;
+    separationRunningRef.current = true;
+    separationAbortRef.current = { aborted: false };
     setIsSeparatingStems(true);
     setStemEngineUnavailableReason(null);
     setSeparationProgress({
@@ -1097,31 +1121,51 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       processedSeconds: 0,
       totalSeconds: workingAudioBuffer.duration,
     });
-    const availability = await stemEngine.checkAvailability();
-    setIsSeparatingStems(false);
-    setSeparationProgress(null);
-    if (!availability.available) {
-      logger.warn('EDITING', `Stem-Preflight: BS-RoFormer nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
-      setStemEngineUnavailableReason(availability.reason || 'STEM AI UNAVAILABLE');
-      setStemQualityWarning(availability.reason || 'STEM AI UNAVAILABLE');
-      const info = await stemEngine.getEngineInfo().catch(() => null);
-      if (info) setStemEngineInfo(info);
-      return;
+    let handedOver = false;
+    try {
+      const availability = await stemEngine.checkAvailability();
+      if (separationAbortRef.current.aborted) {
+        logger.info('EDITING', 'Stem-Separation: Preflight abgebrochen.');
+        return;
+      }
+      if (!availability.available) {
+        logger.warn('EDITING', `Stem-Preflight: BS-RoFormer nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
+        setStemEngineUnavailableReason(availability.reason || 'STEM AI UNAVAILABLE');
+        setStemQualityWarning(availability.reason || 'STEM AI UNAVAILABLE');
+        const info = await stemEngine.getEngineInfo().catch(() => null);
+        if (info) setStemEngineInfo(info);
+        return;
+      }
+      const info = await stemEngine.getEngineInfo();
+      setStemEngineInfo(info);
+      if (separationAbortRef.current.aborted) {
+        logger.info('EDITING', 'Stem-Separation: Preflight abgebrochen.');
+        return;
+      }
+      const chosen = info.profiles.find((entry) => entry.profile === profile);
+      if (!info.ok || (chosen && !chosen.available)) {
+        logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
+        setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
+        setStemQualityWarning(
+          `Profil ${profile} nicht verfügbar: ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}. ` +
+            'Installation: npm run stems:setup:bsroformer und npm run stems:diagnose'
+        );
+        return;
+      }
+      // Hand over to the actual run without dropping isSeparating (no UI flicker).
+      separationRunningRef.current = false;
+      handedOver = true;
+      await runStemSeparation(profile);
+    } finally {
+      separationRunningRef.current = false;
+      // runStemSeparation resets the UI state itself when it ran;
+      // preflight-only exits must reset it here.
+      if (!handedOver) {
+        setIsSeparatingStems(false);
+        setSeparationProgress(null);
+      }
     }
-    const info = await stemEngine.getEngineInfo();
-    setStemEngineInfo(info);
-    const chosen = info.profiles.find((entry) => entry.profile === profile);
-    if (!info.ok || (chosen && !chosen.available)) {
-      logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
-      setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
-      setStemQualityWarning(
-        `Profil ${profile} nicht verfügbar: ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}. ` +
-          'Installation: npm run stems:setup:bsroformer und npm run stems:diagnose'
-      );
-      return;
-    }
-    await runStemSeparation(profile);
-  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile]);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile, isSeparatingStems]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -3694,6 +3738,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onAnalyzeMixIn={() => setChatbotOpen(true)}
         onOpenMidiModal={() => setMidiModalOpen(true)}
         onSeparateStems={handleSeparateStems}
+        stemsSeparating={isSeparatingStems}
         onOpenRecorder={openRecorder}
       />
 

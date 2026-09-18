@@ -237,7 +237,9 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
     import numpy as np
     import torch
 
-    torch.set_num_threads(max(1, (os.cpu_count() or 2)))
+    # Leave one core for the OS/Electron UI: with all cores saturated the app
+    # feels frozen on Windows during CPU inference.
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) - 1))
     sample_rate = int(getattr(config.audio, "sample_rate", args.sample_rate))
     chunk_size = int(args.chunk_size)
     num_overlap = max(1, int(args.num_overlap))
@@ -318,6 +320,9 @@ def main(argv: List[str]) -> int:
     except Exception as error:  # noqa: BLE001
         emit({"type": "error", "code": "BACKEND_UNAVAILABLE", "message": f"PyTorch nicht verfügbar: {error}"})
         return EXIT_MODEL
+    # Early progress while the ~500 MB checkpoint loads: without these the UI
+    # sits at ~8-10% for minutes on CPU and looks frozen on Windows.
+    emit({"type": "progress", "fraction": 0.01, "phase": "PyTorch bereit"})
 
     device = args.device
     if device == "auto":
@@ -341,8 +346,10 @@ def main(argv: List[str]) -> int:
     except Exception as error:  # noqa: BLE001
         emit({"type": "error", "code": "MODEL_CORRUPT", "message": f"Modell konnte nicht aufgebaut werden: {error}"})
         return EXIT_MODEL
+    emit({"type": "progress", "fraction": 0.02, "phase": "Modell aufgebaut – Checkpoint wird geladen"})
 
     weight_state = load_checkpoint(model, args.checkpoint, args.allow_random_weights, device)
+    emit({"type": "progress", "fraction": 0.03, "phase": "Checkpoint geladen – Audio wird gelesen"})
 
     try:
         mix = read_audio(args.input, int(getattr(config.audio, "sample_rate", args.sample_rate)))
@@ -353,6 +360,7 @@ def main(argv: List[str]) -> int:
     except Exception as error:  # noqa: BLE001
         emit({"type": "error", "code": "AUDIO_CORRUPT", "message": f"Eingabe nicht lesbar: {error}"})
         return EXIT_AUDIO
+    emit({"type": "progress", "fraction": 0.04, "phase": "Audio gelesen – Inferenz startet"})
 
     stem_order = [stem.strip() for stem in args.stem_order.split(",") if stem.strip()]
     if not stem_order:

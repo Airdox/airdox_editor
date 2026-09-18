@@ -317,15 +317,16 @@ export class StemSeparationEngine {
       onProgress: request.onProgress,
       token: request.token,
     });
-    if (request.token) {
-      // Forward cancellation from a caller supplied token into the job token.
-      const watcher = setInterval(() => {
-        if (request.token!.cancelled) job.cancel(request.token!.reason);
-      }, 100);
-      watcher.unref?.();
-      job.token.waitForResume().catch(() => undefined);
-      void watcher;
-    }
+    // Forward cancellation from a caller supplied token into the job token.
+    // The watcher is cleared in the finally below: previously every run leaked
+    // a 100 ms interval forever, slowing the host process after repeated runs.
+    const cancelWatcher = request.token
+      ? setInterval(() => {
+          if (request.token!.cancelled) job.cancel(request.token!.reason);
+        }, 100)
+      : undefined;
+    cancelWatcher?.unref?.();
+    if (request.token) job.token.waitForResume().catch(() => undefined);
     job.inputAudioHash = working.inputAudioHash;
     job.originalIntegrity = integrity;
     job.workingCopyPath = working.workingPath;
@@ -522,6 +523,8 @@ export class StemSeparationEngine {
       await job.persist().catch(() => undefined);
       await this.finishIntegrity(job, integrity).catch(() => undefined);
       throw error instanceof StemSeparationError ? error : classifyFailure('INFERENCE_FAILED', 'Separation fehlgeschlagen', error);
+    } finally {
+      if (cancelWatcher !== undefined) clearInterval(cancelWatcher);
     }
   }
 

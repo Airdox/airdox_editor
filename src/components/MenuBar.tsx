@@ -48,6 +48,7 @@ interface MenuBarProps {
   onAnalyzeMixIn?: () => void;
   onOpenMidiModal?: () => void;
   onSeparateStems?: () => void;
+  stemsSeparating?: boolean;
   onOpenRecorder?: () => void;
 }
 
@@ -91,6 +92,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onAnalyzeMixIn,
   onOpenMidiModal,
   onSeparateStems,
+  stemsSeparating = false,
   onOpenRecorder,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
@@ -353,12 +355,13 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               {onSeparateStems && (
                 <button
                   onClick={() => { onSeparateStems(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
-                  title="Trennt den aktiven Track in 4 Stems (Vocals, Drums, Bass, Other)"
+                  disabled={stemsSeparating}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 disabled:hover:bg-transparent flex justify-between items-center text-[#00e5ff]"
+                  title={stemsSeparating ? 'Separation läuft bereits – bitte warten oder abbrechen' : 'Trennt den aktiven Track in 4 Stems (Vocals, Drums, Bass, Other)'}
                 >
                   <span className="flex items-center space-x-1.5">
                     <Sparkles size={12} className="text-[#00e5ff]" />
-                    <span>Multi-Band Stems trennen...</span>
+                    <span>{stemsSeparating ? 'Stems werden getrennt…' : 'Multi-Band Stems trennen...'}</span>
                   </span>
                   <span className="text-[9px] bg-[#0088ff]/30 text-white px-1 rounded font-mono">4-STEMS</span>
                 </button>

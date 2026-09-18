@@ -145,7 +145,60 @@ export type StemEngineErrorCode =
   | 'TORCH_MISSING'
   | 'MODEL_NOT_AVAILABLE';
 
-function encodeStereoFloatWav(buffer: AudioBuffer): Uint8Array {
+/** Gives the renderer a chance to paint + process input between heavy chunks.
+ * Without these yields a multi-minute track blocks the UI thread for seconds
+ * (WAV encoding, base64 upload, stem decoding) and the app looks frozen. */
+function yieldToUI(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function throwIfAborted(signal?: { aborted: boolean }): void {
+  if (signal?.aborted) {
+    throw Object.assign(
+      new Error('Die Separation wurde abgebrochen; es wurden keine Stems übernommen.'),
+      { code: 'INFERENCE_CANCELLED' }
+    );
+  }
+}
+
+/** Races an engine wait against a local abort signal (preparation/cancel phase). */
+async function waitWithAbort<T>(
+  pending: Promise<T>,
+  signal: { aborted: boolean } | undefined,
+  onAbort: () => void
+): Promise<T> {
+  if (!signal) return pending;
+  if (signal.aborted) {
+    try { onAbort(); } catch { /* best effort */ }
+    throwIfAborted(signal);
+  }
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      pending.then(resolve, reject);
+      timer = setInterval(() => {
+        if (signal.aborted) {
+          try { onAbort(); } catch { /* best effort */ }
+          reject(Object.assign(
+            new Error('Die Separation wurde abgebrochen; es wurden keine Stems übernommen.'),
+            { code: 'INFERENCE_CANCELLED' }
+          ));
+        }
+      }, 150);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+    // The underlying engine wait still settles later – never surface it twice.
+    pending.then(() => undefined, () => undefined);
+  }
+}
+
+async function encodeStereoFloatWavAsync(
+  buffer: AudioBuffer,
+  onFraction?: (fraction: number) => void,
+  signal?: { aborted: boolean }
+): Promise<Uint8Array> {
   const channels = 2;
   const bytesPerSample = 4;
   const dataSize = buffer.length * channels * bytesPerSample;
@@ -163,11 +216,22 @@ function encodeStereoFloatWav(buffer: AudioBuffer): Uint8Array {
   const left = buffer.getChannelData(0);
   const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
   let offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    for (const sample of [left[i], right[i]]) {
-      view.setFloat32(offset, Number.isFinite(sample) ? sample : 0, true);
+  // Chunked + yielding: a 6-minute track encodes ~16M samples – synchronously
+  // that blocks the UI for many seconds (Windows: app „friert ein“).
+  const CHUNK_SAMPLES = 262144;
+  for (let start = 0; start < buffer.length; start += CHUNK_SAMPLES) {
+    throwIfAborted(signal);
+    const end = Math.min(buffer.length, start + CHUNK_SAMPLES);
+    for (let i = start; i < end; i++) {
+      const l = left[i];
+      const r = right[i];
+      view.setFloat32(offset, Number.isFinite(l) ? l : 0, true);
+      offset += bytesPerSample;
+      view.setFloat32(offset, Number.isFinite(r) ? r : 0, true);
       offset += bytesPerSample;
     }
+    onFraction?.(end / buffer.length);
+    await yieldToUI();
   }
   return bytes;
 }
@@ -540,15 +604,33 @@ class StemEngine {
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
     const duration = sourceBuffer.duration;
     const profile = options.profile ?? 'HIGH';
+    const signal = options.signal;
+    throwIfAborted(signal);
     this.isProcessing = true;
     const startedAt = Date.now();
     try {
       options.onProgress?.({ percent: 1, phaseText: `Arbeitskopie für Profil ${profile} vorbereiten…`, processedSeconds: 0, totalSeconds: duration });
-      const wav = encodeStereoFloatWav(sourceBuffer);
+      await yieldToUI();
+      // Chunked encoding with progress: keeps the UI (progress bar, cancel
+      // button) alive instead of freezing the whole app on Windows.
+      const wav = await encodeStereoFloatWavAsync(
+        sourceBuffer,
+        (fraction) => options.onProgress?.({
+          percent: 1 + Math.round(fraction * 4),
+          phaseText: `Arbeitskopie vorbereiten… ${Math.round(fraction * 100)}% (UI bleibt bedienbar)`,
+          processedSeconds: 0,
+          totalSeconds: duration,
+        }),
+        signal
+      );
+      throwIfAborted(signal);
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
       let job: StemJobView;
       if (desktop?.startStemJob) {
+        options.onProgress?.({ percent: 6, phaseText: 'Mix wird an die KI-Engine übergeben…', processedSeconds: 0, totalSeconds: duration });
+        await yieldToUI();
+        throwIfAborted(signal);
         const started = await desktop.startStemJob({ bytes: wav, trackName, profile, modelId: options.modelId });
         if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
         job = started.data;
@@ -563,17 +645,37 @@ class StemEngine {
           });
         });
         try {
-          const waited = await desktop.waitStemJob(job.jobId);
+          // Abort-aware: „Abbrechen“ bricht auch das Warten ab, statt dass die
+          // UI scheinbar endlos hängt, bis die Engine von selbst fertig wird.
+          const waited = await waitWithAbort(
+            desktop.waitStemJob(job.jobId),
+            signal,
+            () => { void desktop.cancelStemJob?.(job.jobId, 'Abbruch durch Benutzer'); }
+          );
           if (waited.ok === false) throw Object.assign(new Error(`${waited.code}: ${waited.message}`), { code: waited.code });
           job = waited.data;
         } finally {
           detach?.();
         }
       } else {
+        options.onProgress?.({ percent: 5, phaseText: 'Mix wird für den Upload vorbereitet…', processedSeconds: 0, totalSeconds: duration });
+        const base64 = await base64FromBytesAsync(
+          wav,
+          (fraction) => options.onProgress?.({
+            percent: 5 + Math.round(fraction * 2),
+            phaseText: `Upload vorbereiten… ${Math.round(fraction * 100)}%`,
+            processedSeconds: 0,
+            totalSeconds: duration,
+          }),
+          signal
+        );
+        throwIfAborted(signal);
+        options.onProgress?.({ percent: 7, phaseText: 'Mix wird hochgeladen…', processedSeconds: 0, totalSeconds: duration });
+        await yieldToUI();
         const response = await fetch('/api/stems/jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bytes: base64FromBytes(wav), trackName, profile, modelId: options.modelId }),
+          body: JSON.stringify({ bytes: base64, trackName, profile, modelId: options.modelId }),
         });
         const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; code?: string; data?: StemJobView };
         if (!response.ok || !payload.ok || !payload.data) {
@@ -583,8 +685,9 @@ class StemEngine {
         job = payload.data;
         this.activeJobId = job.jobId;
         for (;;) {
-          if (options.signal?.aborted) {
+          if (signal?.aborted) {
             await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}/cancel`, { method: 'POST' }).catch(() => undefined);
+            throwIfAborted(signal);
           }
           const poll = await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}`);
           const polled = (await poll.json().catch(() => ({}))) as { ok?: boolean; data?: StemJobView; message?: string; code?: string };
@@ -614,8 +717,17 @@ class StemEngine {
       if (!stemIds.length) throw new Error(`Modell ${job.modelId} meldet keine Stems – Deskriptor unvollständig?`);
 
       options.onProgress?.({ percent: 96, phaseText: `${stemIds.length} Stems dekodieren…`, processedSeconds: duration, totalSeconds: duration });
+      await yieldToUI();
       const stemsById: Record<string, AudioBuffer> = {};
-      for (const stemId of stemIds) {
+      for (let stemIndex = 0; stemIndex < stemIds.length; stemIndex++) {
+        throwIfAborted(signal);
+        const stemId = stemIds[stemIndex];
+        options.onProgress?.({
+          percent: 96 + Math.round((stemIndex / stemIds.length) * 3),
+          phaseText: `Stem ${stemIndex + 1}/${stemIds.length} (${stemId}) dekodieren…`,
+          processedSeconds: duration,
+          totalSeconds: duration,
+        });
         if (desktop) {
           const read = await desktop.readStemJobStem!(job.jobId, stemId);
           if (read.ok === false) throw Object.assign(new Error(`${read.code}: ${read.message}`), { code: read.code });
@@ -627,6 +739,7 @@ class StemEngine {
           if (!response.ok) throw new Error(`Stem ${stemId} konnte nicht geladen werden (HTTP ${response.status}).`);
           stemsById[stemId] = await decodeWavToAudioBuffer(new Uint8Array(await response.arrayBuffer()));
         }
+        await yieldToUI();
       }
 
       const result = buildTrackStems({ trackId, originalSha256, job, stemsById, profile });
@@ -711,13 +824,27 @@ class StemEngine {
   }
 }
 
-function base64FromBytes(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+async function base64FromBytesAsync(
+  bytes: Uint8Array,
+  onFraction?: (fraction: number) => void,
+  signal?: { aborted: boolean }
+): Promise<string> {
+  // Chunk size is a multiple of 3, so each chunk can be base64-encoded on its
+  // own and concatenated – with UI yields in between instead of one huge
+  // blocking btoa() call on 50–150 MB.
+  const RAW_CHUNK = 32766;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += RAW_CHUNK) {
+    throwIfAborted(signal);
+    parts.push(btoa(String.fromCharCode(...bytes.subarray(i, i + RAW_CHUNK))));
+    if (parts.length % 4 === 0) {
+      onFraction?.(Math.min(1, (i + RAW_CHUNK) / bytes.length));
+      await yieldToUI();
+    }
   }
-  return btoa(binary);
+  onFraction?.(1);
+  await yieldToUI();
+  return parts.join('');
 }
 
 async function decodeWavToAudioBuffer(bytes: Uint8Array): Promise<AudioBuffer> {
