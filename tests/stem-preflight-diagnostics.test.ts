@@ -33,7 +33,7 @@ async function run() {
 
   // READY only if all critical pass
   if (preflight.status === 'READY') {
-    const failedCritical = preflight.checks.filter((c) => c.critical && !c.passed);
+    const failedCritical = preflight.checks.filter((c) => c.critical && !c.ok);
     assert.equal(failedCritical.length, 0, 'READY only when all critical pass');
     console.log('  [PASS] READY only when critical pass');
   } else {

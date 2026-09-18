@@ -1,6 +1,8 @@
 export {};
 
 import type { StemDesktopApi } from '../stems/transportTypes';
+import type { StemRuntimeDiagnostics } from '../stems/runtime/diagnostics';
+import type { PreflightResult } from '../stems/runtime/preflight';
 
 declare global {
   interface Window {
@@ -78,6 +80,13 @@ declare global {
        * demselben Vertrag.
        */
       stemEngine?: StemDesktopApi;
+      /**
+       * §13 Diagnose-Endpunkt (Renderer-Äquivalent zu `npm run stems:diagnose`).
+       * Liefert `StemRuntimeDiagnostics` aus src/stems/runtime/diagnostics.ts.
+       */
+      getStemDiagnostics(): Promise<StemRuntimeDiagnostics>;
+      /** §14 Preflight-Endpunkt – Checks + READY/UNAVAILABLE-Status. */
+      getStemPreflight(): Promise<PreflightResult>;
       // --- Diagnostics / logging bridge ---
       writeLogEntries(entries: unknown[]): void;
       getLogInfo(): Promise<{

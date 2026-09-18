@@ -110,11 +110,19 @@ async function run() {
   // die trainierten Gewichte nicht geladen wurden (TEIL 2, Pinning).
   const unverifiedWarnings = (status.registryIssues as { code?: string }[]).filter((issue) => issue.code === 'MODEL_HASH_UNVERIFIED');
   assert.ok(unverifiedWarnings.length <= status.models.length);
-  assert.equal(status.profiles.length, 3, 'genau die drei Profile aus dem Kern');
+  assert.equal(status.profiles.length, 5, 'genau die fünf Profile aus dem Kern (PREVIEW, BALANCED, HIGH, HIGH_QUALITY, MAXIMUM_QUALITY)');
 
   const preview = status.profiles.find((entry) => entry.profile === 'PREVIEW')!;
+  const balanced = status.profiles.find((entry) => entry.profile === 'BALANCED')!;
+  const highDefault = status.profiles.find((entry) => entry.profile === 'HIGH')!;
   const high = status.profiles.find((entry) => entry.profile === 'HIGH_QUALITY')!;
   const maximum = status.profiles.find((entry) => entry.profile === 'MAXIMUM_QUALITY')!;
+
+  // Jedes Profil trägt eine Beschreibung (Record<QualityProfile, string> ist total).
+  for (const entry of status.profiles) {
+    assert.equal(typeof entry.description, 'string', `Beschreibung für ${entry.profile}`);
+    assert.ok(entry.description.length > 0, `Beschreibung für ${entry.profile} nicht leer`);
+  }
   assert.equal(preview.modelId, 'htdemucs-ft-4stem', 'PREVIEW bleibt beim Demucs-Pfad');
   assert.deepEqual(
     preview.stems.map((stem) => stem.id),
@@ -123,6 +131,13 @@ async function run() {
   );
   assert.equal(high.modelId, 'bsroformer-musdb18hq-4stem-zfturbo');
   assert.deepEqual(high.stems.map((stem) => stem.id), ['vocals', 'bass', 'drums', 'other']);
+  // BALANCED und HIGH wählen dasselbe BS-RoFormer-Modell (Katalog: serves beide),
+  // HIGH ist der Legacy-Alias von HIGH_QUALITY.
+  assert.equal(balanced.modelId, 'bsroformer-musdb18hq-4stem-zfturbo');
+  assert.deepEqual(balanced.stems.map((stem) => stem.id), ['vocals', 'bass', 'drums', 'other']);
+  assert.equal(highDefault.modelId, high.modelId, 'HIGH nutzt dasselbe Modell wie HIGH_QUALITY');
+  assert.equal(highDefault.parameters.numOverlap, high.parameters.numOverlap);
+  assert.equal(highDefault.parameters.ensemblePasses, high.parameters.ensemblePasses);
   assert.deepEqual(
     high.stems.map((stem) => stem.displayName),
     ['Vocals', 'Bass', 'Drums', 'Other'],
@@ -303,7 +318,7 @@ async function run() {
   assert.equal(bridge.version, STEM_BRIDGE_VERSION);
   const bridgeStatus = await bridge.status();
   assert.equal(bridgeStatus.ok, true);
-  assert.equal(bridgeStatus.ok && bridgeStatus.data.profiles.length, 3);
+  assert.equal(bridgeStatus.ok && bridgeStatus.data.profiles.length, 5);
   const bridgeStarted = await bridge.start({
     inputPath: probe.inputPath,
     profile: 'PREVIEW',

@@ -79,9 +79,18 @@ async function run() {
   // 10. Invalid audio is rejected before any Python/model work.
   await assert.rejects(separateWav(Buffer.alloc(12)), /gültige WAV/); passed++;
 
-  // 11. Candidate lists prioritize the project-owned venv over system Python.
+  // 11. Candidate lists: deterministic production stem-runtime first (§9, §10 –
+  // never app.asar/.venv as primary), dev .venv afterwards, system Python only
+  // as diagnostic fallback.
   const candidates = defaultPythonCandidates(path.resolve('/repo'));
-  assert.match(candidates[0], /\.venv/); passed++;
+  assert.match(candidates[0], /stem-runtime[\\/](bin[\\/])?python/);
+  const venvIndex = candidates.findIndex((entry) => entry.includes('.venv'));
+  assert.ok(venvIndex > 0, 'Dev-.venv bleibt Kandidat, aber nach der Production-Runtime');
+  assert.ok(
+    candidates[candidates.length - 1] === 'python' || candidates[candidates.length - 1] === 'python3',
+    'System-Python nur als diagnostischer Fallback'
+  );
+  passed++;
 
   // 12. Fine-tuned ensemble readiness requires all four known checkpoints.
   assert.deepEqual(FT_WEIGHT_FILES.sort(), [

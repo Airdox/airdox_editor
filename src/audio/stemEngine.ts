@@ -249,24 +249,27 @@ class StemEngine {
       // New engine path first
       if (desktop?.stemEngine?.getStemEngineStatus) {
         const result = await desktop.stemEngine.getStemEngineStatus();
-        if (result.ok) {
-          const data = result.data;
-          if (data.usable) {
-            const hq = data.profiles.find((p) => p.profile === 'HIGH' || p.profile === 'HIGH_QUALITY' || p.profile === 'MAXIMUM_QUALITY');
-            return { available: true, engine: 'BS_ROFORMER', model: hq?.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo' };
-          }
+        // Hinweis: bewusst `!== true` statt `if (result.ok)`/Fall-through –
+        // ohne strictNullChecks kann TS den Discriminant sonst nicht
+        // eingrenzen und `result.message`/`result.code` typen nicht.
+        if (result.ok !== true) {
           return {
             available: false,
             engine: 'BS_ROFORMER',
-            reason: data.profiles.map((p) => `${p.profile}: ${p.reason}`).join(' | ') || 'BS-RoFormer Engine nicht verfügbar',
-            code: 'STEM_ENGINE_UNAVAILABLE',
+            reason: result.message || 'Stem Engine nicht verfügbar',
+            code: result.code ?? 'STEM_ENGINE_UNAVAILABLE',
           };
+        }
+        const data = result.data;
+        if (data.usable) {
+          const hq = data.profiles.find((p) => p.profile === 'HIGH' || p.profile === 'HIGH_QUALITY' || p.profile === 'MAXIMUM_QUALITY');
+          return { available: true, engine: 'BS_ROFORMER', model: hq?.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo' };
         }
         return {
           available: false,
           engine: 'BS_ROFORMER',
-          reason: result.message || 'Stem Engine nicht verfügbar',
-          code: result.code ?? 'STEM_ENGINE_UNAVAILABLE',
+          reason: data.profiles.map((p) => `${p.profile}: ${p.reason}`).join(' | ') || 'BS-RoFormer Engine nicht verfügbar',
+          code: 'STEM_ENGINE_UNAVAILABLE',
         };
       }
 
