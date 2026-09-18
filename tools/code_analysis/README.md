@@ -5,7 +5,7 @@ interaktive Sichten übersetzt:
 
 | Ausgabe | Zweck |
 |---|---|
-| `code_analysis_out/airdox.cc.json` | **CodeCharta**-Datei: 3D-Code-Stadt inkl. Git-Risiko-Metriken (`commitsCount`, `authorCount`, `ageInDays`) |
+| `code_analysis_out/airdox.cc.json` | **CodeCharta**-Datei: 3D-Code-Stadt inkl. Git-Risiko-Metriken und kombiniertem `riskScore` |
 | `code_analysis_out/graph.json` | Rohdaten: Knoten, Metriken, Import-, IPC-, API-, Subprozess- und Protokoll-Kanten |
 | `visualization.html` (Repo-Root) | **Eigenständige D3-App** – per Doppelklick im Browser öffnen (Daten sind eingebettet) |
 
@@ -15,51 +15,88 @@ interaktive Sichten übersetzt:
 python3 tools/code_analysis/analyze_repo.py
 ```
 
-- Nur Python-Standardbibliothek, keine pip-Abhängigkeiten.
+- Nur Python-Standardbibliothek, keine pip-Abhängigkeiten. Keine Installation nötig.
 - `--repo <pfad>` für ein anderes Repository.
 - Die Ausgaben werden bei jedem Lauf neu erzeugt (Git-Historie via `git log`).
 
-## 2) 3D-Code-Stadt (CodeCharta)
+## 2) Change-Risk: Berechnung & Farbskala
 
-Voraussetzungen laut Doku: Node ≥ 20, Java ≥ 11.
+### 2.1 Metriken pro Datei
 
-```bash
-# Optional: Datei vor dem Hochladen validieren
-npm i -g codecharta-analysis
-ccsh check code_analysis_out/airdox.cc.json
+| Metrik | Quelle | Bedeutung |
+|---|---|---|
+| `commitsCount` | `git log --name-only` (volle Historie) | Wie oft wurde die Datei geändert? („Churn" auf Datei-Ebene, **nicht** Zeilen-Churn) |
+| `authorCount` | `git log %an` | Anzahl verschiedener Autoren (Wissens-Streu-Risiko) |
+| `ageInDays` | `git log %ct` | Tage seit letzter Änderung (0 = heute) – nur Inspektionsmetrik, **nicht** im Score |
+| `riskScore` | Formel s. u. | **Kombinierter Score 0–100** – empfohlen für die Stadtfarbe |
+
+### 2.2 Der kombinierte `riskScore` (0–100)
+
+Klassische Hotspot-These: **Risiko = Komplexität × Änderungshäufigkeit × Autorenbeteiligung**.
+Jede Komponente wird dafür auf ihr Maximum im Projekt normiert (0–1), dann gewichtet summiert:
+
+```
+riskScore = round( 100 · ( 0.35 · complexity/maxComplexity
+                         + 0.35 · commitsCount/maxCommits
+                         + 0.20 · authorCount/maxAuthors
+                         + 0.10 · rloc/maxRloc ) )
 ```
 
-**Im Browser:** <https://codecharta.com/visualization/> öffnen → die Datei
-`airdox.cc.json` per Drag & Drop hineinziehen (sie bleibt lokal, kein Upload nötig).
+Die Gewichte sind bewusst einfach und in `analyze_repo.py`
+(Abschnitt „Kombinierter Risiko-Score") direkt anpassbar. Normiert wird immer
+innerhalb des aktuellen Snapshots – der Score ist also ein **relativer Vergleich
+innerhalb des Projekts**, nicht über Projekte hinweg.
 
-Empfohlene Belegung im Studio:
-- **Height (Höhe):** `rloc`
-- **Area (Grundfläche):** `functions`
-- **Color (Farbe):** `complexity` (rot = verzweigt), `fanIn` (rot = viel genutzt)
-  oder **`authorCount` / `commitsCount` (rot = Change-Risk)**
-- **Edge-Metrik:** `imports` (Kopplung), Checkbox „Show Edges" aktivieren
-- Dateisuche oben links; mit der rechten Maustaste drehen, Scrollen = Zoom
+### 2.3 Farbskala (Grün → Gelb → Rot)
 
-## 3) Change-Risk: zwei Wege
+CodeCharta bildet die gewählte Farb-Metrik **linear** auf die Ampelskala ab:
+der kleinste Wert (0) der geladenen Map wird grün, der **Maximalwert rot**, die
+Mitte gelb (im Color-Panel per Schieberegler „Max Color Value" justierbar –
+sinnvoll, wenn ein Ausreißer die Skala flachdrückt).
 
-**Weg A – ohne Java (eingebaut):** `analyze_repo.py` berechnet pro Datei
-`commitsCount` (Commits), `authorCount` (beteiligte Autoren) und `ageInDays`
-(Tage seit letzter Änderung) direkt aus `git log` und schreibt sie in
-`airdox.cc.json`. Farbe = `authorCount` genügt für die Risk-Stadt.
+Da `riskScore` bereits auf 0–100 skaliert, gilt als Orientierung:
 
-**Weg B – offizieller gitlogparser (mit Java):** zusätzliche Metriken wie
-Datei-Kopplung aus Co-Changes und exakte Alters-Ranges:
+| Risk-Score | Farbe | Lesart |
+|---|---|---|
+| 0–39 | 🟢 grün | unauffällig |
+| 40–69 | 🟡 gelb | beobachten (Kandidaten für Tests/Refactoring) |
+| 70–100 | 🔴 rot | Hotspot –Refactoring priorisieren |
+
+Aktueller Stand (Snapshot dieser Ausgabe): **1 rote Datei** (`src/App.tsx`,
+96/100), **6 gelbe** (u. a. `electron/main.cjs`, `DetailWaveform.tsx`,
+`anlzParser.ts`), Rest grün.
+
+### 2.4 Zwei Wege zu Git-Metriken
+
+**Weg A – ohne Java (eingebaut, Standard):** `analyze_repo.py` berechnet
+`commitsCount`, `authorCount`, `ageInDays` und `riskScore` selbst aus `git log`
+und schreibt sie in `airdox.cc.json`. Voraussetzung: nur `git` (und Python 3).
+*Hinweis: Werte decken die Historie des lokalen Klons ab – nach einem frischen
+`git clone` sind das alle Commits auf dem gewählten Branch.*
+
+**Weg B – offizieller gitlogparser (mit Java):** zusätzliche Parser-Metriken
+(u. a. `numberOfAuthors`, Co-Change-Kopplungen) und Merge in eine Datei:
 
 ```bash
 npm i -g codecharta-analysis          # Node >= 20, Java >= 11
 bash tools/code_analysis/run_gitlog_analysis.sh
+# → code_analysis_out/airdox_risk.cc.json  (Farbe = riskScore oder numberOfAuthors)
 ```
 
-Das Skript führt aus:
-1. `ccsh gitlogparser repo-scan --repo-path . -o code_analysis_out/gitmetrics.cc.json -nc`
-2. `ccsh merge code_analysis_out/airdox.cc.json code_analysis_out/gitmetrics.cc.json -o code_analysis_out/airdox_risk.cc.json`
+## 3) 3D-Code-Stadt bedienen (CodeCharta Web Studio)
 
-→ `airdox_risk.cc.json` im Studio laden, Farbe = `numberOfAuthors`.
+1. <https://codecharta.com/visualization/> öffnen (Dateien bleiben lokal im Browser).
+2. `code_analysis_out/airdox.cc.json` per Drag & Drop hineinziehen.
+3. Belegung:
+   - **Height (Höhe):** `rloc`
+   - **Area (Grundfläche):** `functions`
+   - **Color (Farbe):** `riskScore` (Risk-Stadt, s. Abschnitt 2.3) oder
+     `complexity` / `fanIn`
+   - **Edges:** Metrik `imports`, Checkbox „Show Edges" → IPC-/API-Brücken leuchten
+4. Navigation: Mausrad = Zoom, rechte Maustaste = drehen, Klick = Metriken,
+   Suche oben links.
+
+Optional vorab validieren: `ccsh check code_analysis_out/airdox.cc.json`.
 
 ## 4) Netzwerk-Graph (D3)
 
@@ -70,16 +107,30 @@ visualization.html
 
 - Knotenfarben: Blau = `src/` · Gelb = `electron/` · Rot = Root-Core (`server.ts`) ·
   Grün = `native/` · Türkis = `python/`+`colab/` · Violett = `scripts/` · Grau = `tests/`
+- **Goldener Halo** = Top-10 nach `riskScore`
 - Kantenarten: Import, IPC (blau, animiert), HTTP-API (rot), Python-Subprozess (grün),
   Bundle-Brücke (orange), geteiltes Protokoll (türkis)
 - Interaktion: Zoom/Pan, Knoten ziehen, Doppelklick = anpinnen, Hovern = Nachbarschaft,
-  Klick = Detailpanel, Suche, Hotspot-Liste (**rloc / Komplexität / Commits / Fan-In /
-  Autoren / Alter**), Filter über Legende, 🌪️ Shake
-- Tooltips zeigen u. a. Commits, Autoren und Tage seit letzter Änderung
-- Hinweis: Beim ersten Öffnen wird Internet für das D3-CDN benötigt; danach kann
-  `d3.min.js` lokal abgelegt werden, um offline zu arbeiten.
+  Klick = Detailpanel, Suche, Hotspot-Liste (**Risk-Score / Zeilen / Komplexität /
+  Commits / Fan-In / Autoren / Alter**), Filter über Legende, 🌪️ Shake
+- Tooltips zeigen den Risk-Score prominent an, plus Commits, Autoren,
+  Tage seit letzter Änderung
+- Beim ersten Öffnen wird Internet für das D3-CDN benötigt (danach optional
+  `d3.min.js` lokal ablegen)
 
-## Wie die Cross-World-Kanten erkannt werden
+## 5) Abhängigkeiten (Übersicht)
+
+| Komponente | Benötigt | Installiert? |
+|---|---|---|
+| `analyze_repo.py` (Weg A) | Python ≥ 3.9 (stdlib), `git` | nichts zu installieren |
+| `visualization.html` | Browser (einmalig Internet für D3-CDN) | nichts zu installieren |
+| CodeCharta Web Studio | nur der Browser | nichts zu installieren |
+| Weg B: `run_gitlog_analysis.sh` | `npm i -g codecharta-analysis` (Node ≥ 20) **und Java ≥ 11** | nur für die Parser-Extras nötig |
+
+Am Projekt selbst (`package.json`, Laufzeit-Abhängigkeiten) ändert sich nichts –
+alles liegt unter `tools/code_analysis/` und ist für den App-Betrieb irrelevant.
+
+## 6) Wie die Cross-World-Kanten erkannt werden
 
 - **IPC:** `preload.cjs` wird geparst (inkl. verschachtelter Objekte wie
   `stemEngine.*`) und die Kanalnamen werden den `ipcMain.handle(...)`-Registrierungen

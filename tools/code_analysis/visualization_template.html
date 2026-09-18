@@ -165,7 +165,7 @@ function render(DATA){
     .filter(l => l.source && l.target && l.source !== l.target);
   nodes.forEach(n => { n.r = Math.min(3 + Math.sqrt(n.rloc) * 0.5, 30); n.degree = 0; });
   links.forEach(l => { l.source.degree++; l.target.degree++; });
-  const hottest = new Set(nodes.slice().sort((a,b)=>b.complexity-a.complexity).slice(0,10).map(n=>n.id));
+  const hottest = new Set(nodes.slice().sort((a,b)=>(b.riskScore||0)-(a.riskScore||0)).slice(0,10).map(n=>n.id));
 
   const importNeighbors = new Map(); // id -> Set(ids) über Import-Kanten
   links.forEach(l => {
@@ -210,7 +210,7 @@ function render(DATA){
     d3.select(el).classed("off", !set.has(key)); rebuild(); }
 
   // ---------- Hotspots ----------
-  const METRICS = [["rloc","Zeilen"],["complexity","Komplexität"],["churn","Commits"],["fanIn","Fan-In"],["authorCount","Autoren"],["ageInDays","Alter (Tage)"]];
+  const METRICS = [["riskScore","Risk-Score"],["rloc","Zeilen"],["complexity","Komplexität"],["churn","Commits"],["fanIn","Fan-In"],["authorCount","Autoren"],["ageInDays","Alter (Tage)"]];
   let hsMetric = "rloc";
   const metricBtns = d3.select("#metricBtns").selectAll("button").data(METRICS).join("button")
     .text(d=>d[1]).attr("title", d=>d[0])
@@ -281,7 +281,7 @@ function render(DATA){
       `<div class="tt-path" style="color:${g.color}">${d.id}</div>` +
       `<div>${g.label} · ${d.lang}</div>` +
       `<div class="tt-desc">${d.desc||""}</div>` +
-      `<div class="tt-metrics">rloc <b>${d.rloc}</b> · Funktionen <b>${d.functions}</b> · ` +
+      `<div class="tt-metrics"><b style="color:#fbbf24">Risk-Score ${d.riskScore||0}</b>/100 · rloc <b>${d.rloc}</b> · Funktionen <b>${d.functions}</b> · ` +
       `Klassen <b>${d.classes}</b> · Komplexität <b>${d.complexity}</b><br>` +
       `Fan-In <b>${d.fanIn}</b> · Fan-Out <b>${d.fanOut}</b> · Commits <b>${d.commitsCount||0}</b> · ` +
       `Autoren <b>${d.authorCount||0}</b> · Letzte Änderung <b>${d.ageInDays||0} Tage</b> · ` +

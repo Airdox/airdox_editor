@@ -435,12 +435,12 @@ def group_of(rel: str) -> str:
 # cc.json-Baum
 # --------------------------------------------------------------------------
 
-def folder_to_cc(tree: dict, fan_in: dict, fan_out: dict, risk: dict) -> list:
+def folder_to_cc(tree: dict, fan_in: dict, fan_out: dict, risk: dict, risk_scores: dict) -> list:
     children: list = []
     for name, value in sorted(tree.items()):
         if name.endswith("/"):
             children.append({"name": name[:-1], "type": "folder", "attributes": {},
-                             "children": folder_to_cc(value, fan_in, fan_out, risk)})
+                             "children": folder_to_cc(value, fan_in, fan_out, risk, risk_scores)})
         else:
             s = value
             rel = s["path"]
@@ -453,6 +453,7 @@ def folder_to_cc(tree: dict, fan_in: dict, fan_out: dict, risk: dict) -> list:
                 "commitsCount": r.get("commitsCount", 0),
                 "authorCount": r.get("authorCount", 0),
                 "ageInDays": r.get("ageInDays", 0),
+                "riskScore": risk_scores.get(rel, 0),
                 "commentLines": s["commentLines"], "todos": s["todos"],
             }})
     return children
@@ -537,6 +538,24 @@ def main() -> None:
         fan_in[b] += 1
     risk = git_risk_metrics(repo)
 
+    # --- Kombinierter Risiko-Score (0-100) ---------------------------------
+    # Klassische Hotspot-These: Risiko = Komplexität × Änderungshäufigkeit ×
+    # Autorenbeteiligung (+ Größe). Jede Komponente wird auf das Maximum im
+    # Projekt normiert, dann gewichtet summiert. Gewichte bewusst einfach,
+    # damit sie dokumentiert und anpassbar bleiben (siehe README).
+    max_complexity = max((s["complexity"] for s in stats.values()), default=1) or 1
+    max_rloc = max((s["rloc"] for s in stats.values()), default=1) or 1
+    max_commits = max((v.get("commitsCount", 0) for v in risk.values()), default=1) or 1
+    max_authors = max((v.get("authorCount", 0) for v in risk.values()), default=1) or 1
+    risk_scores: dict = {}
+    for rel, s in stats.items():
+        rv = risk.get(rel, {})
+        risk_scores[rel] = round(100 * (
+            0.35 * (s["complexity"] / max_complexity)
+            + 0.35 * (rv.get("commitsCount", 0) / max_commits)
+            + 0.20 * (rv.get("authorCount", 0) / max_authors)
+            + 0.10 * (s["rloc"] / max_rloc)))
+
     # --- Cross-World-Edges -------------------------------------------------
     cross_edges: list = []
     for src, dst, typ, why in CURATED_EDGES:
@@ -598,6 +617,7 @@ def main() -> None:
             "commitsCount": risk.get(rel, {}).get("commitsCount", 0),
             "authorCount": risk.get(rel, {}).get("authorCount", 0),
             "ageInDays": risk.get(rel, {}).get("ageInDays", 0),
+            "riskScore": risk_scores.get(rel, 0),
             "commentLines": s["commentLines"],
             "desc": DESCRIPTIONS.get(rel, GROUP_FALLBACK_DESC[g]),
             "importsList": s["internalTargets"][:12],
@@ -633,7 +653,7 @@ def main() -> None:
             node = node.setdefault(folder + "/", {})
         node[parts[-1]] = s
     cc_nodes = [{"name": "root", "type": "folder", "attributes": {},
-                 "children": folder_to_cc(root_children, fan_in, fan_out, risk)}]
+                 "children": folder_to_cc(root_children, fan_in, fan_out, risk, risk_scores)}]
     cc_edges = [{"fromNode": f"/root/{a}", "toNode": f"/root/{b}", "attributes": {"imports": w}}
                 for a, b, w in import_edges]
     for e in cross_edges:
@@ -647,7 +667,7 @@ def main() -> None:
             "nodes": {k: "absolute" for k in
                       ["rloc", "loc", "functions", "classes", "complexity", "maxDepth",
                        "imports", "fanIn", "fanOut", "churn", "todos", "commentLines",
-                       "commitsCount", "authorCount", "ageInDays"]},
+                       "commitsCount", "authorCount", "ageInDays", "riskScore"]},
             "edges": {"imports": "absolute", "crossWorld": "absolute"},
         },
         "edges": cc_edges,

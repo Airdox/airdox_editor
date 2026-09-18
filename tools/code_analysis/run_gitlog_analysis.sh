@@ -35,7 +35,7 @@ ccsh merge "$OUT/airdox.cc.json" "$OUT/gitmetrics.cc.json" -o "$OUT/airdox_risk.
 
 echo "== 3/3 Fertig ✅"
 echo "→ $OUT/airdox_risk.cc.json in https://codecharta.com/visualization/ öffnen"
-echo "  Empfehlung: Höhe = rloc · Fläche = functions · Farbe = numberOfAuthors"
+echo "  Empfehlung: Höhe = rloc · Fläche = functions · Farbe = riskScore (0-100)"
 echo "  (oder commitsCount) → rote Hochburgen = Change-Risk-Hotspots."
 echo
 echo "Hinweis: Ohne Java liefert analyze_repo.py dieselben Risiko-Metriken"
