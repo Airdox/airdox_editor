@@ -1,14 +1,13 @@
 /**
  * @license
  * Rekordbox TrackOverview Component
- * Thin horizontal track overview using original-data helpers:
- * - Waveform from selectTrackWaveform (genuine ANLZ variants only)
- * - Honest empty state via waveformMissingNotice
+ * Thin horizontal track overview waveform with cue markers, memory cue triangles,
+ * and draggable detail window frame.
  */
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
-import { selectTrackWaveform, waveformMissingNotice } from '../waveform/renderModel';
+import { spectralRgb } from '../waveform/spectralColor';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -31,16 +30,22 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Draw overview canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
     const width = canvas.width;
     const height = canvas.height;
     ctx.clearRect(0, 0, width, height);
+
+    // Dark container background
     ctx.fillStyle = '#0f1013';
     ctx.fillRect(0, 0, width, height);
+
+    // Subtle horizontal center baseline
     ctx.strokeStyle = '#1d1f26';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -48,52 +53,61 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     ctx.lineTo(width, height / 2);
     ctx.stroke();
 
-    if (!track) return;
+    if (!track) {
+      return;
+    }
 
+    const analysis = track.analysis;
     const duration = Math.max(1, track.duration);
+
     const targetCols = width;
 
-    const resolved = selectTrackWaveform(track, duration, width);
-
-    if (resolved && resolved.length > 0) {
-      const buckets = resolved.length;
+    if (analysis && analysis.length > 0) {
+      const buckets = analysis.length;
       const bucketsPerCol = buckets / targetCols;
+
       for (let col = 0; col < targetCols; col++) {
         const startB = Math.floor(col * bucketsPerCol);
         const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
+
         let maxPeak = 0;
         let sumLow = 0;
         let sumMid = 0;
         let sumHigh = 0;
         let count = 0;
+
         for (let b = startB; b < endB; b++) {
-          const p = resolved.peaks[b] || 0;
+          const p = analysis.peaks[b] || 0;
           if (p > maxPeak) maxPeak = p;
-          sumLow += resolved.lowEnergy[b] || 0;
-          sumMid += resolved.midEnergy[b] || 0;
-          sumHigh += resolved.highEnergy[b] || 0;
+          sumLow += analysis.lowEnergy[b] || 0;
+          sumMid += analysis.midEnergy[b] || 0;
+          sumHigh += analysis.highEnergy[b] || 0;
           count++;
         }
+
         const low = count > 0 ? sumLow / count : 0;
         const mid = count > 0 ? sumMid / count : 0;
         const high = count > 0 ? sumHigh / count : 0;
-        const barH = Math.max(2, maxPeak * (height - 4));
+
+        // Do not turn a zero-energy (CLEAR/silence) bucket into a cosmetic
+        // waveform column. The neutral baseline above remains visible instead.
+        if (maxPeak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
+        const barH = maxPeak * (height - 4);
         const yTop = (height - barH) / 2;
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+
+        // Color based on spectral density (Rekordbox RGB spectral styling)
+        // Red = Bass, Green = Mids, Blue/Cyan = Highs — shared helper keeps
+        // the overview identical in hue to the detail waveform below it.
+        ctx.fillStyle = spectralRgb(low, mid, high);
         ctx.fillRect(col, yTop, 1, barH);
       }
     } else {
-      const notice = waveformMissingNotice(track);
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(notice.title, width / 2, height / 2);
-      ctx.textAlign = 'left';
+      // Intentionally leave the neutral baseline visible. A waveform must come
+      // from ANLZ or an explicitly labeled local analysis, never from a visual
+      // BPM/template approximation.
     }
 
+    // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
     if (track.phrases && track.phrases.length > 0) {
       track.phrases.forEach((p) => {
         const px1 = (p.startTime / duration) * width;
@@ -104,9 +118,12 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       });
     }
 
+    // Draw Cues and Memory Markers
     track.cues.forEach((c) => {
       const cueX = (c.position / duration) * width;
+
       if (c.type === 'MEMORY') {
+        // Red downward triangle flag at top with crisp white outline
         ctx.fillStyle = '#ff2222';
         ctx.beginPath();
         ctx.moveTo(cueX - 4.5, 0);
@@ -117,6 +134,8 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 0.75;
         ctx.stroke();
+
+        // Subtle vertical red guide line
         ctx.strokeStyle = 'rgba(255, 34, 34, 0.4)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -124,25 +143,30 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         ctx.lineTo(cueX, height - 3);
         ctx.stroke();
       } else {
+        // Hot cue marker
         ctx.fillStyle = c.color || '#00a2ff';
         ctx.fillRect(cueX - 1, 0, 2, height - 3);
       }
     });
 
+    // Draw First Beat "E" marker (Orange box with 'E')
     ctx.fillStyle = '#ff8800';
     ctx.fillRect(1, 1, 9, 9);
     ctx.fillStyle = '#000000';
     ctx.font = 'bold 8px sans-serif';
     ctx.fillText('E', 3, 8);
 
+    // Draw Visible Detail Viewport (Blue rectangular frame)
     const viewLeft = (viewOffset / duration) * width;
     const viewWidth = Math.max(14, (viewDuration / duration) * width);
+
     ctx.strokeStyle = '#0099ff';
     ctx.lineWidth = 1.5;
     ctx.fillStyle = 'rgba(0, 153, 255, 0.18)';
     ctx.fillRect(viewLeft, 1, viewWidth, height - 2);
     ctx.strokeRect(viewLeft, 1, viewWidth, height - 2);
 
+    // Draw Playhead line in overview
     const playheadX = (currentTime / duration) * width;
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1.5;
@@ -152,6 +176,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     ctx.stroke();
   }, [track, currentTime, viewOffset, viewDuration]);
 
+  // Handle click or drag on overview to seek / pan
   const handlePointerInteraction = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!track) return;
@@ -160,7 +185,9 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       const rect = container.getBoundingClientRect();
       const clickX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
       const targetTime = (clickX / rect.width) * track.duration;
+
       onSeek(targetTime);
+      // Center view on clicked point
       const newOffset = Math.max(0, targetTime - viewDuration / 2);
       onPanView(Math.min(newOffset, Math.max(0, track.duration - viewDuration)));
     },
@@ -175,13 +202,20 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         handlePointerInteraction(e);
       }}
       onMouseMove={(e) => {
-        if (isDragging) handlePointerInteraction(e);
+        if (isDragging) {
+          handlePointerInteraction(e);
+        }
       }}
       onMouseUp={() => setIsDragging(false)}
       onMouseLeave={() => setIsDragging(false)}
       className="relative w-full h-8 bg-[#0a0b0d] border border-[#1f2129] rounded-xs cursor-pointer overflow-hidden shadow-inner"
     >
-      <canvas ref={canvasRef} width={900} height={32} className="w-full h-full block" />
+      <canvas
+        ref={canvasRef}
+        width={900}
+        height={32}
+        className="w-full h-full block"
+      />
     </div>
   );
 };

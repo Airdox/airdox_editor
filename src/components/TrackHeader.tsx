@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { FileAudio, Check, Layers } from 'lucide-react';
+import { FileAudio, Check } from 'lucide-react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
 
@@ -17,15 +17,6 @@ interface TrackHeaderProps {
   onSeek: (time: number) => void;
   onPanView: (newOffset: number) => void;
   onLoadAudioClick?: () => void;
-  onSeparateStems?: () => void;
-  isSeparating?: boolean;
-  onStemVolumeChange?: (index: number, volume: number) => void;
-  stemVolumes?: number[];
-  stemIds?: string[];
-  /** 0..100 while a separation runs, null when indeterminate. */
-  stemProgress?: number | null;
-  stemStatus?: { kind: 'idle' | 'running' | 'done' | 'error'; message: string };
-  onCancelSeparation?: () => void;
 }
 
 export const TrackHeader: React.FC<TrackHeaderProps> = ({
@@ -36,14 +27,6 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   onSeek,
   onPanView,
   onLoadAudioClick,
-  onSeparateStems,
-  isSeparating = false,
-  onStemVolumeChange,
-  stemVolumes = [],
-  stemIds = [],
-  stemProgress = null,
-  stemStatus,
-  onCancelSeparation,
 }) => {
   // Format 05:26.3
   const formatTime = (secs: number) => {
@@ -52,6 +35,17 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
     const tenths = Math.floor((secs % 1) * 10);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${tenths}`;
   };
+
+  const waveformSourceLabel = (() => {
+    if (!track?.analysis) return 'KEINE WAVEFORM-ANALYSE';
+    const provenance = track.analysis.provenance;
+    if (track.analysis.origin === 'REKORDBOX_ANLZ' && !provenance) return 'REKORDBOX ANLZ (ORIGINAL)';
+    if (provenance?.nativeCoverage && provenance.projectCoverage) {
+      return `ANLZ ${Math.round(provenance.nativeCoverage * 100)}% + PROJEKT ${Math.round(provenance.projectCoverage * 100)}%`;
+    }
+    if (provenance?.nativeCoverage) return `REKORDBOX ANLZ ${Math.round(provenance.nativeCoverage * 100)}%`;
+    return track.analysis.origin === 'PROJECT' ? 'PROJEKT-AUDIOANALYSE' : track.analysis.origin;
+  })();
 
   return (
     <div className="bg-[#0b0c0f] border-b border-[#1a1b22] px-3 py-1.5 flex flex-col select-none">
@@ -90,46 +84,6 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   <span>Audio aktiv ({track.sampleRate}Hz)</span>
                 </span>
               )}
-              {track && track.audioBuffer && track.filePath && onSeparateStems && !track.stems && (
-                <button
-                  onClick={onSeparateStems}
-                  disabled={isSeparating}
-                  className={`flex items-center space-x-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-all cursor-pointer shadow-sm ${
-                    isSeparating
-                      ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 animate-pulse cursor-wait'
-                      : 'bg-indigo-500/20 hover:bg-indigo-500/35 border-indigo-500/50 text-indigo-300'
-                  }`}
-                  title="Stems mit lokaler KI trennen (Requires audio-separator CLI)"
-                >
-                  <Layers size={11} />
-                  <span>
-                    {isSeparating
-                      ? stemProgress !== null
-                        ? `Trenne Stems … ${Math.round(stemProgress)}%`
-                        : 'Trenne Stems …'
-                      : 'Stems trennen'}
-                  </span>
-                </button>
-              )}
-              {isSeparating && onCancelSeparation && (
-                <button
-                  onClick={onCancelSeparation}
-                  className="px-2 py-0.5 rounded border text-[10px] font-semibold bg-red-500/15 hover:bg-red-500/30 border-red-500/50 text-red-300"
-                  title="Separation abbrechen"
-                >
-                  Abbrechen
-                </button>
-              )}
-              {stemStatus && stemStatus.kind === 'error' && (
-                <span className="text-[10px] text-red-400 max-w-[42ch] truncate" title={stemStatus.message}>
-                  {stemStatus.message}
-                </span>
-              )}
-              {stemStatus && stemStatus.kind === 'done' && (
-                <span className="text-[10px] text-emerald-400 max-w-[42ch] truncate" title={stemStatus.message}>
-                  {stemStatus.message}
-                </span>
-              )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">
               <span>{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
@@ -141,6 +95,17 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
                   ? 'REKORDBOX XML'
                   : 'EDIT WORKING COPY'}
               </span>
+              {track && (
+                <>
+                  <span>•</span>
+                  <span
+                    className="max-w-[250px] truncate text-emerald-400 font-mono text-[9.5px]"
+                    title="Anzeigequelle der Wellenform; ANLZ-Werte stammen direkt aus der read-only Rekordbox-Analyse."
+                  >
+                    {waveformSourceLabel}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -11,11 +11,10 @@
  */
 
 import assert from 'node:assert';
-import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { isProtectedTarget, normalizeForCompare, toLocalPath } = require('../electron/pathGuard.cjs');
+const { OriginalSourceRegistry, isProtectedTarget, normalizeForCompare } = require('../electron/pathGuard.cjs');
 
 const protectedPaths = [
   'C:\\Music\\Track.wav',
@@ -46,24 +45,15 @@ assert.strictEqual(isProtectedTarget('C:\\Music\\Track.wav', ['', '  ']), false)
 // Normalization is stable for cross-platform paths.
 assert.strictEqual(normalizeForCompare('C:\\Music\\Track.wav'), normalizeForCompare('c:/music/track.wav'));
 
-// toLocalPath converts Rekordbox LOCATION strings to local paths.
-const fileUrl = toLocalPath('file://localhost/C:/Music/Ref%20Mix.wav');
-assert.strictEqual(typeof fileUrl, 'string');
-assert.ok(fileUrl.includes('Ref Mix.wav'), 'file:// URL is decoded to a local path');
-assert.ok(!fileUrl.includes('%20'), 'no percent-encoding survives');
-assert.strictEqual(
-  toLocalPath('/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'),
-  path.resolve('/PIONEER/USBANLZ/0e8/abc/ANLZ0000.DAT'),
-  'absolute paths resolve without searching'
-);
-assert.strictEqual(
-  toLocalPath('C:\\Music\\Direct.wav'),
-  path.resolve('C:\\Music\\Direct.wav'),
-  'drive-letter paths resolve without searching'
-);
-assert.strictEqual(toLocalPath('https://example.com/track.mp3'), null, 'remote URLs are not local');
-assert.strictEqual(toLocalPath(''), null);
-assert.strictEqual(toLocalPath(null), null);
-assert.strictEqual(toLocalPath(undefined), null);
+// The main process keeps its own authoritative source list. Protection cannot
+// be bypassed by an empty or incomplete renderer-provided protectedPaths list.
+const registry = new OriginalSourceRegistry();
+assert.strictEqual(registry.register('C:\\Music\\Track.wav'), true);
+registry.registerMany(['D:\\Rekordbox\\collection.xml', '', null]);
+assert.strictEqual(registry.isProtected('c:/music/TRACK.WAV', []), true);
+assert.strictEqual(registry.isProtected('D:\\Rekordbox\\collection.xml', []), true);
+assert.strictEqual(registry.isProtected('C:\\Exports\\safe.wav', []), false);
+assert.strictEqual(registry.isProtected('E:\\Pioneer\\master.db', ['E:\\Pioneer\\master.db']), true);
+assert.strictEqual(registry.values().length, 2, 'registry deduplicates and ignores invalid paths');
 
 console.log('path overwrite guard: OK');

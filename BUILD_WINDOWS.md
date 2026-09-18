@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.13-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.13-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.1-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.1-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -14,16 +14,10 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 1. **Node.js** (LTS, ≥ 20) – https://nodejs.org
 2. **Git** (für den Klon aus GitHub)
 
-Für den vollständigen Desktop-Build mit Master-DB-Unterstützung werden
-Visual Studio 2022 Build Tools mit **Desktopentwicklung mit C++**, MSVC und
-Windows SDK sowie Python 3 benötigt. Das Binding
-`better-sqlite3-multiple-ciphers` muss gegen die Electron-ABI gebaut werden;
-ein Build mit normalem Node.js reicht für die Desktop-App nicht aus.
-
-Der Renderer-/XML-/ANLZ-Build kann weiterhin ohne SQLCipher-Toolchain laufen.
-`npmRebuild` bleibt in `package.json` bewusst `false`; der Native-Rebuild wird
-stattdessen explizit und reproduzierbar über `npm run rebuild:electron`
-aufgerufen.
+Der Basis-Build benötigt **kein** Visual Studio: XML-/ANLZ-Import, Audio-Editor
+und Export funktionieren vollständig. Das optionale SQLCipher-Modul ist per
+`"npmRebuild": false` abgeschaltet, sodass der Build auch in Pfaden **mit
+Leerzeichen** und ohne C++-Toolchain durchläuft.
 
 ## Bauen (PowerShell – Windows)
 
@@ -38,34 +32,11 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 
 ## Automatischer Build (GitHub Actions)
 
-Der Workflow `.github/workflows/windows-build.yml` baut **auf jedem Push
-(alle Branches), auf jedem Pull Request, auf Tags `v*` und einmal täglich
-um 03:00 UTC (05:00 DE)** automatisch beide Windows-Artefakte und lädt sie
-als Artifact (30 Tage) hoch:
-
-- **Jeder Commit-Push** → frischer Build unter *Actions → Windows-Build →
-  Artifacts* (`airdox-smart-editor-windows`), herunterladbar als ZIP mit
-  Installer + Portable-`.exe`.
-- **Jeder Push auf `main`** → aktualisiert zusätzlich das Rolling-Prerelease
-  `latest` unter *Releases*, sodass es dort immer die neueste WIN-App gibt
-  – ganz ohne Tag.
-- **Tag** (z. B. `git tag v0.4.13 && git push --tags`) → offizielles GitHub
-  Release mit den `.exe`-Dateien und generierten Release-Notes.
-
-Laufen bei schnellen Push-Folgen mehrere Builds, wird der ältere automatisch
-abgebrochen – es gewinnt immer der neueste Commit.
-
-Der Build ist robust gegen unvollständige Commits: Fehlt die
-`package-lock.json` oder ist sie nicht synchron mit der `package.json`
-(passiert bei parallelen Branches), schaltet der Workflow automatisch auf
-`npm install` ohne Cache um und baut trotzdem – mit einer Warnung im
-Build-Protokoll statt eines Abruchs. Die CI nutzt Node.js 20 und baut das
-Native-Binding vor dem Electron-Packaging automatisch gegen die Electron-ABI.
-
-Hinweis: Die Qualitäts-Gates (`TypeScript-Prüfung`, `Waveform-Gates`) laufen
-bei jedem Build mit und bleiben sichtbar, blockieren den WIN-Build aber
-vorerst nicht, bis der Baum wieder vollständig grün ist (siehe
-`continue-on-error` im Workflow).
+Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
+`main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
+beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
+Tag (z. B. `git tag v0.4.1 && git push --tags`) wird automatisch ein GitHub
+Release mit den `.exe`-Dateien erzeugt.
 
 ## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 

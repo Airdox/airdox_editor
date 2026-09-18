@@ -6,6 +6,7 @@
  */
 
 import { BeatGrid, BeatNode, CuePoint, DataOrigin, LoopPoint, TrackModel } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export function buildBeatGridFromTempo(
   firstBeatSec: number,
@@ -267,19 +268,15 @@ function parseSingleTrackNode(
     }
   }
 
-  // Parse POSITION_MARK and alt-tag CUE – robust guard: skip entries without position
+  // Parse POSITION_MARK
   const cues: CuePoint[] = [];
   const loops: LoopPoint[] = [];
 
   const markElements = el.querySelectorAll('POSITION_MARK');
-  const altCueElements = el.querySelectorAll('CUE');
   let firstBeatCueAnchor: number | null = null;
   markElements.forEach((mEl: any) => {
     const name = (mEl.getAttribute('Name') || '').toLowerCase();
-    const startAttr = mEl.getAttribute('Start');
-    if (startAttr === null) return;
-    const start = parseFloat(startAttr);
-    if (Number.isNaN(start)) return;
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
     if ((name.includes('first beat') || name.includes('1.1') || name === 'grid') && start >= 0) {
       firstBeatCueAnchor = start;
     }
@@ -304,14 +301,9 @@ function parseSingleTrackNode(
         beats: [],
         origin: DataOrigin.REKORDBOX_XML,
       };
-
-  let cueCounter = 0;
   markElements.forEach((mEl: any, mIdx: number) => {
-    const startAttr = mEl.getAttribute('Start');
-    if (startAttr === null) return;
-    const start = parseFloat(startAttr);
-    if (Number.isNaN(start)) return;
     const type = mEl.getAttribute('Type') || '0';
+    const start = parseFloat(mEl.getAttribute('Start') || '0.0');
     const name = mEl.getAttribute('Name') || `Cue ${mIdx + 1}`;
     const numStr = mEl.getAttribute('Num') || '-1';
     const num = parseInt(numStr, 10);
@@ -321,7 +313,6 @@ function parseSingleTrackNode(
     const color = `rgb(${r}, ${g}, ${b})`;
 
     if (type === '0') {
-      cueCounter++;
       const inMsec = Math.round(start * 1000);
       const spb = 60.0 / tempoBpm;
       const beatIndex = Math.round((start - firstBeat) / spb);
@@ -338,7 +329,7 @@ function parseSingleTrackNode(
           letter: letters[num] || `${num}`,
           position: start,
           inMsec,
-          cueIndex: cueCounter,
+          cueIndex: mIdx + 1,
           barNumber,
           beatNumber,
           color: color || '#00a2ff',
@@ -351,7 +342,7 @@ function parseSingleTrackNode(
           type: 'MEMORY',
           position: start,
           inMsec,
-          cueIndex: cueCounter,
+          cueIndex: mIdx + 1,
           barNumber,
           beatNumber,
           color: '#ff3b30',
@@ -359,9 +350,7 @@ function parseSingleTrackNode(
         });
       }
     } else if (type === '4') {
-      const endAttr = mEl.getAttribute('End');
-      const end = endAttr !== null ? parseFloat(endAttr) : start + 4;
-      if (Number.isNaN(end)) return;
+      const end = parseFloat(mEl.getAttribute('End') || `${start + 4}`);
       loops.push({
         id: `loop-${mIdx}`,
         name: name || 'Loop',
@@ -369,53 +358,6 @@ function parseSingleTrackNode(
         end,
         length: Math.max(0.1, end - start),
         color: '#ff9500',
-        origin: DataOrigin.REKORDBOX_XML,
-      });
-    }
-  });
-
-  // Alt-tag exporters: <CUE Name="..." Position="20.5" Number="0" />
-  altCueElements.forEach((cEl: any, cIdx: number) => {
-    const posAttr = cEl.getAttribute('Position') || cEl.getAttribute('Start');
-    if (posAttr === null) return;
-    const position = parseFloat(posAttr);
-    if (Number.isNaN(position)) return;
-    const name = cEl.getAttribute('Name') || `Cue ${cIdx + 1}`;
-    const numStr = cEl.getAttribute('Number') || cEl.getAttribute('Num') || '-1';
-    const num = parseInt(numStr, 10);
-    const inMsec = Math.round(position * 1000);
-    const spb = 60.0 / tempoBpm;
-    const beatIndex = Math.round((position - firstBeat) / spb);
-    const barNumber = Math.floor(beatIndex / 4) + 1;
-    const beatNumber = (beatIndex % 4) + 1;
-    cueCounter++;
-    if (num >= 0) {
-      const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-      cues.push({
-        id: `hot-cue-${num}`,
-        name,
-        type: 'HOT_CUE',
-        hotCueNum: num,
-        letter: letters[num] || `${num}`,
-        position,
-        inMsec,
-        cueIndex: cueCounter,
-        barNumber,
-        beatNumber,
-        color: '#00a2ff',
-        origin: DataOrigin.REKORDBOX_XML,
-      });
-    } else {
-      cues.push({
-        id: `mem-cue-alt-${cIdx}`,
-        name,
-        type: 'MEMORY',
-        position,
-        inMsec,
-        cueIndex: cueCounter,
-        barNumber,
-        beatNumber,
-        color: '#ff3b30',
         origin: DataOrigin.REKORDBOX_XML,
       });
     }
@@ -463,6 +405,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur: ${parserError.textContent}`);
       throw new Error('Invalid Rekordbox XML structure: ' + parserError.textContent);
     }
 
@@ -478,6 +421,7 @@ export function parseRekordboxXml(xmlString: string): { tracks: Partial<TrackMod
 
   const rawVersion = djPlaylists?.getAttribute('Version') || '1.0.0';
   const tracks: Partial<TrackModel>[] = trackElements.map((el, idx) => parseSingleTrackNode(el, idx));
+  logger.debug('XML_IMPORT', `XML synchron geparst: ${tracks.length} Track(s), Schema ${rawVersion}`);
 
   return { tracks, rawVersion };
 }
@@ -516,6 +460,7 @@ export async function parseRekordboxXmlAsync(
     const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
     const parserError = xmlDoc.querySelector('parsererror');
     if (parserError) {
+      logger.error('XML_IMPORT', `Ungültige Rekordbox-XML-Struktur (async): ${parserError.textContent}`);
       throw new Error('Ungültige Rekordbox-XML-Struktur: ' + parserError.textContent);
     }
     djPlaylists = xmlDoc.querySelector('DJ_PLAYLISTS');
@@ -607,6 +552,14 @@ export async function parseRekordboxXmlAsync(
     logMessages: [...logs.slice(-15)],
   });
 
+  logger.info('XML_IMPORT', `XML-Async-Import abgeschlossen: ${tracks.length} Tracks`, {
+    schemaVersion: rawVersion,
+    tracks: tracks.length,
+    memoryCues: totalMemoryCues,
+    hotCues: totalHotCues,
+    loops: totalLoops,
+  });
+
   return { tracks, rawVersion };
 }
 
@@ -637,6 +590,7 @@ ${track.loops
     </TRACK>
   </COLLECTION>
 </DJ_PLAYLISTS>`;
+  logger.debug('XML_IMPORT', `Track "${track.title}" nach Rekordbox-XML serialisiert (${xml.length} Zeichen, ${track.cues.length} Cues, ${track.loops.length} Loops).`);
   return xml;
 }
 

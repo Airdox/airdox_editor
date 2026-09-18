@@ -1,29 +1,63 @@
 /**
  * @license
  * Rekordbox Audio Engine
- * Real Web Audio API pipeline with Master Bus, Analyser meters,
+ * Real Web Audio API pipeline with Master Bus, Stem Mixer, Analyser meters,
  * Non-destructive Edit Graph playback, and WAV export.
  */
 
 import { EditSegment, TrackModel, PaletteClip } from '../types/rekordbox';
 import { adaptClipAudioBuffer, calculateHarmonicPitchShift } from './pitchTempoEngine';
+import { renderEditSegments } from './editingEngine';
+import {
+  TrackStems,
+  StemsMixerState,
+  STEM_TYPES,
+  DEFAULT_STEMS_MIXER_STATE,
+} from './stemEngine';
+import { logger } from '../utils/logger';
+
+const SAMPLE_INDEX_EPSILON = 1e-6;
+
+function timeToSampleFloor(seconds: number, sampleRate: number): number {
+  return Math.floor(seconds * sampleRate + SAMPLE_INDEX_EPSILON);
+}
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  /** Final safety stage shared by playback, meters and the recorder. */
+  private masterLimiter: DynamicsCompressorNode | null = null;
+  private masterRecordDestination: MediaStreamAudioDestinationNode | null = null;
   private analyserL: AnalyserNode | null = null;
   private analyserR: AnalyserNode | null = null;
   private splitter: ChannelSplitterNode | null = null;
 
+  // Single-source playback
   private currentSource: AudioBufferSourceNode | null = null;
+
+  // Stems playback
+  private stemSources: {
+    vocals: AudioBufferSourceNode | null;
+    drums: AudioBufferSourceNode | null;
+    bass: AudioBufferSourceNode | null;
+    other: AudioBufferSourceNode | null;
+  } = { vocals: null, drums: null, bass: null, other: null };
+
+  private stemGains: {
+    vocals: GainNode | null;
+    drums: GainNode | null;
+    bass: GainNode | null;
+    other: GainNode | null;
+  } = { vocals: null, drums: null, bass: null, other: null };
+
+  private isPlayingStems: boolean = false;
+  private activeStems: TrackStems | null = null;
+  private stemsMixerState: StemsMixerState = { ...DEFAULT_STEMS_MIXER_STATE };
+
   private startTime: number = 0; // audioCtx.currentTime when playback started
   private pauseOffset: number = 0; // playback position in seconds
   private isPlaying: boolean = false;
   private activeBuffer: AudioBuffer | null = null;
-  private stemBuffers: AudioBuffer[] = [];
-  private stemSources: AudioBufferSourceNode[] = [];
-  private stemGains: GainNode[] = [];
-  private stemsActive: boolean = false;
   private loopActive: boolean = false;
   private loopStart: number = 0;
   private loopEnd: number = 0;
@@ -40,25 +74,111 @@ class AudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 0.9;
 
+      // A real safety limiter lives after the master gain. This is deliberately
+      // before both the meters and the record tap, so the file can never clip
+      // merely because a DJ pushes the master above unity.
+      this.masterLimiter = this.ctx.createDynamicsCompressor();
+      this.masterLimiter.threshold.value = -1;
+      this.masterLimiter.knee.value = 0;
+      this.masterLimiter.ratio.value = 20;
+      this.masterLimiter.attack.value = 0.001;
+      this.masterLimiter.release.value = 0.08;
+
       this.splitter = this.ctx.createChannelSplitter(2);
       this.analyserL = this.ctx.createAnalyser();
       this.analyserR = this.ctx.createAnalyser();
       this.analyserL.fftSize = 64;
       this.analyserR.fftSize = 64;
+      this.masterRecordDestination = this.ctx.createMediaStreamDestination();
 
-      this.masterGain.connect(this.ctx.destination);
-      this.masterGain.connect(this.splitter);
+      this.masterGain.connect(this.masterLimiter);
+      this.masterLimiter.connect(this.ctx.destination);
+      this.masterLimiter.connect(this.splitter);
+      this.masterLimiter.connect(this.masterRecordDestination);
       this.splitter.connect(this.analyserL, 0);
       this.splitter.connect(this.analyserR, 1);
+
+      // Initialize Stem gain nodes
+      for (const stem of STEM_TYPES) {
+        const gain = this.ctx.createGain();
+        gain.gain.value = 1.0;
+        gain.connect(this.masterGain);
+        this.stemGains[stem] = gain;
+      }
+
+      logger.info('AUDIO_ENGINE', `AudioContext erzeugt (${this.ctx.sampleRate} Hz, ${this.ctx.destination.maxChannelCount} Kanäle)`, {
+        sampleRate: this.ctx.sampleRate,
+        baseLatency: this.ctx.baseLatency,
+        outputChannelCount: this.ctx.destination.maxChannelCount,
+      });
+      this.ctx.onstatechange = () => {
+        logger.debug('AUDIO_ENGINE', `AudioContext-Zustand: ${this.ctx?.state}`);
+      };
     }
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch((err: unknown) => {
+        logger.warn('AUDIO_ENGINE', `AudioContext konnte nicht fortgesetzt werden: ${err instanceof Error ? err.message : String(err)}`);
+      });
     }
     return this.ctx;
   }
 
   public getContext(): AudioContext {
     return this.init();
+  }
+
+  /**
+   * Returns the post-limiter master tap used by the professional recorder.
+   * It is a MediaStreamAudioDestinationNode, not the speakers' output, so
+   * recording the internal editor master never depends on microphone access.
+   */
+  public getMasterRecordStream(): MediaStream {
+    this.init();
+    if (!this.masterRecordDestination) {
+      throw new Error('Der Master-Record-Tap konnte nicht initialisiert werden.');
+    }
+    return this.masterRecordDestination.stream;
+  }
+
+  /**
+   * Routes an external microphone/line/loopback stream through an isolated
+   * safety limiter. The processed stream is sent only to MediaRecorder and is
+   * never fed back to the speakers (avoids feedback loops).
+   */
+  public createInputRecordingStream(input: MediaStream, useLimiter = true): {
+    stream: MediaStream;
+    dispose: () => void;
+  } {
+    const ctx = this.init();
+    const source = ctx.createMediaStreamSource(input);
+    const destination = ctx.createMediaStreamDestination();
+    const inputGain = ctx.createGain();
+    inputGain.gain.value = 1;
+    source.connect(inputGain);
+
+    let safety: DynamicsCompressorNode | null = null;
+    if (useLimiter) {
+      safety = ctx.createDynamicsCompressor();
+      safety.threshold.value = -1;
+      safety.knee.value = 0;
+      safety.ratio.value = 20;
+      safety.attack.value = 0.001;
+      safety.release.value = 0.08;
+      inputGain.connect(safety);
+      safety.connect(destination);
+    } else {
+      inputGain.connect(destination);
+    }
+
+    return {
+      stream: destination.stream,
+      dispose: () => {
+        try { source.disconnect(); } catch { /* already disconnected */ }
+        try { inputGain.disconnect(); } catch { /* already disconnected */ }
+        try { safety?.disconnect(); } catch { /* already disconnected */ }
+        try { destination.disconnect(); } catch { /* already disconnected */ }
+      },
+    };
   }
 
   public setMasterVolume(vol: number) {
@@ -89,69 +209,116 @@ class AudioEngine {
     };
   }
 
+  /**
+   * Applies the Stems mixer state (Mute / Solo / Volume) to the active stem gain nodes.
+   */
+  public updateStemMixer(mixer: StemsMixerState) {
+    this.stemsMixerState = { ...mixer };
+    if (!this.ctx) return;
+
+    const hasAnySolo = STEM_TYPES.some((s) => mixer[s].solo);
+    const now = this.ctx.currentTime;
+
+    for (const stem of STEM_TYPES) {
+      const gainNode = this.stemGains[stem];
+      if (!gainNode) continue;
+
+      const state = mixer[stem];
+      let targetGain = state.volume;
+
+      if (hasAnySolo) {
+        targetGain = state.solo ? state.volume : 0.0;
+      } else if (state.muted) {
+        targetGain = 0.0;
+      }
+
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+      gainNode.gain.linearRampToValueAtTime(Math.max(0, targetGain), now + 0.02);
+    }
+  }
+
+  /**
+   * Standard single-buffer playback.
+   */
   public play(
     buffer: AudioBuffer,
     offsetSeconds: number = 0,
     loop: boolean = false,
     loopStartSec: number = 0,
-    loopEndSec: number = 0,
-    stemBuffers?: AudioBuffer[]
+    loopEndSec: number = 0
   ) {
     const ctx = this.init();
     this.stop();
 
+    this.isPlayingStems = false;
     this.activeBuffer = buffer;
-    this.stemBuffers = stemBuffers || [];
-    this.stemsActive = this.stemBuffers.length > 0;
-    
+    this.activeStems = null;
     this.pauseOffset = Math.max(0, Math.min(offsetSeconds, buffer.duration));
     this.loopActive = loop;
     this.loopStart = loopStartSec;
     this.loopEnd = loopEndSec > loopStartSec ? loopEndSec : buffer.duration;
 
-    this.startTime = ctx.currentTime - this.pauseOffset;
-    this.isPlaying = true;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
 
-    if (this.stemsActive) {
-      // Create a source and gain for each stem
-      this.stemSources = [];
-      
-      // Ensure we have enough gain nodes
-      while (this.stemGains.length < this.stemBuffers.length) {
-        const gain = ctx.createGain();
-        gain.connect(this.masterGain || ctx.destination);
-        this.stemGains.push(gain);
-      }
+    if (this.loopActive && this.loopEnd > this.loopStart) {
+      source.loop = true;
+      source.loopStart = this.loopStart;
+      source.loopEnd = this.loopEnd;
+    }
 
-      for (let i = 0; i < this.stemBuffers.length; i++) {
-        const source = ctx.createBufferSource();
-        source.buffer = this.stemBuffers[i];
-        
-        if (this.loopActive && this.loopEnd > this.loopStart) {
-          source.loop = true;
-          source.loopStart = this.loopStart;
-          source.loopEnd = this.loopEnd;
-        }
-        
-        source.connect(this.stemGains[i]);
-        source.start(0, this.pauseOffset);
-        this.stemSources.push(source);
-      }
-      
-      // We use the first stem as the timing reference for onended
-      if (this.stemSources.length > 0) {
-        const refSource = this.stemSources[0];
-        refSource.onended = () => {
-          if (this.stemSources.includes(refSource)) {
-            this.isPlaying = false;
-            this.stemSources = [];
-          }
-        };
-      }
+    if (this.masterGain) {
+      source.connect(this.masterGain);
     } else {
-      // Play original buffer
+      source.connect(ctx.destination);
+    }
+
+    this.startTime = ctx.currentTime - this.pauseOffset;
+    source.start(0, this.pauseOffset);
+    this.currentSource = source;
+    this.isPlaying = true;
+    logger.debug('AUDIO_ENGINE', `Wiedergabe gestartet bei ${this.pauseOffset.toFixed(3)}s (Dauer ${buffer.duration.toFixed(2)}s, Loop: ${this.loopActive})`);
+
+    source.onended = () => {
+      if (this.currentSource === source) {
+        this.isPlaying = false;
+        this.currentSource = null;
+        logger.debug('AUDIO_ENGINE', 'Wiedergabe natürlich beendet (onended).');
+      }
+    };
+  }
+
+  /**
+   * Real-time 4-stem multi-channel playback with individual gain nodes.
+   */
+  public playWithStems(
+    stems: TrackStems,
+    mixerState: StemsMixerState,
+    offsetSeconds: number = 0,
+    loop: boolean = false,
+    loopStartSec: number = 0,
+    loopEndSec: number = 0
+  ) {
+    const ctx = this.init();
+    this.stop();
+
+    this.isPlayingStems = true;
+    this.activeStems = stems;
+    this.activeBuffer = stems.vocals; // reference for duration/timing
+    this.pauseOffset = Math.max(0, Math.min(offsetSeconds, stems.duration));
+    this.loopActive = loop;
+    this.loopStart = loopStartSec;
+    this.loopEnd = loopEndSec > loopStartSec ? loopEndSec : stems.duration;
+
+    this.updateStemMixer(mixerState);
+
+    this.startTime = ctx.currentTime - this.pauseOffset;
+
+    for (const stem of STEM_TYPES) {
+      const stemBuf = stems[stem];
       const source = ctx.createBufferSource();
-      source.buffer = buffer;
+      source.buffer = stemBuf;
 
       if (this.loopActive && this.loopEnd > this.loopStart) {
         source.loop = true;
@@ -159,19 +326,31 @@ class AudioEngine {
         source.loopEnd = this.loopEnd;
       }
 
-      if (this.masterGain) {
+      const gainNode = this.stemGains[stem];
+      if (gainNode) {
+        source.connect(gainNode);
+      } else if (this.masterGain) {
         source.connect(this.masterGain);
       } else {
         source.connect(ctx.destination);
       }
 
       source.start(0, this.pauseOffset);
-      this.currentSource = source;
+      this.stemSources[stem] = source;
+    }
 
-      source.onended = () => {
-        if (this.currentSource === source) {
-          this.isPlaying = false;
-          this.currentSource = null;
+    this.isPlaying = true;
+    logger.debug('AUDIO_ENGINE', `Stem-Wiedergabe gestartet bei ${this.pauseOffset.toFixed(3)}s (Trennmethode: ${stems.separationMethod || 'unbekannt'}, Loop: ${this.loopActive})`);
+
+    // Monitor 'ended' on the primary source
+    const leadSource = this.stemSources.vocals;
+    if (leadSource) {
+      leadSource.onended = () => {
+        // Ignore delayed onended events from a source that was replaced during
+        // a live mixer transition. Otherwise the stale vocal source can stop
+        // the newly started stem set and make Vocal Solo sound completely dead.
+        if (this.isPlayingStems && this.stemSources.vocals === leadSource) {
+          this.stop();
         }
       };
     }
@@ -181,6 +360,7 @@ class AudioEngine {
     const pos = this.getCurrentTime();
     this.stop();
     this.pauseOffset = pos;
+    logger.debug('AUDIO_ENGINE', `Wiedergabe pausiert bei ${pos.toFixed(3)}s.`);
     return pos;
   }
 
@@ -189,36 +369,29 @@ class AudioEngine {
       try {
         this.currentSource.stop();
         this.currentSource.disconnect();
-      } catch {
+      } catch (err) {
         // already stopped
+        logger.debug('AUDIO_ENGINE', `Source.stop() beim Stoppen ignoriert: ${err instanceof Error ? err.message : String(err)}`);
       }
       this.currentSource = null;
     }
-    
-    if (this.stemSources.length > 0) {
-      for (const source of this.stemSources) {
+
+    for (const stem of STEM_TYPES) {
+      const src = this.stemSources[stem];
+      if (src) {
         try {
-          source.stop();
-          source.disconnect();
-        } catch {}
+          src.stop();
+          src.disconnect();
+        } catch (err) {
+          // already stopped
+          logger.debug('AUDIO_ENGINE', `Stem-Source.stop() (${stem}) ignoriert: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        this.stemSources[stem] = null;
       }
-      this.stemSources = [];
     }
 
     this.isPlaying = false;
-  }
-  
-  public setStemVolume(index: number, volume: number) {
-    if (index >= 0 && index < this.stemGains.length) {
-      this.stemGains[index].gain.value = volume;
-    }
-  }
-  
-  public getStemVolume(index: number): number {
-    if (index >= 0 && index < this.stemGains.length) {
-      return this.stemGains[index].gain.value;
-    }
-    return 1.0;
+    this.isPlayingStems = false;
   }
 
   public getCurrentTime(): number {
@@ -239,6 +412,18 @@ class AudioEngine {
     return this.isPlaying;
   }
 
+  public getIsPlayingStems(): boolean {
+    return this.isPlayingStems;
+  }
+
+  public getActiveStems(): TrackStems | null {
+    return this.activeStems;
+  }
+
+  public getStemsMixerState(): StemsMixerState {
+    return { ...this.stemsMixerState };
+  }
+
   /**
    * Builds an AudioBuffer from an original AudioBuffer and a list of EditSegments
    * (non-destructive non-linear rendering)
@@ -248,60 +433,11 @@ class AudioEngine {
     segments: EditSegment[]
   ): AudioBuffer {
     const ctx = this.init();
-    if (!segments || segments.length === 0) {
-      return originalBuffer;
-    }
-
-    // Calculate total duration from segments
-    let totalDuration = 0;
-    for (const seg of segments) {
-      const end = seg.projectStart + seg.projectDuration;
-      if (end > totalDuration) totalDuration = end;
-    }
-    if (totalDuration <= 0) totalDuration = originalBuffer.duration;
-
-    const sampleRate = originalBuffer.sampleRate;
-    const totalSamples = Math.max(1, Math.floor(totalDuration * sampleRate));
-    const channels = originalBuffer.numberOfChannels;
-    const outputBuffer = ctx.createBuffer(channels, totalSamples, sampleRate);
-
-    for (let ch = 0; ch < channels; ch++) {
-      const outCh = outputBuffer.getChannelData(ch);
-      const origCh = originalBuffer.getChannelData(ch);
-
-      for (const seg of segments) {
-        const destStart = Math.floor(seg.projectStart * sampleRate);
-        const destLen = Math.floor(seg.projectDuration * sampleRate);
-        const gain = seg.gain ?? 1.0;
-
-        if (seg.type === 'ORIGINAL' || seg.type === 'CUT') {
-          const srcStart = Math.floor(seg.sourceStart * sampleRate);
-          for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < origCh.length; i++) {
-            outCh[destStart + i] = origCh[srcStart + i] * gain;
-          }
-        } else if (seg.type === 'INSERT' || seg.type === 'REPLACE') {
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            const srcStart = Math.floor(seg.sourceStart * sampleRate);
-            for (let i = 0; i < destLen && destStart + i < totalSamples && srcStart + i < clipCh.length; i++) {
-              outCh[destStart + i] = clipCh[srcStart + i] * gain;
-            }
-          }
-        } else if (seg.type === 'OVERDUB') {
-          // Overdub layers onto existing sound
-          const clipBuf = seg.clipBuffer;
-          if (clipBuf) {
-            const clipCh = clipBuf.getChannelData(Math.min(ch, clipBuf.numberOfChannels - 1));
-            for (let i = 0; i < destLen && destStart + i < totalSamples && i < clipCh.length; i++) {
-              outCh[destStart + i] = Math.tanh(outCh[destStart + i] + clipCh[i] * gain * 0.85);
-            }
-          }
-        }
-      }
-    }
-
-    return outputBuffer;
+    return renderEditSegments(
+      originalBuffer,
+      segments,
+      (channels, length, sampleRate) => ctx.createBuffer(channels, length, sampleRate)
+    );
   }
 
   /**
@@ -314,8 +450,8 @@ class AudioEngine {
   ): AudioBuffer {
     const ctx = this.init();
     const sampleRate = buffer.sampleRate;
-    const startSample = Math.max(0, Math.floor(startSec * sampleRate));
-    const endSample = Math.min(buffer.length, Math.floor(endSec * sampleRate));
+    const startSample = Math.max(0, timeToSampleFloor(startSec, sampleRate));
+    const endSample = Math.min(buffer.length, timeToSampleFloor(endSec, sampleRate));
     const length = Math.max(1, endSample - startSample);
     const channels = buffer.numberOfChannels;
 
@@ -355,6 +491,25 @@ class AudioEngine {
     const isCrossTrack = clip.sourceTrackId !== destTrack.id;
     const destBpm = destTrack.bpm > 0 ? destTrack.bpm : 120.0;
     const clipBpm = clip.bpm > 0 ? clip.bpm : destBpm;
+    const pitchPreview = calculateHarmonicPitchShift(clip.key, destTrack.key);
+    const needsTempoAdaptation = Math.abs(destBpm / clipBpm - 1) > 0.002;
+    const needsPitchAdaptation = Boolean(matchPitch && clip.key && destTrack.key && pitchPreview.semitones !== 0);
+
+    // Do not route an already compatible clip through WSOLA. Apart from being
+    // needlessly expensive, an unnecessary resynthesis is precisely where a
+    // short/empty tail can be introduced. Returning the immutable clip buffer
+    // preserves a same-track palette round trip sample-for-sample.
+    if (!needsTempoAdaptation && !needsPitchAdaptation) {
+      return {
+        adaptedBuffer: clip.audioBuffer,
+        tempoRatio: destBpm / clipBpm,
+        semitonesShifted: 0,
+        harmonicRelation: matchPitch ? pitchPreview.harmonicRelation : 'Keine Tonhöhenanpassung',
+        originalDuration: clip.audioBuffer.duration,
+        newDuration: clip.audioBuffer.duration,
+        isCrossTrack,
+      };
+    }
 
     const res = adaptClipAudioBuffer(
       clip.audioBuffer,
@@ -404,6 +559,7 @@ class AudioEngine {
     const bitDepth = 16;
     const bytesPerSample = bitDepth / 8;
     const blockAlign = numChannels * bytesPerSample;
+    logger.debug('EXPORT', `Rendere 16-Bit-Stereo-WAV (${buffer.duration.toFixed(2)}s, ${sampleRate} Hz, ${(44 + buffer.length * blockAlign) / 1024 / 1024} MiB)`);
 
     const left = buffer.getChannelData(0);
     const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;

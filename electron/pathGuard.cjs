@@ -17,8 +17,8 @@ function normalizeForCompare(filePath) {
 
 /**
  * Returns true when `targetPath` collides with any original source path.
- * Case-insensitive so a save to "C:\\Music\\Track.WAV" cannot overwrite an
- * original "C:\\Music\\Track.wav" (fail-closed on case-sensitive filesystems).
+ * Case-insensitive so a save to "C:\Music\Track.WAV" cannot overwrite an
+ * original "C:\Music\Track.wav" (fail-closed on case-sensitive filesystems).
  */
 function isProtectedTarget(targetPath, protectedPaths) {
   if (!Array.isArray(protectedPaths) || protectedPaths.length === 0) return false;
@@ -28,20 +28,34 @@ function isProtectedTarget(targetPath, protectedPaths) {
   );
 }
 
-function toLocalPath(location) {
-  if (typeof location !== 'string' || !location.trim()) return null;
-  try {
-    if (/^[a-z]:[\\/]/i.test(location) || path.isAbsolute(location)) {
-      return path.resolve(location);
-    }
-    if (/^[a-z][a-z\d+.-]*:/i.test(location)) {
-      const url = new URL(location);
-      return url.protocol === 'file:' ? require('node:url').fileURLToPath(url) : null;
-    }
-    return path.resolve(location);
-  } catch {
-    return null;
+/**
+ * Main-process-owned registry of every source path opened read-only. Renderer
+ * payloads are not a security boundary, so save/export checks must also use
+ * this authoritative list even if a renderer accidentally omits a source.
+ */
+class OriginalSourceRegistry {
+  constructor() {
+    this.paths = new Map();
+  }
+
+  register(filePath) {
+    if (typeof filePath !== 'string' || !filePath.trim()) return false;
+    this.paths.set(normalizeForCompare(filePath), path.resolve(filePath));
+    return true;
+  }
+
+  registerMany(filePaths) {
+    if (!Array.isArray(filePaths)) return;
+    for (const filePath of filePaths) this.register(filePath);
+  }
+
+  isProtected(targetPath, additionalPaths = []) {
+    return isProtectedTarget(targetPath, [...this.values(), ...(Array.isArray(additionalPaths) ? additionalPaths : [])]);
+  }
+
+  values() {
+    return Array.from(this.paths.values());
   }
 }
 
-module.exports = { normalizeForCompare, isProtectedTarget, toLocalPath };
+module.exports = { normalizeForCompare, isProtectedTarget, OriginalSourceRegistry };

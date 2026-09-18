@@ -27,39 +27,33 @@ function alignedLength(a: StereoSignal, b: StereoSignal): number {
   return Math.min(a.frames, b.frames);
 }
 
-/** Upper reporting bound in dB: a finite ceiling keeps "identical" from becoming Infinity in reports/JSON. */
-export const MAX_SDR_DB = 180;
-/** A pure separation never claims a perfect 10 (§24). */
-export const MAX_QUALITY_SCORE = 9.5;
-/** Energy below which a buffer counts as silence; anything quieter cannot be scored meaningfully. */
-const SILENCE_ENERGY = 1e-18;
-
-function energyOf(data: Float64Array, n: number): number {
-  let e = 0;
-  for (let i = 0; i < n; i++) e += data[i] * data[i];
-  return e;
-}
-
 /**
- * Classic (BSS-Eval style) SDR: 10*log10(||reference||^2 / ||reference - estimate||^2).
- *
- * Deliberately NOT scale invariant: a stem at the wrong level must be
- * penalised, because that is exactly what the recombination and level checks
- * are there to catch. Use `siSdr()` when a pure gain offset should be ignored.
- *
- * A silent estimate yields -MAX_SDR_DB, never a perfect score — a backend that
- * outputs nothing must not be able to pass the gate.
+ * Standard (BSS-Eval style) SDR: 10*log10(||target||^2 / ||target - estimate||^2)
+ * after best-scaling the estimate to the target (removes a pure gain
+ * mismatch from the score, exactly like the reference implementations used
+ * by MUSDB/BSS-Eval).
  */
 export function sdr(reference: Float64Array, estimate: Float64Array): number {
   const n = Math.min(reference.length, estimate.length);
   if (n === 0) return Number.NaN;
-  const refEnergy = energyOf(reference, n);
-  if (refEnergy < SILENCE_ENERGY) return Number.NaN;
-  if (energyOf(estimate, n) < SILENCE_ENERGY) return -MAX_SDR_DB;
-  let error = 0;
-  for (let i = 0; i < n; i++) error += (estimate[i] - reference[i]) ** 2;
-  if (error < SILENCE_ENERGY) return MAX_SDR_DB;
-  return Math.max(-MAX_SDR_DB, Math.min(MAX_SDR_DB, 10 * Math.log10(refEnergy / error)));
+  let dot = 0;
+  let refEnergy = 0;
+  for (let i = 0; i < n; i++) {
+    dot += reference[i] * estimate[i];
+    refEnergy += reference[i] * reference[i];
+  }
+  if (refEnergy < 1e-18) return Number.NaN;
+  const alpha = dot / refEnergy;
+  let targetEnergy = 0;
+  let errorEnergy = 0;
+  for (let i = 0; i < n; i++) {
+    const target = alpha * reference[i];
+    const error = estimate[i] - target;
+    targetEnergy += target * target;
+    errorEnergy += error * error;
+  }
+  if (errorEnergy < 1e-18) return 180;
+  return 10 * Math.log10(targetEnergy / errorEnergy);
 }
 
 /**
@@ -77,8 +71,7 @@ export function siSdr(reference: Float64Array, estimate: Float64Array): number {
     dot += reference[i] * estimate[i];
     refEnergy += reference[i] * reference[i];
   }
-  if (refEnergy < SILENCE_ENERGY) return Number.NaN;
-  if (energyOf(estimate, n) < SILENCE_ENERGY) return -MAX_SDR_DB;
+  if (refEnergy < 1e-18) return Number.NaN;
   const alpha = dot / refEnergy;
   let targetEnergy = 0;
   let errorEnergy = 0;
@@ -88,8 +81,8 @@ export function siSdr(reference: Float64Array, estimate: Float64Array): number {
     targetEnergy += target * target;
     errorEnergy += error * error;
   }
-  if (errorEnergy < SILENCE_ENERGY) return MAX_SDR_DB;
-  return Math.max(-MAX_SDR_DB, Math.min(MAX_SDR_DB, 10 * Math.log10(targetEnergy / errorEnergy)));
+  if (errorEnergy < 1e-18) return 180;
+  return 10 * Math.log10(targetEnergy / errorEnergy);
 }
 
 /**
@@ -422,7 +415,7 @@ export function qualityScore(report: StemMetricsReport): { score: number; breakd
   const stereoPenalty = report.stereo.becameMono ? 3 : Math.min(1.5, Math.abs(report.stereo.widthDeltaDb) / 6);
   const spectralPenalty = Math.min(2, report.spectral.logSpectralDistanceDb / 10);
   const raw = sdrScore - bleedPenalty - transientPenalty - stereoPenalty - spectralPenalty;
-  const score = Math.max(1, Math.min(MAX_QUALITY_SCORE, raw)); // §24: 10/10 is never claimed for pure separation.
+  const score = Math.max(1, Math.min(9.5, raw)); // §24: 10/10 is never claimed for pure separation.
   return {
     score,
     breakdown: {

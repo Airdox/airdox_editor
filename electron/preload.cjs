@@ -9,23 +9,59 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   readAnalysisFile: (filePath) => ipcRenderer.invoke('rekordbox:read-analysis-file', filePath),
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
-  // Master-DB-Gate: gibt ein strukturiertes Gate-Ergebnis zurück (ok/errorCode).
-  resolveTrackFromMasterDb: (request) => ipcRenderer.invoke('rekordbox:resolve-track-master-db', request),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  // Small app-owned index of track ↔ ANLZ paths. This never writes to
+  // Rekordbox's master.db or source files.
+  cacheAnalysisMappings: (mappings) => ipcRenderer.invoke('rekordbox:cache-analysis-mappings', mappings),
+  findAnalysisMapping: (query) => ipcRenderer.invoke('rekordbox:find-analysis-mapping', query),
+  getAnalysisMappingStats: () => ipcRenderer.invoke('rekordbox:analysis-mapping-stats'),
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
-  separateStems: (payload) => ipcRenderer.invoke('audio:separate-stems', payload),
-  stemsPreflight: () => ipcRenderer.invoke('audio:stems-preflight'),
-  cancelStems: (jobId) => ipcRenderer.invoke('audio:cancel-stems', jobId),
-  // Progress is push-based; returns an unsubscribe function so the renderer
-  // cannot leak listeners across re-renders.
-  onStemsProgress: (handler) => {
-    const listener = (_event, payload) => handler(payload);
-    ipcRenderer.on('audio:stems-progress', listener);
-    return () => ipcRenderer.removeListener('audio:stems-progress', listener);
+  // Preflight and inference are separate so missing/unsupported Python is known
+  // before a large audio buffer is handed to the model process.
+  getStemEngineStatus: () => ipcRenderer.invoke('stems:get-status'),
+  separateStems: (wavBytes) => ipcRenderer.invoke('stems:separate', wavBytes),
+
+  // --- Neue Stem-Engine (src/stems) als Jobs -------------------------------
+  // Verschachtelt als `stemEngine`, damit der Vertrag exakt
+  // `StemDesktopApi` aus src/stems/transportTypes.ts ist (Typ + Präsenz werden
+  // von tests/stem-engine-ipc-contract.test.ts geprüft).
+  // status() liefert Profile/Modelle/Stem-Listen aus dem Modell-Katalog,
+  // startStemJob() gibt sofort eine jobId zurück, Fortschritt kommt über
+  // onStemJobProgress, Stems werden einzeln geladen (kein 4-fach-Buffer-Payload).
+  stemEngine: {
+    getStemEngineStatus: () => ipcRenderer.invoke('stems:engine-status'),
+    startStemJob: (payload) => ipcRenderer.invoke('stems:job-start', payload),
+    waitStemJob: (jobId) => ipcRenderer.invoke('stems:job-wait', jobId),
+    getStemJob: (jobId) => ipcRenderer.invoke('stems:job-get', jobId),
+    listStemJobs: () => ipcRenderer.invoke('stems:job-list'),
+    cancelStemJob: (jobId, reason) => ipcRenderer.invoke('stems:job-cancel', jobId, reason),
+    pauseStemJob: (jobId) => ipcRenderer.invoke('stems:job-pause', jobId),
+    resumeStemJob: (jobId) => ipcRenderer.invoke('stems:job-resume', jobId),
+    readStemJobStem: (jobId, stemId) => ipcRenderer.invoke('stems:job-stem', jobId, stemId),
+    readStemJobMetadata: (jobId) => ipcRenderer.invoke('stems:job-metadata', jobId),
+    onStemJobProgress: (callback) => {
+      const listener = (_event, progress) => callback(progress);
+      ipcRenderer.on('stems:job-progress', listener);
+      return () => ipcRenderer.removeListener('stems:job-progress', listener);
+    },
   },
-  appendLog: (entry) => ipcRenderer.invoke('log:append', entry),
-  getLogFilePath: () => ipcRenderer.invoke('log:get-path'),
+
+  // --- Diagnostics / logging bridge -----------------------------------------
+  // Fire-and-forget batched log stream from the renderer. send() (not invoke)
+  // so the message is handed to the main process even during page hide/unload.
+  writeLogEntries: (entries) => ipcRenderer.send('logs:write', entries),
+  getLogInfo: () => ipcRenderer.invoke('logs:get-info'),
+  readLogTail: (maxBytes) => ipcRenderer.invoke('logs:read-tail', maxBytes),
+  openLogFolder: () => ipcRenderer.invoke('logs:open-log-folder'),
+  // One-click installation of the real AI engine (Python venv + torch +
+  // demucs + htdemucs_ft weights). Progress arrives via onStemInstallProgress.
+  installStemEngine: () => ipcRenderer.invoke('stems:install-engine'),
+  onStemInstallProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('stems:install-progress', listener);
+    return () => ipcRenderer.removeListener('stems:install-progress', listener);
+  },
 });

@@ -32,6 +32,7 @@ import {
   PhraseSection,
   WaveformAnalysisData,
 } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export interface AnlzCueEntry {
   /** 0 = memory point, 1..N = hot cue number (A=1, B=2, ...) */
@@ -79,7 +80,6 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
-  waveformVariants: WaveformAnalysisData[];
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -221,8 +221,7 @@ function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: s
 
 function createWaveform(
   spec: WaveformSpec,
-  view: DataView,
-  sourceTag?: string
+  view: DataView
 ): WaveformAnalysisData {
   const { entryCount, entryBytes, dataOffset, style } = spec;
   const peaks = new Float32Array(entryCount);
@@ -285,7 +284,6 @@ function createWaveform(
     midEnergy,
     highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
-    sourceTag: sourceTag ?? 'PWV',
   };
 }
 
@@ -579,7 +577,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     cues: [],
     loops: [],
     phrases: [],
-    waveformVariants: [],
     warnings: [],
   };
 
@@ -648,7 +645,6 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         if (legacyBpm >= 4000 && legacyBpm <= 35000) {
           result.bpm = legacyBpm / 100;
           result.firstBeat = view.getUint32(offset + 10, false) / 1000;
-          result.warnings.push(`${tag}: legacy bpm-only layout, keine Beat-Knoten – PQTZ-Lücke gemeldet.`);
         } else {
           result.warnings.push(`${tag} ohne lesbare Beat-Einträge übersprungen.`);
         }
@@ -773,14 +769,10 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
       const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec) {
-        const wf = createWaveform(spec, view, tag);
-        result.waveformVariants.push(wf);
-        if (WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-          result.waveform = wf;
-          waveformPriority = WAVEFORM_PRIORITY[tag];
-        }
-      } else {
+      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
+        result.waveform = createWaveform(spec, view);
+        waveformPriority = WAVEFORM_PRIORITY[tag];
+      } else if (!spec) {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
       }
     }
@@ -797,6 +789,18 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
   const memModel = entriesToModel(rawMemoryCues, false, bpm, firstBeat);
   result.cues = [...memModel.cues, ...hotModel.cues];
   result.loops = [...memModel.loops, ...hotModel.loops];
+
+  logger.debug('XML_IMPORT', `ANLZ binär geparst (${(len / 1024).toFixed(1)} KB)`, {
+    byteLength: len,
+    tags: result.tagsFound,
+    cues: result.cues.length,
+    loops: result.loops.length,
+    phrases: result.phrases.length,
+    bpm: result.bpm,
+    hasWaveform: Boolean(result.waveform),
+    waveformBuckets: result.waveform?.length,
+    warnings: result.warnings,
+  });
 
   return result;
 }

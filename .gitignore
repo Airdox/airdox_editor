@@ -1,24 +1,15 @@
 node_modules/
+.venv/
 build/
 dist/
 coverage/
 .DS_Store
 *.log
+stem-test-output/
 .env*
 !.env.example
-release/
-release-current/
-*.zip
-
-# Nur im CI erzeugte SQLCipher-Nachweise (keine Testdaten einchecken)
-ci-artifacts/
-
-# Stem-Separation-Modelle: niemals ins Repo (Groesse + ungeklaerte Gewichte-Lizenz)
-models/
-*.ckpt
-*.onnx
-*.th
-*.safetensors
-
-# Generiert von `npm run build:stems` (electron-builder baut vorher neu)
-electron/stemsEngine.cjs
+logs/
+stem-engine-data/
+stem-gate-run/
+stem-gate-colab.tar.gz
+test-runner-failure.txt
