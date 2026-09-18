@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>airdox_SMART_Editor – Architektur-Netzwerk (interaktiv)</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+  :root{
+    --bg:#0b1020; --bg2:#0e1530; --panel:rgba(10,16,38,.92); --line:#26325a;
+    --text:#dbe4ff; --muted:#8b97c4; --accent:#5eead4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:
+    radial-gradient(1200px 700px at 70% -10%, #16224d 0%, var(--bg) 55%) fixed;
+    color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #graph{position:fixed;inset:0}
+  svg{width:100%;height:100%;display:block;cursor:grab}
+  svg:active{cursor:grabbing}
+
+  /* ---------- Kopfleiste ---------- */
+  header{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;flex-wrap:wrap;gap:10px 18px;
+    align-items:center;padding:10px 16px;background:linear-gradient(180deg,var(--panel),transparent);
+    pointer-events:none}
+  header > *{pointer-events:auto}
+  h1{font-size:16px;margin:0;letter-spacing:.3px}
+  h1 small{color:var(--muted);font-weight:400;margin-left:8px}
+  #stats{color:var(--muted);font-size:12px}
+  #stats b{color:var(--text)}
+  .controls{display:flex;gap:8px;align-items:center;margin-left:auto}
+  #search{background:var(--bg2);border:1px solid var(--line);border-radius:8px;color:var(--text);
+    padding:7px 12px;width:230px;outline:none}
+  #search:focus{border-color:var(--accent)}
+  button{background:var(--bg2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:7px 12px;cursor:pointer;font-size:13px;transition:.15s}
+  button:hover{border-color:var(--accent);color:#fff;transform:translateY(-1px)}
+  button.primary{background:linear-gradient(135deg,#134e4a,#0f766e);border-color:#14b8a6}
+
+  /* ---------- Legende / Filter ---------- */
+  #legend{position:fixed;left:14px;top:64px;z-index:15;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px 14px;width:270px;backdrop-filter:blur(6px)}
+  #legend h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:2px 0 8px}
+  .chip{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:8px;cursor:pointer;
+    user-select:none;transition:.12s}
+  .chip:hover{background:rgba(255,255,255,.06)}
+  .chip .dot{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+  .chip .lbl{flex:1;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .cnt{color:var(--muted);font-size:11px}
+  .chip.off{opacity:.32}
+  .chip.edge .dot{border-radius:50%;background:transparent!important;border:0;height:0;width:0;
+    border-top:3px dotted}
+  .hint{color:var(--muted);font-size:11px;margin-top:8px;line-height:1.5}
+
+  /* ---------- Hotspots ---------- */
+  #hotspots{position:fixed;left:14px;bottom:14px;z-index:15;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:12px 14px;width:270px;backdrop-filter:blur(6px)}
+  #hotspots h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:0 0 8px}
+  .metric-btns{display:flex;gap:4px;margin-bottom:8px}
+  .metric-btns button{padding:3px 8px;font-size:11px;border-radius:6px}
+  .metric-btns button.active{background:#134e4a;border-color:#14b8a6;color:#99f6e4}
+  .hs-row{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;cursor:pointer}
+  .hs-row:hover{background:rgba(255,255,255,.06)}
+  .hs-row .name{flex:1;font-size:11.5px;font-family:ui-monospace,monospace;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .hs-row .bar{height:5px;border-radius:3px;background:linear-gradient(90deg,#f59e0b,#ef4444);min-width:4px}
+
+  /* ---------- Detail-Panel ---------- */
+  #detail{position:fixed;right:14px;top:64px;z-index:16;width:330px;max-height:calc(100% - 90px);
+    overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;backdrop-filter:blur(8px);display:none}
+  #detail.open{display:block}
+  #detail h3{margin:0 0 2px;font-size:14px;word-break:break-all;font-family:ui-monospace,monospace}
+  #detail .group-tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin:4px 0 10px}
+  #detail p{color:var(--muted);font-size:12.5px;margin:6px 0 12px}
+  .metric-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px}
+  .metric{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .metric b{display:block;font-size:15px}
+  .metric span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  #detail h4{font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px;letter-spacing:.1em}
+  #detail ul{margin:0;padding-left:16px;font-size:12px}
+  #detail li{margin:2px 0}
+  #detail li a{color:var(--accent);cursor:pointer;text-decoration:none}
+  #detail li a:hover{text-decoration:underline}
+  #closeDetail{position:absolute;top:8px;right:10px;border:none;background:none;color:var(--muted);
+    font-size:16px;padding:2px 6px}
+
+  /* ---------- Tooltip ---------- */
+  #tooltip{position:fixed;z-index:30;pointer-events:none;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;max-width:340px;font-size:12px;display:none;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);backdrop-filter:blur(8px)}
+  #tooltip .tt-path{font-family:ui-monospace,monospace;font-weight:600;margin-bottom:2px;word-break:break-all}
+  #tooltip .tt-desc{color:var(--muted);margin:5px 0 6px}
+  #tooltip .tt-metrics{color:var(--muted)}
+  #tooltip .tt-metrics b{color:var(--text)}
+
+  /* ---------- Graph-Elemente ---------- */
+  .link{stroke-linecap:round;transition:opacity .15s}
+  .link.cross{stroke-dasharray:7 5;animation:dashmove 1.1s linear infinite}
+  @keyframes dashmove{to{stroke-dashoffset:-12}}
+  .node{cursor:pointer;stroke-width:1.5;transition:opacity .15s}
+  .node circle{stroke:rgba(255,255,255,.75)}
+  .node.hot circle{stroke:#fbbf24;stroke-width:2.5}
+  .node text{fill:#cdd8f7;font-size:9px;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2.5px}
+  .dimmed{opacity:.07!important}
+  .search-hit{filter:drop-shadow(0 0 8px #5eead4)}
+  .glow{filter:drop-shadow(0 0 10px currentColor)}
+  #err{position:fixed;inset:0;display:none;place-items:center;z-index:50;background:var(--bg);
+    color:#fca5a5;font-size:15px;text-align:center;padding:30px}
+  @media (max-width:900px){#legend,#hotspots{display:none}#detail{width:280px}}
+</style>
+</head>
+<body>
+<div id="graph"><svg></svg></div>
+
+<header>
+  <h1>🕸️ airdox_SMART_Editor <small>· Architektur-Netzwerk</small></h1>
+  <span id="stats"></span>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Datei suchen (z. B. stemEngine, App.tsx) …">
+    <button id="btnFit" title="Alles einpassen">⤢ Fit</button>
+    <button id="btnShake" title="Simulation neu anregen">🌪️ Shake</button>
+    <button id="btnPin" title="Alle Knoten lösen">📌 Lösen</button>
+  </div>
+</header>
+
+<aside id="legend"><h2>Module (klicken = filtern)</h2><div id="groupChips"></div>
+  <h2 style="margin-top:12px">Kanten (klicken = filtern)</h2><div id="edgeChips"></div>
+  <div class="hint">🖱️ Ziehen = schütteln · Mausrad = Zoom · Hovern = Nachbarschaft · Klick = Details · Doppelklick = Pin</div>
+</aside>
+
+<section id="hotspots">
+  <h2>🔥 Hotspots</h2>
+  <div class="metric-btns" id="metricBtns"></div>
+  <div id="hsList"></div>
+</section>
+
+<section id="detail"><button id="closeDetail">✕</button><div id="detailBody"></div></section>
+<div id="tooltip"></div>
+<div id="err"><div>⚠️ D3.js konnte nicht geladen werden.<br><br>
+  Diese Seite lädt D3 vom CDN – beim ersten Öffnen wird also Internet benötigt.<br>
+  Alternativ: d3.min.js herunterladen und den &lt;script src&gt; auf die lokale Datei umbiegen.</div></div>
+
+<script>
+"use strict";
+const DATA = /*__GRAPH_DATA__*/null;
+
+(function boot(){
+  if (typeof d3 === "undefined") { document.getElementById("err").style.display = "grid"; return; }
+  if (!DATA || !DATA.nodes) { document.getElementById("err").style.display = "grid";
+    document.querySelector("#err div").textContent = "Keine Graph-Daten eingebettet – bitte analyze_repo.py ausführen."; return; }
+  render(DATA);
+})();
+
+function render(DATA){
+  const svg = d3.select("svg"), g = svg.append("g");
+  const defs = svg.append("defs");
+  const W = () => window.innerWidth, H = () => window.innerHeight;
+
+  // ---------- Daten aufbereiten ----------
+  const nodes = DATA.nodes.map(d => Object.assign({}, d));
+  const byId = new Map(nodes.map(d => [d.id, d]));
+  const links = DATA.links
+    .map(l => ({ source: byId.get(l.source), target: byId.get(l.target), type: l.type,
+                 weight: l.weight || 1, why: l.why || "" }))
+    .filter(l => l.source && l.target && l.source !== l.target);
+  nodes.forEach(n => { n.r = Math.min(3 + Math.sqrt(n.rloc) * 0.5, 30); n.degree = 0; });
+  links.forEach(l => { l.source.degree++; l.target.degree++; });
+  const hottest = new Set(nodes.slice().sort((a,b)=>b.complexity-a.complexity).slice(0,10).map(n=>n.id));
+
+  const importNeighbors = new Map(); // id -> Set(ids) über Import-Kanten
+  links.forEach(l => {
+    if (l.type !== "import") return;
+    if(!importNeighbors.has(l.source.id)) importNeighbors.set(l.source.id, new Set());
+    if(!importNeighbors.has(l.target.id)) importNeighbors.set(l.target.id, new Set());
+    importNeighbors.get(l.source.id).add(l.target.id);
+    importNeighbors.get(l.target.id).add(l.source.id);
+  });
+
+  // ---------- Header-Stats ----------
+  const totalRloc = d3.sum(nodes, d => d.rloc);
+  const langs = d3.rollups(nodes, v => d3.sum(v, d => d.rloc), d => d.lang.split(" ")[0])
+      .sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]).join(", ");
+  d3.select("#stats").html(
+    `<b>${nodes.length}</b> Dateien · <b>${links.length}</b> Abhängigkeiten · ` +
+    `<b>${totalRloc.toLocaleString("de-DE")}</b> Zeilen · Kern: ${langs} · Stand ${DATA.generatedAt || ""}`);
+
+  // ---------- Cluster-Anker (gruppenweise Regionen) ----------
+  const ANCHORS = { frontend:[0,-30], tests:[-30,-470], core:[540,-230], desktop:[620,110],
+                    python:[620,430], native:[980,440], scripts:[-640,270] };
+
+  // ---------- Filter-Zustand ----------
+  const activeGroups = new Set(Object.keys(DATA.groups));
+  const activeEdges  = new Set(Object.keys(DATA.edgeTypes));
+  let searchHits = new Set(), pinned = new Set(), selected = null, sim = null;
+
+  // ---------- Legende ----------
+  const groupChips = d3.select("#groupChips").selectAll("div")
+    .data(Object.entries(DATA.groups)).join("div").attr("class","chip").html(d =>
+      `<span class="dot" style="background:${d[1].color}"></span>` +
+      `<span class="lbl" title="${d[1].description||""}">${d[1].label}</span>` +
+      `<span class="cnt">${d[1].count||0}</span>`)
+    .on("click", (e,d) => toggleSet(activeGroups, d[0], e.currentTarget));
+  const edgeChips = d3.select("#edgeChips").selectAll("div")
+    .data(Object.entries(DATA.edgeTypes)).join("div").attr("class","chip edge").html(d =>
+      `<span class="dot" style="border-color:${d[1].color}"></span>` +
+      `<span class="lbl">${d[1].label}</span>` +
+      `<span class="cnt">${links.filter(l=>l.type===d[0]).length}</span>`)
+    .on("click", (e,d) => toggleSet(activeEdges, d[0], e.currentTarget));
+  function toggleSet(set, key, el){ set.has(key) ? set.delete(key) : set.add(key);
+    d3.select(el).classed("off", !set.has(key)); rebuild(); }
+
+  // ---------- Hotspots ----------
+  const METRICS = [["rloc","Zeilen"],["complexity","Komplexität"],["churn","Git-Churn"],["fanIn","Fan-In"]];
+  let hsMetric = "rloc";
+  const metricBtns = d3.select("#metricBtns").selectAll("button").data(METRICS).join("button")
+    .text(d=>d[1]).attr("title", d=>d[0])
+    .classed("active", d=>d[0]===hsMetric)
+    .on("click",(e,d)=>{ hsMetric=d[0]; metricBtns.classed("active", x=>x[0]===hsMetric); drawHotspots(); });
+  function drawHotspots(){
+    const top = nodes.slice().sort((a,b)=>b[hsMetric]-a[hsMetric]).slice(0,8);
+    const max = top.length ? (top[0][hsMetric]||1) : 1;
+    d3.select("#hsList").selectAll(".hs-row").data(top, d=>d.id).join("div")
+      .attr("class","hs-row").html(d =>
+        `<span class="name" title="${d.id}">${d.name}</span>` +
+        `<span class="bar" style="width:${Math.max(4, 90*Math.sqrt((d[hsMetric]||0)/max))}px"></span>` +
+        `<span class="cnt">${d[hsMetric]}</span>`)
+      .on("click",(e,d)=>{ select(d); zoomTo(d); });
+  }
+  drawHotspots();
+
+  // ---------- Marker (Richtungspfeile für Cross-World-Kanten) ----------
+  Object.values(DATA.edgeTypes).forEach(t => {
+    defs.append("marker").attr("id","arr-"+t.label.replace(/\W/g,""))
+      .attr("viewBox","0 -5 10 10").attr("refX",9).attr("refY",0)
+      .attr("markerWidth",5).attr("markerHeight",5).attr("orient","auto")
+      .append("path").attr("d","M0,-4L9,0L0,4").attr("fill",t.color);
+  });
+
+  // ---------- Zoom ----------
+  const zoom = d3.zoom().scaleExtent([0.05, 10])
+    .on("zoom", e => g.attr("transform", e.transform));
+  svg.call(zoom).on("dblclick.zoom", null);
+  d3.select("#btnFit").on("click", fitAll);
+  d3.select("#btnShake").on("click", () => {
+    nodes.forEach(n => { n.vx += (Math.random()-0.5)*90; n.vy += (Math.random()-0.5)*90; });
+    sim.alphaTarget(0.5).restart(); setTimeout(()=>sim && sim.alphaTarget(0), 2500);
+  });
+  d3.select("#btnPin").on("click", () => { pinned.clear(); nodes.forEach(n=>{n.fx=null;n.fy=null;}); sim.alpha(0.6).restart(); });
+
+  function fitAll(){
+    const vis = nodes.filter(n => activeGroups.has(n.group) && n.x != null);
+    if (!vis.length) return;
+    const [x0,x1] = d3.extent(vis, d=>d.x), [y0,y1] = d3.extent(vis, d=>d.y);
+    const k = 0.88 * Math.min(W()/(x1-x0+140), H()/(y1-y0+140));
+    const t = d3.zoomIdentity.translate(W()/2, H()/2).scale(Math.min(k,2)).translate(-(x0+x1)/2, -(y0+y1)/2);
+    svg.transition().duration(700).call(zoom.transform, t);
+  }
+  function zoomTo(d){
+    const t = d3.zoomIdentity.translate(W()/2, H()/2).scale(1.7).translate(-d.x, -d.y);
+    svg.transition().duration(600).call(zoom.transform, t);
+  }
+
+  // ---------- Suche ----------
+  d3.select("#search").on("input", function(){
+    const q = this.value.trim().toLowerCase();
+    searchHits = new Set(!q ? [] : nodes.filter(n =>
+      n.id.toLowerCase().includes(q) || (n.desc||"").toLowerCase().includes(q)).map(n=>n.id));
+    drawSearchRings();
+  });
+  function drawSearchRings(){
+    nodeSel.classed("search-hit", d => searchHits.has(d.id));
+    linkSel.classed("dimmed", d => searchHits.size > 0 &&
+      !searchHits.has(d.source.id) && !searchHits.has(d.target.id));
+  }
+
+  // ---------- Tooltip / Hervorhebung ----------
+  const tooltip = d3.select("#tooltip");
+  function showTip(e, d){
+    const g = DATA.groups[d.group] || {label:d.group,color:"#888"};
+    tooltip.style("display","block").html(
+      `<div class="tt-path" style="color:${g.color}">${d.id}</div>` +
+      `<div>${g.label} · ${d.lang}</div>` +
+      `<div class="tt-desc">${d.desc||""}</div>` +
+      `<div class="tt-metrics">rloc <b>${d.rloc}</b> · Funktionen <b>${d.functions}</b> · ` +
+      `Klassen <b>${d.classes}</b> · Komplexität <b>${d.complexity}</b><br>` +
+      `Fan-In <b>${d.fanIn}</b> · Fan-Out <b>${d.fanOut}</b> · Git-Churn <b>${d.churn}</b> · ` +
+      `Tiefe <b>${d.maxDepth}</b> · TODOs <b>${d.todos}</b></div>`);
+    moveTip(e);
+  }
+  function moveTip(e){
+    const x = Math.min(e.clientX + 16, W() - 360), y = Math.min(e.clientY + 14, H() - 190);
+    tooltip.style("left", x + "px").style("top", y + "px");
+  }
+  function highlight(d){
+    const nb = new Set([d.id]); 
+    links.forEach(l => { if (l.source.id === d.id) nb.add(l.target.id);
+                         if (l.target.id === d.id) nb.add(l.source.id); });
+    nodeSel.classed("dimmed", n => !nb.has(n.id));
+    linkSel.classed("dimmed", l => l.source.id !== d.id && l.target.id !== d.id);
+  }
+  function clearHighlight(){
+    nodeSel.classed("dimmed", false); linkSel.classed("dimmed", false); drawSearchRings();
+  }
+
+  // ---------- Detail-Panel ----------
+  d3.select("#closeDetail").on("click", () => { selected = null; d3.select("#detail").classed("open", false); });
+  function select(d){
+    selected = d;
+    const g = DATA.groups[d.group] || {label:d.group,color:"#888"};
+    const usedBy = [...(importNeighbors.get(d.id)||[])].map(id=>byId.get(id)).filter(n=>n)
+      .sort((a,b)=>b.rloc-a.rloc);
+    const cross = links.filter(l => l.type !== "import" && (l.source.id===d.id || l.target.id===d.id));
+    d3.select("#detail").classed("open", true);
+    d3.select("#detailBody").html(
+      `<h3>${d.id}</h3>` +
+      `<span class="group-tag" style="background:${g.color}22;color:${g.color};border:1px solid ${g.color}66">${g.label}</span>` +
+      `<p>${d.desc||""}</p>` +
+      `<div class="metric-grid">` +
+      `<div class="metric"><b>${d.rloc}</b><span>rloc</span></div>` +
+      `<div class="metric"><b>${d.functions}</b><span>Funktionen</span></div>` +
+      `<div class="metric"><b>${d.classes}</b><span>Klassen</span></div>` +
+      `<div class="metric"><b>${d.complexity}</b><span>Komplexität</span></div>` +
+      `<div class="metric"><b>${d.fanIn}</b><span>Fan-In</span></div>` +
+      `<div class="metric"><b>${d.churn}</b><span>Git-Churn</span></div></div>` +
+      (cross.length ? `<h4>Cross-World-Verbindungen</h4><ul>` + cross.map(l => {
+          const other = l.source.id===d.id ? l.target : l.source;
+          const t = DATA.edgeTypes[l.type] || {label:l.type};
+          return `<li><span style="color:${t.color}">${t.label}</span> → ` +
+                 `<a data-id="${other.id}">${other.name}</a>${l.why ? ` <small style="color:var(--muted)">(${l.why})</small>` : ""}</li>`;
+        }).join("") + `</ul>` : "") +
+      (d.importsList && d.importsList.length ? `<h4>Importiert</h4><ul>` +
+        d.importsList.map(i=>`<li><a data-id="${i}">${i}</a></li>`).join("") + `</ul>` : "") +
+      (usedBy.length ? `<h4>Wird importiert von (${d.fanIn})</h4><ul>` +
+        usedBy.slice(0,10).map(n=>`<li><a data-id="${n.id}">${n.id}</a></li>`).join("") +
+        (usedBy.length>10?`<li>…</li>`:"") + `</ul>` : ""));
+    d3.selectAll("#detailBody a").on("click", function(){
+      const n = byId.get(this.dataset.id); if (n){ select(n); zoomTo(n); }
+    });
+  }
+
+  // ---------- Simulation + Zeichnen ----------
+  let nodeSel = d3.select(null), linkSel = d3.select(null);
+
+  function rebuild(){
+    if (sim) sim.stop();
+    const visNodes = nodes.filter(n => activeGroups.has(n.group));
+    const visSet = new Set(visNodes.map(n => n.id));
+    const visLinks = links.filter(l => activeEdges.has(l.type) && visSet.has(l.source.id) && visSet.has(l.target.id));
+
+    g.selectAll("*").remove();
+    const linkG = g.append("g"), nodeG = g.append("g");
+
+    linkSel = linkG.selectAll("line").data(visLinks, d => d.type + "|" + d.source.id + "|" + d.target.id)
+      .join("line")
+      .attr("class", d => "link" + (d.type === "import" ? "" : " cross"))
+      .attr("stroke", d => (DATA.edgeTypes[d.type]||{color:"#64748b"}).color)
+      .attr("stroke-width", d => d.type === "import" ? Math.min(0.4 + d.weight * 0.25, 2.2) : 1.6)
+      .attr("stroke-opacity", d => d.type === "import" ? 0.22 : 0.75)
+      .attr("marker-end", d => d.type === "import" ? null : `url(#arr-${(DATA.edgeTypes[d.type]||{label:"x"}).label.replace(/\W/g,"")})`)
+      .on("mouseover", (e,l) => { if (l.why) showTip(e, { id:`${l.source.name} → ${l.target.name}`,
+        group:l.source.group, lang:"Beziehung", desc:`${(DATA.edgeTypes[l.type]||{}).label}: ${l.why}`,
+        rloc:"–",functions:"–",classes:"–",complexity:"–",fanIn:"–",fanOut:"–",churn:"–",maxDepth:"–",todos:"–" }); })
+      .on("mousemove", moveTip).on("mouseout", () => tooltip.style("display","none"));
+
+    nodeSel = nodeG.selectAll("g.node").data(visNodes, d => d.id).join("g")
+      .attr("class", d => "node" + (hottest.has(d.id) ? " hot" : ""))
+      .call(d3.drag()
+        .on("start", (e,d) => { if (!e.active) sim.alphaTarget(0.35).restart(); d.fx = d.x; d.fy = d.y; })
+        .on("drag",  (e,d) => { d.fx = e.x; d.fy = e.y; })
+        .on("end",   (e,d) => { if (!e.active) sim.alphaTarget(0); }))
+      .on("mouseover", (e,d) => { highlight(d); showTip(e,d); d3.select(e.currentTarget).select("circle").raise(); })
+      .on("mousemove", moveTip)
+      .on("mouseout",  () => { clearHighlight(); tooltip.style("display","none"); })
+      .on("click", (e,d) => select(d))
+      .on("dblclick", (e,d) => {
+        if (pinned.has(d.id)) { pinned.delete(d.id); d.fx = d.fy = null; }
+        else { pinned.add(d.id); d.fx = d.x; d.fy = d.y; }
+        d3.select(e.currentTarget).classed("glow", pinned.has(d.id));
+      });
+
+    nodeSel.append("circle")
+      .attr("r", d => d.r)
+      .attr("fill", d => (DATA.groups[d.group]||{color:"#888"}).color)
+      .attr("fill-opacity", 0.88);
+    nodeSel.filter(d => d.r >= 9).append("text")
+      .attr("text-anchor","middle").attr("dy", d => d.r + 11)
+      .text(d => d.name.length > 24 ? d.name.slice(0,22) + "…" : d.name);
+
+    sim = d3.forceSimulation(visNodes)
+      .force("link", d3.forceLink(visLinks).id(d => d.id)
+        .distance(d => d.type === "import" ? (d.source.group === d.target.group ? 34 : 85) : 150)
+        .strength(d => d.type === "import" ? 0.35 : 0.06))
+      .force("charge", d3.forceManyBody().strength(d => -55 - d.r * 3.2))
+      .force("collide", d3.forceCollide().radius(d => d.r + 4).iterations(1.5))
+      .force("x", d3.forceX(d => (ANCHORS[d.group]||[0,0])[0]).strength(0.05))
+      .force("y", d3.forceY(d => (ANCHORS[d.group]||[0,0])[1]).strength(0.06))
+      .alpha(1).alphaDecay(0.022)
+      .on("tick", () => {
+        linkSel.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+               .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+        nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
+      });
+    visNodes.forEach(n => { if (n.x == null){ n.x = (Math.random()-0.5)*400; n.y = (Math.random()-0.5)*400; } });
+    drawSearchRings();
+  }
+
+  rebuild();
+  setTimeout(fitAll, 2600);         // erste Einpassung nach dem "Aufbauspiel"
+  d3.select(window).on("resize", () => svg.attr("viewBox", [0,0,W(),H()]));
+  svg.attr("viewBox", [0,0,W(),H()]);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape"){ selected = null; d3.select("#detail").classed("open", false); clearHighlight(); }
+  });
+}
+</script>
+</body>
+</html>
