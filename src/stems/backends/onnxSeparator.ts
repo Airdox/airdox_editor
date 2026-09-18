@@ -25,6 +25,13 @@
  *   cuda      : cuda -> tensorrt -> cpu
  *   cpu       : cpu
  *
+ * Zwei CPU-Auswege schützen den Job: scheitert schon das *Bauen* der Session
+ * (fehlende CUDA-DLLs, alter Treiber), greift die CPU-Erstellung. Kippt die
+ * *Inferenz* im Grafiktreiber (DirectML/DXGI 887A0020 und Verwandte – die
+ * Session ließ sich bauen, `session.run` stürzt ab), wird die Provider-Kette
+ * prozessweit gesperrt und das Segment auf der CPU wiederholt. Statt
+ * INFERENCE_FAILED bekommt der DJ dann einfach CPU-Qualität mit CPU-Tempo.
+ *
  * A session is created once and kept warm (per model + provider list), because
  * loading a 166 MB graph dominates short jobs.
  *
@@ -349,15 +356,36 @@ interface WarmSession {
 const warmSessions = new Map<string, Promise<WarmSession>>();
 const warmSessionStates = new Map<string, WarmSession>();
 
+/**
+ * Provider-Ketten, die zur Laufzeit („session.run“) abgestürzt sind – nicht
+ * beim Bau der Session. Typischer Auslöser: Grafiktreiber-Fehler unter
+ * DirectML (DXGI 887A0020 „DRIVER_INTERNAL_ERROR“, 887A0005/6/7 „DEVICE_*“).
+ * Die Session lässt sich anlegen, aber die Inferenz kippt im Treiber; eine
+ * identisch gebaute Session stürzt an derselben Stelle wieder ab. Darum merkt
+ * sich der Prozess solche Ketten und legt das Modell bis zum Neustart direkt
+ * auf CPU an (`createSessionForProviders` leitet um).
+ */
+const crashedProviderChains = new Set<string>();
+
+function providerChainKey(modelPath: string, providers: string[]): string {
+  return `${modelPath}|${providers.join(',')}`;
+}
+
 export function warmSessionCount(): number {
   return warmSessionStates.size;
 }
 
-/** Drops warm sessions (tests, model updates, memory pressure). */
+/**
+ * Drops warm sessions (tests, model updates, memory pressure). Löscht auch
+ * die Laufzeit-Absturzliste: bei neuen Modellgewichten darf die GPU-Kette
+ * einen neuen Versuch bekommen (und würde sonst ohnehin beim ersten Segment
+ * erneut sauber auf CPU ausweichen).
+ */
 export async function disposeWarmSessions(): Promise<void> {
   await Promise.all([...warmSessions.values()].map((entry) => entry.catch(() => undefined)));
   warmSessions.clear();
   warmSessionStates.clear();
+  crashedProviderChains.clear();
 }
 
 /* ------------------------------------------------------------------------- *
@@ -529,20 +557,37 @@ export class OnnxSeparator implements IStemSeparator {
     device: ComputeDevice | undefined,
     runtime: OnnxRuntimeLike
   ): Promise<WarmSession> {
-    const modelPath = resolveOnnxModelPath(descriptor, this.options.modelStoreDir);
     const backendList = listSharedBackends(runtime);
     const supported = backendList.map((entry) => entry.name);
     const bundled = Object.fromEntries(
       backendList.map((entry) => [normaliseExecutionProvider(entry.name), entry.bundled !== false])
     );
     const providers = selectExecutionProviders({ requested: device, supported, bundled });
-    const key = `${modelPath}|${providers.join(',')}`;
+    return this.createSessionForProviders(descriptor, providers, runtime);
+  }
+
+  /**
+   * Baut (oder holt aus dem Warm-Cache) die Session für eine konkrete
+   * Provider-Kette. Liegt die Kette in `crashedProviderChains` (Session ließ
+   * sich bauen, aber `session.run` ist im Grafiktreiber gestorben), wird ohne
+   * GPU-Versuch direkt auf ['cpu'] umgeleitet – sonst kostete jeder weitere
+   * Job erst einen garantierten Absturz.
+   */
+  private async createSessionForProviders(
+    descriptor: ModelDescriptor,
+    providers: string[],
+    runtime: OnnxRuntimeLike
+  ): Promise<WarmSession> {
+    const modelPath = resolveOnnxModelPath(descriptor, this.options.modelStoreDir);
+    const cpuOnly = providers.length === 1 && providers[0] === 'cpu';
+    const effective = !cpuOnly && crashedProviderChains.has(providerChainKey(modelPath, providers)) ? ['cpu'] : providers;
+    const key = providerChainKey(modelPath, effective);
     const cached = warmSessions.get(key);
     if (cached) return cached;
 
     const created = (async () => {
       const sessionOptions: Record<string, unknown> = {
-        executionProviders: providers,
+        executionProviders: effective,
         graphOptimizationLevel: 'all',
         // Let ORT size the thread pool; a fixed 1 would waste the DJ machine.
         intraOpNumThreads: Number(this.options.env?.AIRODOX_ONNX_THREADS ?? 0),
@@ -552,7 +597,7 @@ export class OnnxSeparator implements IStemSeparator {
         const session = await runtime.InferenceSession.create(modelPath, sessionOptions);
         const warm: WarmSession = {
           session,
-          providers,
+          providers: effective,
           segmentSamples: segmentSamplesFromMetadata(session.inputMetadata as never),
         };
         warmSessionStates.set(key, warm);
@@ -560,7 +605,7 @@ export class OnnxSeparator implements IStemSeparator {
       } catch (error) {
         // A provider that exists in the list but not on the machine (missing
         // CUDA DLLs, old driver) must not kill the job – CPU always remains.
-        if (providers.length > 1) {
+        if (effective.length > 1) {
           const session = await runtime.InferenceSession.create(modelPath, {
             executionProviders: ['cpu'],
             graphOptimizationLevel: 'all',
@@ -576,7 +621,7 @@ export class OnnxSeparator implements IStemSeparator {
         }
         throw new StemSeparationError(
           'BACKEND_UNAVAILABLE',
-          `ONNX-Session konnte nicht erstellt werden (${providers.join(', ')}): ${error instanceof Error ? error.message : String(error)}`
+          `ONNX-Session konnte nicht erstellt werden (${effective.join(', ')}): ${error instanceof Error ? error.message : String(error)}`
         );
       }
     })();
@@ -603,6 +648,7 @@ export class OnnxSeparator implements IStemSeparator {
     const started = Date.now();
     const runtime = await this.loadRuntime();
     const warm = await this.createSession(request.descriptor, request.device ?? this.options.device, runtime);
+    const modelPath = resolveOnnxModelPath(request.descriptor, this.options.modelStoreDir);
 
     const channels = request.channels ?? request.descriptor.inputChannels ?? 2;
     const sampleRate = request.sampleRate ?? request.descriptor.sampleRate;
@@ -627,15 +673,20 @@ export class OnnxSeparator implements IStemSeparator {
     const plans = planChunks({ totalFrames: frames, chunkSamples: segmentSamples, overlapFraction, sampleRate });
     const rows = stemRowsFor(request.descriptor, request.stems);
 
-    const inputName = warm.session.inputNames[0] ?? 'mix';
-    const outputName = warm.session.outputNames[0] ?? 'stems';
     const reconstructors = new Map<StemId, OverlapAddReconstructor>();
     for (const { stem } of rows) {
       reconstructors.set(stem, new OverlapAddReconstructor({ totalFrames: frames, channels, plans }));
     }
 
     const segmentBuffer = new Float32Array(channels * segmentSamples);
-    for (const plan of plans) {
+    // Bei einem Laufzeit-Absturz des GPU-Providers wechselt `active` mitten im
+    // Job auf die CPU-Session; die bereits rekonstruierten Segmente bleiben
+    // gültig (jedes Segment ist unabhängig, Overlap-Add schert den Provider
+    // nicht). `gpuCrashDetail` dokumentiert den Auslöser für Report + Fehler.
+    let active = warm;
+    let gpuCrashDetail: string | undefined;
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
       checkCancelled(request.token);
       const planFrames = plan.endSample - plan.startSample;
       const tensorData = packSegment({
@@ -647,17 +698,37 @@ export class OnnxSeparator implements IStemSeparator {
         target: segmentBuffer,
       });
       const tensor = new runtime.Tensor('float32', tensorData, [1, channels, segmentSamples]);
+      const inputName = active.session.inputNames[0] ?? 'mix';
+      const outputName = active.session.outputNames[0] ?? 'stems';
       let output: OnnxTensorLike | undefined;
       try {
-        const result = await warm.session.run({ [inputName]: tensor });
+        const result = await active.session.run({ [inputName]: tensor });
         output = result[outputName];
       } catch (error) {
-        throw new StemSeparationError(
-          'INFERENCE_FAILED',
-          `ONNX-Inferenz fehlgeschlagen (Segment ${plan.index + 1}/${plans.length}, Provider ${warm.providers.join('+')}): ${
-            error instanceof Error ? error.message : String(error)
-          }`
+        const detail = error instanceof Error ? error.message : String(error);
+        const cpuOnly = active.providers.length === 1 && active.providers[0] === 'cpu';
+        if (cpuOnly) {
+          throw new StemSeparationError(
+            'INFERENCE_FAILED',
+            `ONNX-Inferenz fehlgeschlagen (Segment ${plan.index + 1}/${plans.length}, Provider ${active.providers.join('+')})` +
+              (gpuCrashDetail ? ` – auch der CPU-Ausweg nach dem GPU-Treiberabsturz (${gpuCrashDetail}) ist gescheitert` : '') +
+              `: ${detail}`
+          );
+        }
+        // Laufzeit-Absturz auf dem GPU-Provider (z. B. DirectML/DXGI
+        // 887A0020 „DRIVER_INTERNAL_ERROR“): die Kette war baubar, die
+        // Inferenz kippt aber im Treiber – ein Neubau würde identisch
+        // scheitern. Kette prozessweit sperren, CPU-Session holen und exakt
+        // dieses Segment wiederholen, statt den ganzen Job zu verlieren.
+        gpuCrashDetail = detail;
+        crashedProviderChains.add(providerChainKey(modelPath, active.providers));
+        request.onProgress?.(
+          index / plans.length,
+          `GPU-Provider ${active.providers[0]} abgestürzt (Treiberfehler) – wechsle auf CPU, wiederhole Segment ${plan.index + 1}`
         );
+        active = await this.createSessionForProviders(request.descriptor, ['cpu'], runtime);
+        index -= 1;
+        continue;
       }
       if (!output?.data) {
         throw new StemSeparationError('INFERENCE_FAILED', `ONNX-Ausgabe "${outputName}" fehlt`);
@@ -680,7 +751,7 @@ export class OnnxSeparator implements IStemSeparator {
         chunk.set(output.data.subarray(base, base + planFrames * channels));
         reconstructors.get(stem)!.add(plan, chunk);
       }
-      request.onProgress?.((plan.index + 1) / plans.length, `Segment ${plan.index + 1}/${plans.length} (${warm.providers[0]})`);
+      request.onProgress?.((plan.index + 1) / plans.length, `Segment ${plan.index + 1}/${plans.length} (${active.providers[0]})`);
       checkCancelled(request.token);
     }
 
@@ -692,7 +763,7 @@ export class OnnxSeparator implements IStemSeparator {
       outputIndex,
     }));
 
-    const device: ComputeDevice = warm.providers[0] === 'dml' ? 'directml' : warm.providers[0] === 'coreml' ? 'coreml' : warm.providers[0] === 'cpu' ? 'cpu' : 'cuda';
+    const device: ComputeDevice = active.providers[0] === 'dml' ? 'directml' : active.providers[0] === 'coreml' ? 'coreml' : active.providers[0] === 'cpu' ? 'cpu' : 'cuda';
     const requestedDevice = request.device ?? this.options.device ?? 'auto';
     return {
       engine: this.family,
@@ -701,12 +772,13 @@ export class OnnxSeparator implements IStemSeparator {
       inlineStems,
       device,
       // Nur melden, wenn wirklich auf CPU zurückgefallen wurde – 'auto' ohne
-      // GPU ist kein Rückfall, sondern das erwartete Ergebnis.
-      cpuFallback: device === 'cpu' && requestedDevice !== 'cpu' && requestedDevice !== 'auto',
+      // GPU ist kein Rückfall, sondern das erwartete Ergebnis. Ein
+      // Treiberabsturz mitten im Lauf dagegen ist immer berichtenswert.
+      cpuFallback: gpuCrashDetail !== undefined || (device === 'cpu' && requestedDevice !== 'cpu' && requestedDevice !== 'auto'),
       report: {
         backendName: this.name,
         totalMs: Date.now() - started,
-        providers: warm.providers,
+        providers: active.providers,
         segmentSamples,
         segmentCount: plans.length,
         overlapFraction,
@@ -714,6 +786,7 @@ export class OnnxSeparator implements IStemSeparator {
         precision: request.precision,
         warmSessions: warmSessionStates.size,
         zeroDiskChunks: true,
+        ...(gpuCrashDetail ? { gpuCrash: gpuCrashDetail } : {}),
       },
     };
   }

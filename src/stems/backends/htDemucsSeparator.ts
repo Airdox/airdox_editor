@@ -13,6 +13,7 @@ import path from 'node:path';
 import { readdir } from 'node:fs/promises';
 import { StemSeparationError } from '../errors';
 import { runBackendProcess } from './processTransport';
+import { pythonDeviceFor } from './roformerSeparator';
 import { probeTorchRuntime } from './runtimeProbe';
 import type { BackendAvailability, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator, BackendAvailabilityOptions } from './types';
 import type { ComputeDevice, ModelDescriptor, ModelFamily } from '../types';
@@ -53,6 +54,9 @@ export class HTDemucsSeparator implements IStemSeparator {
       cancellable: true,
       trainedModel: true,
       inMemory: false,
+      // Demucs verarbeitet nativ ganze Songs (eigene --overlap-Fensterung):
+      // ein Prozessstart + Modell-Laden pro Track, nicht pro Engine-Chip.
+      processesWholeFile: true,
     };
   }
 
@@ -100,7 +104,9 @@ export class HTDemucsSeparator implements IStemSeparator {
       '--jobs', '1',
       '--out', request.outputDir,
     ];
-    if (request.device !== 'auto') args.push('--device', request.device as string);
+    // Demucs-argparse kennt nur cpu/cuda/mps – directml & Co. wären Exit 2.
+    const device = pythonDeviceFor(request.device);
+    if (device !== 'auto') args.push('--device', device);
     args.push(request.workingWavPath);
     return args;
   }
@@ -143,7 +149,7 @@ export class HTDemucsSeparator implements IStemSeparator {
       backend: this.kind,
       stems,
       device,
-      cpuFallback: result.device === 'cpu' && request.device !== 'cpu',
+      cpuFallback: result.device === 'cpu' && request.device !== 'cpu' && request.device !== 'auto',
       report: { backendName: this.name, processMs: result.durationMs, logs: result.logs.slice(-20) },
     };
   }

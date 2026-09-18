@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    name: Windows Installer + Portable
+    name: Windows Installer (Setup-exe)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -74,8 +74,11 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: npm test
 
-      - name: Electron Windows-Pakete (NSIS + Portable)
-        run: npx electron-builder --win nsis --win portable --publish never
+      # Nur das NSIS-Setup: das Portable-Paket wird vorerst nicht mehr
+      # gebraucht. Zum Reaktivieren später einfach wieder
+      # `--win nsis --win portable` setzen.
+      - name: Electron Windows-Paket (NSIS-Setup)
+        run: npx electron-builder --win nsis --publish never
         env:
           # Kein Signieren in der offenen CI
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -86,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
-          path: release/*.exe
+          path: release/*-setup.exe
           retention-days: 30
 
       - name: GitHub-Release bei Tag
@@ -94,5 +97,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: airdox_SMART_Editor ${{ github.ref_name }}
-          files: release/*.exe
+          files: release/*-setup.exe
           generate_release_notes: true

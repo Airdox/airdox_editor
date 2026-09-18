@@ -268,7 +268,10 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
     dtype = {"f16": torch.float16, "bf16": torch.bfloat16}.get(args.precision)
     autocast = dtype is not None and str(device).startswith("cuda")
 
-    with torch.no_grad():
+    # inference_mode statt no_grad: deaktiviert zusätzlich die Version-Counter-
+    # Buchführung pro Tensor – messbar weniger Overhead bei vielen kleinen
+    # Fensteraufrufen (hier: hunderte Chunks pro Track).
+    with torch.inference_mode():
         for pass_index in range(max(1, args.ensemble_passes)):
             # Deterministic ensemble shifts (reproducible MAXIMUM_QUALITY runs).
             shift = 0 if pass_index == 0 else ((pass_index * 1011) % 3001) - 1500
@@ -283,7 +286,11 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
                 if segment.shape[1] < chunk_size:
                     pad = chunk_size - segment.shape[1]
                     segment = np.pad(segment, ((0, 0), (0, pad)), mode="reflect")
-                tensor = torch.from_numpy(segment).float().unsqueeze(0).to(device)
+                # from_numpy auf einem nicht-kontiguierlichen View zahlt bei
+                # .float()/.to(device) einen versteckten Kopiervorgang nach dem
+                # anderen – einmal sauber anlegen ist schneller.
+                segment = np.ascontiguousarray(segment)
+                tensor = torch.from_numpy(segment).float().unsqueeze(0).to(device, non_blocking=True)
                 if dtype is not None and not autocast:
                     tensor = tensor.to(dtype)
                 if autocast:
@@ -298,8 +305,8 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
                     result = result[None, ...]
                 length = end - start
                 window_slice = window[:length]
-                for stem_index in range(min(num_stems, result.shape[0])):
-                    estimates[stem_index, :, start:end] += result[stem_index, :, :length] * window_slice
+                stem_count = min(num_stems, result.shape[0])
+                estimates[:stem_count, :, start:end] += result[:stem_count, :, :length] * window_slice
                 if pass_index == 0:
                     weights[start:end] += window_slice
                 processed += 1
@@ -335,6 +342,15 @@ def main(argv: List[str]) -> int:
     if device.startswith("cuda") and not torch.cuda.is_available():
         log("CUDA nicht verfügbar – CPU-Fallback", "warning")
         device = "cpu"
+    if device.startswith("cuda"):
+        # Kostenloser Speedup ohne Qualitätsänderung an der SDR-Metrik:
+        # cudnn autotuned die FFT-/Conv-Kernel, TF32 beschleunigt MatMuls auf
+        # Ampere+ deutlich (fp32-Genauigkeit der Speicherung bleibt).
+        try:
+            torch.backends.cudnn.benchmark = True
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
 
     if not args.config:
         emit({"type": "error", "code": "MODEL_MISSING", "message": "Ohne --config kann die Architektur nicht aufgebaut werden"})

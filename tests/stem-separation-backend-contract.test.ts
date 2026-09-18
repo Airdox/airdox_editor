@@ -328,8 +328,12 @@ async function run() {
   assert.ok(engineResult.stems.every((stem) => stem.channelCount === 2 && stem.sampleRate === 44100));
   assert.ok(engineResult.validation?.pass, JSON.stringify(engineResult.validation?.issues));
   assert.equal(engineResult.originalIntegrity.unchanged, true);
+  // python-torch ist ein Ganzdatei-Backend (processesWholeFile): ein Prozess
+  // für den ganzen Track statt ~1 Prozess je 3-Sekunden-Chip – der Chunk-Plan
+  // der Engine muss deshalb auf genau einen Plan schrumpfen.
+  assert.equal(engineResult.metadata.chunkCount, 1, 'Ganzdatei-Backend bekommt genau einen Plan (kein Prozess-Ping-Pong)');
   console.log(`  ✓ ${engineResult.stems.length} Stems über Prozess-Backend, Validierung bestanden`);
-  console.log(`  ✓ chunkCount ${engineResult.metadata.chunkCount}, backend ${engineResult.metadata.settings.backend}`);
+  console.log(`  ✓ chunkCount ${engineResult.metadata.chunkCount} (Ganzdatei), backend ${engineResult.metadata.settings.backend}`);
 
   // ---- 7. native CLI contract ---------------------------------------------
   console.log('\n[ TEST ] #7 Native Deployment-Verträge (audio.cpp / BSRoformer.cpp)');

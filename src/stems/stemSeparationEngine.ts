@@ -23,7 +23,7 @@ import { ModelManager, type ModelAvailabilityReport } from './modelManager';
 import { StemRegistry } from './stemRegistry';
 import { SeparationCache, buildCacheKey, hashSettings } from './separationCache';
 import { SeparationJob } from './separationJob';
-import { SeparationCancellationToken, planChunks, validateChunkPlan, type ChunkPlan } from './chunkProcessor';
+import { SeparationCancellationToken, planChunks, validateChunkPlan, MIN_OVERLAP_SAMPLES, type ChunkPlan } from './chunkProcessor';
 import { OverlapAddReconstructor } from './reconstructor';
 import { validateSeparation } from './qualityValidator';
 import { prepareWorkingCopy, verifyOriginalIntegrity, type WorkingCopy } from './preprocessor';
@@ -526,10 +526,18 @@ export class StemSeparationEngine {
       }
 
       // ---- 4. chunk plan --------------------------------------------------
+      const backendCapabilities = backend.capabilities();
+      const inMemory = backendCapabilities.inMemory === true;
+      // Ganzdatei-Backends (python-torch, native CLI) fenstern intern per
+      // num_overlap und zahlen pro Aufruf Interpeterstart + Modell-Laden. Sie
+      // bekommen den kompletten Track in einem Zug: bei ~3-s-Engine-Chunks
+      // waren das sonst ~100 Prozessstarts pro 5-Minuten-Song plus doppelt
+      // gerechneter Modellaufrufe (äußeres 50-%-Overlap × inneres Overlap).
+      const wholeFile = !inMemory && backendCapabilities.processesWholeFile === true;
       const plans = planChunks({
         totalFrames: working.frames,
-        chunkSamples: job.settings.chunkSizeSamples,
-        overlapFraction: job.settings.chunkOverlap,
+        chunkSamples: wholeFile ? Math.max(working.frames, MIN_OVERLAP_SAMPLES * 2) : job.settings.chunkSizeSamples,
+        overlapFraction: wholeFile ? 0 : job.settings.chunkOverlap,
         sampleRate: working.sampleRate,
       });
       const coverage = validateChunkPlan(plans, working.frames);
@@ -539,15 +547,17 @@ export class StemSeparationEngine {
       job.chunkCount = plans.length;
       job.chunkPlan = plans.map((plan) => ({ index: plan.index, startSample: plan.startSample, endSample: plan.endSample }));
 
-      // ---- 5. chunked inference + overlap-add ------------------------------
-      job.setStatus('RUNNING', 'Chunk-basierte Inferenz läuft');
+      // ---- 5. chunked bzw. Ganzdatei-Inferenz + Overlap-Add ---------------
+      job.setStatus('RUNNING', wholeFile ? 'Inferenz läuft (ein Prozess, ganzer Track)' : 'Chunk-basierte Inferenz läuft');
       const inferenceStart = Date.now();
-      const workingAudio = await readWavFile(working.workingPath);
+      // Nur der Ganzdatei-Pfad darf auf das Einlesen verzichten (das Backend
+      // bekommt die Datei direkt); Multi-Chunk-Dateibackends und In-memory-
+      // Backends brauchen die Samples hier.
+      const workingAudio = wholeFile ? { data: new Float32Array(0), channels: working.channels } : await readWavFile(working.workingPath);
       // In-memory backends (ONNX, double) never see a chunk file. That removes
       // the per-chunk WAV write, the per-chunk output directory and the read
       // back of every stem – the reason the Python path produced hundreds of
       // files for one track.
-      const inMemory = backend.capabilities().inMemory === true;
       if (!inMemory) await mkdir(job.chunkDir, { recursive: true });
       await mkdir(job.partialDir, { recursive: true });
 
@@ -562,10 +572,14 @@ export class StemSeparationEngine {
       for (const plan of plans) {
         job.token.throwIfCancelled();
         await job.token.waitForResume();
-        const slice = this.sliceAudio(workingAudio, plan, working.channels);
-        const slicePath = inMemory ? '' : path.join(job.chunkDir, `chunk_${String(plan.index).padStart(4, '0')}.wav`);
-        if (!inMemory) {
-          await writeFile(slicePath, encodeWavFloat32(working.sampleRate, working.channels, slice, plan.endSample - plan.startSample));
+        // Slice-Material nur wo nötig: In-memory-Backends brauchen die Samples
+        // im RAM, dateibasierte Multi-Chunk-Backends die geschriebene WAV.
+        // Der Ganzdatei-Pfad übergibt direkt die Arbeitskopie – kein erneutes
+        // Lesen/Schreiben von hundert MB pro Track.
+        const slice = inMemory || !wholeFile ? this.sliceAudio(workingAudio, plan, working.channels) : undefined;
+        const slicePath = inMemory ? '' : wholeFile ? working.workingPath : path.join(job.chunkDir, `chunk_${String(plan.index).padStart(4, '0')}.wav`);
+        if (!inMemory && !wholeFile) {
+          await writeFile(slicePath, encodeWavFloat32(working.sampleRate, working.channels, slice!, plan.endSample - plan.startSample));
         }
 
         const chunkDir = inMemory ? job.chunkDir : path.join(job.chunkDir, `out_${String(plan.index).padStart(4, '0')}`);
@@ -635,7 +649,9 @@ export class StemSeparationEngine {
             await rm(file.filePath, { force: true });
           }
           await rm(chunkDir, { recursive: true, force: true });
-          if (!this.options.keepTemporaries) await rm(slicePath, { force: true });
+          // Niemals die Arbeitskopie löschen: im Ganzdatei-Pfad ist slicePath
+          // genau sie (die weitere Pipeline archive/integrität braucht sie).
+          if (!this.options.keepTemporaries && !wholeFile) await rm(slicePath, { force: true });
         }
         deviceUsed = response.device;
         cpuFallback = cpuFallback || Boolean(response.cpuFallback);

@@ -71,6 +71,18 @@ const EXIT_CODE_MAP: Record<number, Parameters<typeof classifyFailure>[0]> = {
   [EXIT_AUDIO]: 'AUDIO_CORRUPT',
 };
 
+/**
+ * Letzte nicht-leere Zeilen eines Textblocks, hart begrenzt – für sprechende
+ * Fehlermeldungen ohne 32-kB-Traceback-Dump in der UI.
+ */
+function tailLines(text: string, maxLines: number, maxChars = 900): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+  return lines.slice(-maxLines).join('\n').slice(-maxChars).trim();
+}
+
 export async function runBackendProcess(options: RunProcessOptions): Promise<ProcessResult> {
   const started = Date.now();
   const logs: string[] = [];
@@ -125,8 +137,16 @@ export async function runBackendProcess(options: RunProcessOptions): Promise<Pro
           ? (reportedError.code as Parameters<typeof classifyFailure>[0])
           : undefined;
         const mapped = EXIT_CODE_MAP[child.exitCode ?? -1];
-        const message = reportedError?.message || `Backend beendete sich mit Code ${String(child.exitCode)}`;
-        reject(classifyFailure(reportedCode ?? mapped ?? 'INFERENCE_FAILED', message, { stderr: result.stderr, logs: logs.slice(-10) }));
+        // Ohne Protokoll-Fehler (z. B. argparse-Usage, Python-Traceback) steht
+        // die eigentliche Ursache auf stderr/Logs – NICHT in der Exit-Nummer.
+        // Der Schwanz gehört direkt in die Meldung, sonst diagnostiziert die
+        // UI nur „Code 2“ (früher: „Code 2 ([object Object])“).
+        const stderrTail = tailLines(result.stderr, 8);
+        const logTail = tailLines(logs.join('\n'), 3);
+        const context = stderrTail || logTail;
+        const base = reportedError?.message || `Backend beendete sich mit Code ${String(child.exitCode)}`;
+        const message = context && !base.includes(context) ? `${base}\nLetzte Backend-Ausgabe:\n${context}` : base;
+        reject(classifyFailure(reportedCode ?? mapped ?? 'INFERENCE_FAILED', message));
         return;
       }
       if (reportedError) {
