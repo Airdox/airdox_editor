@@ -8,7 +8,7 @@
  * browser bundle free of the engine's file system code, and it is asserted by
  * `tests/stem-engine-ipc-contract.test.ts`.
  */
-import type { JobStatus, QualityProfile, StemId } from './types';
+import type { ComputeDevice, JobStatus, QualityProfile, StemId } from './types';
 
 /** Serializable per-stem result of a finished job. */
 export interface StemJobStemView {
@@ -55,6 +55,16 @@ export interface StemJobView {
   };
 }
 
+/**
+ * Rechengerät einer Separation. Bewusst derselbe Typ wie in der Engine
+ * (`ComputeDevice`), damit UI und Engine nicht auseinanderlaufen –
+ * `directml`/`coreml` sind die ONNX-GPU-Pfade.
+ */
+export type StemComputeDevice = ComputeDevice;
+
+/** Validierungstiefe: live (schnell) oder Studio (volle Grenzanalyse). */
+export type StemValidationMode = 'fast_dj' | 'studio_master';
+
 export interface StemProfileInfo {
   profile: QualityProfile;
   modelId: string;
@@ -76,6 +86,8 @@ export interface StemServiceStatus {
     id: string;
     family: string;
     version: string;
+    /** Checkpoint format (`onnx` = läuft in-process, `safetensors-package`/`demucs-th` = Subprozess). */
+    format?: string;
     installed: boolean;
     hashVerified: boolean;
     reason?: string;
@@ -83,6 +95,22 @@ export interface StemServiceStatus {
     serves: QualityProfile[];
   }[];
   backends: { kind: string; name: string; available: boolean; reason?: string }[];
+  /**
+   * In-process ONNX runtime (DJ path): which execution providers the installed
+   * `onnxruntime-node` can use and whether it loads at all. The settings menu
+   * shows this instead of letting the user pick a device that cannot work.
+   */
+  onnx?: {
+    runtimeAvailable: boolean;
+    /** Chosen provider order, e.g. ['dml', 'cpu']. */
+    providers: string[];
+    /** Providers the shipped runtime carries, with bundle flag. */
+    supported: { name: string; bundled: boolean }[];
+    /** ONNX descriptor the DJ path would use, if the catalog has one. */
+    modelId?: string;
+    modelInstalled: boolean;
+    reason?: string;
+  };
   cacheEntries: { key: string; stems: number }[];
   roots: Record<'working' | 'output' | 'cache' | 'models' | 'staging', string>;
   registryIssues: unknown[];
@@ -103,9 +131,15 @@ export interface StartStemJobPayload {
   inputPath?: string;
   trackName?: string;
   profile?: QualityProfile;
+  /**
+   * Explicit model/architecture. Wins over the profile default – that is what
+   * the settings menu sends when the user pinned an architecture.
+   */
   modelId?: string;
   stems?: StemId[];
-  device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
+  device?: StemComputeDevice;
+  /** Validation depth for this job. `fast_dj` skips the boundary analysis. */
+  mode?: StemValidationMode;
   precision?: 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
   overlap?: number;
   chunkSizeSamples?: number;

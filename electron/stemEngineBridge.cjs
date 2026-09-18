@@ -36,6 +36,9 @@ const CHANNELS = {
 /** Obergrenze für den Mix, den der Renderer hochreicht (float32-Stereo-WAV). */
 const MAX_INPUT_BYTES = 1024 * 1024 * 1024;
 const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+/** Rechengeräte und Validierungstiefe, die ein Job aus dem Renderer wählen darf. */
+const DEVICES = ['auto', 'cpu', 'cuda', 'vulkan', 'metal', 'directml', 'coreml'];
+const MODES = ['fast_dj', 'studio_master'];
 
 /** Shared by the desktop and HTTP hosts; directories alone are not models. */
 function resolveEnginePaths(repoRoot, stemsRoot) {
@@ -112,7 +115,8 @@ function sanitizeRequest(raw) {
   if (typeof raw.trackName === 'string' && raw.trackName.length) request.trackName = raw.trackName.slice(0, 120);
   if (typeof raw.modelId === 'string' && raw.modelId.length) request.modelId = raw.modelId.slice(0, 120);
   if (PROFILES.includes(raw.profile)) request.profile = raw.profile;
-  if (typeof raw.device === 'string') request.device = raw.device;
+  if (typeof raw.device === 'string' && DEVICES.includes(raw.device)) request.device = raw.device;
+  if (MODES.includes(raw.mode)) request.mode = raw.mode;
   if (typeof raw.precision === 'string') request.precision = raw.precision;
   if (typeof raw.overlap === 'number' && raw.overlap >= 0 && raw.overlap <= 0.95) request.overlap = raw.overlap;
   if (typeof raw.chunkSizeSamples === 'number' && raw.chunkSizeSamples >= 4096) request.chunkSizeSamples = Math.floor(raw.chunkSizeSamples);

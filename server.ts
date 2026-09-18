@@ -249,7 +249,10 @@ async function startServer() {
         profile?: 'PREVIEW' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
         modelId?: string;
         stems?: string[];
-        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
+        // Architektur-/Gerätewahl aus dem Einstellungsmenü. Explizit gewählte
+        // Werte schlagen die Umgebungs-Defaults (AIRDOX_STEM_MODE/DEVICE).
+        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal' | 'directml' | 'coreml';
+        mode?: 'fast_dj' | 'studio_master';
         precision?: 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
         overlap?: number;
         chunkSizeSamples?: number;
@@ -265,6 +268,7 @@ async function startServer() {
         modelId: body.modelId,
         stems: Array.isArray(body.stems) ? body.stems : undefined,
         device: body.device,
+        mode: body.mode,
         precision: body.precision,
         overlap: typeof body.overlap === 'number' ? body.overlap : undefined,
         chunkSizeSamples: typeof body.chunkSizeSamples === 'number' ? body.chunkSizeSamples : undefined,

@@ -332,6 +332,25 @@ export class OnnxSeparator implements IStemSeparator {
     return this.runtimePromise;
   }
 
+  /**
+   * Laufzeitinfo für UI/Doctor: lädt die Runtime überhaupt, welche Provider
+   * bringt sie mit und welche würde die Engine wählen? Braucht kein Modell –
+   * das Einstellungsmenü soll auch ohne Gewichte eine belastbare Auskunft
+   * bekommen (statt einen Gerät-Eintrag anzubieten, der nie greift).
+   */
+  async runtimeInfo(): Promise<{ available: boolean; providers: string[]; supported: { name: string; bundled: boolean }[]; reason?: string }> {
+    try {
+      const info = await this.executionProviders();
+      return {
+        available: true,
+        providers: info.providers,
+        supported: info.supported.map((entry) => ({ name: normaliseExecutionProvider(entry.name), bundled: entry.bundled !== false })),
+      };
+    } catch (error) {
+      return { available: false, providers: [], supported: [], reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   /** Diagnostics for the doctor script and the UI: which EPs can this host use? */
   async executionProviders(descriptor?: ModelDescriptor): Promise<{ providers: string[]; supported: { name: string; bundled?: boolean }[] }> {
     const runtime = await this.loadRuntime();

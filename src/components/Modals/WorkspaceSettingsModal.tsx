@@ -1,6 +1,14 @@
 import React from 'react';
-import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves } from 'lucide-react';
+import { X, Settings, Info, Database, Activity, Trash2, Layout, Sliders, Waves, Cpu, CheckCircle2, AlertCircle } from 'lucide-react';
 import { WaveformMode } from '../../types/rekordbox';
+import {
+  STEM_VALIDATION_MODES,
+  deviceChoices,
+  modeLabel,
+  type StemArchitectureOption,
+  type StemArchitectureViewState,
+} from '../../audio/stemArchitectures';
+import type { StemComputeDevice, StemValidationMode } from '../../stems/transportTypes';
 
 export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
 export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3';
@@ -38,6 +46,18 @@ interface WorkspaceSettingsModalProps {
   onSetConfirmDestructiveEdits: (value: boolean) => void;
   autoSaveProject: boolean;
   onSetAutoSaveProject: (value: boolean) => void;
+  /** Stem-Architekturen (Katalog + Installationsstatus) für die Auswahl. */
+  stemArchitectures: StemArchitectureOption[];
+  /** `auto` oder eine Modell-ID – gilt für neue Separationen. */
+  stemArchitectureId: string;
+  onSetStemArchitectureId: (id: string) => void;
+  stemValidationMode: StemValidationMode;
+  onSetStemValidationMode: (mode: StemValidationMode) => void;
+  stemDevice: StemComputeDevice;
+  onSetStemDevice: (device: StemComputeDevice) => void;
+  stemEngineState?: StemArchitectureViewState | null;
+  stemArchitecturesLoading?: boolean;
+  onRefreshStemArchitectures?: () => void;
 }
 
 export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
@@ -73,7 +93,21 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onSetConfirmDestructiveEdits,
   autoSaveProject,
   onSetAutoSaveProject,
+  stemArchitectures,
+  stemArchitectureId,
+  onSetStemArchitectureId,
+  stemValidationMode,
+  onSetStemValidationMode,
+  stemDevice,
+  onSetStemDevice,
+  stemEngineState,
+  stemArchitecturesLoading,
+  onRefreshStemArchitectures,
 }) => {
+  const stemDeviceOptions = deviceChoices(stemEngineState?.onnx);
+  const activeDevice = stemDeviceOptions.find((choice) => choice.id === stemDevice);
+  const activeArchitecture = stemArchitectures.find((option) => option.id === stemArchitectureId);
+  const architectureMissing = Boolean(activeArchitecture && !activeArchitecture.installed);
   if (!isOpen) return null;
 
   return (
@@ -191,6 +225,128 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                 <label className="flex items-center justify-between text-xs text-neutral-200"><span>Soft-Limiter gegen Clipping</span><input type="checkbox" checked={recordingLimiter} onChange={(e) => onSetRecordingLimiter(e.target.checked)} /></label>
                 <label className="flex items-center justify-between text-xs text-neutral-200"><span>Vor destruktiven Befehlen bestätigen</span><input type="checkbox" checked={confirmDestructiveEdits} onChange={(e) => onSetConfirmDestructiveEdits(e.target.checked)} /></label>
                 <label className="flex items-center justify-between text-xs text-neutral-200"><span>Projekt automatisch sichern</span><input type="checkbox" checked={autoSaveProject} onChange={(e) => onSetAutoSaveProject(e.target.checked)} /></label>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Stem-Engine / KI-Architektur */}
+          <div className="space-y-3">
+            <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center space-x-1.5 border-b border-[#1f222d] pb-1">
+              <Cpu size={12} />
+              <span>Stem-Separation &amp; KI-Architektur</span>
+            </h3>
+
+            <div className="bg-[#161820] border border-[#22242d] rounded-xs p-3 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold text-white">Architektur / Modell</div>
+                  <div className="text-[10.5px] text-neutral-500">
+                    Gilt für neue Separationen. „Automatisch" lässt das Qualitätsprofil entscheiden.
+                  </div>
+                </div>
+                <button
+                  onClick={() => onRefreshStemArchitectures?.()}
+                  disabled={stemArchitecturesLoading}
+                  className="shrink-0 px-2 py-1 rounded-xs border border-[#2b2e39] bg-[#0f1015] text-[10px] font-semibold text-neutral-300 hover:border-[#3a3f50] hover:text-white disabled:opacity-50"
+                >
+                  {stemArchitecturesLoading ? 'Prüfe…' : 'Neu prüfen'}
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                {stemArchitectures.map((option) => {
+                  const active = option.id === stemArchitectureId;
+                  return (
+                    <button
+                      key={option.id}
+                      onClick={() => onSetStemArchitectureId(option.id)}
+                      className={`w-full text-left p-2 rounded-xs border transition-colors ${
+                        active ? 'bg-[#1b2130] border-[#0088ff]' : 'bg-[#0f1015] border-[#22242d] hover:border-[#3a3f50]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <span className={`w-2.5 h-2.5 rounded-full border shrink-0 ${active ? 'bg-[#0088ff] border-[#0088ff]' : 'border-neutral-500'}`} />
+                          <span className={`text-[11.5px] font-semibold truncate ${active ? 'text-white' : 'text-neutral-300'}`}>{option.label}</span>
+                        </div>
+                        <span className={`shrink-0 inline-flex items-center gap-1 text-[9.5px] font-semibold px-1.5 py-0.5 rounded-sm border ${
+                          option.installed
+                            ? 'text-[#39d353] border-[#1d3d28] bg-[#0f1d14]'
+                            : 'text-[#f0b429] border-[#3a2f14] bg-[#1d1808]'
+                        }`}>
+                          {option.installed ? <CheckCircle2 size={9} /> : <AlertCircle size={9} />}
+                          {option.installed ? (option.inProcess ? 'in-process' : 'installiert') : 'nicht installiert'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-500 mt-1 pl-[18px]">{option.detail}</div>
+                      {!option.installed && option.reason && (
+                        <div className="text-[10px] text-[#f0b429] mt-0.5 pl-[18px]">{option.reason}</div>
+                      )}
+                    </button>
+                  );
+                })}
+                {!stemArchitectures.length && (
+                  <div className="text-[10.5px] text-neutral-500 bg-[#0f1015] border border-[#22242d] rounded-xs p-2">
+                    Keine Architekturliste verfügbar{stemEngineState?.reason ? `: ${stemEngineState.reason}` : '.'} Läuft die Stem-Engine?
+                  </div>
+                )}
+              </div>
+
+              {architectureMissing && (
+                <div className="text-[10px] text-[#f0b429] bg-[#1d1808] border border-[#3a2f14] rounded-xs px-2 py-1.5">
+                  Diese Architektur ist noch nicht installiert – neue Separationen starten erst nach der Installation
+                  (bzw. nach dem Umschalten auf „Automatisch").
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 border-t border-[#252834] pt-2">
+                <label className="text-[10px] text-neutral-400">
+                  Validierung
+                  <select
+                    value={stemValidationMode}
+                    onChange={(e) => onSetStemValidationMode(e.target.value as StemValidationMode)}
+                    className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"
+                  >
+                    {STEM_VALIDATION_MODES.map((mode) => (
+                      <option key={mode} value={mode}>{modeLabel(mode)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-[10px] text-neutral-400">
+                  Rechengerät
+                  <select
+                    value={stemDevice}
+                    onChange={(e) => onSetStemDevice(e.target.value as StemComputeDevice)}
+                    className="mt-1 w-full bg-[#0f1015] border border-[#2b2e39] text-xs rounded px-2 py-1.5"
+                  >
+                    {stemDeviceOptions.map((choice) => (
+                      <option key={choice.id} value={choice.id} disabled={!choice.available}>
+                        {choice.label}{choice.available ? '' : ' – nicht verfügbar'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="text-[10px] text-neutral-500 space-y-0.5">
+                <div>
+                  {stemValidationMode === 'fast_dj'
+                    ? 'Live: nur Kernprüfungen (Header, Peak, NaN) – schnellster Pfad für den DJ-Betrieb.'
+                    : 'Studio: zusätzlich Grenz- und Rekombinationsanalyse – langsamer, für Mastering-Kontrolle.'}
+                </div>
+                {activeDevice && <div>{activeDevice.hint}</div>}
+                {stemEngineState?.onnx && (
+                  <div>
+                    ONNX-Runtime: {stemEngineState.onnx.runtimeAvailable ? 'verfügbar' : 'nicht verfügbar'}
+                    {stemEngineState.onnx.providers.length ? ` · geplante Provider: ${stemEngineState.onnx.providers.join(' → ')}` : ''}
+                    {stemEngineState.onnx.modelId
+                      ? ` · Modell ${stemEngineState.onnx.modelId}${stemEngineState.onnx.modelInstalled ? '' : ' (nicht installiert)'}`
+                      : ''}
+                  </div>
+                )}
+                {stemEngineState?.transport === 'unavailable' && stemEngineState.reason && (
+                  <div className="text-[#f0b429]">Engine nicht erreichbar: {stemEngineState.reason}</div>
+                )}
               </div>
             </div>
           </div>

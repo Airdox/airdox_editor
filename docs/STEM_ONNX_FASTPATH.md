@@ -136,7 +136,35 @@ Validierung:
 $env:AIRODOX_STEM_MODE="studio_master"; npm run dev
 ```
 
-## 5. Grenzen und offene Punkte
+## 5. Architektur, Modus und Gerät im Einstellungsmenü
+
+Zahnrad/Einstellungen → **„Stem-Separation & KI-Architektur"** bündelt die drei
+Schrauben, die vorher nur über Umgebungsvariablen bzw. das Deck erreichbar waren:
+
+* **Architektur / Modell:** `Automatisch (Profil entscheidet)` oder ein konkretes
+  Katalogmodell (BS-RoFormer, HT-Demucs, `htdemucs-onnx-4stem-fp16`). Jeder
+  Eintrag zeigt, ob er installiert ist, ob er in-process läuft (ONNX) und – wenn
+  nicht – den Grund aus der Engine. „Neu prüfen" fragt den Status erneut ab.
+  Die Wahl gilt für **neue** Separationen und wird unter
+  `localStorage['airdox.stemArchitecture']` gespeichert.
+* **Validierung:** `Live (fast_dj)` (Default) prüft nur die schnellen Basics
+  (Header, Peak, NaN), `Studio (studio_master)` fährt zusätzlich die Grenz- und
+  Rekombinationsanalyse. Der Modus ändert **nie** die Audiodaten und ist
+  deshalb auch nicht Teil des Cache-Schlüssels.
+* **Rechengerät:** `auto` (DirectML → CUDA/TensorRT → CoreML → CPU),
+  `directml`, `cuda`, `coreml` oder `cpu`. Geräte, deren Provider die
+  installierte `onnxruntime-node`-Version nicht mitbringt, sind ausgegraut –
+  mit Grund statt totem Knopf. Das Gerät ist Teil des Cache-Schlüssels
+  (`auto` und „nicht gesetzt" sind identisch), die Architektur ebenfalls
+  (anderes Modell ⇒ anderer Schlüssel).
+
+Ist eine fest gewählte Architektur nicht installiert, bricht der Start mit einer
+klaren Meldung ab (Installationshinweis bzw. zurück auf „Automatisch"), statt
+einen Job in `MODEL_MISSING` laufen zu lassen. Der CLI-äquivalente Weg für
+Skripte bleibt `AIRODOX_STEM_MODE` / `AIRDOX_STEM_DEVICE`; beide wirken nur als
+Default, die Menüauswahl pro Job hat Vorrang.
+
+## 6. Grenzen und offene Punkte
 
 * Geprüft ist hier die CPU-Schiene plus die Provider-Auswahllogik (Tests
   `tests/onnx-ep-selection.test.ts` und `tests/onnx-separator-inmemory.test.ts`).

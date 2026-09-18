@@ -25,7 +25,7 @@ import { randomUUID } from 'node:crypto';
 import { isStemError, StemSeparationError } from './errors';
 import { ModelRegistry } from './modelRegistry';
 import { SeparationCancellationToken } from './chunkProcessor';
-import type { OnnxRuntimeLike } from './backends/onnxSeparator';
+import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
 import {
   createDefaultBackendFactory,
   StemSeparationEngine,
@@ -265,6 +265,9 @@ export class StemJobService {
           id: model.modelId,
           family: model.family,
           version: model.version,
+          // Format entscheidet in der UI zwischen Subprozess (.th/.ckpt) und
+          // in-process ONNX-Graph.
+          format: descriptor?.checkpoint?.format,
           installed: Boolean(model.available),
           hashVerified: Boolean(model.hashVerified),
           reason: model.reason,
@@ -273,6 +276,7 @@ export class StemJobService {
         };
       }),
       backends: await this.probeBackends(),
+      onnx: await this.probeOnnx(),
       cacheEntries: engineStatus.cacheEntries.map((entry) => ({ key: entry.key, stems: entry.stems })),
       roots: this.roots,
       registryIssues: engineStatus.registryIssues,
@@ -306,6 +310,34 @@ export class StemJobService {
       notes.push({ kind: 'in-process', name: 'pipeline-double (nur Tests)', available: true });
     }
     return notes;
+  }
+
+  /**
+   * In-process ONNX runtime for the settings menu: loadable? which execution
+   * providers? which DJ model would serve it? Runs no inference and needs no
+   * weights – a missing model is reported as `modelInstalled: false`, so the
+   * user sees *why* the fast path is not available yet.
+   */
+  private async probeOnnx(): Promise<NonNullable<StemServiceStatus['onnx']>> {
+    const env = { ...(process.env as Record<string, string | undefined>), ...(this.options.env ?? {}) };
+    const descriptor = this.registry.list().find((model) => model.checkpoint?.format === 'onnx');
+    const separator = new OnnxSeparator({
+      modelStoreDir: this.roots.models,
+      env,
+      device: this.options.device,
+      family: descriptor?.family ?? 'htdemucs',
+      runtime: this.options.onnxRuntime,
+      loadRuntime: this.options.loadOnnxRuntime,
+    });
+    const info = await separator.runtimeInfo();
+    return {
+      runtimeAvailable: info.available,
+      providers: info.providers,
+      supported: info.supported,
+      modelId: descriptor?.id,
+      modelInstalled: descriptor ? await this.engine.isSelectable(descriptor) : false,
+      reason: info.reason,
+    };
   }
 
   /** Descriptor a request would resolve to – lets the UI label the run early. */
@@ -393,10 +425,12 @@ export class StemJobService {
       .separate({
         inputPath,
         profile,
-        mode: this.options.mode,
+        // Pro Job: was der Nutzer im Einstellungsmenü gewählt hat, schlägt den
+        // Dienst-Default (der aus der Umgebung kommt).
+        mode: request.mode ?? this.options.mode,
         modelId: request.modelId,
         stems,
-        device: request.device,
+        device: request.device ?? this.options.device,
         precision: request.precision,
         overlap: request.overlap,
         chunkSizeSamples: request.chunkSizeSamples ?? this.options.chunkSizeSamples,
