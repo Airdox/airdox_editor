@@ -55,7 +55,7 @@
   #hotspots{position:fixed;left:14px;bottom:14px;z-index:15;background:var(--panel);border:1px solid var(--line);
     border-radius:12px;padding:12px 14px;width:270px;backdrop-filter:blur(6px)}
   #hotspots h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:0 0 8px}
-  .metric-btns{display:flex;gap:4px;margin-bottom:8px}
+  .metric-btns{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
   .metric-btns button{padding:3px 8px;font-size:11px;border-radius:6px}
   .metric-btns button.active{background:#134e4a;border-color:#14b8a6;color:#99f6e4}
   .hs-row{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;cursor:pointer}
@@ -210,7 +210,7 @@ function render(DATA){
     d3.select(el).classed("off", !set.has(key)); rebuild(); }
 
   // ---------- Hotspots ----------
-  const METRICS = [["rloc","Zeilen"],["complexity","Komplexität"],["churn","Git-Churn"],["fanIn","Fan-In"]];
+  const METRICS = [["rloc","Zeilen"],["complexity","Komplexität"],["churn","Commits"],["fanIn","Fan-In"],["authorCount","Autoren"],["ageInDays","Alter (Tage)"]];
   let hsMetric = "rloc";
   const metricBtns = d3.select("#metricBtns").selectAll("button").data(METRICS).join("button")
     .text(d=>d[1]).attr("title", d=>d[0])
@@ -283,7 +283,8 @@ function render(DATA){
       `<div class="tt-desc">${d.desc||""}</div>` +
       `<div class="tt-metrics">rloc <b>${d.rloc}</b> · Funktionen <b>${d.functions}</b> · ` +
       `Klassen <b>${d.classes}</b> · Komplexität <b>${d.complexity}</b><br>` +
-      `Fan-In <b>${d.fanIn}</b> · Fan-Out <b>${d.fanOut}</b> · Git-Churn <b>${d.churn}</b> · ` +
+      `Fan-In <b>${d.fanIn}</b> · Fan-Out <b>${d.fanOut}</b> · Commits <b>${d.commitsCount||0}</b> · ` +
+      `Autoren <b>${d.authorCount||0}</b> · Letzte Änderung <b>${d.ageInDays||0} Tage</b> · ` +
       `Tiefe <b>${d.maxDepth}</b> · TODOs <b>${d.todos}</b></div>`);
     moveTip(e);
   }

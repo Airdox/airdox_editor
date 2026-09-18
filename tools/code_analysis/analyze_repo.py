@@ -384,20 +384,35 @@ def build_ipc_map(electron_texts: dict):
 # Git-Churn
 # --------------------------------------------------------------------------
 
-def git_churn(repo: Path) -> dict:
+def git_risk_metrics(repo: Path) -> dict:
+    """Java-freie Alternative zum ccsh-gitlogparser: pro Datei
+    commitsCount (= churn), authorCount und ageInDays aus der vollen Historie."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo), "log", "--pretty=format:", "--name-only"],
-            capture_output=True, text=True, timeout=60, check=True,
+            ["git", "-C", str(repo), "log", "--pretty=format:%x1e%an%x1f%ct", "--name-only"],
+            capture_output=True, text=True, timeout=120, check=True,
         ).stdout
     except Exception:
         return {}
-    churn: dict = defaultdict(int)
-    for line in out.splitlines():
-        line = line.strip()
-        if line:
-            churn[line.replace("\\", "/")] += 1
-    return dict(churn)
+    metrics: dict = {}
+    author, ts = None, 0
+    for line in out.split("\n"):   # splitlines() wuerde \x1e als Zeilenende schlucken!
+        if line.startswith("\x1e"):   # Header NICHT strippen (U+001E ist in Python "Whitespace")
+            parts = line[1:].split("\x1f")
+            author, ts = parts[0], int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+            continue
+        stripped = line.strip()
+        if not stripped or author is None:
+            continue
+        path = stripped.replace("\\", "/")
+        m = metrics.setdefault(path, {"commits": 0, "authors": set(), "lastTs": 0})
+        m["commits"] += 1
+        m["authors"].add(author)
+        m["lastTs"] = max(m["lastTs"], ts)
+    now = _dt.datetime.now().timestamp()
+    return {k: {"commitsCount": v["commits"], "authorCount": len(v["authors"]),
+                "ageInDays": max(0, int((now - v["lastTs"]) / 86400))}
+            for k, v in metrics.items()}
 
 
 def group_of(rel: str) -> str:
@@ -420,20 +435,24 @@ def group_of(rel: str) -> str:
 # cc.json-Baum
 # --------------------------------------------------------------------------
 
-def folder_to_cc(tree: dict, fan_in: dict, fan_out: dict) -> list:
+def folder_to_cc(tree: dict, fan_in: dict, fan_out: dict, risk: dict) -> list:
     children: list = []
     for name, value in sorted(tree.items()):
         if name.endswith("/"):
             children.append({"name": name[:-1], "type": "folder", "attributes": {},
-                             "children": folder_to_cc(value, fan_in, fan_out)})
+                             "children": folder_to_cc(value, fan_in, fan_out, risk)})
         else:
             s = value
             rel = s["path"]
+            r = risk.get(rel, {})
             children.append({"name": name, "type": "file", "attributes": {
                 "rloc": s["rloc"], "loc": s["loc"], "functions": s["functions"],
                 "classes": s["classes"], "complexity": s["complexity"],
                 "maxDepth": s["maxDepth"], "imports": s["importStatements"],
                 "fanIn": fan_in.get(rel, 0), "fanOut": fan_out.get(rel, 0),
+                "commitsCount": r.get("commitsCount", 0),
+                "authorCount": r.get("authorCount", 0),
+                "ageInDays": r.get("ageInDays", 0),
                 "commentLines": s["commentLines"], "todos": s["todos"],
             }})
     return children
@@ -516,7 +535,7 @@ def main() -> None:
     for a, b, _w in import_edges:
         fan_out[a] += 1
         fan_in[b] += 1
-    churn = git_churn(repo)
+    risk = git_risk_metrics(repo)
 
     # --- Cross-World-Edges -------------------------------------------------
     cross_edges: list = []
@@ -575,7 +594,10 @@ def main() -> None:
             "maxDepth": s["maxDepth"], "imports": s["importStatements"],
             "externalImports": s["externalImports"],
             "fanIn": fan_in.get(rel, 0), "fanOut": fan_out.get(rel, 0),
-            "churn": churn.get(rel, 0), "todos": s["todos"],
+            "churn": risk.get(rel, {}).get("commitsCount", 0), "todos": s["todos"],
+            "commitsCount": risk.get(rel, {}).get("commitsCount", 0),
+            "authorCount": risk.get(rel, {}).get("authorCount", 0),
+            "ageInDays": risk.get(rel, {}).get("ageInDays", 0),
             "commentLines": s["commentLines"],
             "desc": DESCRIPTIONS.get(rel, GROUP_FALLBACK_DESC[g]),
             "importsList": s["internalTargets"][:12],
@@ -611,7 +633,7 @@ def main() -> None:
             node = node.setdefault(folder + "/", {})
         node[parts[-1]] = s
     cc_nodes = [{"name": "root", "type": "folder", "attributes": {},
-                 "children": folder_to_cc(root_children, fan_in, fan_out)}]
+                 "children": folder_to_cc(root_children, fan_in, fan_out, risk)}]
     cc_edges = [{"fromNode": f"/root/{a}", "toNode": f"/root/{b}", "attributes": {"imports": w}}
                 for a, b, w in import_edges]
     for e in cross_edges:
@@ -624,7 +646,8 @@ def main() -> None:
         "attributeTypes": {
             "nodes": {k: "absolute" for k in
                       ["rloc", "loc", "functions", "classes", "complexity", "maxDepth",
-                       "imports", "fanIn", "fanOut", "churn", "todos", "commentLines"]},
+                       "imports", "fanIn", "fanOut", "churn", "todos", "commentLines",
+                       "commitsCount", "authorCount", "ageInDays"]},
             "edges": {"imports": "absolute", "crossWorld": "absolute"},
         },
         "edges": cc_edges,
