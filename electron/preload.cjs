@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   readAnalysisFile: (filePath) => ipcRenderer.invoke('rekordbox:read-analysis-file', filePath),
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
+  // Datenbankort-Bootstrap (Startabfrage zu Testzwecken): gespeicherten Ort
+  // lesen/setzen/löschen bzw. die Abfrage erneut anzeigen.
+  getDbLocation: () => ipcRenderer.invoke('rekordbox:get-db-location'),
+  setDbLocation: (dbPath) => ipcRenderer.invoke('rekordbox:set-db-location', dbPath),
+  clearDbLocation: () => ipcRenderer.invoke('rekordbox:clear-db-location'),
+  promptDbLocation: () => ipcRenderer.invoke('rekordbox:prompt-db-location'),
   // Master-DB-Gate: gibt ein strukturiertes Gate-Ergebnis zurück (ok/errorCode).
   resolveTrackFromMasterDb: (request) => ipcRenderer.invoke('rekordbox:resolve-track-master-db', request),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),

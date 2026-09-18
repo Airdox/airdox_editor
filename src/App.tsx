@@ -19,6 +19,14 @@ import {
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { runMasterDbGate, TrackRequestGuard } from './rekordbox/masterDbPipeline';
 import { buildDeckTrackAfterGate } from './rekordbox/deckTrackPipeline';
+import {
+  applyGateResultToStages,
+  createPipelineStages,
+  GATE_STAGE_IDS,
+  PipelineStageState,
+  setPipelineStage,
+  setPipelineStages,
+} from './rekordbox/pipelineProgress';
 import { generateAnalysisFromMetadata } from './waveform/metadataAnalysis';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, extractMiniPeaksFromAnalysis, estimateBpm } from './waveform/analyzer';
@@ -58,6 +66,7 @@ import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
 import { EditAssistantModal } from './components/Modals/EditAssistantModal';
+import { PipelineProgressModal } from './components/Modals/PipelineProgressModal';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
@@ -284,6 +293,39 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Request-Guard: verhindert, dass ein spät eintreffendes Ergebnis eines
   // früheren Tracks die Waveform des inzwischen gewählten Tracks überschreibt.
   const trackRequestGuard = useRef(new TrackRequestGuard());
+
+  // Live-Pipeline-Popup: zeigt während des Track-Ladens sichtbar an, welche
+  // Code-Abschnitte (XML → Master DB → Audio → Wellenform) bereits
+  // durchlaufen wurden. Status stammt ausschließlich aus echten Ergebnissen.
+  const [pipelineProgress, setPipelineProgress] = useState<{
+    open: boolean;
+    trackTitle: string;
+    stages: PipelineStageState[];
+  }>({ open: false, trackTitle: '', stages: [] });
+
+  // Datenbankort-Bootstrap (Testzwecke): Beim Start den in der Desktop-App
+  // abgefragten/gespeicherten Ort der Rekordbox-Datenbank übernehmen, damit
+  // das Master-DB-Gate ihn ohne erneute Suche verwendet.
+  useEffect(() => {
+    const bridge = window.rekordboxDesktop;
+    if (!bridge || typeof bridge.getDbLocation !== 'function') return;
+    let cancelled = false;
+    bridge
+      .getDbLocation()
+      .then((info) => {
+        if (cancelled || !info || !info.dbPath) return;
+        setMasterDbPath(info.dbPath);
+        console.info(
+          `[DB-Bootstrap] Datenbankort übernommen: ${info.dbPath}${info.exists ? '' : ' (Datei aktuell nicht gefunden)'}`
+        );
+      })
+      .catch((error) => {
+        console.warn('[DB-Bootstrap] Datenbankort konnte nicht gelesen werden:', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Real-time Transparency Modals (Non-blocking parser & operation feedback)
   const [importProgress, setImportProgress] = useState<XmlImportProgress | null>(null);
@@ -1617,6 +1659,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
       setMasterDbPath(result.filePath || dbPath);
+      // Den Ort dieser Datenbank für zukünftige Starts merken (Testzwecke).
+      try {
+        await window.rekordboxDesktop.setDbLocation?.(result.filePath || dbPath);
+      } catch (error) {
+        console.warn('[DB-Bootstrap] Datenbankort konnte nicht gespeichert werden:', error);
+      }
       setXmlCollectionModalOpen(true);
 
       showOperationFeedback({
@@ -1667,6 +1715,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // Request-Guard gegen Race Conditions: nur das Ergebnis der zuletzt
     // gestarteten Auswahl darf das Deck/die Waveform setzen.
     const generation = trackRequestGuard.current.begin();
+
+    // Live-Pipeline-Popup (Testzwecke): sichtbar machen, welche Code-Abschnitte
+    // (XML/DB-Quelle → Master DB → Audio → Wellenform) bereits durchlaufen
+    // wurden. Der Status folgt ausschließlich echten Ergebnissen.
+    const updatePipelineStages = (fn: (stages: PipelineStageState[]) => PipelineStageState[]) => {
+      if (!trackRequestGuard.current.isCurrent(generation)) return;
+      setPipelineProgress((prev) => (prev.open ? { ...prev, stages: fn(prev.stages) } : prev));
+    };
+    setPipelineProgress({
+      open: true,
+      trackTitle: selectedDef.title || 'Rekordbox Track',
+      stages: setPipelineStage(
+        createPipelineStages(),
+        'SOURCE_PARSED',
+        'DONE',
+        `${selectedDef.origin === DataOrigin.REKORDBOX_DB ? 'Rekordbox DB' : 'Rekordbox XML'}: „${selectedDef.title || 'Track'}“`
+      ),
+    });
+
     try {
       const audioCtx = audioEngine.getContext();
       let originalAudio = selectedDef.audioBuffer || null;
@@ -1678,6 +1745,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Kein stiller XML-Fallback, keine erfundenen Werte.
       let dbGateTrack: TrackModel | null = null;
       if (window.rekordboxDesktop) {
+        updatePipelineStages((s) => setPipelineStage(s, 'MASTER_DB_LOCATED', 'RUNNING'));
         const gate = await runMasterDbGate({
           dbPath: masterDbPath || undefined,
           trackId: selectedDef.origin === DataOrigin.REKORDBOX_DB ? selectedDef.id : undefined,
@@ -1685,6 +1753,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           location: selectedDef.originalMedia?.location,
         });
         if (!trackRequestGuard.current.isCurrent(generation)) return;
+        // Gate-Flags faktenbasiert auf die sichtbaren Stufen abbilden.
+        updatePipelineStages((s) => applyGateResultToStages(s, gate));
         if (gate.ok === false) {
           console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${gate.errorCode} – ${gate.reason}`);
           showOperationFeedback({
@@ -1696,6 +1766,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           });
           return;
         }
+        updatePipelineStages((s) => setPipelineStage(s, 'DECK_TRACK_BUILT', 'RUNNING'));
         const built = buildDeckTrackAfterGate({
           gate,
           supplementary: selectedDef,
@@ -1703,21 +1774,32 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           firstBeat: selectedDef.beatGrid?.firstBeat ?? null,
         });
         if (built.ok === false) {
+          updatePipelineStages((s) => setPipelineStage(s, 'DECK_TRACK_BUILT', 'FAILED', built.reason));
           console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${built.errorCode} – ${built.reason}`);
           return;
         }
+        updatePipelineStages((s) =>
+          setPipelineStage(s, 'DECK_TRACK_BUILT', 'DONE', `matchedBy=${built.provenance.matchedBy}`)
+        );
         dbGateTrack = built.track;
         console.info(
           `[RekordboxDB] track ${built.provenance.trackId} aus Master DB übernommen (matchedBy=${built.provenance.matchedBy}, analysis=${built.analysisSource})`
         );
         selectedDef = { ...selectedDef, ...dbGateTrack, audioBuffer: selectedDef.audioBuffer ?? null };
         originalMedia = selectedDef.originalMedia;
+      } else {
+        // Browser-Modus ohne Desktop-Bridge: Master-DB-Gate kann hier nicht
+        // laufen – die Stufen werden ehrlich als übersprungen angezeigt.
+        updatePipelineStages((s) =>
+          setPipelineStages(s, GATE_STAGE_IDS, 'SKIPPED', 'Keine Desktop-Bridge (Browser-Modus)')
+        );
       }
 
       // The native bridge can resolve the XML Location and only ever opens the
       // original audio read-only. In a browser or when no Location exists, the
       // track is provisioned with high-fidelity audio matching its BPM, beatgrid,
       // and key, ensuring beatgrid, waveform, playback, and editing work immediately.
+      updatePipelineStages((s) => setPipelineStage(s, 'ORIGINAL_AUDIO_READ', 'RUNNING'));
       if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
         try {
           const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
@@ -1729,10 +1811,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             modifiedAt: source.modifiedAt,
             status: 'AVAILABLE',
           };
+          updatePipelineStages((s) => setPipelineStage(s, 'ORIGINAL_AUDIO_READ', 'DONE', source.path));
         } catch (error) {
           console.warn('[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio.', error);
           originalMedia = { ...originalMedia, status: 'MISSING' };
+          updatePipelineStages((s) =>
+            setPipelineStage(s, 'ORIGINAL_AUDIO_READ', 'SKIPPED', 'Originalaudio nicht auffindbar')
+          );
         }
+      } else if (originalAudio) {
+        updatePipelineStages((s) =>
+          setPipelineStage(s, 'ORIGINAL_AUDIO_READ', 'DONE', 'Audio bereits geladen')
+        );
+      } else {
+        updatePipelineStages((s) =>
+          setPipelineStage(s, 'ORIGINAL_AUDIO_READ', 'SKIPPED', 'Keine Originaldatei referenziert')
+        );
       }
 
       const bpm = selectedDef.bpm || 130.0;
@@ -1749,7 +1843,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // echte ANLZ-Analyse hat Vorrang, sonst die aus den tatsächlich
       // geladenen Rekordbox-/Master-DB-Daten abgeleitete Metadata-Analysis.
       let analysis = selectedDef.analysis || null;
-      if (!analysis) {
+      if (analysis) {
+        updatePipelineStages((s) =>
+          setPipelineStage(s, 'WAVEFORM_ANALYSIS', 'DONE', 'Wellenform-/Analysis-Daten aus Quelle vorhanden')
+        );
+      } else {
+        updatePipelineStages((s) => setPipelineStage(s, 'WAVEFORM_ANALYSIS', 'RUNNING'));
         analysis = generateAnalysisFromMetadata(
           duration,
           selectedDef.bpm ?? null,
@@ -1759,6 +1858,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         if (analysis) {
           console.info('[RekordboxAnalysis] using metadata fallback');
           console.info('[Waveform] metadata analysis generated');
+          updatePipelineStages((s) =>
+            setPipelineStage(s, 'WAVEFORM_ANALYSIS', 'DONE', 'Wellenformdaten aus DB-Metadaten abgeleitet')
+          );
+        } else {
+          updatePipelineStages((s) =>
+            setPipelineStage(s, 'WAVEFORM_ANALYSIS', 'SKIPPED', 'Keine Analysis-Daten verfügbar')
+          );
         }
       }
       const sha256 = originalAudio
@@ -1833,8 +1939,32 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
+
+      updatePipelineStages((s) => setPipelineStage(s, 'COMPLETE', 'DONE', 'Deck bereit'));
+      // Bei Erfolg bleibt das Popup kurz sichtbar und schließt dann selbst.
+      // Bei einer FAILED-Stufe bleibt es zur Diagnose geöffnet.
+      setTimeout(() => {
+        if (!trackRequestGuard.current.isCurrent(generation)) return;
+        setPipelineProgress((prev) =>
+          prev.open && prev.stages.every((st) => st.status !== 'FAILED')
+            ? { ...prev, open: false }
+            : prev
+        );
+      }, 1800);
     } catch (err) {
       console.error('Fehler beim Laden des Tracks in das Deck:', err);
+      updatePipelineStages((s) => {
+        const running = s.find((st) => st.status === 'RUNNING');
+        if (running) {
+          return setPipelineStage(
+            s,
+            running.id,
+            'FAILED',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+        return s;
+      });
     }
   };
 
@@ -2843,6 +2973,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           setImportProgressModalOpen(false);
           setXmlCollectionModalOpen(true);
         }}
+      />
+
+      {/* Live-Pipeline-Popup: zeigt beim Track-Laden, welche Code-Abschnitte
+          (XML/DB-Quelle → Master DB → Audio → Wellenform) bereits durchlaufen
+          wurden (Testzwecke). */}
+      <PipelineProgressModal
+        isOpen={pipelineProgress.open}
+        trackTitle={pipelineProgress.trackTitle}
+        stages={pipelineProgress.stages}
+        onClose={() => setPipelineProgress((prev) => ({ ...prev, open: false }))}
       />
 
       {/* Real-time Operation Feedback Modal (Insert, Replace, Delete, etc.) */}

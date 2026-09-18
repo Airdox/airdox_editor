@@ -11,6 +11,12 @@ const {
 const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { createLogWriter, formatLogLine } = require('./logWriter.cjs');
+const {
+  loadStoredDbLocation,
+  saveStoredDbLocation,
+  clearStoredDbLocation,
+  buildStartupPrompt,
+} = require('./dbBootstrap.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -162,6 +168,156 @@ const desktopLogWriter = createLogWriter(
   path.join(app.getPath('userData'), 'airdox-smart-editor.log')
 );
 
+// --- Datenbankort-Bootstrap (Testzwecke) -----------------------------------
+// Beim Start wird gefragt, wo die Rekordbox-Datenbank liegt. Die Auswahl wird
+// in <userData>/db-location.json gespeichert und als Standardpfad für das
+// Master-DB-Gate verwendet, wenn der Renderer keinen eigenen Pfad mitschickt.
+let currentDbLocation = null;
+
+function getEffectiveDbLocation() {
+  // Nur ein existierender Pfad wird als Standard übernommen – sonst soll das
+  // Gate die automatische Suche (locate) durchführen können.
+  const candidate =
+    currentDbLocation ||
+    (() => {
+      try {
+        return loadStoredDbLocation(app.getPath('userData')).dbPath;
+      } catch {
+        return null;
+      }
+    })();
+  if (!candidate) return null;
+  try {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Zeigt die Start-Abfrage nach dem Ort der Rekordbox-Datenbank und speichert
+ * die Auswahl. Liefert den gewählten Pfad (oder null bei Überspringen).
+ */
+async function bootstrapDatabaseLocation() {
+  if (!mainWindow) return null;
+  const userDataDir = app.getPath('userData');
+  const stored = loadStoredDbLocation(userDataDir);
+  let candidates = [];
+  try {
+    candidates = locateRekordboxDatabases() || [];
+  } catch (error) {
+    console.warn('[DB-Bootstrap] Automatische Suche fehlgeschlagen:', error && error.message);
+    candidates = [];
+  }
+
+  const prompt = buildStartupPrompt({
+    storedDbPath: stored.dbPath,
+    storedExists: stored.exists,
+    candidates,
+  });
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: prompt.title,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: prompt.buttons.map((b) => b.label),
+    defaultId: prompt.defaultId,
+    cancelId: prompt.cancelId,
+    noLink: true,
+  });
+
+  const chosen = prompt.buttons[response];
+  if (!chosen || chosen.id === 'SKIP') {
+    console.info('[DB-Bootstrap] Abfrage übersprungen – kein Datenbankort gewählt.');
+    desktopLogWriter.append(
+      formatLogLine({ level: 'INFO', category: 'DATABASE', message: 'DB-Bootstrap: Abfrage übersprungen.' })
+    );
+    return null;
+  }
+
+  let dbPath = null;
+  if (chosen.id === 'CHOOSE') {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Rekordbox-Datenbank auswählen (nur lesend)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Rekordbox Datenbank', extensions: ['db'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+      defaultPath: stored.dbPath || undefined,
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      console.info('[DB-Bootstrap] Dateiauswahl abgebrochen.');
+      return null;
+    }
+    dbPath = result.filePaths[0];
+  } else if (chosen.id === 'USE_STORED') {
+    dbPath = stored.dbPath;
+  } else if (chosen.id === 'USE_DETECTED') {
+    const first = candidates.find((c) => c && c.path);
+    dbPath = first ? first.path : null;
+  }
+
+  if (!dbPath) return null;
+
+  try {
+    saveStoredDbLocation(userDataDir, dbPath);
+  } catch (error) {
+    console.warn('[DB-Bootstrap] Datenbankort konnte nicht gespeichert werden:', error && error.message);
+  }
+  currentDbLocation = dbPath;
+  desktopLogWriter.append(
+    formatLogLine({ level: 'INFO', category: 'DATABASE', message: `DB-Bootstrap: Datenbankort festgelegt: ${dbPath}` })
+  );
+  console.info(`[DB-Bootstrap] Datenbankort festgelegt: ${dbPath}`);
+  return dbPath;
+}
+
+ipcMain.handle('rekordbox:get-db-location', () => {
+  let stored = { dbPath: null, exists: false };
+  try {
+    stored = loadStoredDbLocation(app.getPath('userData'));
+  } catch {
+    /* optional */
+  }
+  const dbPath = currentDbLocation || stored.dbPath;
+  let exists = stored.exists;
+  if (currentDbLocation && currentDbLocation !== stored.dbPath) {
+    try {
+      exists = fs.existsSync(currentDbLocation) && fs.statSync(currentDbLocation).isFile();
+    } catch {
+      exists = false;
+    }
+  }
+  return { dbPath, exists };
+});
+
+ipcMain.handle('rekordbox:set-db-location', (_event, dbPath) => {
+  if (typeof dbPath !== 'string' || !dbPath.trim()) {
+    throw new Error('Kein gültiger Datenbankpfad übergeben.');
+  }
+  const saved = saveStoredDbLocation(app.getPath('userData'), dbPath);
+  currentDbLocation = saved.dbPath;
+  desktopLogWriter.append(
+    formatLogLine({ level: 'INFO', category: 'DATABASE', message: `Datenbankort gesetzt: ${saved.dbPath}` })
+  );
+  return { dbPath: saved.dbPath };
+});
+
+ipcMain.handle('rekordbox:clear-db-location', () => {
+  clearStoredDbLocation(app.getPath('userData'));
+  currentDbLocation = null;
+  return { cleared: true };
+});
+
+// Erlaubt dem Renderer, die Abfrage erneut anzustoßen (z.B. über ein Menü).
+ipcMain.handle('rekordbox:prompt-db-location', async () => {
+  const dbPath = await bootstrapDatabaseLocation();
+  return { dbPath };
+});
+
 ipcMain.handle('rekordbox:append-log', (_event, entry) => {
   return desktopLogWriter.append(formatLogLine(entry));
 });
@@ -229,9 +385,14 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
 // Handler ein Fehlerergebnis mit eindeutigem Code – kein stiller Fallback.
 ipcMain.handle('rekordbox:resolve-track-master-db', async (_event, request) => {
   const payload = request && typeof request === 'object' ? request : {};
+  const explicitDbPath =
+    typeof payload.dbPath === 'string' && payload.dbPath.trim() ? payload.dbPath : undefined;
+  // Kein eigener Pfad vom Renderer → den beim Start abgefragten/gespeicherten
+  // Datenbankort verwenden, bevor die automatische Suche greift.
+  const dbPath = explicitDbPath || getEffectiveDbLocation() || undefined;
   return resolveTrackFromMasterDb(
     {
-      dbPath: typeof payload.dbPath === 'string' ? payload.dbPath : undefined,
+      dbPath,
       trackId: payload.trackId,
       audioPath: typeof payload.audioPath === 'string' ? payload.audioPath : undefined,
       location: typeof payload.location === 'string' ? payload.location : undefined,
@@ -436,6 +597,11 @@ ipcMain.handle('log:get-path', async () => {
 app.whenReady().then(() => {
   registerAppProtocol();
   createWindow();
+  // Testzwecke: Direkt zu Beginn fragen, wo die Rekordbox-Datenbank liegt.
+  // Läuft nach dem Fensterstart und blockiert das Laden der UI nicht.
+  bootstrapDatabaseLocation().catch((error) => {
+    console.error('[DB-Bootstrap] Startabfrage fehlgeschlagen:', error);
+  });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

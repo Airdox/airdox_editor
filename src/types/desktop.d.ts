@@ -31,6 +31,11 @@ declare global {
       locateRekordboxDatabases(): Promise<
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
+      /** Datenbankort-Bootstrap (Startabfrage zu Testzwecken). */
+      getDbLocation(): Promise<{ dbPath: string | null; exists: boolean }>;
+      setDbLocation(dbPath: string): Promise<{ dbPath: string }>;
+      clearDbLocation(): Promise<{ cleared: boolean }>;
+      promptDbLocation(): Promise<{ dbPath: string | null }>;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
       /** Verbindliches Master-DB-/SQLCipher-Gate für einen einzelnen Track. */
       resolveTrackFromMasterDb(request: {
