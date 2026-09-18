@@ -27,6 +27,20 @@ function truncate(value, maxChars) {
   return `${value.slice(0, maxChars)}…(+${value.length - maxChars} Zeichen)`;
 }
 
+/**
+ * Defense in depth for entries that reach the main process without going
+ * through LoggerService (for example, a malformed renderer integration).
+ * The renderer already redacts details; the durable boundary must not rely on
+ * that fact when it is responsible for writing a file.
+ */
+function redactSensitiveText(value) {
+  return String(value)
+    .replace(/\b((?:sqlcipher(?:[_-]?key)?|password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization|credential|client[_-]?secret)\s*[=:]\s*)([^\s,;]+)/gi, '$1[REDACTED]')
+    .replace(/("(?:password|passwd|pwd|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization|credential|credentials|secret|client[_-]?secret|private[_-]?key|sqlcipher(?:[_-]?key)?|encryption[_-]?key)"\s*:\s*")[^"]*(")/gi, '$1[REDACTED]$2')
+    .replace(/\b(bearer\s+)[A-Za-z0-9._~+\-/=]+/gi, '$1[REDACTED]')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+(?::[^\s/@]*)?@/gi, '$1[REDACTED]@');
+}
+
 function safeJson(data) {
   if (data === undefined) return undefined;
   try {
@@ -48,9 +62,11 @@ function formatLogLine(entry) {
   const ts = Number.isFinite(entry?.ts) ? entry.ts : Date.now();
   const level = String(entry?.level ?? 'INFO').toUpperCase();
   const category = String(entry?.category ?? 'SYSTEM').toUpperCase();
-  const message = truncate(collapseLines(entry?.message ?? ''), MAX_MESSAGE_CHARS);
+  const message = truncate(collapseLines(redactSensitiveText(entry?.message ?? '')), MAX_MESSAGE_CHARS);
   const dataJson = safeJson(entry?.data);
-  const dataSuffix = dataJson !== undefined ? ` | ${truncate(collapseLines(dataJson), MAX_DATA_CHARS)}` : '';
+  const dataSuffix = dataJson !== undefined
+    ? ` | ${truncate(collapseLines(redactSensitiveText(dataJson)), MAX_DATA_CHARS)}`
+    : '';
   return `${new Date(ts).toISOString()} ${level} [${category}] ${message}${dataSuffix}`;
 }
 
@@ -74,10 +90,13 @@ function createLogWriter(filePath, options = {}) {
     try {
       if (fs.existsSync(prevPath)) fs.unlinkSync(prevPath);
       fs.renameSync(filePath, prevPath);
+      bytesWritten = 0;
+      return true;
     } catch {
-      // rotation failed; keep writing into the current file
+      // Rotation failed: retain the real byte accounting and append to the
+      // current file. This remains non-fatal and avoids corrupted counters.
+      return false;
     }
-    bytesWritten = 0;
   }
 
   return {

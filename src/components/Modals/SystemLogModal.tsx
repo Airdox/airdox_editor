@@ -26,7 +26,40 @@ import { logger, LogEntry, LogLevel, LogCategory } from '../../utils/logger';
 interface SystemLogModalProps {
   isOpen: boolean;
   onClose: () => void;
-  appContextState?: any;
+  appContextState?: unknown;
+}
+
+export interface SystemLogFilters {
+  level: string;
+  category: string;
+  query: string;
+}
+
+function detailText(details: unknown): string {
+  try {
+    return details === undefined ? '' : JSON.stringify(details).toLowerCase();
+  } catch {
+    return String(details).toLowerCase();
+  }
+}
+
+/** Pure and exported so the live-inspector filter contract is regression-tested. */
+export function filterSystemLogEntries(logs: LogEntry[], filters: SystemLogFilters): LogEntry[] {
+  const query = filters.query.trim().toLowerCase();
+  return logs.filter((log) => {
+    const matchesLevel =
+      filters.level === 'ALL' ||
+      log.level === filters.level ||
+      (filters.level === 'ERROR' && log.level === 'FATAL');
+    if (!matchesLevel) return false;
+    if (filters.category !== 'ALL' && log.category !== filters.category) return false;
+    if (!query) return true;
+    return (
+      log.message.toLowerCase().includes(query) ||
+      log.category.toLowerCase().includes(query) ||
+      detailText(log.details).includes(query)
+    );
+  });
 }
 
 export const SystemLogModal: React.FC<SystemLogModalProps> = ({
@@ -55,29 +88,27 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
     return () => unsubscribe();
   }, [isOpen]);
 
-  const filteredLogs = useMemo(() => {
-    return logs.filter((log) => {
-      if (levelFilter !== 'ALL' && log.level !== levelFilter) return false;
-      if (categoryFilter !== 'ALL' && log.category !== categoryFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchMsg = log.message.toLowerCase().includes(q);
-        const matchCat = log.category.toLowerCase().includes(q);
-        const matchDetails = log.details ? JSON.stringify(log.details).toLowerCase().includes(q) : false;
-        if (!matchMsg && !matchCat && !matchDetails) return false;
-      }
-      return true;
-    });
-  }, [logs, levelFilter, categoryFilter, searchQuery]);
+  const filteredLogs = useMemo(
+    () => filterSystemLogEntries(logs, { level: levelFilter, category: categoryFilter, query: searchQuery }),
+    [logs, levelFilter, categoryFilter, searchQuery]
+  );
 
   const handleCopy = () => {
     const text = filteredLogs
       .map((l) => `[${l.timeString}] [${l.level}] [${l.category}] ${l.message}`)
       .join('\n');
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      Promise.resolve(navigator.clipboard.writeText(text))
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch(() => undefined);
+    } catch {
+      // Clipboard permissions are a UI convenience; failure must not create an
+      // unhandled rejection in the global diagnostic channel.
+    }
   };
 
   const handleDownload = () => {
@@ -160,6 +191,8 @@ export const SystemLogModal: React.FC<SystemLogModalProps> = ({
             <option value="BEATGRID">BEATGRID</option>
             <option value="EDITING">EDITING</option>
             <option value="DATABASE">DATABASE</option>
+            <option value="CHATBOT">CHATBOT</option>
+            <option value="UI">UI</option>
             <option value="SYSTEM">SYSTEM</option>
           </select>
 

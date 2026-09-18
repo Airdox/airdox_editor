@@ -22,6 +22,7 @@ import {
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
 import { AnlzTagDiagnostic, parseAnlzBinary as parseAnlzFile } from './anlzParser';
+import { logger } from '../utils/logger';
 
 /**
  * Parses binary Rekordbox ANLZ file (.DAT, .EXT, .2EX).
@@ -434,16 +435,37 @@ export function extractTrackFromRekordboxXml(
   return { track, record: dbRecord };
 }
 
+export interface GeneratedWaveformFallbackContext {
+  reason?: string;
+  contentId?: string;
+  trackId?: string;
+  /** True only when the caller has already verified an ANLZ waveform exists. */
+  anlzWaveformAvailable?: boolean;
+}
+
 /**
- * Creates synthetic high-precision multi-band waveform data aligned to duration & cues
- * when raw audio is loading or for immediate instant-preview from database metadata.
+ * Creates synthetic high-precision multi-band waveform data aligned to duration & cues.
+ * It is intentionally an explicit last-resort source, never a substitute for
+ * valid Rekordbox ANLZ data. The optional diagnostic context keeps its origin
+ * visible in both the live SystemLogModal and persistent desktop log.
  */
 export function generateAnalysisFromMetadata(
   durationSec: number,
   bpm: number,
   cues: CuePoint[],
-  firstBeatSec: number = 0.0
+  firstBeatSec: number = 0.0,
+  context: GeneratedWaveformFallbackContext = {}
 ): WaveformAnalysisData {
+  logger.warn('DATABASE', '[WAVEFORM] Generated waveform fallback activated.', {
+    origin: DataOrigin.GENERATED_FALLBACK,
+    reason: context.reason || 'Kein verifizierter nativer Waveform-Datensatz verfügbar.',
+    contentId: context.contentId,
+    trackId: context.trackId,
+    duration: durationSec,
+    bpm,
+    cueCount: cues.length,
+    anlzWaveformAvailable: context.anlzWaveformAvailable === true,
+  });
   const bucketsPerSec = 180;
   const totalBuckets = Math.max(100, Math.floor(durationSec * bucketsPerSec));
   const peaks = new Float32Array(totalBuckets);

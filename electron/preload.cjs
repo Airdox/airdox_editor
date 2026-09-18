@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
     ipcRenderer.on('audio:stems-progress', listener);
     return () => ipcRenderer.removeListener('audio:stems-progress', listener);
   },
-  appendLog: (entry) => ipcRenderer.invoke('log:append', entry),
-  getLogFilePath: () => ipcRenderer.invoke('log:get-path'),
+  // Explicit, narrowly scoped durable diagnostics bridge. It deliberately
+  // exposes no generic ipcRenderer access or writable Rekordbox operations.
+  appendLog: (entry) => ipcRenderer.invoke('rekordbox:append-log', entry),
+  getLogFilePath: () => ipcRenderer.invoke('rekordbox:get-log-file-path'),
 });

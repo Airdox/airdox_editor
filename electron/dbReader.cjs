@@ -491,17 +491,35 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
     files: [],
     warnings: [],
   };
-  if (!contentId && contentId !== 0) return { ...base, reason: 'Keine djmdContent.ID übergeben.' };
+  if (!contentId && contentId !== 0) {
+    return { ...base, code: 'TRACK_NOT_FOUND_IN_MASTER_DB', reason: 'Keine djmdContent.ID übergeben.' };
+  }
   if (!isWithinRekordboxRoot(masterDbPath)) {
-    return { ...base, reason: `master.db muss unter dem verbindlichen Rekordbox-Root ${REKORDBOX_ROOT} liegen.` };
+    return {
+      ...base,
+      code: 'MASTER_DB_NOT_FOUND',
+      reason: `master.db muss unter dem verbindlichen Rekordbox-Root ${REKORDBOX_ROOT} liegen.`,
+    };
+  }
+  if (!fs.existsSync(masterDbPath)) {
+    return { ...base, code: 'MASTER_DB_NOT_FOUND', reason: 'Die angegebene master.db wurde nicht gefunden.' };
   }
 
   const opened = openRekordboxDb(masterDbPath);
-  if (!opened.available) return { ...base, reason: opened.reason };
+  if (!opened.available) {
+    const code = /SQLCipher-Modul/i.test(String(opened.reason))
+      ? 'SQLCIPHER_UNAVAILABLE'
+      : 'MASTER_DB_OPEN_FAILED';
+    return { ...base, code, reason: opened.reason };
+  }
   const { db, dbType } = opened;
   try {
     if (dbType !== 'MASTER_DB') {
-      return { ...base, reason: 'Die automatische ANLZ-Kette ist für Rekordbox master.db vorgesehen.' };
+      return {
+        ...base,
+        code: 'MASTER_DB_SCHEMA_INVALID',
+        reason: 'Die automatische ANLZ-Kette ist für Rekordbox master.db vorgesehen.',
+      };
     }
     const schema = inspectDbSchema(db);
     const table = schemaTable(schema, 'djmdContent');
@@ -511,6 +529,7 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
     if (!table || missing.length) {
       return {
         ...base,
+        code: 'MASTER_DB_SCHEMA_INVALID',
         stage: 'SCHEMA',
         schema: { ...schema, missingRequired: missing.map((column) => `djmdContent.${column}`) },
         reason: `Unbekanntes/unvollständiges master.db-Schema: ${missing.map((column) => `djmdContent.${column}`).join(', ') || 'djmdContent fehlt'}.`,
@@ -521,7 +540,13 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
     const idColumn = columns.find((column) => column.toLowerCase() === 'id') || 'ID';
     const row = db.prepare(`SELECT ${selected} FROM ${quoteIdentifier(table)} WHERE ${quoteIdentifier(idColumn)} = ?`).get(contentId);
     if (!row) {
-      return { ...base, stage: 'TRACK', schema, reason: `djmdContent.ID ${contentId} wurde nicht gefunden.` };
+      return {
+        ...base,
+        code: 'TRACK_NOT_FOUND_IN_MASTER_DB',
+        stage: 'TRACK',
+        schema,
+        reason: `djmdContent.ID ${contentId} wurde nicht gefunden.`,
+      };
     }
     const normalizedRow = normalizeRow(row);
     const analysisDataPath = normalizedRow.AnalysisDataPath ?? normalizedRow.analysisdatapath;
@@ -530,6 +555,7 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
     if (!resolved.path) {
       return {
         ...base,
+        code: 'ANALYSIS_DATA_PATH_INVALID',
         stage: 'ANALYSIS_DATA_PATH',
         schema,
         analysisDataPath: analysisDataPath == null ? '' : String(analysisDataPath),
@@ -546,6 +572,7 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
     if (!found.length) {
       return {
         ...base,
+        code: 'ANLZ_FILES_NOT_FOUND',
         stage: 'ANLZ_FILES',
         schema,
         analysisDataPath: String(analysisDataPath),
@@ -571,7 +598,12 @@ function readRekordboxTrackAnalysis(masterDbPath, contentId) {
       warnings: files.filter((file) => file.status !== 'FOUND' && file.status !== 'NOT_FOUND').map((file) => `${file.kind}: ${file.reason || file.status}`),
     };
   } catch (error) {
-    return { ...base, stage: 'MASTER_DB', reason: error && error.message ? error.message : String(error) };
+    return {
+      ...base,
+      code: 'MASTER_DB_OPEN_FAILED',
+      stage: 'MASTER_DB',
+      reason: error && error.message ? error.message : String(error),
+    };
   } finally {
     db.close();
   }

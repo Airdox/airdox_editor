@@ -38,8 +38,19 @@ export interface RekordboxSchemaDiagnostic {
  * sibling was read; it does not claim a waveform was decoded.  The renderer
  * makes that latter decision from `decodeRekordboxAnalysisFiles`.
  */
+export type RekordboxGateCode =
+  | 'MASTER_DB_NOT_FOUND'
+  | 'SQLCIPHER_UNAVAILABLE'
+  | 'MASTER_DB_OPEN_FAILED'
+  | 'MASTER_DB_SCHEMA_INVALID'
+  | 'TRACK_NOT_FOUND_IN_MASTER_DB'
+  | 'ANALYSIS_DATA_PATH_INVALID'
+  | 'ANLZ_FILES_NOT_FOUND';
+
 export interface RekordboxTrackAnalysisReadResult {
   available: boolean;
+  /** Machine-readable failure classification. Undefined only when stage is COMPLETE. */
+  code?: RekordboxGateCode;
   stage:
     | 'MASTER_DB'
     | 'SCHEMA'

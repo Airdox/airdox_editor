@@ -95,9 +95,14 @@ assert(enriched.analysis?.origin === DataOrigin.REKORDBOX_ANLZ, 'analysis model 
 assert(waveformForUi && waveformForUi.length > 0, 'existing waveform renderer receives visible columns');
 assert(waveformForUi?.sourceTag === 'PWV7', 'renderer chooses genuine detailed ANLZ variant');
 
-// The selection guard makes a late Track A result unable to overwrite Track B.
-assert(!isCurrentTrackAnalysisRequest(10, 11), 'late Track A result is rejected');
-assert(isCurrentTrackAnalysisRequest(11, 11), 'current Track B result is accepted');
+// The selection guard makes a late Track A or B result unable to overwrite
+// the final Track C request during quick browsing.
+const requestA = 10;
+const requestB = 11;
+const requestC = 12;
+assert(!isCurrentTrackAnalysisRequest(requestA, requestC), 'late Track A result is rejected');
+assert(!isCurrentTrackAnalysisRequest(requestB, requestC), 'late Track B result is rejected');
+assert(isCurrentTrackAnalysisRequest(requestC, requestC), 'final Track C result is accepted');
 
 const empty = decodeRekordboxAnalysisFiles([{ kind: 'DAT', status: 'NOT_FOUND' }]);
 assert(!empty.extraction?.waveform, 'missing ANLZ has no synthetic waveform fallback');

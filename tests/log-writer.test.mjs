@@ -32,6 +32,16 @@ const minimal = formatLogLine({ message: 'x' });
 assert.ok(/ INFO \[SYSTEM\] x$/.test(minimal), 'defaults to INFO [SYSTEM]');
 assert.ok(!minimal.endsWith(' | '), 'no dangling separator without data');
 
+// Persistence boundary redacts secrets even if a caller bypassed LoggerService.
+const secretLine = formatLogLine({
+  ts,
+  message: 'Authorization=should-not-persist Bearer abc.def',
+  data: { password: 'nope', apiKey: 'also-nope', musicalKey: '8A' },
+});
+assert.ok(!secretLine.includes('should-not-persist') && !secretLine.includes('abc.def'), 'message credentials redacted');
+assert.ok(!secretLine.includes('"password":"nope"') && !secretLine.includes('"apiKey":"also-nope"'), 'JSON credentials redacted');
+assert.ok(secretLine.includes('"musicalKey":"8A"'), 'technical non-secret metadata is retained');
+
 // Newlines inside message/data collapse instead of breaking the line format
 const multi = formatLogLine({ ts, message: 'a\nb\r\nc', data: { x: '1\n2' } });
 assert.strictEqual(multi.split('\n').length, 1, 'newlines collapsed');
@@ -77,6 +87,19 @@ const curContent = fs.readFileSync(rotPath, 'utf8').trim();
 assert.ok(prevContent.includes('entry'), 'prev log retains earlier entries');
 assert.ok(curContent.includes('entry 9'), 'current log continues after rotation');
 assert.ok(fs.statSync(rot.prevPath).size <= 400 + 200, 'rotated file bounded (~maxBytes + one line)');
+
+// A rotation failure is non-fatal: preserve current contents and accurate byte
+// accounting rather than crashing or pretending the file is empty.
+const failedRotationPath = path.join(tmp, 'rotation-failure.log');
+const failedRotation = createLogWriter(failedRotationPath, { maxBytes: 20 });
+assert.strictEqual(failedRotation.append('first durable line'), true);
+fs.mkdirSync(failedRotation.prevPath);
+fs.writeFileSync(path.join(failedRotation.prevPath, 'blocker'), 'x');
+const bytesBeforeFailedRotation = failedRotation.bytesWritten;
+assert.strictEqual(failedRotation.append('second durable line'), true, 'rotation failure falls back to current log append');
+assert.ok(failedRotation.bytesWritten > bytesBeforeFailedRotation, 'failed rotation keeps byte accounting');
+const failedRotationContents = fs.readFileSync(failedRotationPath, 'utf8');
+assert.ok(failedRotationContents.includes('first durable line') && failedRotationContents.includes('second durable line'), 'failed rotation loses no current data');
 
 // Never throws on unwritable targets — append degrades to false. A regular
 // file used as a directory component fails mkdir/write on every OS (ENOTDIR).

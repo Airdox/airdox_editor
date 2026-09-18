@@ -30,7 +30,11 @@ import {
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
-import { decodeRekordboxAnalysisFiles, isCurrentTrackAnalysisRequest } from './rekordbox/analysisPipeline';
+import {
+  decodeRekordboxAnalysisFiles,
+  isCurrentTrackAnalysisRequest,
+  type RekordboxTrackAnalysisReadResult,
+} from './rekordbox/analysisPipeline';
 import { classifyPpthPlausibility } from './rekordbox/analysisResolver';
 import {
   serializeProject,
@@ -100,6 +104,36 @@ function extractPaletteWaveform(
     origin: analysis.origin,
     sourceTag: analysis.sourceTag,
     secPerBucket: Math.max(0, end - start) / Math.max(1, compact.peaks.length),
+  };
+}
+
+/** Bounded schema evidence suitable for the durable diagnostics log. */
+function summarizeRekordboxSchema(schema: { tables: string[]; indexes: Record<string, string[]>; properties?: Record<string, string | number | null>; missingRequired?: string[] } | undefined) {
+  if (!schema) return undefined;
+  return {
+    tables: schema.tables,
+    indexedTables: Object.keys(schema.indexes),
+    properties: schema.properties,
+    missingRequired: schema.missingRequired || [],
+  };
+}
+
+/** Keeps every final TrackModel log unambiguous about waveform provenance. */
+function getWaveformSource(analysis: WaveformAnalysisData | null | undefined) {
+  const origin = analysis?.origin || 'NONE';
+  return {
+    waveformSource:
+      origin === DataOrigin.REKORDBOX_ANLZ
+        ? 'REKORDBOX_ANLZ'
+        : origin === DataOrigin.LOCAL_ANALYSIS
+          ? 'AUDIO_ANALYSIS'
+          : origin === DataOrigin.GENERATED_FALLBACK
+            ? 'GENERATED_FALLBACK'
+            : origin,
+    origin,
+    sourceTag: analysis?.sourceTag,
+    buckets: analysis?.length || 0,
+    secPerBucket: analysis?.secPerBucket,
   };
 }
 
@@ -1582,8 +1616,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         originalSha256: enrichedTrack.originalSha256,
         timestamp: Date.now(),
       });
+      logger.info('DATABASE', '[DATABASE] ANLZ-Datei read-only importiert.', {
+        fileName,
+        tags: extraction.tagsFound,
+        waveform: getWaveformSource(extraction.waveform),
+        cues: extraction.cues.length,
+        loops: extraction.loops.length,
+        phrases: extraction.phrases.length,
+        beatCount: extraction.beatGrid?.beats.length || 0,
+        warnings: extraction.warnings,
+      });
+      logger.info('DATABASE', '[WAVEFORM] Waveform source selected.', {
+        trackId: enrichedTrack.id,
+        ...getWaveformSource(enrichedTrack.analysis),
+      });
+      // Retain the lightweight developer-console summary in addition to the
+      // structured central logger for browser-only ANLZ troubleshooting.
       console.info(`[ANLZ Import] ${fileName} → Tags: ${tags}`, extraction.warnings);
     } catch (error) {
+      logger.error('DATABASE', '[DATABASE] ANLZ-Decoderfehler.', error);
       console.error('[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden:', error);
     }
   };
@@ -1613,14 +1664,31 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // returns only rows; the renderer never touches the source file.
   const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
     if (!window.rekordboxDesktop) return;
+    logger.info('DATABASE', '[DATABASE] Master DB import started (read-only).', {
+      dbPath,
+      requiredRekordboxRootForAnalysis: 'D:\\',
+    });
     try {
       const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
       if (!result.available || !result.rows) {
         throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
       }
       if (result.dbType === 'MASTER_DB' && result.schema?.missingRequired?.length) {
+        logger.error('DATABASE', '[DATABASE] MASTER_DB_SCHEMA_INVALID', {
+          dbPath: result.filePath || dbPath,
+          missingRequired: result.schema.missingRequired,
+          schema: summarizeRekordboxSchema(result.schema),
+        });
         throw new Error(`master.db-Schema unvollständig: ${result.schema.missingRequired.join(', ')}.`);
       }
+      logger.info('DATABASE', '[DATABASE] Master DB opened (read-only).', {
+        dbPath: result.filePath || dbPath,
+        dbType: result.dbType,
+      });
+      logger.info('DATABASE', '[DATABASE] Master DB schema validated.', {
+        dbPath: result.filePath || dbPath,
+        schema: summarizeRekordboxSchema(result.schema),
+      });
 
       const mapped = mapRekordboxDatabaseRows(
         {
@@ -1650,6 +1718,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return collectionTrack;
       });
 
+      logger.info('DATABASE', '[DATABASE] Master DB tracks read.', {
+        dbPath: result.filePath || dbPath,
+        dbType: result.dbType,
+        tracks: mapped.stats.tracks,
+        memoryCues: mapped.stats.memoryCues,
+        hotCues: mapped.stats.hotCues,
+        loops: mapped.stats.loops,
+      });
+
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
       setXmlCollectionModalOpen(true);
@@ -1665,9 +1742,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
       if (warnings.length > 0) {
+        logger.warn('DATABASE', '[DATABASE] Master DB import completed with warnings.', {
+          dbPath: result.filePath || dbPath,
+          warnings,
+        });
         console.warn('[Rekordbox DB] Hinweise:', warnings);
       }
     } catch (error) {
+      logger.error('DATABASE', '[DATABASE] MASTER_DB_OPEN_FAILED', { dbPath, error });
       console.error('[Rekordbox DB] Import fehlgeschlagen:', error);
       alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1701,19 +1783,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
     const requestId = ++trackSelectionRequestRef.current;
     const sourceMasterDbPath = selectedDef.rawXmlAttributes?.sourceMasterDbPath;
+    const usesMasterDbGate =
+      selectedDef.origin === DataOrigin.REKORDBOX_DB &&
+      selectedDef.rawXmlAttributes?.databaseType === 'MASTER_DB' &&
+      Boolean(sourceMasterDbPath) &&
+      Boolean(window.rekordboxDesktop);
+
+    logger.info('UI', '[UI] Track request started.', {
+      requestId,
+      trackId: selectedDef.id,
+      contentId: selectedDef.id,
+      title: selectedDef.title,
+      artist: selectedDef.artist,
+      origin: selectedDef.origin,
+      masterDbGateRequested: usesMasterDbGate,
+    });
+
     // Start the exact DB → ANLZ read immediately and in parallel with optional
     // original-audio decoding. The Electron side accepts only D:\ and never
     // writes master.db, WAL/SHM, ANLZ, or the audio source.
-    const autoAnalysisPromise =
-      selectedDef.origin === DataOrigin.REKORDBOX_DB &&
-      selectedDef.rawXmlAttributes?.databaseType === 'MASTER_DB' &&
-      sourceMasterDbPath &&
-      window.rekordboxDesktop
-        ? window.rekordboxDesktop.readRekordboxTrackAnalysis({
-            masterDbPath: sourceMasterDbPath,
-            contentId: selectedDef.id,
-          })
-        : Promise.resolve(null);
+    const autoAnalysisPromise = usesMasterDbGate
+      ? window.rekordboxDesktop!.readRekordboxTrackAnalysis({
+          masterDbPath: sourceMasterDbPath!,
+          contentId: selectedDef.id,
+        })
+      : Promise.resolve(null);
+
+    if (!usesMasterDbGate && selectedDef.origin === DataOrigin.REKORDBOX_DB) {
+      logger.warn('DATABASE', '[DATABASE] Master DB gate not started for selected track.', {
+        requestId,
+        contentId: selectedDef.id,
+        databaseType: selectedDef.rawXmlAttributes?.databaseType,
+        masterDbPathPresent: Boolean(sourceMasterDbPath),
+        desktopBridgePresent: Boolean(window.rekordboxDesktop),
+      });
+    }
 
     try {
       const audioCtx = audioEngine.getContext();
@@ -1736,6 +1840,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             status: 'AVAILABLE',
           };
         } catch (error) {
+          logger.warn('AUDIO_ENGINE', '[AUDIO] Original audio unavailable; metadata/ANLZ path remains active.', {
+            requestId,
+            contentId: selectedDef.id,
+            location: selectedDef.originalMedia?.location,
+            error,
+          });
           console.warn('[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio.', error);
           originalMedia = { ...originalMedia, status: 'MISSING' };
         }
@@ -1805,9 +1915,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Prefer the genuine Rekordbox source over any pre-existing analysis.
       // `available` only says DAT/EXT/2EX were read. A result is considered a
       // waveform success only if a verified PWV/PWAV block actually decodes.
-      const autoRead = await autoAnalysisPromise;
+      let autoRead: RekordboxTrackAnalysisReadResult | null = null;
+      try {
+        autoRead = await autoAnalysisPromise;
+      } catch (error) {
+        // A failed native lookup is a gate failure, not a reason to abort the
+        // selected track or to synthesize a Rekordbox waveform.
+        logger.error('DATABASE', '[DATABASE] MASTER_DB_OPEN_FAILED', {
+          requestId,
+          contentId: selectedDef.id,
+          masterDbPath: sourceMasterDbPath,
+          error,
+        });
+      }
       if (!isCurrentTrackAnalysisRequest(requestId, trackSelectionRequestRef.current)) {
-        logger.info('DATABASE', '[REKORDBOX] Veraltetes ANLZ-Ergebnis verworfen (Track wurde gewechselt).', {
+        logger.warn('UI', '[UI] Track request superseded; ANLZ result discarded.', {
+          requestId,
           requestedContentId: selectedDef.id,
           currentRequestId: trackSelectionRequestRef.current,
         });
@@ -1818,6 +1941,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           kind: file.kind,
           status: file.status,
           path: file.path,
+          size: file.size,
+          modifiedAt: file.modifiedAt,
           reason: file.reason,
         }));
         const baseDiagnostic = {
@@ -1833,6 +1958,55 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           unknownTags: [],
           warnings: [...autoRead.warnings, ...(autoRead.reason ? [autoRead.reason] : [])],
         };
+        logger.info('DATABASE', '[DATABASE] Master DB gate result received.', {
+          requestId,
+          code: autoRead.code || 'COMPLETE',
+          stage: autoRead.stage,
+          root: autoRead.root,
+          masterDb: autoRead.masterDbPath,
+          contentId: autoRead.contentId,
+          reason: autoRead.reason,
+        });
+        if (autoRead.schema) {
+          logger.info('DATABASE', '[DATABASE] Master DB found and opened (read-only).', {
+            requestId,
+            contentId: autoRead.contentId,
+            masterDbPath: autoRead.masterDbPath,
+          });
+          const schemaDetails = {
+            requestId,
+            contentId: autoRead.contentId,
+            schema: summarizeRekordboxSchema(autoRead.schema),
+          };
+          if (autoRead.schema.missingRequired?.length) {
+            logger.error('DATABASE', '[DATABASE] MASTER_DB_SCHEMA_INVALID', schemaDetails);
+          } else {
+            logger.info('DATABASE', '[DATABASE] Master DB schema validated.', schemaDetails);
+          }
+        }
+        if (autoRead.stage !== 'MASTER_DB' && autoRead.stage !== 'SCHEMA') {
+          logger.info('DATABASE', '[DATABASE] Track resolved in master DB.', {
+            requestId,
+            contentId: autoRead.contentId,
+            analysisDataPath: autoRead.analysisDataPath,
+            audioPath: autoRead.audioPath,
+          });
+        }
+        if (autoRead.analysisDataPath) {
+          logger.info('DATABASE', '[DATABASE] AnalysisDataPath resolved under D:\\.', {
+            requestId,
+            contentId: autoRead.contentId,
+            analysisDataPath: autoRead.analysisDataPath,
+            resolvedAnalysisDirectory: autoRead.resolvedAnalysisDirectory,
+          });
+        }
+        for (const file of sourceFiles) {
+          const message = `[DATABASE] ANLZ ${file.kind} ${file.status === 'FOUND' ? 'found' : 'unavailable'}.`;
+          const details = { requestId, contentId: autoRead.contentId, ...file };
+          if (file.status === 'FOUND') logger.info('DATABASE', message, details);
+          else if (file.status === 'NOT_FOUND') logger.warn('DATABASE', message, details);
+          else logger.error('DATABASE', message, details);
+        }
         logger.info('DATABASE', '[REKORDBOX] Read-only Datenkette aufgelöst.', {
           root: autoRead.root,
           masterDb: autoRead.masterDbPath,
@@ -1841,6 +2015,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           resolvedAnalysisDirectory: autoRead.resolvedAnalysisDirectory,
           files: sourceFiles,
           stage: autoRead.stage,
+          code: autoRead.code,
         });
 
         if (!autoRead.available) {
@@ -1872,6 +2047,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             selectedWaveformTag: extraction?.waveform?.sourceTag,
             waveformColumns: extraction?.waveform?.length,
           };
+          logger.debug('DATABASE', '[DATABASE] ANLZ FourCC tags detected.', {
+            requestId,
+            contentId: autoRead.contentId,
+            parsedFiles: decoded.decodedFiles.map((file) => ({ kind: file.kind, path: file.path, size: file.size })),
+            skippedFiles: decoded.skippedFiles.map((file) => ({ kind: file.kind, status: file.status, reason: file.reason })),
+            tags: diagnostic.parsedTags,
+            unknownTags: diagnostic.unknownTags,
+            warnings: diagnostic.warnings,
+          });
           if (extraction?.waveform) {
             const extractedTrack = applyAnlzExtractionToTrack(loadedTrack, extraction);
             loadedTrack = {
@@ -1881,7 +2065,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
                 rekordboxDiagnostics: diagnostic,
               },
             };
+            logger.info('DATABASE', '[WAVEFORM] Waveform source selected: REKORDBOX_ANLZ.', {
+              requestId,
+              contentId: autoRead.contentId,
+              origin: DataOrigin.REKORDBOX_ANLZ,
+              sourceTag: extraction.waveform.sourceTag,
+              buckets: extraction.waveform.length,
+              secPerBucket: extraction.waveform.secPerBucket,
+              samplesPerBucket: extraction.waveform.samplesPerBucket,
+              duration: loadedTrack.duration,
+              ppthPlausibility,
+              tags: extraction.tagsFound,
+            });
             logger.info('DATABASE', '[WAVEFORM] Echte Rekordbox-Waveform automatisch übernommen.', {
+              requestId,
               sourceTag: extraction.waveform.sourceTag,
               columns: extraction.waveform.length,
               duration: loadedTrack.duration,
@@ -1903,10 +2100,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               anlzWarnings: diagnostic.warnings,
               rekordboxDiagnostics: diagnostic,
             };
-            logger.warn('DATABASE', '[WAVEFORM] ANLZ-Datei gefunden, aber kein gültiger Waveform-Block dekodiert.', diagnostic);
+            logger.warn('DATABASE', '[WAVEFORM] ANLZ-Datei gefunden, aber kein gültiger Waveform-Block dekodiert.', {
+              requestId,
+              contentId: autoRead.contentId,
+              ...diagnostic,
+              selectedWaveformSource: getWaveformSource(loadedTrack.analysis),
+            });
           }
         }
       }
+
+      logger.info('UI', '[WAVEFORM] TrackModel analysis state finalized.', {
+        requestId,
+        trackId: loadedTrack.id,
+        contentId: selectedDef.id,
+        analysisPresent: Boolean(loadedTrack.analysis),
+        waveformSource: getWaveformSource(loadedTrack.analysis),
+        renderUpdateDispatched: true,
+      });
 
       setTracks((prev) => {
         const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);
@@ -1924,7 +2135,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
+      logger.info('UI', '[UI] Track request applied.', {
+        requestId,
+        trackId: loadedTrack.id,
+        contentId: selectedDef.id,
+        waveformSource: getWaveformSource(loadedTrack.analysis),
+      });
     } catch (err) {
+      logger.error('UI', '[UI] Track request failed.', { requestId, trackId: selectedDef.id, error: err });
       console.error('Fehler beim Laden des Tracks in das Deck:', err);
     }
   };
@@ -2065,8 +2283,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             duration: originalAudio.duration || activeTrack.duration,
             sampleRate: originalAudio.sampleRate,
             channels: originalAudio.numberOfChannels,
-            analysis: analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
+            // Reopening original media must not overwrite a serialized genuine
+            // Rekordbox waveform with a locally calculated representation.
+            analysis: activeTrack.analysis?.origin === DataOrigin.REKORDBOX_ANLZ
+              ? activeTrack.analysis
+              : analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS),
           };
+          logger.info('UI', '[WAVEFORM] Project-track waveform source restored.', {
+            trackId: withAudio.id,
+            waveformSource: getWaveformSource(withAudio.analysis),
+          });
           const working = audioEngine.renderWorkingAudio(originalAudio, withAudio.workingSegments);
           setWorkingAudioBuffer(working);
           setTracks((prev) => prev.map((t) => (t.id === withAudio.id ? withAudio : t)));
@@ -2113,6 +2339,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
 
       const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
+      logger.info('AUDIO_ENGINE', '[WAVEFORM] Waveform source selected: AUDIO_ANALYSIS.', {
+        waveformSource: 'AUDIO_ANALYSIS',
+        origin: DataOrigin.LOCAL_ANALYSIS,
+        fileName: file.name,
+        duration: decoded.duration,
+        sampleRate: decoded.sampleRate,
+        buckets: analysis.length,
+      });
       const sha256 = audioEngine.computeBufferChecksum(decoded);
 
       // Check if the currently active deck track needs its audio file (or has matching name)

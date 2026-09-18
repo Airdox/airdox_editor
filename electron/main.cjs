@@ -10,7 +10,8 @@ const {
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
-const { createLogWriter, formatLogLine } = require('./logWriter.cjs');
+const { createLogWriter } = require('./logWriter.cjs');
+const { registerDesktopLoggingIpc } = require('./loggingIpc.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
@@ -153,20 +154,14 @@ function registerAppProtocol() {
   });
 }
 
-// --- IPC-Handler bleiben unverändert ---
-
-// Durable log mirror: every renderer log entry is appended to
-// <userData>/airdox-smart-editor.log (rotated at 5 MB by logWriter.cjs).
-// Writes never throw — logging must not break the app it observes.
-const desktopLogWriter = createLogWriter(
-  path.join(app.getPath('userData'), 'airdox-smart-editor.log')
-);
-
-ipcMain.handle('rekordbox:append-log', (_event, entry) => {
-  return desktopLogWriter.append(formatLogLine(entry));
-});
-
-ipcMain.handle('rekordbox:get-log-file-path', () => desktopLogWriter.filePath);
+// --- IPC handlers ----------------------------------------------------------
+//
+// Durable renderer diagnostics are deliberately registered through the same
+// two explicitly exposed `rekordbox:*` channels as preload.cjs. `getLogWriter`
+// creates the existing logWriter lazily under Electron's userData directory;
+// append/rotation failures are converted to `false`, never propagated into
+// a renderer operation.
+registerDesktopLoggingIpc(ipcMain, getLogWriter);
 
 ipcMain.handle('rekordbox:inspect-location', async (_event, location) => {
   const localPath = toLocalPath(location);
@@ -409,26 +404,6 @@ ipcMain.handle('audio:separate-stems', async (event, payload) => {
   } catch (error) {
     const described = stemsEngine.describeError(error);
     return { status: 'FAILED', stems: [], jobId, error: described };
-  }
-});
-
-ipcMain.handle('log:append', async (_event, entry) => {
-  try {
-    const writer = getLogWriter();
-    if (!writer) return false;
-    const line = formatLogLine(entry);
-    return writer.append(line);
-  } catch {
-    return false;
-  }
-});
-
-ipcMain.handle('log:get-path', async () => {
-  try {
-    const writer = getLogWriter();
-    return writer ? writer.filePath : null;
-  } catch {
-    return null;
   }
 });
 
