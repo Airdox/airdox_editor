@@ -17,6 +17,9 @@ import {
   CuePoint,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
+import { runMasterDbGate, TrackRequestGuard } from './rekordbox/masterDbPipeline';
+import { buildDeckTrackAfterGate } from './rekordbox/deckTrackPipeline';
+import { generateAnalysisFromMetadata } from './waveform/metadataAnalysis';
 import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, extractMiniPeaksFromAnalysis, estimateBpm } from './waveform/analyzer';
 import { audioEngine } from './audio/audioEngine';
@@ -276,6 +279,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
   const [xmlImportedTracks, setXmlImportedTracks] = useState<TrackModel[]>([]);
   const [xmlFileName, setXmlFileName] = useState<string>('rekordbox_collection.xml');
+  // Pfad der zuletzt geöffneten Rekordbox Master Database (Pipeline-Gate).
+  const [masterDbPath, setMasterDbPath] = useState<string | null>(null);
+  // Request-Guard: verhindert, dass ein spät eintreffendes Ergebnis eines
+  // früheren Tracks die Waveform des inzwischen gewählten Tracks überschreibt.
+  const trackRequestGuard = useRef(new TrackRequestGuard());
 
   // Real-time Transparency Modals (Non-blocking parser & operation feedback)
   const [importProgress, setImportProgress] = useState<XmlImportProgress | null>(null);
@@ -1608,6 +1616,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
+      setMasterDbPath(result.filePath || dbPath);
       setXmlCollectionModalOpen(true);
 
       showOperationFeedback({
@@ -1655,10 +1664,55 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Load a selected track from Rekordbox XML into the DJ Deck
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
+    // Request-Guard gegen Race Conditions: nur das Ergebnis der zuletzt
+    // gestarteten Auswahl darf das Deck/die Waveform setzen.
+    const generation = trackRequestGuard.current.begin();
     try {
       const audioCtx = audioEngine.getContext();
       let originalAudio = selectedDef.audioBuffer || null;
       let originalMedia = selectedDef.originalMedia;
+
+      // ---- VERPFLICHTENDES MASTER-DB-/SQLCIPHER-GATE ----------------------
+      // Rekordbox → master.db → SQLCipher → geöffnet → Schema → Track →
+      // Trackdaten. Erst danach darf die Waveform-/Analysis-Pipeline laufen.
+      // Kein stiller XML-Fallback, keine erfundenen Werte.
+      let dbGateTrack: TrackModel | null = null;
+      if (window.rekordboxDesktop) {
+        const gate = await runMasterDbGate({
+          dbPath: masterDbPath || undefined,
+          trackId: selectedDef.origin === DataOrigin.REKORDBOX_DB ? selectedDef.id : undefined,
+          audioPath: selectedDef.originalMedia?.location,
+          location: selectedDef.originalMedia?.location,
+        });
+        if (!trackRequestGuard.current.isCurrent(generation)) return;
+        if (gate.ok === false) {
+          console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${gate.errorCode} – ${gate.reason}`);
+          showOperationFeedback({
+            title: 'Rekordbox Master-DB-Gate fehlgeschlagen',
+            operationType: 'CUE',
+            description: `${gate.errorCode}: ${gate.reason} Es werden KEINE Ersatzdaten als Rekordbox-Daten dargestellt.`,
+            originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        const built = buildDeckTrackAfterGate({
+          gate,
+          supplementary: selectedDef,
+          anlzAnalysis: selectedDef.analysis ?? null,
+          firstBeat: selectedDef.beatGrid?.firstBeat ?? null,
+        });
+        if (built.ok === false) {
+          console.error(`[Pipeline] MASTER_DB_GATE_FAILED: ${built.errorCode} – ${built.reason}`);
+          return;
+        }
+        dbGateTrack = built.track;
+        console.info(
+          `[RekordboxDB] track ${built.provenance.trackId} aus Master DB übernommen (matchedBy=${built.provenance.matchedBy}, analysis=${built.analysisSource})`
+        );
+        selectedDef = { ...selectedDef, ...dbGateTrack, audioBuffer: selectedDef.audioBuffer ?? null };
+        originalMedia = selectedDef.originalMedia;
+      }
 
       // The native bridge can resolve the XML Location and only ever opens the
       // original audio read-only. In a browser or when no Location exists, the
@@ -1685,10 +1739,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       const durationDef = selectedDef.duration || 300.0;
       const firstBeatDef = selectedDef.beatGrid?.firstBeat || 0.0;
 
-      // In accordance with VORHABEN.md: No synthetic replacement track is generated when original audio is missing
-      // No own analysis in the Rekordbox deck path – only genuine ANLZ/XML data is kept.
+      // Laut VORHABEN.md wird KEIN synthetischer Ersatztrack erzeugt, wenn das
+      // Originalaudio fehlt. Die Waveform entsteht dann nach erfolgreichem
+      // DB-Gate aus den tatsächlich geladenen Rekordbox-Daten:
+      //   ANLZ vorhanden → echte ANLZ-Analysis
+      //   ANLZ fehlt     → generateAnalysisFromMetadata(DB-Daten)
       const duration = originalAudio ? originalAudio.duration : durationDef;
-      const analysis = selectedDef.analysis || null;
+      // Keine eigene Audioanalyse im Rekordbox-Deck-Pfad (Projektregel):
+      // echte ANLZ-Analyse hat Vorrang, sonst die aus den tatsächlich
+      // geladenen Rekordbox-/Master-DB-Daten abgeleitete Metadata-Analysis.
+      let analysis = selectedDef.analysis || null;
+      if (!analysis) {
+        analysis = generateAnalysisFromMetadata(
+          duration,
+          selectedDef.bpm ?? null,
+          selectedDef.cues || [],
+          firstBeatDef
+        );
+        if (analysis) {
+          console.info('[RekordboxAnalysis] using metadata fallback');
+          console.info('[Waveform] metadata analysis generated');
+        }
+      }
       const sha256 = originalAudio
         ? audioEngine.computeBufferChecksum(originalAudio)
         : (selectedDef.originalSha256 || 'missing-audio');
@@ -1741,6 +1813,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           },
         ],
       };
+
+      // Ergebnis eines inzwischen überholten Requests niemals anwenden.
+      if (!trackRequestGuard.current.isCurrent(generation)) return;
 
       setTracks((prev) => {
         const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);

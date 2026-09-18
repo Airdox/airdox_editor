@@ -8,6 +8,7 @@ const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
 } = require('./dbReader.cjs');
+const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
 const { createLogWriter, formatLogLine } = require('./logWriter.cjs');
 
@@ -221,6 +222,22 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
     throw new Error('Kein gültiger Datenbankpfad übergeben.');
   }
   return readRekordboxDatabase(dbPath);
+});
+
+// Verbindliches Master-DB-Pipeline-Gate: Rekordbox → master.db → SQLCipher →
+// geöffnet → Schema → Track → Trackdaten. Schlägt eine Stufe fehl, liefert der
+// Handler ein Fehlerergebnis mit eindeutigem Code – kein stiller Fallback.
+ipcMain.handle('rekordbox:resolve-track-master-db', async (_event, request) => {
+  const payload = request && typeof request === 'object' ? request : {};
+  return resolveTrackFromMasterDb(
+    {
+      dbPath: typeof payload.dbPath === 'string' ? payload.dbPath : undefined,
+      trackId: payload.trackId,
+      audioPath: typeof payload.audioPath === 'string' ? payload.audioPath : undefined,
+      location: typeof payload.location === 'string' ? payload.location : undefined,
+    },
+    { locate: locateRekordboxDatabases }
+  );
 });
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
