@@ -75,12 +75,31 @@ export interface PhraseSection {
   origin?: DataOrigin;
 }
 
+export interface RekordboxAnalysisDiagnostics {
+  root: 'D:\\';
+  masterDbPath: string;
+  contentId: string;
+  stage: string;
+  analysisDataPath?: string;
+  resolvedAnalysisDirectory?: string;
+  audioPath?: string;
+  ppthPlausibility?: 'EXACT' | 'PLACEHOLDER_BASENAME' | 'MISMATCH';
+  selectedWaveformTag?: string;
+  waveformColumns?: number;
+  files: Array<{ kind: 'DAT' | 'EXT' | '2EX'; status: string; path?: string; reason?: string }>;
+  parsedTags: string[];
+  unknownTags: Array<{ fourcc: string; offset: number; lenHeader: number; lenTag: number }>;
+  warnings: string[];
+}
+
 export interface ExtractedDatabaseRecord {
   trackId: string;
   databaseSource: 'REKORDBOX_XML' | 'REKORDBOX_DB' | 'REKORDBOX_ANLZ' | 'LOCAL_EXTRACT';
   anlzTagsFound: string[];
   /** Non-fatal notices produced while decoding the analysis source. */
   anlzWarnings?: string[];
+  /** Read-only master.db → AnalysisDataPath → ANLZ trace for System Log/debug. */
+  rekordboxDiagnostics?: RekordboxAnalysisDiagnostics;
   memoryCuesCount: number;
   hotCuesCount: number;
   loopsCount: number;
@@ -120,6 +139,8 @@ export interface PaletteClip {
   miniLow?: number[];
   miniMid?: number[];
   miniHigh?: number[];
+  /** Immutable selection derived from the track's verified waveform source. */
+  waveform?: WaveformAnalysisData;
   origin: DataOrigin;
 }
 

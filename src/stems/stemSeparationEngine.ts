@@ -6,6 +6,7 @@ import { readWavFile } from './wavIo';
 import type { StemId, StemProfile, StemDescriptor } from './types';
 import type { BackendSeparationResult, IStemSeparator } from './backends/types';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
+import { AudioSeparatorSeparator, type AudioSeparatorOptions } from './backends/audioSeparatorSeparator';
 import { DspHeuristicSeparator } from './backends/dspHeuristicSeparator';
 import { DSP_SEPARATOR_ENGINE } from './dspSeparator';
 export interface SeparationRequest { inputPath: string; modelId?: string; profile?: StemProfile; trackName?: string; chunkSizeSamples?: number; overlap?: number; token?: SeparationCancellationToken; onProgress?: (entry: { chunkIndex?: number; phase: string; detail?: string }) => void; extras?: Record<string, string | number | boolean>; }
@@ -39,6 +40,28 @@ export class StemSeparationEngine {
   private metadata(request: SeparationRequest, modelId: string, trackName: string, events: { phase: string; detail?: string }[]): SeparationMetadata { return { settings: { inputPath: request.inputPath, modelId, profile: request.profile ?? 'HIGH_QUALITY', trackName, extras: request.extras }, events }; }
   private async ensureWritableRoot(root: string): Promise<void> { try { const info = await stat(root).catch(() => undefined); if (info && (info.mode & 0o222) === 0) throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis ist nicht beschreibbar: ${root}`); await mkdir(root, { recursive: true }); } catch (error) { if (error instanceof StemSeparationError) throw error; throw new StemSeparationError('WRITE_DENIED', `Ausgabeverzeichnis konnte nicht erstellt werden: ${root}`, error); } }
 }
-/** Backend that runs without any external runtime: the built-in heuristic separator. */
-export function defaultBackendFor(model: StemModelDescriptor): IStemSeparator { if (model.id === DSP_SEPARATOR_ENGINE) return new DspHeuristicSeparator({ stemOrder: model.stemOrder }); return new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); }
-export function createDefaultBackendFactory(options: { pipelineDouble?: PipelineDoubleSeparator } = {}): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator { return (model) => { if (model.id === DSP_SEPARATOR_ENGINE) return new DspHeuristicSeparator({ stemOrder: model.stemOrder }); if (model.id === 'pipeline-double-v1' || options.pipelineDouble) return options.pipelineDouble ?? new PipelineDoubleSeparator({ stemOrder: model.stemOrder }); return defaultBackendFor(model); }; }
+/** Selects the honest backend represented by the model descriptor. */
+export function defaultBackendFor(model: StemModelDescriptor): IStemSeparator {
+  if (model.id === DSP_SEPARATOR_ENGINE) {
+    return new DspHeuristicSeparator({ stemOrder: model.stemOrder });
+  }
+  if (model.id === 'pipeline-double-v1' || !model.trainedModel) {
+    return new PipelineDoubleSeparator({ stemOrder: model.stemOrder });
+  }
+  return new AudioSeparatorSeparator({ stemOrder: model.stemOrder });
+}
+
+export function createDefaultBackendFactory(
+  options: { pipelineDouble?: PipelineDoubleSeparator; audioSeparator?: AudioSeparatorOptions } = {},
+): (model: StemModelDescriptor, request: SeparationRequest) => IStemSeparator {
+  return (model) => {
+    if (model.id === DSP_SEPARATOR_ENGINE) {
+      return new DspHeuristicSeparator({ stemOrder: model.stemOrder });
+    }
+    if (options.pipelineDouble) return options.pipelineDouble;
+    if (model.id === 'pipeline-double-v1' || !model.trainedModel) {
+      return new PipelineDoubleSeparator({ stemOrder: model.stemOrder });
+    }
+    return new AudioSeparatorSeparator({ ...options.audioSeparator, stemOrder: model.stemOrder });
+  };
+}

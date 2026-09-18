@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Master-DB-Gate: gibt ein strukturiertes Gate-Ergebnis zurück (ok/errorCode).
   resolveTrackFromMasterDb: (request) => ipcRenderer.invoke('rekordbox:resolve-track-master-db', request),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  readRekordboxTrackAnalysis: (payload) => ipcRenderer.invoke('rekordbox:read-track-analysis', payload),
   // Write path: saves to a user-chosen NEW file only; overwriting an original
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),

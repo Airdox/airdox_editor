@@ -98,6 +98,35 @@ function indexOfMax(values: number[]): number {
   return best;
 }
 
+// At a matching bucket resolution, retain the richer native Rekordbox source
+// rather than relying on container order (e.g. PWV7 3-band over PWV3 mono).
+const NATIVE_WAVEFORM_PRIORITY: Record<string, number> = {
+  PWV7: 8,
+  PWV5: 7,
+  PWV6: 6,
+  'P@V6': 6,
+  PWV4: 5,
+  PWV3: 4,
+  PWV2: 3,
+  PWAV: 2,
+};
+
+function preferRicherEqualResolution(candidates: WaveformAnalysisData[], selectedIndex: number): number {
+  if (selectedIndex < 0) return selectedIndex;
+  const resolution = candidates[selectedIndex].length;
+  let bestIndex = selectedIndex;
+  let bestPriority = NATIVE_WAVEFORM_PRIORITY[candidates[selectedIndex].sourceTag || ''] || 0;
+  for (let index = 0; index < candidates.length; index++) {
+    if (candidates[index].length !== resolution) continue;
+    const priority = NATIVE_WAVEFORM_PRIORITY[candidates[index].sourceTag || ''] || 0;
+    if (priority > bestPriority) {
+      bestIndex = index;
+      bestPriority = priority;
+    }
+  }
+  return bestIndex;
+}
+
 /** Structural view of a TrackModel that the renderer selection needs. */
 export interface RenderTrackWaveformSource {
   duration: number;
@@ -131,7 +160,8 @@ export function selectTrackWaveform(
     track.duration,
     widthPx
   );
-  return index >= 0 ? candidates[index] : null;
+  const preferredIndex = preferRicherEqualResolution(candidates, index);
+  return preferredIndex >= 0 ? candidates[preferredIndex] : null;
 }
 
 /**

@@ -161,7 +161,7 @@ runTest('Real ANLZ .EXT', 'PWV7 three-band detail wins over PWV3', () => {
 
   assert(result.waveform !== undefined, 'Waveform present');
   assertEqual(result.waveform!.length, 900, 'Highest priority waveform kept');
-  // PWV7 entries are stored mid, high, low.
+  // PWV7 entries are sweep-verified as low, mid, high.
   assert(result.waveform!.midEnergy[10] >= 0 && result.waveform!.midEnergy[10] <= 1, 'Mid band normalized');
 });
 
