@@ -52,8 +52,8 @@ const { installStemEngine } = stemInstaller as {
   installStemEngine: (
     repoRoot: string,
     onProgress?: (p: { step: number; totalSteps: number; percent: number; label: string; logLine?: string }) => void,
-    options?: { stemsRoot: string }
-  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string; restartRequired?: boolean }>;
+    options?: { stemsRoot?: string; modelId?: string; run?: unknown; fetchImpl?: unknown }
+  ) => Promise<{ ok: boolean; error?: string; python?: string; model?: string; modelDir?: string; weightsReady?: boolean; restartRequired?: boolean }>;
 };
 
 const { separateWav, inspectDemucsEnvironment } = demucsRunner as {
@@ -120,9 +120,11 @@ async function startServer() {
   });
 
   // One-click installer with Server-Sent-Events progress stream. The browser
-  // UI triggers this; the actual work happens locally on this machine.
+  // UI triggers this; the actual work happens locally on this machine. The
+  // body may carry { modelId } – then exactly that catalog model from the
+  // settings menu is installed, otherwise the primary BS-RoFormer model.
   let installRunning = false;
-  app.post('/api/stems/install', async (_req, res) => {
+  app.post('/api/stems/install', express.json({ limit: '1mb' }), async (req, res) => {
     if (installRunning) {
       res.status(409).json({ ok: false, error: 'Die Installation läuft bereits.' });
       return;
@@ -135,8 +137,12 @@ async function startServer() {
     const send = (event: string, data: unknown) => {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
+    const requestedModelId = typeof req.body?.modelId === 'string' && req.body.modelId.length > 0 ? req.body.modelId : undefined;
     try {
-      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress), { stemsRoot: stemsDataRoot });
+      const result = await installStemEngine(process.cwd(), (progress) => send('progress', progress), {
+        stemsRoot: stemsDataRoot,
+        ...(requestedModelId ? { modelId: requestedModelId } : {}),
+      });
       if (result.ok) {
         if (stemJobs.listJobs().length === 0) stemJobs = createStemJobs();
         else result.restartRequired = true;

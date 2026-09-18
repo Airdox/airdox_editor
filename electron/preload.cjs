@@ -60,9 +60,11 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   getLogInfo: () => ipcRenderer.invoke('logs:get-info'),
   readLogTail: (maxBytes) => ipcRenderer.invoke('logs:read-tail', maxBytes),
   openLogFolder: () => ipcRenderer.invoke('logs:open-log-folder'),
-  // One-click installation of the real AI engine (Python venv + torch +
-  // demucs + htdemucs_ft weights). Progress arrives via onStemInstallProgress.
-  installStemEngine: () => ipcRenderer.invoke('stems:install-engine'),
+  // One-click installation of the real AI engine. Installs exactly the model
+  // chosen in the settings menu (options.modelId); without a modelId the
+  // primary BS-RoFormer model is installed. Progress arrives via
+  // onStemInstallProgress.
+  installStemEngine: (options) => ipcRenderer.invoke('stems:install-engine', options || undefined),
   onStemInstallProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on('stems:install-progress', listener);

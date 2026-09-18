@@ -337,19 +337,22 @@ ipcMain.handle('stems:preflight', async () => {
   };
 });
 
-// One-click BS-RoFormer setup in persistent, writable user data.
+// One-click setup in persistent, writable user data. Installs exactly the
+// model selected in the settings menu (options.modelId); without a modelId the
+// primary BS-RoFormer model is installed (legacy one-click behavior).
 let stemInstallRunning = false;
-ipcMain.handle('stems:install-engine', async (event) => {
+ipcMain.handle('stems:install-engine', async (event, options) => {
   if (stemInstallRunning) {
     return { ok: false, error: 'Die Installation läuft bereits.' };
   }
   stemInstallRunning = true;
   try {
+    const modelId = options && typeof options.modelId === 'string' && options.modelId.length > 0 ? options.modelId : undefined;
     const result = await installStemEngine(path.join(__dirname, '..'), (progress) => {
       try {
         event.sender.send('stems:install-progress', progress);
       } catch { /* window may be closing */ }
-    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems') });
+    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems'), ...(modelId ? { modelId } : {}) });
     if (result.ok && stemEngineHost.refreshRuntime && !stemEngineHost.refreshRuntime()) {
       return { ...result, restartRequired: true };
     }
