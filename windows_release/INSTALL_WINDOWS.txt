@@ -1,0 +1,80 @@
+AudioEditor - Windows Installation & Test Anleitung
+====================================================
+Branch: feature/colab-stem-separation
+
+SCHNELLTEST IN 2 MINUTEN (ohne Google Credentials, Mock Modus)
+--------------------------------------------------------------
+1. Python installieren: https://www.python.org/downloads/
+   - Wichtig: Haken bei "Add python.exe to PATH"
+
+2. Portable ZIP entpacken:
+   - AudioEditor-Windows-Portable.zip entpacken
+
+3. Doppelklick auf:
+   - START_HIER.bat  oder  Run_AudioEditor_Mock.bat
+
+4. In der App:
+   - Deck A: "Track laden" -> MP3/WAV wählen
+   - Button "Externe Stems berechnen" klicken
+   - Fortschritt beobachten: Kopie -> Upload (Mock) -> Trigger -> Download
+   - Pop-up: "Alles klar, die Stems sind nun verfügbar."
+   - Stems Liste erscheint: drums, bass, other, vocals
+
+ECHTE CLOUD NUTZUNG (mit Google Drive + Colab GPU)
+---------------------------------------------------
+1. Google Cloud Console: https://console.cloud.google.com
+   - Neues Projekt
+   - Google Drive API aktivieren
+   - Service Account erstellen, JSON Key herunterladen
+
+2. JSON als service_account.json ins App Verzeichnis legen
+
+3. Google Drive: Ordner "AudioEditor_Stems" erstellen
+   - Diesen Ordner mit Service Account Email teilen (aus JSON)
+
+4. Colab Notebook öffnen:
+   - https://colab.research.google.com
+   - Datei hochladen: audio_editor/colab/colab_notebook.ipynb
+   - Laufzeit -> Laufzeittyp ändern -> GPU (T4/V100/A100) -> Speichern
+   - Alle Zellen ausführen, Watcher startet
+
+5. App starten (ohne Mock):
+   - Run_AudioEditor.bat oder python -m audio_editor.main
+
+6. Track laden, "Externe Stems berechnen"
+   - Upload nach /AudioEditor_Stems/Input/
+   - Colab erkennt Trigger, verarbeitet mit htdemucs GPU
+   - Speichert nach /AudioEditor_Stems/Output/<Track_ID>/
+   - App lädt automatisch herunter
+
+EIGENES WINDOWS .EXE BAUEN
+--------------------------
+Auf Windows PC:
+
+> build_exe_windows.bat
+
+Ergebnis: dist\AudioEditor\AudioEditor.exe (ca. 60-150 MB)
+Dann: Doppelklick auf dist\AudioEditor\AudioEditor.exe
+
+TECHNISCHE DETAILS
+------------------
+- Modell: htdemucs (Hybrid Transformer Demucs)
+- Gewichte: Offiziell via demucs Bibliothek, keine manuellen Links
+- GPU: Zwingend in Colab, torch.cuda.is_available()
+- Stems: drums, bass, other, vocals
+- DB: data/audio_editor.db (SQLite)
+- Stems lokal: data/stems/<Track_ID>/
+
+TROUBLESHOOTING
+---------------
+- Python nicht gefunden: PATH prüfen, neu installieren
+- PySide6 Fehler: pip install --upgrade PySide6
+- Antivirus blockiert EXE: Ausnahme hinzufügen
+- Keine Stems: Mock Modus testen, dann echte Credentials prüfen
+- Colab Timeout: Watcher läuft? GPU aktiv? Input Ordner vorhanden?
+
+SUPPORT
+-------
+- Siehe README.md (Hauptdoku)
+- Siehe audio_editor/colab/COLAB_SETUP.md (Colab Details)
+- Siehe BUILD_WINDOWS.md (Build Details)
