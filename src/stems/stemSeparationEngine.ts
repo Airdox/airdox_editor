@@ -495,6 +495,21 @@ export class StemSeparationEngine {
       void watcher;
     }
 
+    // Sofort persistieren (PENDING): friert ein Lauf *in* der Arbeitskopie,
+    // liegt trotzdem eine job.json mit Event-Trail und Settings da – statt
+    // eines leeren Separations-Ordners, der jede Diagnose blockiert.
+    // Bestehende Aufzeichnungen *nicht* überschreiben: das Ergebnis eines
+    // früheren Laufs bleibt bis `archivePreviousRun` (nach der Prep, wenn der
+    // CacheKey des aktuellen Laufs bekannt ist) unangetastet.
+    let hasExistingJobRecord = false;
+    try {
+      await readFile(job.metadataPath);
+      hasExistingJobRecord = true;
+    } catch {
+      hasExistingJobRecord = false;
+    }
+    if (!hasExistingJobRecord) await job.persist().catch(() => undefined);
+
     // Prep-Phasen auf den 0–2%-Bereich des Job-Fortschritts mappen, damit die
     // UI keinen statischen „Arbeitskopie vorbereiten“-Text für Minuten sieht.
     const prepProgress = (p: WorkingCopyProgress): void => {
@@ -868,13 +883,16 @@ export class StemSeparationEngine {
     } catch {
       return;
     }
-    let previous: { jobId?: string; cacheKey?: string; stems?: { id: string }[] };
+    let previous: { jobId?: string; cacheKey?: string; status?: string; stems?: { id: string }[] };
     try {
       previous = JSON.parse(raw);
     } catch {
       return;
     }
     if (!previous.cacheKey || previous.cacheKey === job.cacheKey) return;
+    // Ein PENDING-Eintrag ist der Early-Persist-Stub dieses eigenen Laufs
+    // (Job wird vor der Arbeitskopie persistiert) – kein vorheriger Lauf.
+    if (previous.status === 'PENDING') return;
     const historyDir = path.join(job.outputDir, '.history', previous.jobId ?? 'unknown-job');
     await mkdir(historyDir, { recursive: true });
     for (const stem of previous.stems ?? []) {
