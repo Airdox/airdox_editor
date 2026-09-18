@@ -1,11 +1,9 @@
 /**
  * @license
- * StemQualityWarningModal for airdox_SMART_Editor
- *
- * Shown BEFORE a stem separation when the real AI engine (Demucs htdemucs_ft)
- * is not available. The user decides explicitly whether to run the low-quality
- * local spectral fallback anyway — it is never chosen silently, because its
- * output is not usable for club/performance sets.
+ * StemQualityWarningModal – REFACTORED per §25, §38
+ * - Zeigt STEM AI UNAVAILABLE statt Fallback-Option
+ * - BS-RoFormer primär, kein spektraler Pseudo-Stem
+ * - Diagnose, Preflight, Installation
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -17,14 +15,10 @@ import {
 
 interface StemQualityWarningModalProps {
   isOpen: boolean;
-  /** Why Demucs is unavailable (Python missing, module missing, weights…). */
   reason: string;
   onClose: () => void;
-  /** User explicitly accepts the low-quality local fallback. */
   onProceedWithFallback: () => void;
-  /** Called after a successful in-app installation of the AI engine. */
   onEngineInstalled?: () => void;
-  /** Closes the dialog and immediately re-runs the separation with Demucs. */
   onRunWithInstalledEngine?: () => void;
 }
 
@@ -83,83 +77,73 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
 
   const setupCommand =
     typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
-      ? 'npm run stems:setup:win'
-      : 'npm run stems:setup';
+      ? 'npm run stems:setup:bsroformer'
+      : 'npm run stems:setup:bsroformer';
+
+  const isUnavailable = reason.includes('STEM_ENGINE_UNAVAILABLE') || reason.includes('BS-RoFormer') || reason.includes('nicht verfügbar');
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 select-none p-4">
-      <div className="w-full max-w-lg bg-[#13151c] border border-[#f59e0b]/40 rounded shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs animate-in fade-in zoom-in-95 duration-150">
-        {/* Header */}
-        <div className="h-10 bg-[#1d1810] border-b border-[#3a2f14] flex items-center justify-between px-3">
+      <div className="w-full max-w-lg bg-[#13151c] border border-[#ef4444]/40 rounded shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs animate-in fade-in zoom-in-95 duration-150">
+        <div className="h-10 bg-[#1d1010] border-b border-[#3a1414] flex items-center justify-between px-3">
           <div className="flex items-center space-x-2">
-            <div className="w-6 h-6 rounded bg-[#f59e0b]/20 border border-[#f59e0b]/50 flex items-center justify-center text-[#f59e0b]">
+            <div className="w-6 h-6 rounded bg-[#ef4444]/20 border border-[#ef4444]/50 flex items-center justify-center text-[#ef4444]">
               <AlertTriangle size={14} />
             </div>
             <span className="font-bold text-white text-xs tracking-wide">
-              KI-Stem-Engine (Demucs) nicht verfügbar
+              {isUnavailable ? 'STEM AI UNAVAILABLE – BS-RoFormer nicht bereit' : 'KI-Stem-Engine nicht verfügbar'}
             </span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:text-white text-neutral-400 hover:bg-[#252834] rounded transition-colors"
-            title="Abbrechen (ESC)"
-          >
+          <button onClick={onClose} className="p-1 hover:text-white text-neutral-400 hover:bg-[#252834] rounded">
             <X size={14} />
           </button>
         </div>
 
-        {/* Body */}
         <div className="p-4 space-y-3.5">
-          <div className="bg-[#241d10] border border-[#f59e0b]/30 p-3 rounded flex items-start space-x-2.5">
-            <ShieldAlert size={18} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
+          <div className="bg-[#241010] border border-[#ef4444]/30 p-3 rounded flex items-start space-x-2.5">
+            <ShieldAlert size={18} className="text-[#ef4444] flex-shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <span className="font-bold text-[#fbbf24] text-xs block">
-                Ohne Demucs gibt es keine performancetaugliche Stem-Qualität
+              <span className="font-bold text-[#fca5a5] text-xs block">
+                {isUnavailable ? 'Kein Pseudo-Stem wird erzeugt – echte AI erforderlich' : 'Ohne AI-Modell keine performancetaugliche Qualität'}
               </span>
               <p className="text-[11.5px] text-neutral-300 leading-relaxed">
-                Vocals, Synths und Snares überlappen sich im Frequenzbereich. Der lokale
-                STFT-Fallback (Median-HPSS + Spektralmasken) trennt Drums brauchbar,
-                lässt aber hörbare Übersprecher zwischen Vocals und Instrumenten — er ist{' '}
-                <span className="text-white font-semibold">nicht für Club-/Live-Einsatz geeignet</span>.
-                Echte Trennqualität liefert ausschließlich das trainierte KI-Modell{' '}
-                <span className="font-mono text-[#00c8ff]">htdemucs_ft</span>.
+                Spektraler Fallback (EQ, HPSS, Bandpass) ist <span className="text-white font-semibold">KEINE echte AI-Separation</span> und wird nicht als "Stem Separation" angeboten. Echte Trennqualität liefert ausschließlich das trainierte Modell{' '}
+                <span className="font-mono text-[#00c8ff]">model_bs_roformer_ep_17_sdr_9.6568.ckpt</span> (BS-RoFormer, 4 Stems, SDR 9.65).
+                <br />
+                <br />
+                Pfad (Production): <span className="font-mono text-[#4ade80]">resources/stem-runtime/python.exe</span> + <span className="font-mono text-[#4ade80]">resources/models/</span>
+                <br />
+                Python 3.9–3.13 erforderlich, 3.14 wird abgelehnt. Torch/torchaudio pinned.
               </p>
             </div>
           </div>
 
-          {/* Diagnostic reason */}
           <div className="bg-[#0b0c10] border border-[#1d1f2a] rounded-xs p-2.5 space-y-1.5">
             <div className="flex items-center space-x-1.5 text-neutral-400">
               <Cpu size={12} />
-              <span className="font-bold text-[10.5px] uppercase tracking-wider">Diagnose</span>
+              <span className="font-bold text-[10.5px] uppercase tracking-wider">Diagnose – npm run stems:diagnose</span>
             </div>
-            <p className="font-mono text-[10.5px] text-[#ff8a80] leading-relaxed break-all">
-              {reason}
+            <p className="font-mono text-[10.5px] text-[#ff8a80] leading-relaxed break-all">{reason}</p>
+            <p className="text-[10px] text-neutral-500 mt-2">
+              SHA256 Modell: 3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb (wird beim Start verifiziert)
             </p>
           </div>
 
-          {/* One-click installation (primary path) */}
           {install.phase === 'IDLE' && (
             <div className="bg-[#0b1a12] border border-[#10b981]/30 rounded-xs p-2.5 space-y-2">
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <Download size={12} />
-                <span className="font-bold text-[10.5px] uppercase tracking-wider">
-                  Empfohlen: KI-Engine jetzt automatisch installieren
-                </span>
+                <span className="font-bold text-[10.5px] uppercase tracking-wider">Empfohlen: BS-RoFormer jetzt installieren</span>
               </div>
               <p className="text-[11px] text-neutral-300 leading-relaxed">
-                Ein Klick erledigt alles: Python-Umgebung, PyTorch, Demucs 4.0.1 und die
-                htdemucs_ft-Modellgewichte (~2–3 GB Download, einmalig). Danach läuft jede
-                Trennung lokal in echter KI-Qualität — keine Audiodaten verlassen deinen Rechner.
+                Python 3.11 venv + torch + torchaudio + BS-RoFormer Checkpoint (~400MB) + Config. Danach läuft jede Trennung lokal in echter AI-Qualität – CUDA wenn verfügbar, CPU Fallback bei wenig VRAM, niemals spektral.
               </p>
               <p className="text-[10px] text-neutral-500">
-                Voraussetzung: Python 3.9–3.13 ist installiert (Windows: python.org, 64-Bit).
-                Alternativ manuell im Projektordner: <span className="font-mono text-[#4ade80]">{setupCommand}</span>
+                Manuell: <span className="font-mono text-[#4ade80]">{setupCommand}</span> – danach <span className="font-mono">npm run stems:diagnose</span>
               </p>
             </div>
           )}
 
-          {/* Live installation progress */}
           {install.phase === 'RUNNING' && (
             <div className="bg-[#0b1a12] border border-[#10b981]/40 rounded-xs p-2.5 space-y-2">
               <div className="flex items-center justify-between">
@@ -169,71 +153,45 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
                     Installation läuft — Schritt {install.progress?.step ?? 1}/{install.progress?.totalSteps ?? 6}
                   </span>
                 </div>
-                <span className="font-mono text-[10.5px] text-[#34d399]">
-                  {install.progress?.percent ?? 0}%
-                </span>
+                <span className="font-mono text-[10.5px] text-[#34d399]">{install.progress?.percent ?? 0}%</span>
               </div>
               <div className="h-1.5 bg-black/50 rounded overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[#10b981] to-[#34d399] transition-all duration-500"
-                  style={{ width: `${install.progress?.percent ?? 0}%` }}
-                />
+                <div className="h-full bg-gradient-to-r from-[#10b981] to-[#34d399] transition-all duration-500" style={{ width: `${install.progress?.percent ?? 0}%` }} />
               </div>
               <p className="text-[11px] text-neutral-200">{install.progress?.label || 'Wird vorbereitet…'}</p>
-              {install.lastLog && (
-                <p className="font-mono text-[9.5px] text-neutral-500 truncate" title={install.lastLog}>
-                  {install.lastLog}
-                </p>
-              )}
-              <p className="text-[10px] text-neutral-500">
-                PyTorch und die Modellgewichte sind große Downloads — das kann einige Minuten dauern.
-                Dieses Fenster bitte geöffnet lassen.
-              </p>
+              {install.lastLog && <p className="font-mono text-[9.5px] text-neutral-500 truncate">{install.lastLog}</p>}
             </div>
           )}
 
-          {/* Success */}
           {install.phase === 'DONE' && (
             <div className="bg-[#0b1a12] border border-[#10b981]/60 rounded-xs p-2.5 space-y-1.5">
               <div className="flex items-center space-x-1.5 text-[#34d399]">
                 <CheckCircle2 size={14} />
-                <span className="font-bold text-[11px]">
-                  KI-Engine erfolgreich installiert und verifiziert!
-                </span>
+                <span className="font-bold text-[11px]">BS-RoFormer erfolgreich installiert und verifiziert!</span>
               </div>
-              <p className="text-[11px] text-neutral-300">
-                Demucs htdemucs_ft ist einsatzbereit. Starte die Stem-Trennung jetzt erneut —
-                sie läuft ab sofort in echter KI-Qualität.
-              </p>
+              <p className="text-[11px] text-neutral-300">Modell SHA256 geprüft, Test-Inferenz erfolgreich. Starte jetzt erneut.</p>
             </div>
           )}
 
-          {/* Installation failure with diagnostic */}
           {install.phase === 'FAILED' && (
             <div className="bg-[#241314] border border-[#ff453a]/40 rounded-xs p-2.5 space-y-1.5">
               <div className="flex items-center space-x-1.5 text-[#ff6b62]">
                 <AlertTriangle size={12} />
-                <span className="font-bold text-[10.5px] uppercase tracking-wider">
-                  Installation fehlgeschlagen
-                </span>
+                <span className="font-bold text-[10.5px] uppercase tracking-wider">Installation fehlgeschlagen</span>
               </div>
-              <p className="font-mono text-[10px] text-[#ff8a80] leading-relaxed break-all">
-                {install.error}
-              </p>
+              <p className="font-mono text-[10px] text-[#ff8a80] break-all">{install.error}</p>
               <p className="text-[10.5px] text-neutral-400">
-                Manuelle Alternative im Projektordner:{' '}
-                <span className="font-mono text-[#4ade80]">{setupCommand}</span>
+                Manuell: <span className="font-mono text-[#4ade80]">{setupCommand}</span>
               </p>
             </div>
           )}
         </div>
 
-        {/* Footer */}
         <div className="h-12 bg-[#10121a] border-t border-[#1e2130] flex items-center justify-end px-3 space-x-2">
           {install.phase === 'DONE' ? (
             <button
               onClick={() => (onRunWithInstalledEngine ? onRunWithInstalledEngine() : onClose())}
-              className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-[#10b981] hover:bg-[#34d399] text-black text-xs font-bold transition-colors"
+              className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-[#10b981] hover:bg-[#34d399] text-black text-xs font-bold"
             >
               <CheckCircle2 size={13} />
               <span>Fertig — jetzt in KI-Qualität trennen</span>
@@ -243,27 +201,17 @@ export const StemQualityWarningModal: React.FC<StemQualityWarningModalProps> = (
               <button
                 onClick={onClose}
                 disabled={installing}
-                className="px-3 py-1.5 rounded bg-[#1e2230] hover:bg-[#272d40] border border-[#343b52] text-neutral-200 text-xs font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                className="px-3 py-1.5 rounded bg-[#1e2230] hover:bg-[#272d40] border border-[#343b52] text-neutral-200 text-xs font-medium disabled:opacity-40"
               >
-                Abbrechen
-              </button>
-              <button
-                onClick={onProceedWithFallback}
-                disabled={installing}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded bg-[#3a2f14] hover:bg-[#f59e0b] border border-[#f59e0b]/50 text-[#fbbf24] hover:text-black text-xs font-semibold transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                title="Nur zur groben Vorschau geeignet — deutliche Übersprecher zwischen den Stems"
-              >
-                <Sparkles size={12} />
-                <span>Fallback (Vorschau-Qualität)</span>
+                Schließen
               </button>
               <button
                 onClick={handleInstall}
                 disabled={installing}
-                className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] hover:from-[#34d399] hover:to-[#6ee7b7] text-black text-xs font-bold shadow-md transition-all disabled:opacity-60 disabled:pointer-events-none"
-                title="Installiert Python-venv, PyTorch, Demucs und die htdemucs_ft-Gewichte automatisch — komplett lokal"
+                className="flex items-center space-x-1.5 px-4 py-1.5 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] text-black text-xs font-bold disabled:opacity-60"
               >
                 {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-                <span>{installing ? 'Installiert…' : 'KI-Engine jetzt installieren'}</span>
+                <span>{installing ? 'Installiert…' : 'BS-RoFormer installieren'}</span>
               </button>
             </>
           )}

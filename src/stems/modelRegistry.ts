@@ -200,7 +200,7 @@ export class ModelRegistry {
 
   /**
    * Deterministic model selection:
-   * HIGH_QUALITY / MAXIMUM_QUALITY always prefer `bs_roformer` (primary engine),
+   * HIGH_QUALITY / MAXIMUM_QUALITY / HIGH / BALANCED always prefer `bs_roformer` (primary engine),
    * then other RoFormer families. PREVIEW prefers the fastest available family.
    */
   selectForProfile(profile: QualityProfile, family?: ModelFamily): ModelDescriptor {
@@ -216,9 +216,13 @@ export class ModelRegistry {
       profile === 'PREVIEW'
         ? { htdemucs: 0, bs_roformer: 1, mel_band_roformer: 2, pipeline_double: 3 }
         : { bs_roformer: 0, mel_band_roformer: 1, htdemucs: 2, pipeline_double: 3 };
+    // Prefer the primary 4-stem model for HQ profiles
     return [...candidates].sort((a, b) => {
       const rank = familyRank[a.family] - familyRank[b.family];
       if (rank !== 0) return rank;
+      // Primary model first
+      if (a.id === 'bsroformer-musdb18hq-4stem-zfturbo') return -1;
+      if (b.id === 'bsroformer-musdb18hq-4stem-zfturbo') return 1;
       return a.id.localeCompare(b.id);
     })[0];
   }

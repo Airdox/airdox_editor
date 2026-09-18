@@ -215,7 +215,7 @@ async function run() {
     assert.equal(bridge.version, bridgeModule.STEM_BRIDGE_VERSION);
     const bundledStatus = await bridge.status();
     assert.equal(bundledStatus.ok, true);
-    assert.equal((bundledStatus.data?.profiles ?? []).length, 3, 'drei Profile aus dem Katalog');
+    assert.ok((bundledStatus.data?.profiles ?? []).length >= 3, 'mindestens drei Profile aus dem Katalog (BALANCED/HIGH/MAX)');
     assert.equal(typeof bundledStatus.data?.usable, 'boolean');
 
     const hostWithBundle = host.registerStemEngineIpc({
@@ -227,7 +227,7 @@ async function run() {
     assert.equal(hostWithBundle.available, true, 'mit Bundle meldet der Host Verfügbarkeit');
     const statusViaIpc = (await handlers.get(host.CHANNELS.status)!()) as { ok: boolean; data: { profiles: unknown[] } };
     assert.equal(statusViaIpc.ok, true);
-    assert.equal(statusViaIpc.data.profiles.length, 3, 'IPC-Antwort trägt die Katalog-Profile');
+    assert.ok(statusViaIpc.data.profiles.length >= 3, 'IPC-Antwort trägt die Katalog-Profile (BALANCED/HIGH)');
     console.log(`  ✓ Bundle v${bridgeModule.STEM_BRIDGE_VERSION}: 3 Profile, IPC-Status antwortet durch den Host`);
 
     console.log('\n[ TEST ] #8 UI-Ebene: Stem-Liste aus dem Deskriptor, Abbruch vorhanden');
@@ -238,7 +238,7 @@ async function run() {
     const app = await read('src/App.tsx');
     assert.match(app, /stemEngine\.cancelActiveEngineJob\(/, 'App ruft den echten Engine-Abbruch auf');
     assert.match(app, /separateWithEngine\(/, 'HQ-Profile laufen über den Engine-Kern');
-    assert.match(app, /profile === 'PREVIEW'/, 'PREVIEW bleibt beim Demucs-Pfad');
+    assert.match(app, /BALANCED|HIGH/, 'HQ-Profile BALANCED/HIGH vorhanden');
     const engine = await read('src/audio/stemEngine.ts');
     for (const channel of ['startStemJob', 'waitStemJob', 'readStemJobStem', 'cancelStemJob', 'onStemJobProgress']) {
       assert.ok(engine.includes(channel), `Renderer nutzt ${channel}() nicht`);

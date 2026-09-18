@@ -34,14 +34,16 @@ export type ModelPrecision = 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
 export type ComputeDevice = 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
 
 /**
- * The three mandatory quality profiles.
- * PREVIEW trades quality for speed (a faster family may be used),
- * HIGH_QUALITY uses BS-RoFormer with the model's recommended parameters,
- * MAXIMUM_QUALITY pushes overlap/ensemble/consistency as far as sensible.
+ * Quality profiles – per §23.
+ * PREVIEW trades quality for speed,
+ * BALANCED is balanced,
+ * HIGH uses BS-RoFormer with recommended parameters,
+ * HIGH_QUALITY is alias for HIGH (legacy),
+ * MAXIMUM_QUALITY pushes overlap/ensemble.
  */
-export type QualityProfile = 'PREVIEW' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
+export type QualityProfile = 'PREVIEW' | 'BALANCED' | 'HIGH' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
 
-export const QUALITY_PROFILES: QualityProfile[] = ['PREVIEW', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+export const QUALITY_PROFILES: QualityProfile[] = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
 
 /** A stem id is dynamic – it is whatever the model descriptor declares. */
 export type StemId = string;
@@ -50,6 +52,7 @@ export type CheckpointFormat =
   | 'gguf'
   | 'safetensors-package'
   | 'pytorch-ckpt'
+  | 'yaml'
   | 'demucs-th'
   | 'synthetic';
 
@@ -81,10 +84,18 @@ export interface QualityProfileSpec {
 export interface ModelDescriptor {
   id: string;
   family: ModelFamily;
+  /** New field per §4 */
+  architecture?: string;
   version: string;
   checkpoint: ModelCheckpointRef;
   /** Architecture config (YAML/JSON) required by PyTorch style runtimes. */
   config?: ModelCheckpointRef;
+  /** New fields per §4 */
+  checkpointSha256?: string;
+  supportedStems?: StemId[];
+  sourceUrl?: string;
+  weightLicense?: string;
+  licenseUrl?: string;
   sampleRate: number;
   /** Channels the model consumes. 2 = native stereo, no downmixing. */
   inputChannels: number;
@@ -289,16 +300,29 @@ export interface SeparationJobMetadata {
 
 export const JOB_SCHEMA_VERSION = 1;
 
-/** Every failure mode of §16 gets a stable machine readable code. */
+/** Every failure mode of §16 gets a stable machine readable code. Extended per §4, §30. */
 export type StemErrorCode =
   | 'MODEL_MISSING'
   | 'MODEL_CORRUPT'
   | 'MODEL_INCOMPATIBLE'
   | 'MODEL_REGISTRY_INVALID'
+  | 'MODEL_HASH_MISMATCH'
+  | 'CHECKPOINT_MISSING'
+  | 'CONFIG_MISSING'
+  | 'HASH_MISMATCH'
+  | 'INVALID_CONFIG'
+  | 'LICENSE_UNVERIFIED'
+  | 'NOT_INSTALLED'
+  | 'STEM_ENGINE_UNAVAILABLE'
+  | 'RUNTIME_MISSING'
+  | 'PYTHON_MISSING'
+  | 'PYTHON_VERSION_UNSUPPORTED'
+  | 'TORCH_MISSING'
   | 'AUDIO_MISSING'
   | 'AUDIO_CORRUPT'
   | 'AUDIO_UNSUPPORTED_FORMAT'
   | 'AUDIO_INVALID_SAMPLE_RATE'
+  | 'AUDIO_INVALID'
   | 'GPU_UNAVAILABLE'
   | 'GPU_OUT_OF_MEMORY'
   | 'CPU_FALLBACK_REQUIRED'

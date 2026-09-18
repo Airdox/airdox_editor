@@ -36,6 +36,8 @@ import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
 
 export const DEFAULT_CHUNK_OVERLAP: Record<QualityProfile, number> = {
   PREVIEW: 0.25,
+  BALANCED: 0.5,
+  HIGH: 0.5,
   HIGH_QUALITY: 0.5,
   MAXIMUM_QUALITY: 0.6,
 };
@@ -43,6 +45,8 @@ export const DEFAULT_CHUNK_OVERLAP: Record<QualityProfile, number> = {
 /** Preferred precision per profile: quality first, speed only for previews. */
 export const PREFERRED_PRECISION: Record<QualityProfile, ModelPrecision[]> = {
   PREVIEW: ['q8_0', 'f16', 'bf16', 'f32', 'native'],
+  BALANCED: ['f32', 'native', 'bf16', 'f16', 'q8_0'],
+  HIGH: ['f32', 'native', 'bf16', 'f16', 'q8_0'],
   HIGH_QUALITY: ['f32', 'native', 'bf16', 'f16', 'q8_0'],
   MAXIMUM_QUALITY: ['f32', 'native', 'bf16', 'f16', 'q8_0'],
 };

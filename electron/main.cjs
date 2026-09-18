@@ -10,6 +10,7 @@ const {
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
+const { inspectStemRuntime } = require('./stemRuntime.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
 const { installStemEngine } = require('./stemInstaller.cjs');
 const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
@@ -261,14 +262,80 @@ function toLocalPath(location) {
 
 // Probe executable, supported Python version, imports and cached model weights
 // without touching audio. This catches Python 3.14 / missing-module installs up front.
-ipcMain.handle('stems:get-status', async () =>
-  inspectDemucsEnvironment(
+// NEW: Primary is BS-RoFormer, Demucs is legacy fallback – per §26, Demucs must not block BS-RoFormer.
+ipcMain.handle('stems:get-status', async () => {
+  const bsResult = await inspectStemRuntime(
+    path.join(__dirname, '..'),
+    undefined,
+    (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
+  );
+  // Keep Demucs check for legacy UI, but BS-RoFormer is primary
+  const demucsResult = await inspectDemucsEnvironment(
     path.join(__dirname, '..'),
     undefined,
     undefined,
     (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
-  )
-);
+  );
+
+  // If BS-RoFormer READY, report it as available
+  if (bsResult.status === 'READY') {
+    return {
+      available: true,
+      engine: 'BS_ROFORMER',
+      model: bsResult.model,
+      python: bsResult.diagnostics.pythonPath,
+      details: bsResult.python?.details,
+      diagnostics: bsResult.diagnostics,
+      checks: bsResult.checks,
+      demucs: demucsResult,
+    };
+  }
+
+  // Otherwise, report BS-RoFormer UNAVAILABLE with clear reason – no spectral fallback
+  return {
+    available: false,
+    engine: 'BS_ROFORMER',
+    model: bsResult.model,
+    python: bsResult.diagnostics.pythonPath,
+    details: bsResult.python?.details,
+    diagnostics: bsResult.diagnostics,
+    checks: bsResult.checks,
+    reason: bsResult.reason || 'BS-RoFormer Engine nicht verfügbar',
+    code: 'STEM_ENGINE_UNAVAILABLE',
+    demucs: demucsResult,
+  };
+});
+
+// New diagnostics endpoint per §13
+ipcMain.handle('stems:diagnostics', async () => {
+  const result = await inspectStemRuntime(
+    path.join(__dirname, '..'),
+    undefined,
+    (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
+  );
+  return result;
+});
+
+// New preflight endpoint per §14
+ipcMain.handle('stems:preflight', async () => {
+  const result = await inspectStemRuntime(
+    path.join(__dirname, '..'),
+    undefined,
+    (level, category, message, details) => logger[level === 'warn' ? 'warn' : level](category, message, details)
+  );
+  return {
+    status: result.status,
+    engine: 'bsroformer',
+    model: result.model,
+    python: result.python,
+    torch: result.torch,
+    device: result.device,
+    checkpointVerified: result.checkpointVerified,
+    checks: result.checks,
+    reason: result.reason,
+    diagnostics: result.diagnostics,
+  };
+});
 
 // One-click in-app installation of the complete Demucs environment
 // (Python venv, torch, demucs, htdemucs_ft weights) with progress events.
