@@ -12,16 +12,22 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  OnnxSeparator,
+  disposeWarmSessions,
   normaliseExecutionProvider,
+  resetSharedOnnxRuntime,
   selectExecutionProviders,
   resolveOnnxModelPath,
   segmentSamplesFromMetadata,
   packSegment,
   stemRowsFor,
   describeProviderPlan,
+  type OnnxRuntimeLike,
+  type OnnxTensorLike,
 } from '../src/stems/backends/onnxSeparator';
 import { ModelRegistry } from '../src/stems/modelRegistry';
 import { StemSeparationError } from '../src/stems/errors';
+import type { BackendSeparationRequest } from '../src/stems/backends/types';
 import type { ModelDescriptor } from '../src/stems/types';
 
 console.log('═══════════════════════════════════════════════════════════════════');
@@ -108,6 +114,161 @@ async function run() {
   assert.deepEqual(stemRowsFor(swapped, ['vocals']), [{ stem: 'vocals', outputIndex: 0 }]);
   assert.throws(() => stemRowsFor(onnxModel, ['guitar']), (error: unknown) => error instanceof StemSeparationError && error.code === 'STEM_CONFIG_INVALID');
   console.log('  ✓ vocals -> Zeile 3 (Originalreihenfolge), Fehler bei unbekanntem Stem');
+
+  // ---- #7: GPU-Treiberabsturz zur Laufzeit -> CPU-Ausweg ------------------
+  // Reproduziert den Produktionsfehler DXGI 887A0020 (DRIVER_INTERNAL_ERROR):
+  // Die DirectML-Session lässt sich bauen, aber `session.run` kippt mitten im
+  // Job. Erwartung: Kette wird gesperrt, das Segment auf CPU wiederholt, der
+  // Job endet mit exaktem Ergebnis statt INFERENCE_FAILED.
+  console.log('\n[ TEST ] #7 GPU-Absturz mitten im Lauf: Segment-Wiederholung auf CPU, sample-genaues Ergebnis');
+  {
+    await disposeWarmSessions();
+    await resetSharedOnnxRuntime();
+
+    const SEG = 4096; // >= 2 × MIN_OVERLAP_SAMPLES (Pflichtgröße von planChunks)
+    const GAINS = [0.5, 0.3, 0.15, 0.05];
+    const descriptor = {
+      id: 'fake-gpu-crash',
+      family: 'htdemucs',
+      architecture: 'FakeGraph',
+      version: 'test',
+      checkpoint: { file: 'fake.onnx', format: 'onnx' as const },
+      sampleRate: 44100,
+      inputChannels: 2,
+      outputStems: ['drums', 'bass', 'other', 'vocals'],
+      stemOrder: ['drums', 'bass', 'other', 'vocals'],
+      chunkSizeSamples: SEG,
+      backendSupport: ['onnx' as const],
+    } as unknown as ModelDescriptor;
+
+    const makeRuntime = (opts: { crashAfterDmlRuns: number; cpuCrashes?: boolean }) => {
+      const counters = { creates: [] as string[][], dmlRuns: 0, cpuRuns: 0 };
+      const runtime = {
+        listSupportedBackends: () => [
+          { name: 'dml', bundled: true },
+          { name: 'cpu', bundled: true },
+        ],
+        Tensor: class {
+          constructor(readonly type: 'float32', readonly data: Float32Array, readonly dims: readonly number[]) {}
+        },
+        InferenceSession: {
+          create: async (_modelPath: string, options?: Record<string, unknown>) => {
+            const providers = (options?.executionProviders as string[]) ?? ['cpu'];
+            counters.creates.push(providers);
+            const gpu = providers[0] !== 'cpu';
+            return {
+              inputNames: ['mix'],
+              outputNames: ['stems'],
+              inputMetadata: [{ name: 'mix', type: 'tensor(float)', shape: [1, 2, SEG] }],
+              outputMetadata: [{ name: 'stems', type: 'tensor(float)', shape: [1, 4, 2, SEG] }],
+              run: async (feeds: Record<string, OnnxTensorLike>) => {
+                if (gpu) {
+                  counters.dmlRuns += 1;
+                  if (counters.dmlRuns > opts.crashAfterDmlRuns) {
+                    throw new Error(
+                      'onnxruntime.dll DmlCommandRecorder.cpp(371) Exception(3) 887A0020 DXGI_ERROR_DRIVER_INTERNAL_ERROR (Test-Fake)'
+                    );
+                  }
+                } else {
+                  counters.cpuRuns += 1;
+                  if (opts.cpuCrashes) throw new Error('CPU-Kernel ebenfalls defekt (Test-Fake)');
+                }
+                // Deterministischer „Export“: Zeile i = mix * GAINS[i] (wie das Tiny-Fixture).
+                const mix = feeds['mix'].data;
+                const stems = new Float32Array(4 * mix.length);
+                for (let row = 0; row < 4; row += 1) {
+                  for (let i = 0; i < mix.length; i += 1) stems[row * mix.length + i] = mix[i] * GAINS[row];
+                }
+                return { stems: { data: stems, dims: [1, 4, 2, SEG], type: 'float32' } as OnnxTensorLike };
+              },
+            };
+          },
+        },
+      } as unknown as OnnxRuntimeLike;
+      return { runtime, counters };
+    };
+
+    const makeMix = (frames: number): Float32Array => {
+      const data = new Float32Array(frames * 2);
+      for (let frame = 0; frame < frames; frame += 1) {
+        data[frame * 2] = 0.6 * Math.sin((2 * Math.PI * 220 * frame) / 44100);
+        data[frame * 2 + 1] = 0.4 * Math.sin((2 * Math.PI * 400 * frame) / 44100 + 0.3);
+      }
+      return data;
+    };
+
+    const makeSeparator = (runtime: OnnxRuntimeLike, storeDir: string) =>
+      new OnnxSeparator({ modelStoreDir: storeDir, loadRuntime: async () => runtime, family: 'htdemucs' });
+
+    const frames = SEG * 2 + 100; // drei Segmente bei 25 % Überlappung
+    const mix = makeMix(frames);
+    const makeRequest = (onProgress?: (fraction: number, phase: string) => void): BackendSeparationRequest => ({
+      descriptor,
+      workingWavPath: '',
+      workingSamples: mix,
+      sampleRate: 44100,
+      channels: 2,
+      outputDir: '',
+      startSample: 0,
+      frames,
+      stems: ['drums', 'bass', 'other', 'vocals'],
+      chunkIndex: 0,
+      chunkCount: 1,
+      numOverlap: 1,
+      ensemblePasses: 1,
+      precision: 'f32',
+      device: 'directml',
+      profile: 'PREVIEW',
+      onProgress,
+    });
+
+    // (a) Absturz beim zweiten Segment: Segment 1 lief auf DML, Rest auf CPU –
+    //     zusammengesetzt muss das Ergebnis exakt mix*gain bleiben.
+    const notes: string[] = [];
+    const fakeA = makeRuntime({ crashAfterDmlRuns: 1 });
+    const separatorA = makeSeparator(fakeA.runtime, '/virtual-store/crash-a');
+    const response = await separatorA.separate(makeRequest((_f, phase) => notes.push(phase)));
+    assert.equal(response.device, 'cpu', 'nach Treiberabsturz muss das Ergebnis von der CPU kommen');
+    assert.equal(response.cpuFallback, true, 'der Absturz-Ausweg muss gemeldet werden');
+    assert.ok(String(response.report?.gpuCrash).includes('887A0020'), 'Report muss den Treiberfehler nennen');
+    assert.equal(response.inlineStems?.length, 4);
+    let worst = 0;
+    for (const stem of response.inlineStems!) {
+      const gain = GAINS[descriptor.stemOrder.indexOf(stem.name)];
+      for (let i = 0; i < stem.samples.length; i += 1) worst = Math.max(worst, Math.abs(stem.samples[i] - mix[i] * gain));
+    }
+    assert.ok(worst < 1e-6, `DML- und CPU-Segmente müssen sample-genau zusammenpassen (Abweichung ${worst})`);
+    assert.equal(fakeA.counters.dmlRuns, 2, 'ein DML-Lauf erfolgreich, einer abgestürzt');
+    assert.equal(fakeA.counters.cpuRuns, 2, 'Segment 2 (wiederholt) + Segment 3 liefen auf CPU');
+    assert.equal(fakeA.counters.creates.filter((p) => p[0] !== 'cpu').length, 1, 'genau eine GPU-Session gebaut');
+    assert.ok(notes.some((n) => n.includes('wiederhole Segment 2')), `Fortschritt muss die Wiederholung erklären: ${notes.join(' | ')}`);
+    console.log('  ✓ 1 DML-Segment + Absturz -> CPU wiederholt, Gesamtergebnis sample-genau, cpuFallback + gpuCrash gemeldet');
+
+    // (b) Zweiter Job: die abgestürzte Kette ist gesperrt – kein GPU-Versuch mehr.
+    const second = await separatorA.separate(makeRequest());
+    assert.equal(second.device, 'cpu');
+    assert.equal(second.cpuFallback, true, 'explizit angefordertes DirectML mit gesperrter Kette ist ein Rückfall');
+    assert.equal(fakeA.counters.dmlRuns, 2, 'kein erneuter GPU-Lauf nach dem Absturz');
+    assert.equal(fakeA.counters.creates.filter((p) => p[0] !== 'cpu').length, 1, 'kein erneuter GPU-Sessionbau nach Absturz');
+    console.log(`  ✓ Folge-Job geht direkt auf CPU (${fakeA.counters.creates.length} Session-Bauten gesamt, davon GPU: 1)`);
+
+    // (c) Kippt auch die CPU, bleibt INFERENCE_FAILED sprechend – mit beiden Ursachen.
+    const fakeC = makeRuntime({ crashAfterDmlRuns: 0, cpuCrashes: true });
+    const separatorC = makeSeparator(fakeC.runtime, '/virtual-store/crash-c');
+    await assert.rejects(
+      separatorC.separate(makeRequest()),
+      (error: unknown) => {
+        assert.ok(error instanceof StemSeparationError && error.code === 'INFERENCE_FAILED', `INFERENCE_FAILED erwartet, war: ${error}`);
+        assert.ok(error.message.includes('887A0020'), 'Fehlertext muss den GPU-Absturz nennen');
+        assert.ok(error.message.includes('CPU-Kernel'), 'Fehlertext muss auch das Scheitern des CPU-Auswegs nennen');
+        return true;
+      }
+    );
+    console.log('  ✓ CPU-Ausweg scheitert ebenfalls -> INFERENCE_FAILED mit GPU- und CPU-Ursache');
+
+    await disposeWarmSessions();
+    await resetSharedOnnxRuntime();
+  }
 
   console.log('\n✔ ONNX EP-SELECTION + SEGMENT-PACKING: alle Prüfungen bestanden');
 }
