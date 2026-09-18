@@ -1,0 +1,181 @@
+name: Release - Auto Version on Push
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - feature/colab-stem-separation
+    tags:
+      - 'v*'
+
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest
+
+    - name: Run all tests (must pass for release)
+      env:
+        USE_MOCK_DRIVE: "1"
+      run: |
+        pytest tests/ -v
+
+    - name: Determine version
+      id: version
+      run: |
+        # Version aus __init__.py oder git tag oder commit
+        VERSION=$(grep -oP '__version__ = "\K[^"]+' audio_editor/__init__.py || echo "0.2.0")
+        COMMIT=$(git rev-parse --short HEAD)
+        BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          # Tag Push -> nutze Tag als Version
+          VERSION=${GITHUB_REF#refs/tags/v}
+          RELEASE_VERSION="v${VERSION}"
+        else
+          # Branch Push -> auto version mit commit
+          RELEASE_VERSION="${VERSION}-${BRANCH//\//-}-${COMMIT}-${TIMESTAMP}"
+          # Für main branch auch als latest taggen
+          if [[ $BRANCH == "main" || $BRANCH == "master" ]]; then
+            RELEASE_VERSION="v${VERSION}-${COMMIT}"
+          fi
+        fi
+        
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "release_version=${RELEASE_VERSION}" >> $GITHUB_OUTPUT
+        echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+        
+        echo "Determined version: ${RELEASE_VERSION}"
+
+    - name: Build Linux executable
+      run: |
+        pip install pyinstaller
+        pyinstaller --name=AudioEditor --windowed --onedir audio_editor/main.py --noconfirm || true
+        ls -lh dist/ || echo "No dist"
+
+    - name: Create Release Archives
+      run: |
+        # Source ZIP
+        zip -r AudioEditor-Source-${{ steps.version.outputs.release_version }}.zip \
+          audio_editor/ requirements.txt README.md \
+          config.json.example .env.example \
+          audio_editor/colab/ \
+          windows_release/*.bat windows_release/*.md \
+          -x "*.pyc" "*__pycache__*" "*data/*" "dist/*" "build/*"
+        
+        # Portable ZIP
+        mkdir -p release_portable
+        cp -r audio_editor release_portable/
+        cp requirements.txt README.md config.json.example .env.example release_portable/
+        cp windows_release/*.bat release_portable/ 2>/dev/null || true
+        zip -r AudioEditor-Windows-Portable-${{ steps.version.outputs.release_version }}.zip release_portable/ -x "*.pyc" "*__pycache__*"
+        
+        ls -lh *.zip
+
+    - name: Create GitHub Release (auto version)
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.release_version }}
+        name: "AudioEditor ${{ steps.version.outputs.release_version }} - ${{ steps.version.outputs.branch }}"
+        body: |
+          ## AudioEditor Release ${{ steps.version.outputs.release_version }}
+          
+          **Branch:** ${{ steps.version.outputs.branch }}
+          **Commit:** ${{ steps.version.outputs.commit }}
+          **Version:** ${{ steps.version.outputs.version }}
+          
+          ### Features
+          - Deck Ansicht mit 2 Decks (Basis)
+          - Button "Externe Stems berechnen" in jedem Deck
+          - Cloud Stem Separation via Google Drive + Colab GPU (htdemucs)
+          - Hintergrund Worker (GUI friert nicht)
+          - Mock Modus für Tests ohne Credentials
+          
+          ### Installation
+          Siehe `README.md` und `windows_release/README_WINDOWS.md`
+          
+          ### Schnelltest (Mock)
+          ```bat
+          set USE_MOCK_DRIVE=1
+          python -m audio_editor.main
+          # Track laden -> Externe Stems berechnen -> Pop-up "Alles klar, die Stems sind nun verfügbar."
+          ```
+          
+          ### Echte Cloud
+          - Service Account JSON als `service_account.json` ablegen
+          - Colab Notebook `audio_editor/colab/colab_notebook.ipynb` starten (GPU!)
+          - Siehe `audio_editor/colab/COLAB_SETUP.md`
+          
+          ### Tests
+          Alle Tests bestanden: `pytest tests/ -v`
+          - test_existing_editor.py - Basis bleibt erhalten
+          - test_deck_integration.py - Workflow Integration
+          - test_config.py, test_database.py, test_stem_manager.py
+          - test_drive_client.py, test_colab_trigger.py, test_worker.py
+          
+          Auto-generated on push to ${{ steps.version.outputs.branch }}
+        files: |
+          AudioEditor-Source-*.zip
+          AudioEditor-Windows-Portable-*.zip
+          dist/AudioEditor/*  (if exists)
+        draft: false
+        prerelease: ${{ contains(steps.version.outputs.branch, 'feature') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    runs-on: windows-latest
+    needs: test-and-release
+    permissions:
+      contents: write
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/feature/colab-stem-separation'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build Windows EXE
+      run: |
+        pyinstaller --name=AudioEditor --windowed --onedir --collect-all=PySide6 --collect-all=shiboken6 --exclude-module=torch --exclude-module=torchaudio --exclude-module=demucs audio_editor/main.py --noconfirm
+
+    - name: Create Windows ZIP
+      run: |
+        Compress-Archive -Path dist/AudioEditor -DestinationPath AudioEditor-Windows-EXE-${{ github.sha }}.zip
+
+    - name: Upload Windows Release to same Tag
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}-${{ github.sha }}
+        files: AudioEditor-Windows-EXE-*.zip
+        fail_on_unmatched_files: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true
