@@ -487,7 +487,12 @@ export class StemSeparationEngine {
               totalSeconds: working.seconds,
               chunkIndex: plan.index,
               chunkCount: plans.length,
-              processedSeconds: plan.endTime,
+              // `processedSeconds` describes the position reached inside the current
+              // chunk. Reporting the chunk end immediately made the UI claim that
+              // several seconds of audio were processed while the backend was
+              // still at the beginning of that chunk. Keep it monotonic and
+              // aligned with the same fraction used for the overall progress.
+              processedSeconds: plan.startTime + fraction * (plan.endTime - plan.startTime),
             });
           },
         });
