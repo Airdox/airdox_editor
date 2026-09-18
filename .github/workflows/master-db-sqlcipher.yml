@@ -30,6 +30,28 @@ permissions:
   contents: read
 
 jobs:
+  fast-master-db-regression:
+    name: Fast injectable Master-DB regression
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # tests/master-db-gate.test.mjs deliberately retains its node:sqlite
+      # injectable path. node:sqlite is available in Node 22; the actual
+      # native SQLCipher job below remains pinned to the project's Node 20 ABI.
+      - name: Node.js 22 für den injectable Testpfad aufsetzen
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Test-Abhängigkeiten installieren
+        run: npm ci --omit=optional --no-audit --no-fund
+
+      - name: Injectable Master-DB-Gate ausführen
+        run: node tests/master-db-gate.test.mjs
+
   native-sqlcipher:
     name: Build and validate real SQLCipher native driver
     runs-on: ubuntu-latest
@@ -114,14 +136,6 @@ jobs:
           console.log(`Native binding loaded after source build; SQLite ${row.version}`);
           db.close();
           NODE
-
-      - name: Schneller injectable Master-DB-Regressionspfad
-        run: |
-          set -euxo pipefail
-          # Dieser bestehende Test bleibt bewusst separat: er prüft die
-          # schnelle injectable node:sqlite-Logik und ist kein Real-SQLCipher-
-          # Nachweis.
-          node tests/master-db-gate.test.mjs
 
       - name: CI-Artefaktverzeichnis vorbereiten
         if: always()
