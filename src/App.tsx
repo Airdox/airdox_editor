@@ -82,6 +82,7 @@ import {
   SELECTABLE_MODEL_FAMILIES,
   DEFAULT_STEMS_MIXER_STATE,
   STEM_TYPES,
+  type RemoteServiceStatus,
 } from './audio/stemEngine';
 import { applyStemMixDuringPlayback, isCustomStemMix } from './audio/stemPlayback';
 import {
@@ -483,6 +484,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
   const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
   const [stemEngineUnavailableReason, setStemEngineUnavailableReason] = useState<string | null>(null);
+  /**
+   * Fernpfad (High Quality extern): Der Nutzer wählt nur „extern rechnen“; hier
+   * stehen Machbarkeit/Status des Transports und der laufende Fern-Job. Es gibt
+   * keine Colab-/Python-Bedienung und keine Zugangsdaten in der UI (§13, §23).
+   */
+  const [stemRemoteEnabled, setStemRemoteEnabled] = useState(false);
+  const [stemRemoteStatus, setStemRemoteStatus] = useState<RemoteServiceStatus | null>(null);
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
   // Separationen und wird wie die übrigen Settings lokal persistiert.
   const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
@@ -1197,15 +1205,128 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemArchitecture]);
 
+  /**
+   * Fernpfad (§15–§22): Status holen, offene Jobs nach einem Neustart
+   * übernehmen (§32) und – solange „extern rechnen“ aktiv ist – in ruhigem
+   * Takt pollen (§20). Das Polling läuft unabhängig vom Renderer weiter; die
+   * Anzeige kommt aus denselben Phasen wie bei einem lokalen Lauf.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void stemEngine
+      .remoteStatus()
+      .then((status) => {
+        if (!cancelled) setStemRemoteStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!stemRemoteEnabled) return undefined;
+    let cancelled = false;
+    const apply = (status: RemoteServiceStatus | null) => {
+      if (!cancelled && status) setStemRemoteStatus(status);
+    };
+    // Beim Einschalten: übernommene Jobs abgleichen und fertige Ergebnisse
+    // importieren, ohne dass der Nutzer etwas anklicken muss.
+    void stemEngine.resumeRemoteJobs().then(apply).catch(() => undefined);
+    const timer = window.setInterval(() => {
+      void stemEngine.pollRemoteJobs().then(apply).catch(() => undefined);
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [stemRemoteEnabled]);
+
+  const runRemoteStemSeparation = useCallback(
+    async (profile: StemQualityProfile) => {
+      if (!activeTrack || !workingAudioBuffer) return;
+      setIsSeparatingStems(true);
+      setStemEngineUnavailableReason(null);
+      try {
+        const separated = await stemEngine.separateRemoteWithEngine(
+          workingAudioBuffer,
+          activeTrack.id,
+          activeTrack.originalSha256,
+          {
+            profile,
+            onProgress: (prog) => setSeparationProgress(prog),
+          }
+        );
+        setActiveTrackStems(separated);
+        showOperationFeedback({
+          title: `Stems getrennt – High Quality extern (${separated.profile})`,
+          operationType: 'CUE',
+          description:
+            `Track \"${activeTrack.title}\" wurde auf dem externen Rechner getrennt (${separated.modelId}) und automatisch importiert: ` +
+            `${(separated.stemIds ?? STEM_TYPES).join(', ')}. Original SHA256 unverändert: ${activeTrack.originalSha256.slice(0, 16)}.`,
+          originalSha256: activeTrack.originalSha256,
+          timestamp: Date.now(),
+        });
+        logger.info('STEM-REMOTE', `Fern-Separation abgeschlossen: ${separated.modelId} (${separated.profile}) für \"${activeTrack.title}\".`);
+      } catch (err: any) {
+        const message = err?.message || String(err);
+        logger.error('STEM-REMOTE', `Fern-Separation fehlgeschlagen: ${message}`);
+        // Kein Python-/Colab-Text in der UI (§13): der Nutzer bekommt eine
+        // verständliche Ursache und den Hinweis, lokal weiterzurechnen.
+        setStemQualityWarning(
+          `High Quality extern konnte nicht abgeschlossen werden: ${message}\n` +
+            'Die Arbeitskopie und das Original bleiben unverändert. Sie können „Schnell“ wählen oder „Extern rechnen“ ausschalten und lokal rechnen.'
+        );
+      } finally {
+        setIsSeparatingStems(false);
+        setSeparationProgress(null);
+        void stemEngine.pollRemoteJobs().then((status) => status && setStemRemoteStatus(status)).catch(() => undefined);
+      }
+    },
+    [activeTrack, workingAudioBuffer, showOperationFeedback]
+  );
+
   const handleCancelStemSeparation = useCallback(() => {
+    // Ein laufender Fern-Job wird über denselben Knopf abgebrochen (§37).
+    const remoteJob = (stemRemoteStatus?.jobs ?? []).find(
+      (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
+    );
+    if (remoteJob) {
+      void stemEngine
+        .cancelRemoteJob(remoteJob.jobId, 'Abbruch über das Deck')
+        .then((accepted) => {
+          if (accepted) void stemEngine.pollRemoteJobs().then((status) => status && setStemRemoteStatus(status));
+        })
+        .catch(() => undefined);
+      setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Externer Job wird abgebrochen…' } : prev));
+      logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${remoteJob.jobId} angefordert.`);
+      return;
+    }
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
     logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
-  }, []);
+  }, [stemRemoteStatus]);
 
   const handleSeparateStems = useCallback(async () => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    /*
+     * „High Quality extern“ zuerst prüfen: hier entscheidet der Transport über
+     * die Machbarkeit, nicht die lokale Engine. Ein lokaler Preflight würde die
+     * Gewichte verlangen, die der externe Rechner ohnehin selbst lädt – und
+     * damit genau den Fall blockieren, für den der Fernpfad existiert (§15).
+     */
+    if (stemRemoteEnabled && (resolvedStemProfile === 'HIGH_QUALITY' || resolvedStemProfile === 'MAXIMUM_QUALITY')) {
+      if (!stemRemoteStatus?.configured) {
+        const reason = 'Kein externer Rechenort eingerichtet (Google Drive) – High Quality läuft lokal.';
+        logger.warn('STEM-REMOTE', 'Fern-Separation angefordert, aber kein Transport konfiguriert.');
+        setStemEngineUnavailableReason(reason);
+        setStemQualityWarning(reason);
+        return;
+      }
+      await runRemoteStemSeparation(resolvedStemProfile);
       return;
     }
     // Feste Architektur aus dem Einstellungsmenü vor dem Preflight prüfen:
@@ -1293,10 +1414,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     activeTrack,
     workingAudioBuffer,
     runStemSeparation,
+    runRemoteStemSeparation,
     resolvedStemProfile,
     stemArchitecture,
     stemArchitectures,
     pinnedStemArchitecture,
+    stemRemoteEnabled,
+    stemRemoteStatus,
   ]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
@@ -3928,6 +4052,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         profiles={stemEngineInfo?.profiles ?? []}
         selectedProfile={resolvedStemProfile}
         onProfileChange={setStemProfile}
+        remoteStatus={stemRemoteStatus}
+        remoteEnabled={stemRemoteEnabled}
+        onRemoteEnabledChange={setStemRemoteEnabled}
         engineUnavailableReason={stemEngineUnavailableReason}
         onShowDiagnostics={() => {
           logger.info('STEMS', 'Diagnose angefordert – npm run stems:diagnose');

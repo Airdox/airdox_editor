@@ -30,6 +30,9 @@ export type LogCategory =
   | 'CHATBOT'
   | 'UI'
   | 'STEMS'
+  // Fernpfad (High Quality extern): eigener Tag, damit im Log erkennbar ist,
+  // was der externe Worker/Drive-Transport meldet vs. was lokal rechnet (§36).
+  | 'STEM-REMOTE'
   | 'MIDI'
   | 'NETWORK'
   | 'IPC'

@@ -52,6 +52,24 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
       ipcRenderer.on('stems:job-progress', listener);
       return () => ipcRenderer.removeListener('stems:job-progress', listener);
     },
+
+    // --- High Quality extern (Google Drive + Colab-Worker, §15) ------------
+    // Der Editor lädt die Arbeitskopie hoch, verfolgt den Job per Polling und
+    // importiert das Ergebnis über denselben Stem-Lesepfad wie lokal. Google
+    // Drive ist dabei reine Transportablage; die Zugangsdaten liegen im
+    // Drive-Client des Nutzers (bzw. in rclone), nie in dieser App.
+    remoteStatus: () => ipcRenderer.invoke('stems:remote-status'),
+    startRemoteStemJob: (payload) => ipcRenderer.invoke('stems:remote-start', payload),
+    listRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-jobs'),
+    pollRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-poll'),
+    cancelRemoteStemJob: (jobId, reason) => ipcRenderer.invoke('stems:remote-cancel', jobId, reason),
+    resumeRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-resume'),
+    configureRemoteStemJobs: (settings) => ipcRenderer.invoke('stems:remote-configure', settings),
+    onRemoteStemJobProgress: (callback) => {
+      const listener = (_event, progress) => callback(progress);
+      ipcRenderer.on('stems:remote-progress', listener);
+      return () => ipcRenderer.removeListener('stems:remote-progress', listener);
+    },
   },
 
   // --- Diagnostics / logging bridge -----------------------------------------

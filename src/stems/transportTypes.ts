@@ -45,6 +45,17 @@ export interface StemJobView {
   updatedAt: number;
   finishedAt?: number;
   error?: { code: string; message: string };
+  /**
+   * Rechengerät, das wirklich gerechnet hat (`cpu`, `directml`, `cuda`, …).
+   * Die UI zeigt daraus „Verarbeitung läuft – GPU/CPU“ statt zu raten (§13).
+   */
+  device?: ComputeDevice;
+  /** True, wenn auf CPU ausgewichen wurde (DirectML/CUDA nicht nutzbar). */
+  cpuFallback?: boolean;
+  /** Grund des Ausweichens, z. B. „DirectML-Treiberabsturz“. */
+  fallbackReason?: string;
+  /** Backend-Kennung des Laufs (`local-mdx` = ONNX-DJ-Pfad, `bs_roformer`, …). */
+  backend?: string;
   /** Set only for a COMPLETED job. */
   result?: {
     outputDir: string;
@@ -200,4 +211,136 @@ export interface StemDesktopApi {
   readStemJobStem(jobId: string, stemId: StemId): Promise<StemBridgeResult<{ stemId: StemId; wav: Uint8Array }>>;
   readStemJobMetadata(jobId: string): Promise<StemBridgeResult<{ metadata: unknown }>>;
   onStemJobProgress(listener: (event: StemServiceEvent) => void): () => void;
+
+  /*
+   * High-Quality-Pfad extern (Google Drive + Colab-Worker, §15).
+   *
+   * Absichtlich optional (`?`): eine ältere Brücke ohne Fernpfad soll den
+   * Editor nicht unbrauchbar machen. Der Renderer prüft auf Vorhandensein,
+   * statt eine Exception zu ernten – und meldet dann „Fernpfad nicht
+   * verfügbar“ statt „function is not a function“.
+   *
+   * Die Methoden liegen hier flach, weil die IPC-Brücke sie flach exponiert
+   * (`window.rekordboxDesktop.stemEngine.remoteStatus()`), genau wie die
+   * lokalen Job-Methoden. `StemRemoteApi` beschreibt dieselbe Gruppe als
+   * eigener Typ (z. B. für den HTTP-Client).
+   */
+  remoteStatus?(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  startRemoteStemJob?(payload: StartRemoteStemJobPayload): Promise<StemBridgeResult<RemoteStemJobView>>;
+  listRemoteStemJobs?(): Promise<StemBridgeResult<RemoteStemJobView[]>>;
+  pollRemoteStemJobs?(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  cancelRemoteStemJob?(jobId: string, reason?: string): Promise<StemBridgeResult<{ accepted: boolean }>>;
+  resumeRemoteStemJobs?(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  configureRemoteStemJobs?(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  onRemoteStemJobProgress?(listener: (event: RemoteServiceEvent) => void): () => void;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Remote-Pfad (High Quality extern über Google Drive / Colab-Worker)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Job-Status im Fernpfad. Bewusst **dieselben** Werte wie {@link JobStatus}:
+ * ein zweites, konkurrierendes Statussystem wäre genau das, was §14 verbietet.
+ * Der Fernpfad hat zusätzlich Phasen (z. B. „FALLBACK_CPU“, „WARTET_AUF_WORKER“),
+ * die in `phase`/`device` stehen – nicht im Status.
+ */
+export type RemoteJobStatus = JobStatus;
+
+export interface RemoteStemJobView {
+  /** Fern-Job-Id (UUID) – dieselbe in Manifest, Logs und Ergebnissen (§18). */
+  jobId: string;
+  status: RemoteJobStatus;
+  phase: string;
+  percent: number;
+  profile: QualityProfile;
+  modelId: string;
+  family: ModelFamily;
+  /** Backend des Fern-Workers, z. B. `bs_roformer`. */
+  backend: string;
+  stems: StemId[];
+  trackName: string;
+  createdAt: number;
+  updatedAt: number;
+  finishedAt?: number;
+  /** lokaler Job, über den die Stems in den Editor kommen (nach COMPLETED). */
+  localJobId?: string;
+  /** Rechenort des Workers: GPU/CPU inkl. Fallback-Kennzeichnung. */
+  device?: ComputeDevice;
+  cpuFallback?: boolean;
+  fallbackReason?: string;
+  worker?: { id: string; claimedAt?: number; heartbeatAt?: number; host?: string };
+  /** Fortschritt des Workers, wenn er welchen meldet. */
+  workerPercent?: number;
+  attempts?: number;
+  error?: { code: string; message: string };
+  /** Grundeinstellungen des Transports (Anzeige: „Google Drive (Ordner)“). */
+  transport?: string;
+  /** True, wenn der letzte Poll den Transport nicht erreichen konnte (§21 C). */
+  transportDegraded?: boolean;
+  /** Lokal vorhandene Ergebnisse (nach Import), damit die UI nichts nachfragen muss. */
+  importedStems?: { id: StemId; filePath: string; bytes: number; sha256: string }[];
+}
+
+export interface RemoteServiceStatus {
+  /** True, wenn ein Transport konfiguriert ist (Ordner oder rclone-Remote). */
+  configured: boolean;
+  /** `folder` = Google-Drive-Sync-Ordner/rclone-Mount, `rclone` = rclone-Remote. */
+  kind?: 'folder' | 'rclone';
+  /** Anzeigename, z. B. „Google Drive (Ordner)“ – nie ein Zugangstoken. */
+  label?: string;
+  /** Wo Jobs liegen (für Anzeige/Support; kein Geheimnis). */
+  root?: string;
+  reason?: string;
+  /** True, wenn der Transport gerade erreichbar ist. */
+  reachable: boolean;
+  jobs: RemoteStemJobView[];
+  active: number;
+  completed: number;
+  failed: number;
+  /** Empfohlenes Polling-Intervall (ms) – der Editor fragt nicht schneller. */
+  pollIntervalMs: number;
+}
+
+export interface RemoteSettings {
+  kind?: 'folder' | 'rclone';
+  /** Ordner (Drive-Sync/rclone-Mount) bzw. rclone-Remote-Pfad (`gdrive:airdox-stem-jobs`). */
+  root?: string;
+  pollIntervalMs?: number;
+  /** Kulanz, bevor ein job ohne Worker-Lebenszeichen als FAILED gilt (§21 E). */
+  workerLeaseMs?: number;
+  /** Absolute Obergrenze für einen Fern-Job (§21 E). */
+  jobTimeoutMs?: number;
+}
+
+export interface StartRemoteStemJobPayload {
+  /** Arbeitskopie (WAV) – wird hochgeladen, das Original bleibt unberührt. */
+  bytes?: Uint8Array;
+  /** Alternative: Pfad im Engine-Datenordner (dann wird eine Arbeitskopie gezogen). */
+  inputPath?: string;
+  trackName?: string;
+  profile?: QualityProfile;
+  modelId?: string;
+  family?: ModelFamily;
+  /** Rechenort-Wunsch des Workers (`auto` = GPU wenn möglich, sonst CPU). */
+  device?: StemComputeDevice;
+  mode?: StemValidationMode;
+}
+
+export interface RemoteServiceEvent {
+  type: 'progress' | 'completed' | 'failed' | 'cancelled' | 'transport';
+  job: RemoteStemJobView;
+}
+
+/** Der Teil des Remote-Pfads, der über IPC/HTTP läuft (Gruppierung, s. o.). */
+export interface StemRemoteApi {
+  remoteStatus(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  startRemoteStemJob(payload: StartRemoteStemJobPayload): Promise<StemBridgeResult<RemoteStemJobView>>;
+  listRemoteStemJobs(): Promise<StemBridgeResult<RemoteStemJobView[]>>;
+  /** Ein Poll-Zyklus (lädt fertige Ergebnisse automatisch herunter und importiert sie). */
+  pollRemoteStemJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  cancelRemoteStemJob(jobId: string, reason?: string): Promise<StemBridgeResult<{ accepted: boolean }>>;
+  /** Erneutes Anwenden des zuletzt gespeicherten Zustands (Editor-Neustart, §32). */
+  resumeRemoteStemJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  configureRemoteStemJobs(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
 }

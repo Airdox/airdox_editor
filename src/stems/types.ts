@@ -373,4 +373,14 @@ export interface SeparationJobSummary {
   validation?: QualityValidationReport;
   originalIntegrity: OriginalIntegrity;
   metadata: SeparationJobMetadata;
+  /**
+   * Rechengerät, das tatsächlich gerechnet hat (nach etwaigem Ausweichen auf
+   * CPU). Ohne dieses Feld wusste die UI nicht, ob DirectML gegriffen hat oder
+   * ob der Job im CPU-Fallback gelandet ist (§7, §13, §36).
+   */
+  device?: ComputeDevice;
+  /** True, wenn das gewünschte Gerät nicht nutzbar war und CPU gerechnet hat. */
+  cpuFallback?: boolean;
+  /** Menschlich lesbarer Grund des Ausweichens (z. B. DirectML-Treiberfehler). */
+  fallbackReason?: string;
 }
