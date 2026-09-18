@@ -32,12 +32,15 @@ import {
   type StemInstallProgressUpdate,
 } from '../../audio/stemEngineInstaller';
 import {
+  APP_PROJECTS_PRESETS,
+  STEM_DATA_PRESETS,
   DEFAULT_WORKSPACE_PATH_SETTINGS,
   loadWorkspacePathSettings,
   saveWorkspacePathSettings,
   type WorkspacePathSettings,
 } from '../../audio/stemArchitectures';
 import { Tooltip, HelpBadge } from '../Tooltip';
+import { DirectorySelector } from '../DirectorySelector';
 
 interface InitialSetupModalProps {
   isOpen: boolean;
@@ -177,77 +180,33 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
               </div>
               <HelpBadge
                 title="Speicherort-Verwaltung"
-                text="Legen Sie fest, wo Projektdateien, Exporte und die KI-Modelldateien abgelegt werden. Eine schnelle SSD ist für die KI-Modelle empfohlen."
+                text="Legen Sie fest, wo Projektdateien, Exporte und die KI-Modelldateien abgelegt werden. Wählen Sie einen Preset-Ordner aus dem Dropdown-Menü oder wählen Sie einen beliebigen Ordner über den Datei-Explorer."
               />
             </div>
 
             {/* Path 1: App & Projects */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-neutral-300 font-semibold text-[11px] flex items-center gap-1.5">
-                  <HardDrive size={12} className="text-neutral-400" />
-                  <span>Anwendungs- &amp; Projektverzeichnis:</span>
-                </label>
-                <div className="flex space-x-1 text-[9.5px]">
-                  <button
-                    onClick={() => setPaths((prev) => ({ ...prev, appProjectsPath: '~/airdox_projects' }))}
-                    className="px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#282e42] text-neutral-400 hover:text-white border border-[#292f44]"
-                  >
-                    Standard
-                  </button>
-                  <button
-                    onClick={() => setPaths((prev) => ({ ...prev, appProjectsPath: '~/Documents/airdox_SMART_Editor' }))}
-                    className="px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#282e42] text-neutral-400 hover:text-white border border-[#292f44]"
-                  >
-                    Dokumente
-                  </button>
-                </div>
-              </div>
-              <input
-                type="text"
-                value={paths.appProjectsPath}
-                onChange={(e) => setPaths((prev) => ({ ...prev, appProjectsPath: e.target.value }))}
-                className="w-full bg-[#0a0b10] border border-[#282d3e] focus:border-[#0088ff] rounded px-2.5 py-1.5 text-[11px] font-mono text-neutral-200 outline-none transition-colors"
-                placeholder="Pfad für Projekte und Exporte..."
-              />
-              <div className="text-[10px] text-neutral-500">
-                Hier werden bearbeitete Projekte (.airdox.json), Audioexporte (WAV, FLAC, MP3) und Aufnahmen gespeichert.
-              </div>
-            </div>
+            <DirectorySelector
+              label="Anwendungs- & Projektverzeichnis:"
+              value={paths.appProjectsPath}
+              onChange={(newPath) => setPaths((prev) => ({ ...prev, appProjectsPath: newPath }))}
+              presets={APP_PROJECTS_PRESETS}
+              dialogTitle="Projekt- & Anwendungsverzeichnis auswählen"
+              helperText="Hier werden bearbeitete Projekte (.airdox.json), Audioexporte (WAV, FLAC, MP3) und Aufnahmen gespeichert."
+              icon={<HardDrive size={12} className="text-[#0088ff]" />}
+              badgeText="Projekte"
+            />
 
             {/* Path 2: Stem Data & Models */}
-            <div className="space-y-1.5 pt-2 border-t border-[#1a1e2b]">
-              <div className="flex items-center justify-between">
-                <label className="text-neutral-300 font-semibold text-[11px] flex items-center gap-1.5">
-                  <Cpu size={12} className="text-[#00e5ff]" />
-                  <span>Stem-Daten- &amp; KI-Modellverzeichnis:</span>
-                </label>
-                <div className="flex space-x-1 text-[9.5px]">
-                  <button
-                    onClick={() => setPaths((prev) => ({ ...prev, stemDataPath: '%APPDATA%\\airdox_SMART_Editor\\stems' }))}
-                    className="px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#282e42] text-neutral-400 hover:text-white border border-[#292f44]"
-                  >
-                    AppData (Standard)
-                  </button>
-                  <button
-                    onClick={() => setPaths((prev) => ({ ...prev, stemDataPath: '~/airdox_stems' }))}
-                    className="px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#282e42] text-neutral-400 hover:text-white border border-[#292f44]"
-                  >
-                    Benutzerordner
-                  </button>
-                </div>
-              </div>
-              <input
-                type="text"
-                value={paths.stemDataPath}
-                onChange={(e) => setPaths((prev) => ({ ...prev, stemDataPath: e.target.value }))}
-                className="w-full bg-[#0a0b10] border border-[#282d3e] focus:border-[#0088ff] rounded px-2.5 py-1.5 text-[11px] font-mono text-neutral-200 outline-none transition-colors"
-                placeholder="Pfad für KI-Modelle und Runtime..."
-              />
-              <div className="text-[10px] text-neutral-500">
-                Speicherort für KI-Gewichte (BS-RoFormer ~503 MB, ONNX-Netze), Python Virtual Environment und Stem-Cache.
-              </div>
-            </div>
+            <DirectorySelector
+              label="Stem-Daten- & KI-Modellverzeichnis:"
+              value={paths.stemDataPath}
+              onChange={(newPath) => setPaths((prev) => ({ ...prev, stemDataPath: newPath }))}
+              presets={STEM_DATA_PRESETS}
+              dialogTitle="Stem- & KI-Modellverzeichnis auswählen"
+              helperText="Speicherort für KI-Gewichte (BS-RoFormer ~503 MB, ONNX-Netze), isoliertes Python-Environment und Stem-Cache."
+              icon={<Cpu size={12} className="text-[#00e5ff]" />}
+              badgeText="SSD empfohlen"
+            />
           </div>
 
           {/* Section 2: Automatische Vollinstallation */}

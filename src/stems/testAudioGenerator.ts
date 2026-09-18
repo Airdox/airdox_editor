@@ -42,11 +42,12 @@ export interface GeneratedTrack {
  * That would make the boundary click detector fire on the *material* instead of
  * on real chunk artefacts – and no real synthesiser produces it either.
  */
-export function bandLimitedSaw(freq: number, t: number, sampleRate: number, harmonics = 16): number {
+export function bandLimitedSaw(freq: number, t: number, sampleRate: number, harmonics = 8): number {
   const maxHarmonics = Math.max(1, Math.min(harmonics, Math.floor(sampleRate / (2 * freq))));
   let value = 0;
+  const basePhase = 2 * Math.PI * freq * t;
   for (let h = 1; h <= maxHarmonics; h++) {
-    value += (Math.sin(2 * Math.PI * freq * h * t) * (h % 2 === 0 ? -1 : 1)) / h;
+    value += (Math.sin(basePhase * h) * (h % 2 === 0 ? -1 : 1)) / h;
   }
   return value * (2 / Math.PI);
 }
@@ -98,7 +99,7 @@ export function addNoiseBurst(target: Float32Array, frames: number, sampleRate: 
 }
 
 export function addSupersaw(target: Float32Array, frames: number, sampleRate: number, freq: number, start: number, length: number, gain: number, width: number): void {
-  const voices = 7;
+  const voices = 5;
   for (let i = 0; i < length && start + i < frames; i++) {
     const t = i / sampleRate;
     const attack = Math.min(1, t / 0.02);
@@ -107,7 +108,7 @@ export function addSupersaw(target: Float32Array, frames: number, sampleRate: nu
     let right = 0;
     for (let v = 0; v < voices; v++) {
       const detune = 1 + (v - (voices - 1) / 2) * 0.0035;
-      const saw = bandLimitedSaw(freq * detune, t, sampleRate, 24);
+      const saw = bandLimitedSaw(freq * detune, t, sampleRate, 8);
       const pan = (v / (voices - 1)) * 2 - 1;
       left += saw * (1 - pan * width) * 0.5;
       right += saw * (1 + pan * width) * 0.5;

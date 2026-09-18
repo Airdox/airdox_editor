@@ -105,7 +105,7 @@ async function run() {
   console.log('  ✓ Pfade und Ersteinrichtungs-Status werden sauber serialisiert & deserialisiert.');
 
   // Test 4: Ungültige Werte fallen auf Defaults zurück
-  console.log('\n[ TEST 4 ] Ungültige Pfad-Daten');
+  console.log('\n[ TEST 4 ] Ungültige Pfad-Daten & Presets');
   const badStorage = fakeStorage({
     [WORKSPACE_PATHS_STORAGE_KEY]: 'invalid json',
   });
@@ -113,7 +113,18 @@ async function run() {
   assert.equal(fallback.setupCompleted, false);
   assert.equal(fallback.appProjectsPath, DEFAULT_WORKSPACE_PATH_SETTINGS.appProjectsPath);
   assert.equal(fallback.stemDataPath, DEFAULT_WORKSPACE_PATH_SETTINGS.stemDataPath);
-  console.log('  ✓ Resilienz gegen beschädigte localStorage-Einträge.');
+
+  // Test 5: Preset-Listen
+  const { APP_PROJECTS_PRESETS, STEM_DATA_PRESETS } = await import('../src/audio/stemArchitectures');
+  assert.ok(APP_PROJECTS_PRESETS.length >= 3, 'Mindestens 3 Projekt-Presets');
+  assert.ok(STEM_DATA_PRESETS.length >= 3, 'Mindestens 3 Stem-Daten-Presets');
+  for (const p of APP_PROJECTS_PRESETS) {
+    assert.ok(p.id && p.label && p.path, `Projekt-Preset ${p.id} hat alle Pflichtfelder`);
+  }
+  for (const p of STEM_DATA_PRESETS) {
+    assert.ok(p.id && p.label && p.path, `Stem-Preset ${p.id} hat alle Pflichtfelder`);
+  }
+  console.log('  ✓ Preset-Listen für Dropdown-Auswahl vollständig.');
 
   console.log('\n✅ Alle Ersteinrichtungs- und Benchmark-Tests erfolgreich bestanden!');
 }

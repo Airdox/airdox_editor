@@ -55,6 +55,7 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       } | null>;
+      chooseDirectory(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
       getStemEngineStatus(): Promise<{
         available: boolean;
         python: string | null;

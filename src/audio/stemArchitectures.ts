@@ -388,6 +388,20 @@ export interface WorkspacePathSettings {
   setupCompleted: boolean;
 }
 
+export const APP_PROJECTS_PRESETS = [
+  { id: 'default_projects', label: 'Standard-Projektordner', path: '~/airdox_projects', description: 'Direkt im Benutzerverzeichnis' },
+  { id: 'documents', label: 'Dokumente', path: '~/Documents/airdox_SMART_Editor', description: 'Im persönlichen Dokumentenordner' },
+  { id: 'music_projects', label: 'Musik-Verzeichnis', path: '~/Music/airdox_SMART_Editor', description: 'Im Musikordner' },
+  { id: 'desktop', label: 'Desktop', path: '~/Desktop/airdox_projects', description: 'Direkt auf dem Desktop' },
+];
+
+export const STEM_DATA_PRESETS = [
+  { id: 'appdata', label: 'AppData (Standard)', path: '%APPDATA%\\airdox_SMART_Editor\\stems', description: 'Standardmäßiger Speicherort für App-Daten' },
+  { id: 'user_stems', label: 'Benutzerordner', path: '~/airdox_stems', description: 'Eigener Ordner im Home-Verzeichnis' },
+  { id: 'local_cache', label: 'Cache-Verzeichnis', path: '~/.cache/airdox-stems', description: 'Standard Linux / macOS Cache' },
+  { id: 'fast_ssd', label: 'Schnelle SSD (Zweites Laufwerk)', path: 'D:\\airdox_stems', description: 'Empfohlen für blitzschnelle Ladezeiten' },
+];
+
 export const DEFAULT_WORKSPACE_PATH_SETTINGS: WorkspacePathSettings = {
   appProjectsPath: typeof process !== 'undefined' && process.env?.USERPROFILE
     ? `${process.env.USERPROFILE}\\airdox_SMART_Editor\\Projects`

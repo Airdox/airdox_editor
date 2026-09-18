@@ -122,12 +122,20 @@ export function parseWavLayout(bytes: Uint8Array): WavLayout {
 export function decodeWav(bytes: Uint8Array): DecodedAudio {
   const layout = parseWavLayout(bytes);
   const { channels, sampleRate, bitsPerSample, formatTag, blockAlign, dataOffset, dataSize } = layout;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const frames = Math.floor(dataSize / Math.max(1, blockAlign));
   const data = new Float32Array(frames * channels);
   const bytesPerSample = bitsPerSample / 8;
   const isFloat = formatTag === 3 || (formatTag === 0xfffe && bitsPerSample === 32);
 
+  // Fast path for 32-bit IEEE float WAV
+  if (isFloat && bitsPerSample === 32 && (bytes.byteOffset + dataOffset) % 4 === 0) {
+    const floatView = new Float32Array(bytes.buffer, bytes.byteOffset + dataOffset, frames * channels);
+    data.set(floatView);
+    const encoding = 'float32';
+    return { sampleRate, channels, frames, data, sourceFormat: 'wav', encoding };
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let read = 0;
   for (let f = 0; f < frames; f++) {
     for (let c = 0; c < channels; c++) {

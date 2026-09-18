@@ -30,6 +30,8 @@ import {
 } from 'lucide-react';
 import { WaveformMode } from '../../types/rekordbox';
 import {
+  APP_PROJECTS_PRESETS,
+  STEM_DATA_PRESETS,
   STEM_VALIDATION_MODES,
   deviceChoices,
   modeLabel,
@@ -39,6 +41,7 @@ import {
 } from '../../audio/stemArchitectures';
 import type { StemComputeDevice, StemValidationMode } from '../../stems/transportTypes';
 import { Tooltip, HelpBadge, GLOSSARY } from '../Tooltip';
+import { DirectorySelector } from '../DirectorySelector';
 
 export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
 export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3';
@@ -478,42 +481,40 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
               </h3>
               <button
                 onClick={() => setShowPathSettings(!showPathSettings)}
-                className="text-[10px] text-neutral-400 hover:text-white flex items-center space-x-1"
+                className="text-[10px] text-neutral-400 hover:text-white flex items-center space-x-1 cursor-pointer"
               >
-                <span>{showPathSettings ? 'Einklappen' : 'Pfade anzeigen'}</span>
+                <span>{showPathSettings ? 'Einklappen' : 'Pfade anpassen'}</span>
                 {showPathSettings ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
               </button>
             </div>
 
             {showPathSettings && workspacePaths && onSetWorkspacePaths && (
               <div className="bg-[#161820] border border-[#22242d] rounded-xs p-3 space-y-3 animate-in fade-in duration-150">
-                <div className="space-y-1">
-                  <label className="text-[10.5px] font-semibold text-neutral-300">
-                    Anwendungs- &amp; Projektverzeichnis:
-                  </label>
-                  <input
-                    type="text"
-                    value={workspacePaths.appProjectsPath}
-                    onChange={(e) =>
-                      onSetWorkspacePaths({ ...workspacePaths, appProjectsPath: e.target.value })
-                    }
-                    className="w-full bg-[#0a0b10] border border-[#282d3e] focus:border-[#0088ff] rounded px-2 py-1 font-mono text-[10.5px] text-neutral-200"
-                  />
-                </div>
+                <DirectorySelector
+                  label="Anwendungs- & Projektverzeichnis:"
+                  value={workspacePaths.appProjectsPath}
+                  onChange={(newPath) =>
+                    onSetWorkspacePaths({ ...workspacePaths, appProjectsPath: newPath })
+                  }
+                  presets={APP_PROJECTS_PRESETS}
+                  dialogTitle="Projektverzeichnis auswählen"
+                  helperText="Hier werden gespeicherte Projekte, Audioexporte und Aufnahmen abgelegt."
+                  icon={<HardDrive size={12} className="text-[#0088ff]" />}
+                  badgeText="Projekte"
+                />
 
-                <div className="space-y-1">
-                  <label className="text-[10.5px] font-semibold text-neutral-300">
-                    Stem-Modelle &amp; KI-Datenverzeichnis:
-                  </label>
-                  <input
-                    type="text"
-                    value={workspacePaths.stemDataPath}
-                    onChange={(e) =>
-                      onSetWorkspacePaths({ ...workspacePaths, stemDataPath: e.target.value })
-                    }
-                    className="w-full bg-[#0a0b10] border border-[#282d3e] focus:border-[#0088ff] rounded px-2 py-1 font-mono text-[10.5px] text-neutral-200"
-                  />
-                </div>
+                <DirectorySelector
+                  label="Stem-Modelle & KI-Datenverzeichnis:"
+                  value={workspacePaths.stemDataPath}
+                  onChange={(newPath) =>
+                    onSetWorkspacePaths({ ...workspacePaths, stemDataPath: newPath })
+                  }
+                  presets={STEM_DATA_PRESETS}
+                  dialogTitle="Stem- & KI-Modellverzeichnis auswählen"
+                  helperText="Speicherort für Checkpoints, KI-Gewichte und Caches."
+                  icon={<Cpu size={12} className="text-[#00e5ff]" />}
+                  badgeText="SSD empfohlen"
+                />
               </div>
             )}
           </div>

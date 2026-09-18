@@ -450,6 +450,19 @@ ipcMain.handle('rekordbox:choose-analysis-file', async () => {
   return { path: result.filePaths[0], accessMode: 'READ_ONLY' };
 });
 
+ipcMain.handle('rekordbox:choose-directory', async (_event, options) => {
+  const dialogOptions = {
+    title: options?.title || 'Ordner im Explorer auswählen',
+    defaultPath: options?.defaultPath,
+    properties: ['openDirectory', 'createDirectory'],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Rekordbox-Datenbank auswählen (nur lesend)',

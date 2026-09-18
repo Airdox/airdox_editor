@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
+  chooseDirectory: (options) => ipcRenderer.invoke('rekordbox:choose-directory', options),
   // Preflight and inference are separate so missing/unsupported Python is known
   // before a large audio buffer is handed to the model process.
   // Legacy Demucs path – now optional, BS-RoFormer is primary per §26

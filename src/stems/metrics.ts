@@ -94,8 +94,9 @@ export function siSdr(reference: Float64Array, estimate: Float64Array): number {
  * ground truth).
  */
 export function interferenceDb(target: Float64Array, estimate: Float64Array, interferers: Float64Array[]): number {
-  const n = Math.min(target.length, estimate.length);
-  if (n === 0 || interferers.length === 0) return Number.POSITIVE_INFINITY;
+  const totalN = Math.min(target.length, estimate.length);
+  if (totalN === 0 || interferers.length === 0) return Number.POSITIVE_INFINITY;
+  const n = Math.min(totalN, 131072);
   // Least squares projection of `estimate` onto the space spanned by
   // [target, interferer_1, interferer_2, ...] using a simple Gram-Schmidt so
   // we do not need a general purpose linear algebra dependency.
@@ -130,7 +131,7 @@ export function interferenceDb(target: Float64Array, estimate: Float64Array, int
   // basis vector (which spans the same 1-D line as `target` since it is the
   // first vector fed into Gram-Schmidt).
   let targetContribution = 0;
-  {
+  if (ortho.length > 0) {
     let dot = 0;
     let norm = 0;
     for (let i = 0; i < n; i++) {
@@ -186,13 +187,14 @@ export interface StereoMetrics {
 
 export function stereoMetricsOf(data: Float32Array, channels: number, frames: number): StereoMetrics {
   const stats = analyzeAudio(data, channels, frames);
-  const planar = toPlanar(data, channels, frames);
   let leftEnergy = 0;
   let rightEnergy = 0;
   if (channels === 2) {
     for (let f = 0; f < frames; f++) {
-      leftEnergy += planar[0][f] ** 2;
-      rightEnergy += planar[1][f] ** 2;
+      const l = data[f * 2] || 0;
+      const r = data[f * 2 + 1] || 0;
+      leftEnergy += l * l;
+      rightEnergy += r * r;
     }
   }
   return {
@@ -262,7 +264,9 @@ export function compareTransients(
     let bestDistance = tolerance + 1;
     for (let i = 0; i < estOnsets.length; i++) {
       if (used[i]) continue;
-      const distance = Math.abs(estOnsets[i].frame - ref.frame);
+      const frameDiff = estOnsets[i].frame - ref.frame;
+      if (frameDiff > tolerance) break;
+      const distance = Math.abs(frameDiff);
       if (distance < bestDistance) {
         bestDistance = distance;
         bestIndex = i;

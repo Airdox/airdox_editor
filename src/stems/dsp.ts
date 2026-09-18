@@ -76,12 +76,15 @@ export function magnitudeSpectrogram(signal: Float32Array | Float64Array, option
   const fftSize = nextPow2(frameSize);
   const window = hannWindow(frameSize);
   const frames: Float64Array[] = [];
+  const re = new Float64Array(fftSize);
+  const im = new Float64Array(fftSize);
+  const bins = fftSize / 2 + 1;
+
   for (let start = 0; start + frameSize <= signal.length; start += hopSize) {
-    const re = new Float64Array(fftSize);
-    const im = new Float64Array(fftSize);
+    re.fill(0);
+    im.fill(0);
     for (let i = 0; i < frameSize; i++) re[i] = signal[start + i] * window[i];
     fftInPlace(re, im);
-    const bins = fftSize / 2 + 1;
     const mag = new Float64Array(bins);
     for (let b = 0; b < bins; b++) mag[b] = Math.hypot(re[b], im[b]);
     frames.push(mag);
@@ -98,7 +101,7 @@ export function magnitudeSpectrogram(signal: Float32Array | Float64Array, option
 export function logSpectralDistanceDb(
   reference: Float32Array | Float64Array,
   estimate: Float32Array | Float64Array,
-  options: StftOptions = { frameSize: 2048, hopSize: 1024 }
+  options: StftOptions = { frameSize: 1024, hopSize: 2048 }
 ): number {
   const refFrames = magnitudeSpectrogram(reference, options);
   const estFrames = magnitudeSpectrogram(estimate, options);
@@ -180,14 +183,18 @@ export function findBestLag(
 ): { lag: number; correlation: number } {
   let bestLag = 0;
   let bestScore = -Infinity;
-  const n = Math.min(reference.length, signal.length);
+  const totalN = Math.min(reference.length, signal.length);
+  // Using a representative segment of up to 65536 samples avoids O(N*L) explosion on long files
+  const n = Math.min(totalN, 65536);
   let refEnergy = 0;
   for (let i = 0; i < n; i++) refEnergy += reference[i] * reference[i];
   for (let lag = -maxLag; lag <= maxLag; lag++) {
     let dot = 0;
     let sigEnergy = 0;
     let count = 0;
-    for (let i = Math.max(0, -lag); i < Math.min(n, n - lag); i++) {
+    const start = Math.max(0, -lag);
+    const end = Math.min(n, n - lag);
+    for (let i = start; i < end; i++) {
       const r = reference[i];
       const s = signal[i + lag];
       dot += r * s;
