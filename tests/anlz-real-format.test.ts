@@ -12,7 +12,7 @@ import {
   generateRealAnlzExtFixture,
   generateSyntheticAnlzBuffer,
   SCENARIO_TECHNO_XML,
-} from './fixtures/testDatasets';
+} from '../src/rekordbox/testDatasets';
 import {
   applyAnlzExtractionToTrack,
   extractTrackFromRekordboxXml,

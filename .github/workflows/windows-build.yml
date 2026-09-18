@@ -1,34 +1,17 @@
 name: Windows-Build
 
-# Baut auf JEDEM Push (alle Branches + Tags) automatisch die Windows-App
-# (NSIS-Installer + Portable). So entsteht zu jedem Commit ein frisches,
-# herunterladbares Build-Artefakt.
-#
-# Robustheit: Auch Commits ohne (oder mit veralteter) package-lock.json
-# werden gebaut – der Workflow schaltet dann automatisch auf Caching aus
-# und 'npm install' um, statt hart abzubrechen.
-#
-# Qualitäts-Gates: 'TypeScript-Prüfung' und 'Waveform-Gates' laufen bei
-# jedem Build mit und bleiben sichtbar, blockieren den WIN-Build aber
-# vorerst nicht (continue-on-error), bis der Baum wieder vollständig
-# grün ist. Dann das continue-on-error entfernen und sie wieder
-# blockierend machen.
 on:
   push:
-    branches: ['**']   # jeder Push auf irgendeinen Branch baut die WIN-App
-    tags: ['v*']       # zusätzlich: Release-Build bei Versionstag (z. B. v0.4.13)
-  pull_request:        # jeder PR (alle Ziel-Branches) wird ebenfalls gebaut
-  workflow_dispatch:   # manuell auf Knopfdruck
+    branches: ['main', 'release/**', 'arena/**']
+    tags: ['v*']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:      # manuell auf Knopfdruck
   schedule:
-    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE (Nightly)
-
-# Schnelle Folge-Pushes: nur der neueste Lauf pro Ref baut.
-concurrency:
-  group: windows-build-${{ github.ref }}
-  cancel-in-progress: true
+    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
 
 permissions:
-  contents: write         # wird für das Erstellen/Aktualisieren von GitHub-Releases benötigt
+  contents: write         # wird für das Erstellen von GitHub-Releases benötigt
 
 jobs:
   build:
@@ -36,63 +19,60 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
-      # setup-node mit npm-Cache bricht hart ab, wenn die Lock-Datei im
-      # Commit fehlt – daher vorher prüfen.
-      - name: Lock-Datei prüfen
-        id: lock
-        shell: bash
-        run: |
-          if [ -f package-lock.json ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Keine package-lock.json in diesem Commit – baue ohne npm-Cache und mit 'npm install'."
-          fi
-
-      - name: Node.js aufsetzen (mit npm-Cache)
-        if: steps.lock.outputs.exists == 'true'
-        uses: actions/setup-node@v7
+      - name: Node.js aufsetzen
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      - name: Node.js aufsetzen (ohne Cache)
-        if: steps.lock.outputs.exists != 'true'
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
+      # package.json VOR der Installation prüfen: eine doppelt vorhandene
+      # „test“-Zeile (Kollisionsklasse aus parallelen Branches) macht das JSON
+      # ungültig, und `npm ci` scheitert dann mit einer kryptischen Meldung,
+      # bevor irgendein Build-Schritt läuft. Diese Prüfung nennt die Datei.
+      - name: Manifest prüfen (package.json)
+        run: npm run test:package
 
-      # 'npm ci' scheitert, wenn Lock- und package.json nicht synchron sind
-      # (kommt bei parallelen Branches vor) – 'npm install' löst dann auf.
+      # Das Colab-Notebook wird aus colab/*.md gebaut. Würde jemand nur die
+      # .ipynb anfassen, misst das Notebook irgendwann etwas anderes als das
+      # Repo dokumentiert – dieser Schritt hält beide Dateien zusammen.
+      - name: Notebook-Manifest prüfen (colab/*.ipynb aus colab/*.md)
+        run: npm run stems:gate:notebook -- --check
+
       - name: Abhängigkeiten installieren
-        shell: bash
-        run: |
-          if [ -f package-lock.json ] && npm ci --no-audit --no-fund; then
-            echo "npm ci erfolgreich (Lock-Datei synchron)."
-          else
-            echo "::warning::'npm ci' nicht möglich (Lock fehlt oder ist veraltet) – falle zurück auf 'npm install'."
-            rm -rf node_modules
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci
 
-      - name: Electron-Native-Binding für die Electron-ABI bauen
-        shell: bash
-        run: npm run rebuild:electron
-
-      # Informativ (siehe Kopfkommentar): läuft immer, blockiert nicht.
-      - name: TypeScript-Prüfung (informativ)
-        continue-on-error: true
+      - name: TypeScript-Prüfung
         run: npm run lint
+
+      # Die Stem-Engine ist reines TypeScript und läuft ohne Python: Registry-,
+      # Backend-Vertrags-, Technical-Gate- und Job-Service-Suite fangen
+      # Engine-Regressionen ab, bevor gebaut wird. Tests mit requirement-
+      # Direktive (@requires: python/torch/model) werden sauber übersprungen.
+      - name: Stem-Engine-Prüfung (Registry, Backend-Vertrag, Technical Gate, Job-Service)
+        run: npm run test:stems
+
+      # Ferndiagnose: die Job-Logs liegen auf externem Blob-Storage, das nicht
+      # von jeder Umgebung erreichbar ist. Der Runner schreibt die vollständige
+      # Ausgabe fehlender Tests in test-runner-failure.txt → hier als Artefakt.
+      - name: Test-Ausgabe bei Fehlschlag anhängen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-runner-failure-stems
+          path: test-runner-failure.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Renderer bauen (Vite)
         run: npm run build
 
-      # Informativ (siehe Kopfkommentar): läuft immer, blockiert nicht.
-      - name: Waveform-Gates / Quellenherkunft verifizieren (informativ)
-        continue-on-error: true
-        run: npm run verify:waveform
+      # Volle Suite nur im Nachtlauf/manuell: sie enthält lang laufende
+      # Audio- und Import-Tests, die pro PR den Windows-Runner aufhalten.
+      - name: Komplette Test-Suite (Nachtlauf / manueller Lauf)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm test
 
       - name: Electron Windows-Pakete (NSIS + Portable)
         run: npx electron-builder --win nsis --win portable --publish never
@@ -101,43 +81,18 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build-Ausgabe prüfen
-        if: always()
-        shell: bash
-        run: ls -la release/ || echo "kein release-Ordner vorhanden"
-
       - name: Artefakte anhängen (immer)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: airdox-smart-editor-windows
           path: release/*.exe
           retention-days: 30
-          if-no-files-found: warn
-          compression-level: 0  # .exe sind bereits komprimiert – spart Upload-Zeit
 
       - name: GitHub-Release bei Tag
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           name: airdox_SMART_Editor ${{ github.ref_name }}
           files: release/*.exe
           generate_release_notes: true
-
-      # Laufender Dev-Build: Jeder Push auf main aktualisiert das
-      # "latest"-Prerelease, sodass es unter Releases immer die neueste
-      # WIN-App als Download gibt – ganz ohne Tag.
-      - name: Rolling Prerelease „latest" aktualisieren (main)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: latest
-          name: Latest dev build (main)
-          prerelease: true
-          files: release/*.exe
-          body: |
-            Automatischer Dev-Build vom `main`-Branch – immer die neueste WIN-App.
-            Offizielle Versionen stehen unter den getaggten Releases (v*).
-
-            - Commit: ${{ github.sha }}
-            - Build: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

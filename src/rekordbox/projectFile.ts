@@ -17,6 +17,7 @@
  */
 
 import {
+  AnalysisFileReference,
   CuePoint,
   DataOrigin,
   EditSegment,
@@ -27,6 +28,7 @@ import {
   SelectionRange,
   TrackModel,
 } from '../types/rekordbox';
+import { logger } from '../utils/logger';
 
 export const PROJECT_FORMAT = 'airdox-project';
 export const PROJECT_VERSION = 1;
@@ -121,19 +123,6 @@ export interface SerializedBeatGrid {
   firstBeat: number;
   bpm: number;
   meter: number;
-  /** Stored grid provenance; adoptSerializedGrid falls back to the track origin when absent. */
-  origin?: DataOrigin;
-  /** Verbatim beat nodes (PQTZ/dense grid); absent in older project files. */
-  beats?: SerializedBeatNode[];
-}
-
-export interface SerializedBeatNode {
-  time: number;
-  isBarStart: boolean;
-  barNumber: number;
-  beatInBar: number;
-  /** Uniform tail continuation appended after the last verbatim beat. */
-  tailExtended?: true;
 }
 
 export interface SerializedSegment {
@@ -146,6 +135,11 @@ export interface SerializedSegment {
   projectDuration: number;
   clipId?: string;
   gain: number;
+  /** Read-only native source coordinates for waveform reconstruction. */
+  analysisSource?: AnalysisFileReference;
+  analysisSourceTrackId?: string;
+  analysisSourceStart?: number;
+  analysisSourceEnd?: number;
   /** Inserted/replaced/overdubbed clip material, embedded as base64 WAV. */
   clipWavBase64?: string;
 }
@@ -178,6 +172,8 @@ export interface SerializedTrack {
   phrases?: PhraseSection[];
   rawXmlAttributes?: Record<string, string>;
   originalMedia?: OriginalMediaReference;
+  /** Read-only native ANLZ pointer; no waveform/audio bytes are duplicated. */
+  analysisSource?: AnalysisFileReference;
   workingSegments: SerializedSegment[];
   /** Original audio for tracks without a re-openable source path (local imports). */
   originalAudioBase64?: string;
@@ -197,6 +193,12 @@ export interface SerializedPaletteClip {
   key: string;
   color: string;
   miniPeaks?: number[];
+  /** Relative native/source beat positions (small metadata, no audio data). */
+  beatOffsets?: number[];
+  analysisSource?: AnalysisFileReference;
+  analysisSourceTrackId?: string;
+  analysisSourceStart?: number;
+  analysisSourceEnd?: number;
   origin: DataOrigin;
   clipWavBase64?: string;
 }
@@ -232,11 +234,24 @@ function serializeSegment(segment: EditSegment): SerializedSegment {
     projectDuration: segment.projectDuration,
     clipId: segment.clipId,
     gain: segment.gain ?? 1.0,
+    analysisSource: segment.analysisSource,
+    analysisSourceTrackId: segment.analysisSourceTrackId,
+    analysisSourceStart: segment.analysisSourceStart,
+    analysisSourceEnd: segment.analysisSourceEnd,
   };
   if (segment.clipBuffer) {
     out.clipWavBase64 = audioBufferToWavBase64(segment.clipBuffer);
   }
   return out;
+}
+
+function hasReopenableSourcePath(source: OriginalMediaReference | undefined): boolean {
+  const candidate = source?.resolvedPath || source?.location || '';
+  // Browser File objects intentionally expose only a basename. Treating that
+  // as a desktop path made saved local projects impossible to reopen because
+  // their original PCM was omitted. Only an absolute Windows/POSIX/file URL is
+  // genuinely re-openable by the desktop bridge.
+  return /^(?:[a-z]:[\\/]|\/|file:)/i.test(candidate);
 }
 
 function serializeTrack(track: TrackModel): SerializedTrack {
@@ -266,22 +281,13 @@ function serializeTrack(track: TrackModel): SerializedTrack {
       firstBeat: track.beatGrid?.firstBeat ?? 0.0,
       bpm: track.beatGrid?.bpm ?? track.bpm,
       meter: track.beatGrid?.meter ?? 4,
-      // Dense grids round-trip verbatim: node times and the tail flag survive
-      // save/load; older readers ignore the extra fields.
-      origin: track.beatGrid?.origin,
-      beats: (track.beatGrid?.beats ?? []).map((node) => ({
-        time: node.time,
-        isBarStart: node.isBarStart,
-        barNumber: node.barNumber,
-        beatInBar: node.beatInBar,
-        ...(node.tailExtended === true ? { tailExtended: true as const } : {}),
-      })),
     },
     cues: track.cues ?? [],
     loops: track.loops ?? [],
     phrases: track.phrases,
     rawXmlAttributes: track.rawXmlAttributes,
     originalMedia: track.originalMedia,
+    analysisSource: track.analysisSource,
     workingSegments: (track.workingSegments ?? []).map(serializeSegment),
   };
 
@@ -289,7 +295,7 @@ function serializeTrack(track: TrackModel): SerializedTrack {
   // locally imported file) keeps its original audio embedded so the project
   // stays fully reconstructable. Rekordbox-sourced tracks reference their
   // read-only location instead and are never duplicated.
-  const hasSourcePath = Boolean(track.originalMedia?.location);
+  const hasSourcePath = hasReopenableSourcePath(track.originalMedia);
   if (track.audioBuffer && !hasSourcePath) {
     out.originalAudioBase64 = audioBufferToWavBase64(track.audioBuffer);
   }
@@ -312,6 +318,11 @@ function serializeClip(clip: PaletteClip): SerializedPaletteClip {
     key: clip.key,
     color: clip.color,
     miniPeaks: clip.miniPeaks,
+    beatOffsets: clip.beatOffsets,
+    analysisSource: clip.analysisSource,
+    analysisSourceTrackId: clip.analysisSourceTrackId,
+    analysisSourceStart: clip.analysisSourceStart,
+    analysisSourceEnd: clip.analysisSourceEnd,
     origin: clip.origin,
   };
   if (clip.audioBuffer) {
@@ -334,7 +345,14 @@ export function serializeProject(snapshot: ProjectSnapshot): string {
     tracks: snapshot.tracks.map(serializeTrack),
     paletteClips: snapshot.paletteClips.map(serializeClip),
   };
-  return JSON.stringify(doc, null, 2);
+  const json = JSON.stringify(doc, null, 2);
+  logger.info('PROJECT', `Projekt serialisiert: "${snapshot.projectName}" (${(json.length / 1024).toFixed(1)} KB, ${doc.tracks.length} Track(s), ${doc.paletteClips.length} Clip(s))`, {
+    projectName: snapshot.projectName,
+    tracks: doc.tracks.length,
+    paletteClips: doc.paletteClips.length,
+    bytes: json.length,
+  });
+  return json;
 }
 
 /**
@@ -345,7 +363,8 @@ export function deserializeProject(json: string): SerializedProjectDocument {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
-  } catch {
+  } catch (err) {
+    logger.error('PROJECT', `Projektdatei ist kein gültiges JSON: ${err instanceof Error ? err.message : String(err)}`);
     throw new Error('Die Projektdatei ist kein gültiges JSON-Dokument.');
   }
 
@@ -362,7 +381,7 @@ export function deserializeProject(json: string): SerializedProjectDocument {
     throw new Error('Die Projektdatei enthält keine Track-Liste.');
   }
 
-  return {
+  const result: SerializedProjectDocument = {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
     savedAt: typeof doc.savedAt === 'string' ? doc.savedAt : new Date().toISOString(),
@@ -372,4 +391,6 @@ export function deserializeProject(json: string): SerializedProjectDocument {
     tracks: doc.tracks as SerializedTrack[],
     paletteClips: (doc.paletteClips as SerializedPaletteClip[] | undefined) ?? [],
   };
+  logger.info('PROJECT', `Projektdatei deserialisiert: "${result.projectName}" v${result.version} (${result.tracks.length} Track(s), ${result.paletteClips.length} Clip(s))`);
+  return result;
 }

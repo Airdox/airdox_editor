@@ -1,32 +1,38 @@
 {
   "name": "airdox_SMART_Editor",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.4.2",
   "description": "airdox_SMART_Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
   "author": "Airdox",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite",
-    "build": "npm run build:stems && vite build",
-    "start": "npm run rebuild:electron && electron .",
-    "desktop": "npm run rebuild:electron && npm run build && electron .",
-    "package:win": "npm run rebuild:electron && npm run build && electron-builder --win",
-    "package:win:nsis": "npm run rebuild:electron && npm run build && electron-builder --win nsis",
-    "package:win:portable": "npm run rebuild:electron && npm run build && electron-builder --win portable",
+    "dev": "tsx server.ts",
+    "build": "vite build && npm run build:stems-bridge && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:stems-bridge": "esbuild src/stems/nodeBridge.ts --bundle --platform=node --format=cjs --outfile=dist/stems/node-bridge.cjs",
+    "start": "node dist/server.cjs",
+    "desktop": "npm run build && electron .",
+    "package:win": "npm run build && electron-builder --win",
+    "package:win:nsis": "npm run build && electron-builder --win nsis",
+    "package:win:portable": "npm run build && electron-builder --win portable",
     "preview": "vite preview",
-    "clean": "rm -rf dist release",
+    "stems:setup": "bash scripts/setup-stem-model.sh",
+    "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
+    "stems:gate:archive": "node scripts/build-stem-gate-tarball.mjs",
+    "stems:gate:notebook": "node scripts/md-to-notebook.mjs",
+    "test:stems": "node scripts/run-tests.mjs --group stems",
+    "test:stems:live": "node scripts/run-tests.mjs --group stems-live",
+    "test:stems:release": "node scripts/run-tests.mjs --group stems-release --fail-on-skip",
+    "test:stems:gate": "node scripts/run-tests.mjs --only stem-isolation-gate-live --fail-on-skip --set-env AIRODOX_STEM_ALLOW_QUALITY_RUN=1",
+    "test:stems:gate:strict": "node scripts/run-tests.mjs --only stem-isolation-gate-live --fail-on-skip --set-env AIRODOX_STEM_ALLOW_QUALITY_RUN=1 --set-env AIRODOX_STEM_GATE_FAIL_ON_QUALITY=1",
+    "test:stems:all": "node scripts/run-tests.mjs --filter stem-separation- --filter stem-isolation-",
+    "stems:setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup-stem-model.ps1",
+    "test:stems:real": "node scripts/run-tests.mjs --filter stem-real-audio --fail-on-skip",
+    "test:package": "node -e \"JSON.parse(require('node:fs').readFileSync('package.json','utf8')); console.log('package.json: gültiges JSON')\"",
+    "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "verify:waveform": "node scripts/waveform-gates.mjs",
-"test": "tsx tests/analysis-resolver.test.ts && tsx tests/anlz-ext-merge.test.ts && tsx tests/anlz-real-format.test.ts && tsx tests/deck-waveform-source.test.ts && tsx tests/import-simulation.test.ts && tsx tests/large-xml-import.test.ts && tsx tests/rekordbox-db-import.test.ts && tsx tests/project-file.test.ts && tsx tests/pitch-tempo.test.ts && tsx tests/track-guards.test.ts && tsx tests/waveform-variants.test.ts && tsx tests/pqtz-strict.test.ts && tsx tests/renderer-original-data.test.ts && tsx tests/xml-exclusive-import.test.ts && node tests/anlz-ppth-scan.test.mjs && node tests/db-reader-keys.test.mjs && node tests/path-guard.test.mjs && node tests/log-writer.test.mjs && npm run test:masterdb && npm run test:stems",
-    "test:stems": "tsx tests/stem-isolation-gate.test.ts && tsx tests/stem-desktop-backend.test.ts",
-    "test:stems:live": "tsx tests/stem-separation-bsroformer-live.test.ts",
-    "test:stems:all": "npm run test:stems && npm run test:stems:live",
-    "build:stems": "esbuild src/stems/desktopEntry.ts --bundle --platform=node --format=cjs --target=node20 --external:electron --outfile=electron/stemsEngine.cjs",
-    "stems:setup": "bash scripts/setup-bsroformer-model.sh",
-    "test:masterdb": "node tests/master-db-gate.test.mjs && tsx tests/rekordbox-waveform-pipeline.test.ts",
-    "test:masterdb:real": "node scripts/sqlcipher-native-gate.mjs"
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -39,8 +45,7 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "three": "^0.186.0",
-    "vite": "^6.2.3",
-    "wavesurfer.js": "^7.12.12"
+    "vite": "^6.2.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",
@@ -68,7 +73,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "src/stems/modelCatalog.json"
     ],
     "directories": {
       "output": "release"

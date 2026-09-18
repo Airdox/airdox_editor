@@ -7,6 +7,7 @@
 
 import { TrackModel, PhraseSection, DataOrigin, CuePoint } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
+import { logger } from '../utils/logger';
 
 export type MixInType =
   | 'PRIMARY_BLEND'      // Optimal standard 16-32 bar mix-in (kicks lock in, low clash)
@@ -158,7 +159,7 @@ export function analyzeTrackForMixIn(track: TrackModel): MixInAnalysisReport {
     try {
       analysis = analyzeAudioBuffer(track.audioBuffer);
     } catch (err) {
-      console.warn('[MixAnalysis] AudioBuffer analysis failed:', err);
+      logger.warn('WAVEFORM', `[MixAnalysis] AudioBuffer-Analyse fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
     }
   }
 

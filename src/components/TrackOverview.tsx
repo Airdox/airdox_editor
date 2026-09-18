@@ -7,7 +7,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
-import { selectTrackWaveform, waveformMissingNotice } from '../waveform/renderModel';
+import { spectralRgb } from '../waveform/spectralColor';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -57,11 +57,7 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
       return;
     }
 
-    // Genuine ANLZ variants only: the overview always renders the full track,
-    // so the coarsest variant that resolves the canvas width wins. Tracks
-    // without a Rekordbox waveform get the honest empty state — never a
-    // synthesized contour.
-    const analysis = selectTrackWaveform(track, track.duration, width);
+    const analysis = track.analysis;
     const duration = Math.max(1, track.duration);
 
     const targetCols = width;
@@ -93,35 +89,22 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
         const mid = count > 0 ? sumMid / count : 0;
         const high = count > 0 ? sumHigh / count : 0;
 
-        const barH = Math.max(2, maxPeak * (height - 4));
+        // Do not turn a zero-energy (CLEAR/silence) bucket into a cosmetic
+        // waveform column. The neutral baseline above remains visible instead.
+        if (maxPeak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
+        const barH = maxPeak * (height - 4);
         const yTop = (height - barH) / 2;
 
         // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs
-        const r = Math.min(255, Math.floor(low * 255 + mid * 70));
-        const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-        const bCol = Math.min(255, Math.floor(high * 255 + low * 30));
-
-        ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+        // Red = Bass, Green = Mids, Blue/Cyan = Highs — shared helper keeps
+        // the overview identical in hue to the detail waveform below it.
+        ctx.fillStyle = spectralRgb(low, mid, high);
         ctx.fillRect(col, yTop, 1, barH);
       }
     } else {
-      // Honest empty state: a flat baseline plus the transparent missing
-      // waveform notice (no invented preview contour).
-      const notice = waveformMissingNotice(track);
-      ctx.strokeStyle = '#2a2d38';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(0, height / 2);
-      ctx.lineTo(width, height / 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#5b6270';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(notice.title, width / 2, height / 2 - 4);
-      ctx.textAlign = 'left';
+      // Intentionally leave the neutral baseline visible. A waveform must come
+      // from ANLZ or an explicitly labeled local analysis, never from a visual
+      // BPM/template approximation.
     }
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview

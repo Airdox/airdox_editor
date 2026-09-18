@@ -17,6 +17,7 @@ import {
   WaveformMode,
   SelectionRange,
 } from '../types/rekordbox';
+import { writePaletteClipDrag } from '../utils/paletteDrag';
 import {
   Play,
   Square,
@@ -38,6 +39,7 @@ import {
 } from 'lucide-react';
 import { audioEngine } from '../audio/audioEngine';
 import { calculateHarmonicPitchShift } from '../audio/pitchTempoEngine';
+import { ClipWaveform, drawDetailedClipWaveform } from './ClipWaveform';
 
 interface ClipDeckViewProps {
   clips: PaletteClip[];
@@ -180,16 +182,20 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
     }
 
     const duration = activeClip.duration;
-    const buffer = activeClip.audioBuffer;
-    const chData = buffer.getChannelData(0);
 
     const visibleDuration = duration / zoomLevel;
     const visibleStart = Math.max(0, Math.min(currentTime - visibleDuration * 0.4, duration - visibleDuration));
 
     const timeToX = (t: number) => ((t - visibleStart) / visibleDuration) * width;
-    const xToTime = (x: number) => visibleStart + (x / width) * visibleDuration;
 
-    // 1. Draw Beatgrid Lines
+    // 1. Detailed waveform — identical visual language to Deck A and the
+    //    palette tiles (dense per-column analysis in BLUE / RGB / 3BAND).
+    drawDetailedClipWaveform(canvas, activeClip, waveformMode, false, {
+      start: visibleStart,
+      end: visibleStart + visibleDuration,
+    });
+
+    // 2. Beatgrid overlay on top of the waveform (like DetailWaveform)
     const bpm = activeClip.bpm || 120.0;
     const spb = 60.0 / bpm;
     const numBeats = Math.floor(duration / spb);
@@ -200,7 +206,7 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
       const x = timeToX(beatTime);
       if (x >= 0 && x <= width) {
         const isBar = b % 4 === 0;
-        ctx.strokeStyle = isBar ? '#444958' : '#22252e';
+        ctx.strokeStyle = isBar ? 'rgba(255, 255, 255, 0.35)' : 'rgba(255, 255, 255, 0.12)';
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
@@ -213,43 +219,6 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
           ctx.fillText(`Bar ${b / 4 + 1}`, x + 3, 12);
         }
       }
-    }
-
-    // 2. Draw Waveform Peaks
-    const midY = height / 2;
-    const samplesPerPixel = Math.max(1, Math.floor((visibleDuration * buffer.sampleRate) / width));
-
-    ctx.lineWidth = 1.5;
-    for (let px = 0; px < width; px++) {
-      const t = xToTime(px);
-      const startSample = Math.floor(t * buffer.sampleRate);
-      if (startSample < 0 || startSample >= chData.length) continue;
-
-      let min = 0;
-      let max = 0;
-      for (let s = 0; s < samplesPerPixel && startSample + s < chData.length; s += 2) {
-        const val = chData[startSample + s];
-        if (val < min) min = val;
-        if (val > max) max = val;
-      }
-
-      const amp = Math.max(Math.abs(min), Math.abs(max));
-      const barH = amp * (height * 0.44);
-
-      // Color scheme based on waveformMode
-      if (waveformMode === 'RGB') {
-        // High frequencies cyan, low frequencies red/orange
-        ctx.strokeStyle = px % 2 === 0 ? '#00e5ff' : '#ff3b30';
-      } else if (waveformMode === '3BAND') {
-        ctx.strokeStyle = '#0088ff';
-      } else {
-        ctx.strokeStyle = '#2979ff';
-      }
-
-      ctx.beginPath();
-      ctx.moveTo(px, midY - barH);
-      ctx.lineTo(px, midY + barH);
-      ctx.stroke();
     }
 
     // 3. Draw Sub-Selection
@@ -592,33 +561,50 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
                 return (
                   <div
                     key={clip.id}
+                    draggable={Boolean(clip.audioBuffer)}
+                    onDragStart={(event) => {
+                      if (!clip.audioBuffer) {
+                        event.preventDefault();
+                        return;
+                      }
+                      onSelectClip(clip);
+                      writePaletteClipDrag(event.dataTransfer, clip.id);
+                    }}
                     onClick={() => onSelectClip(clip)}
-                    className={`p-1.5 rounded-xs border cursor-pointer transition-all flex items-center justify-between ${
+                    title={clip.audioBuffer ? 'Clip auf die Wellenform von Deck A ziehen' : 'Clip besitzt keine Audiodaten'}
+                    className={`p-1.5 rounded-xs border transition-all ${clip.audioBuffer ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed opacity-60'} ${
                       isSelected
                         ? 'bg-[#181d29] border-[#0088ff] shadow-sm'
                         : 'bg-[#12141a] border-[#22242f] hover:border-[#313545]'
                     }`}
                   >
-                    <div className="flex flex-col truncate pr-1">
-                      <span className="text-white text-[11px] font-medium truncate">
-                        {clip.name}
-                      </span>
-                      <span className="text-neutral-500 text-[9.5px] font-mono">
-                        {clip.bpm.toFixed(0)} BPM • {clip.key} • {clip.duration.toFixed(1)}s
-                      </span>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex flex-col truncate pr-1">
+                        <span className="text-white text-[11px] font-medium truncate">
+                          {clip.name}
+                        </span>
+                        <span className="text-neutral-500 text-[9.5px] font-mono">
+                          {clip.bpm.toFixed(0)} BPM • {clip.key} • {clip.duration.toFixed(1)}s
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteClip(clip.id);
+                          }}
+                          className="p-1 text-neutral-500 hover:text-[#ff453a] transition-colors"
+                          title="Clip löschen"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center space-x-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteClip(clip.id);
-                        }}
-                        className="p-1 text-neutral-500 hover:text-[#ff453a] transition-colors"
-                        title="Clip löschen"
-                      >
-                        <Trash2 size={11} />
-                      </button>
+                    {/* Detailed clip waveform, identical visual language to Deck A */}
+                    <div className="w-full h-8 bg-[#0b0c0f] border border-[#1b1c23] rounded-xs overflow-hidden">
+                      <ClipWaveform clip={clip} waveformMode={waveformMode} showBeatgrid={false} />
                     </div>
                   </div>
                 );

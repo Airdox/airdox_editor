@@ -18,11 +18,6 @@ import {
   CuePoint,
 } from '../types/rekordbox';
 import {
-  selectGridRenderBeats,
-  selectTrackWaveform,
-  waveformMissingNotice,
-} from '../waveform/renderModel';
-import {
   Plus,
   Minus,
   RotateCcw,
@@ -34,6 +29,12 @@ import {
   ShieldCheck,
   ZoomIn,
 } from 'lucide-react';
+import {
+  hasPaletteClipDrag,
+  paletteDropTime,
+  readPaletteClipDrag,
+} from '../utils/paletteDrag';
+import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -71,7 +72,13 @@ interface DetailWaveformProps {
   onImportXmlClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
+  onDropPaletteClip?: (clipId: string, time: number) => void;
+  /** Startet die Track-Part-Analyse (Intro/Build/Drop/Break) mit Auto-Cues. */
+  onAnalyzeParts?: () => void;
 }
+
+/** Höhe der farbigen Part-Leiste (Intro/Drop/Break …) unter der Wellenform. */
+const PHRASE_LANE_HEIGHT = 18;
 
 interface ContextMenuState {
   visible: boolean;
@@ -116,6 +123,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onImportXmlClick,
   onLoadAudioClick,
   onDropFile,
+  onDropPaletteClip,
+  onAnalyzeParts,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -240,20 +249,22 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 2. Beatgrid lines & Bar Numbers (Top header strip)
-      // Original-data rule: verbatim beatGrid.beats[] times are drawn exactly
-      // as stored (tail continuations dimmed); a uniform reconstruction only
-      // runs for grids without stored nodes and reports itself.
       const bg = track.beatGrid;
-      const gridSelection = selectGridRenderBeats(bg, viewOffset, viewOffset + viewDuration);
-      const gridBeats = gridSelection.beats;
+      const secondsPerBeat = 60.0 / bg.bpm;
+      const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
+      const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
 
-      for (const beat of gridBeats) {
-        const x = timeToPixel(beat.time, width);
+      for (let b = startBeat; b <= endBeat; b++) {
+        const beatTime = bg.firstBeat + b * secondsPerBeat;
+        const x = timeToPixel(beatTime, width);
         if (x < -20 || x > width + 20) continue;
 
-        if (beat.isBar) {
+        const isBar = b % bg.meter === 0;
+        const barNumber = Math.floor(b / bg.meter) + 1;
+
+        if (isBar) {
           // Rekordbox authentic solid white Bar vertical downbeat line
-          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.55)' : '#ffffff';
+          ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 0);
@@ -261,12 +272,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.stroke();
 
           // Rekordbox Bar number in top ruler (e.g. 109, 113)
-          ctx.fillStyle = beat.tail ? 'rgba(255, 255, 255, 0.6)' : '#ffffff';
+          ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 11px sans-serif';
-          ctx.fillText(`${beat.barNumber}`, x + 3, 14);
+          ctx.fillText(`${barNumber}`, x + 3, 14);
         } else {
           // Intermediate beat lines (beats 2, 3, 4)
-          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.22)';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -283,124 +294,158 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 2b. Rekordbox Phrase Blocks (PSSI Song Structure)
-      if (track.phrases && track.phrases.length > 0) {
-        track.phrases.forEach((p) => {
-          const px1 = timeToPixel(p.startTime, width);
-          const px2 = timeToPixel(p.endTime, width);
-          if (px2 < 0 || px1 > width) return;
-          const left = Math.max(0, px1);
-          const right = Math.min(width, px2);
-          const pw = right - left;
-          if (pw > 2) {
-            ctx.fillStyle = p.color + '33';
-            ctx.fillRect(left, 18, pw, 9);
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = 1;
-            ctx.strokeRect(left, 18, pw, 9);
-
-            if (pw > 35) {
-              ctx.fillStyle = '#ffffff';
-              ctx.font = 'bold 8px sans-serif';
-              ctx.fillText(p.name, left + 3, 25);
-            }
-          }
-        });
-      }
-
-      // 3. Render Waveform (BLUE / RGB / 3BAND)
-      // Genuine ANLZ variants only: the zoom-appropriate variant resolves the
-      // view; nothing is ever synthesized from BPM or the beatgrid.
-      const analysis = selectTrackWaveform(track, viewDuration, width);
+      // 3. Render the source waveform as a continuous silhouette.
+      // Never use edit-operation bars or a synthetic beat pattern here: inserted,
+      // replaced and overdubbed audio must be rendered by the same renderer as
+      // the untouched source so the waveform has one consistent visual language.
+      const analysis = track.analysis;
       if (analysis && analysis.length > 0) {
         const buckets = analysis.length;
         const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
         const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
         const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
-
         const maxHalfH = height * 0.42;
 
-        for (let b = startBucket; b <= endBucket; b++) {
-          const t = b * secPerBucket;
-          const centerT = t + secPerBucket * 0.5;
-          const x = timeToPixel(centerT, width);
-          const nextX = timeToPixel(centerT + secPerBucket, width);
-          const colW = Math.max(1.2, nextX - x);
+        // Render from recorded analysis values only. The continuous envelope keeps
+        // the cleaned-up UI from main, while separate non-zero runs ensure a
+        // cleared/silent range is never bridged or given an invented minimum height.
+        type EnvelopePoint = { x: number; y: number };
+        type EnvelopeRun = { upper: EnvelopePoint[]; lower: EnvelopePoint[] };
+        const envelopeRuns = (amplitudeAt: (bucket: number) => number): EnvelopeRun[] => {
+          const runs: EnvelopeRun[] = [];
+          let run: EnvelopeRun | null = null;
+          for (let bucket = startBucket; bucket <= endBucket; bucket++) {
+            const amplitude = Math.max(0, Math.min(1, amplitudeAt(bucket) || 0));
+            if (amplitude <= 0) {
+              run = null;
+              continue;
+            }
+            if (!run) {
+              run = { upper: [], lower: [] };
+              runs.push(run);
+            }
+            const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
+            const halfHeight = amplitude * maxHalfH;
+            run.upper.push({ x, y: centerY - halfHeight });
+            run.lower.push({ x, y: centerY + halfHeight });
+          }
+          return runs;
+        };
 
-          const peak = analysis.peaks[b];
-          const low = analysis.lowEnergy[b];
-          const mid = analysis.midEnergy[b];
-          const high = analysis.highEnergy[b];
+        const drawEnvelope = (runs: EnvelopeRun[], colour: string | CanvasGradient, alpha = 1) => {
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = colour;
+          for (const { upper, lower } of runs) {
+            if (upper.length === 1) {
+              const halfHeight = centerY - upper[0].y;
+              ctx.fillRect(upper[0].x - 0.5, centerY - halfHeight, 1, halfHeight * 2);
+              continue;
+            }
+            ctx.beginPath();
+            ctx.moveTo(upper[0].x, centerY);
+            upper.forEach((point) => ctx.lineTo(point.x, point.y));
+            for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        };
 
-          if (waveformMode === 'BLUE') {
-            // High-contrast electric blue waveform
-            const barH = Math.max(2, peak * maxHalfH);
-            ctx.fillStyle = '#00a2ff';
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
-            ctx.fillStyle = '#b3e5fc';
-            ctx.fillRect(x - colW * 0.5, centerY - barH * 0.35, colW, barH * 0.7);
-          } else if (waveformMode === 'RGB') {
-            // Pioneer Rekordbox RGB color mapping (Lows=Red, Mids=Cyan/Green, Highs=Blue/White)
-            const barH = Math.max(2, peak * maxHalfH);
-            const r = Math.min(255, Math.floor(low * 270 + mid * 35));
-            const g = Math.min(255, Math.floor(mid * 240 + high * 60));
-            const bCol = Math.min(255, Math.floor(high * 240 + low * 25));
+        const peakRuns = envelopeRuns((bucket) => analysis.peaks[bucket]);
+        if (waveformMode === 'BLUE') {
+          drawEnvelope(peakRuns, '#159fe8');
+          drawEnvelope(peakRuns, '#b8e9ff', 0.34);
+        } else if (waveformMode === '3BAND') {
+          // Each continuous layer follows its actual recorded frequency band.
+          drawEnvelope(envelopeRuns((bucket) => analysis.lowEnergy[bucket] * 0.85), '#ff3b45', 0.72);
+          drawEnvelope(envelopeRuns((bucket) => analysis.midEnergy[bucket] * 0.70), '#18d8df', 0.48);
+          drawEnvelope(envelopeRuns((bucket) => analysis.highEnergy[bucket] * 0.55), '#effcff', 0.30);
+        } else {
+          // RGB: rekordbox-authentic per-column spectral colouring. Every pixel
+          // column is coloured from the real frequency content at that time so
+          // drops (bass-heavy) glow red/orange while breaks and vocal passages
+          // read blue/green — song sections are recognisable at a glance.
+          // A single static top-to-bottom gradient cannot express this.
+          for (let x = 0; x < width; x++) {
+            const t0 = viewOffset + (x / width) * viewDuration;
+            const t1 = viewOffset + ((x + 1) / width) * viewDuration;
+            const b0 = Math.max(0, Math.floor(t0 / secPerBucket));
+            const b1 = Math.min(buckets - 1, Math.floor(t1 / secPerBucket));
+            if (b1 < b0) continue;
 
-            ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
-            ctx.fillRect(x - colW * 0.5, centerY - barH, colW, barH * 2);
+            let maxPeak = 0;
+            let sumLow = 0;
+            let sumMid = 0;
+            let sumHigh = 0;
+            let count = 0;
+            for (let b = b0; b <= b1; b++) {
+              const p = analysis.peaks[b] || 0;
+              if (p > maxPeak) maxPeak = p;
+              sumLow += analysis.lowEnergy[b] || 0;
+              sumMid += analysis.midEnergy[b] || 0;
+              sumHigh += analysis.highEnergy[b] || 0;
+              count++;
+            }
+            // Zero-energy (CLEAR/silence) columns stay empty — no invented floor.
+            if (maxPeak <= 0) continue;
 
-            // Bright center spine
-            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, high * 0.8 + 0.15)})`;
-            ctx.fillRect(x - colW * 0.5, centerY - 2, colW, 4);
-          } else {
-            // 3BAND Mode: Separate layers
-            const lowH = Math.max(1, low * maxHalfH * 0.85);
-            const midH = Math.max(1, mid * maxHalfH * 0.7);
-            const highH = Math.max(1, high * maxHalfH * 0.55);
+            const low = count > 0 ? sumLow / count : 0;
+            const mid = count > 0 ? sumMid / count : 0;
+            const high = count > 0 ? sumHigh / count : 0;
 
-            // Lows (Red)
-            ctx.fillStyle = '#ff2b2b';
-            ctx.fillRect(x - colW * 0.5, centerY - lowH, colW, lowH * 2);
-            // Mids (Cyan/Green)
-            ctx.fillStyle = '#00e5ff';
-            ctx.fillRect(x - colW * 0.5, centerY - midH * 0.6, colW, midH * 1.2);
-            // Highs (White/Ice Blue)
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - colW * 0.5, centerY - highH * 0.3, colW, highH * 0.6);
+            const h = maxPeak * maxHalfH;
+            ctx.fillStyle = spectralRgb(low, mid, high);
+            ctx.fillRect(x, centerY - h, 1, h * 2);
+
+            // Bright inner core in the same spectral hue gives the glowing
+            // centre rekordbox waveforms have.
+            const coreH = h * 0.45;
+            if (coreH >= 0.5) {
+              ctx.fillStyle = spectralRgbCore(low, mid, high);
+              ctx.globalAlpha = 0.55;
+              ctx.fillRect(x, centerY - coreH, 1, coreH * 2);
+              ctx.globalAlpha = 1;
+            }
+          }
+        }
+
+        // Fine centre traces retain visual detail without manufacturing audio in
+        // zero-valued analysis buckets. The RGB columns already carry their own
+        // spectral highlight, so the white trace applies to envelope modes only.
+        if (waveformMode !== 'RGB') {
+          ctx.strokeStyle = 'rgba(220,245,255,.38)';
+          ctx.lineWidth = 0.7;
+          for (const { upper, lower } of peakRuns) {
+            if (upper.length < 2) continue;
+            ctx.beginPath();
+            upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+            ctx.stroke();
+            ctx.beginPath();
+            lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+            ctx.stroke();
           }
         }
       } else {
-        // Honest empty state: no genuine waveform data exists for this track
-        // (no ANLZ assigned / no local analysis). The renderer shows the
-        // transparent missing-waveform notice instead of inventing a contour.
-        const notice = waveformMissingNotice(track);
-        ctx.strokeStyle = '#2a2d38';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, centerY);
-        ctx.lineTo(width, centerY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#8b93a5';
-        ctx.font = 'bold 13px sans-serif';
-        ctx.fillText(notice.title, width / 2, centerY - 26);
-        ctx.fillStyle = '#5b6270';
+        // Never invent a rhythmic waveform from BPM metadata. Until real
+        // ANLZ/audio analysis exists, expose an honest empty lane.
+        ctx.fillStyle = '#606578';
         ctx.font = '11px sans-serif';
-        ctx.fillText(notice.hint, width / 2, centerY - 8);
+        ctx.textAlign = 'center';
+        ctx.fillText('Keine native Rekordbox-Wellenform geladen', width / 2, centerY + 4);
         ctx.textAlign = 'left';
+
       }
 
       // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
-      for (const beat of gridBeats) {
-        const x = timeToPixel(beat.time, width);
+      for (let b = startBeat; b <= endBeat; b++) {
+        const beatTime = bg.firstBeat + b * secondsPerBeat;
+        const x = timeToPixel(beatTime, width);
         if (x < -10 || x > width + 10) continue;
-        const isBar = beat.isBar;
+        const isBar = b % bg.meter === 0;
 
         if (isBar) {
-          ctx.strokeStyle = beat.tail ? 'rgba(255, 255, 255, 0.5)' : '#ffffff';
+          ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.moveTo(x, 18);
@@ -414,6 +459,96 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.lineTo(x, height);
           ctx.stroke();
         }
+      }
+
+      // 3c. Track-Part-Leiste (Intro / Build / Drop / Break / Outro) unter der
+      // Wellenform. Jede erkannte Sektion wird als farbiger Block gerendert;
+      // die Startgrenzen sitzen auf den Taktstrichen des Beatgrids.
+      const laneTop = height - PHRASE_LANE_HEIGHT;
+      if (track.phrases && track.phrases.length > 0) {
+        // Dunkler Leisten-Hintergrund überdeckt Beatgrid-Linien im Lane-Bereich
+        ctx.fillStyle = '#0e1015';
+        ctx.fillRect(0, laneTop, width, PHRASE_LANE_HEIGHT);
+        ctx.strokeStyle = '#232635';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, laneTop);
+        ctx.lineTo(width, laneTop);
+        ctx.stroke();
+
+        track.phrases.forEach((p) => {
+          const px1 = timeToPixel(p.startTime, width);
+          const px2 = timeToPixel(p.endTime, width);
+          if (px2 < 0 || px1 > width) return;
+          const left = Math.max(0, px1);
+          const right = Math.min(width, px2);
+          const pw = right - left;
+          if (pw <= 1) return;
+
+          // Farbiger Part-Block mit leichtem vertikalen Verlauf
+          const grad = ctx.createLinearGradient(0, laneTop, 0, height);
+          grad.addColorStop(0, p.color + 'e6');
+          grad.addColorStop(1, p.color + '99');
+          ctx.fillStyle = grad;
+          ctx.fillRect(left, laneTop + 1.5, pw, PHRASE_LANE_HEIGHT - 2.5);
+
+          // Part-Startgrenze: kräftige Linie in Part-Farbe hoch bis zur Wellenform
+          if (px1 >= 0 && px1 <= width) {
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 1.4;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(px1, 18);
+            ctx.lineTo(px1, laneTop);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Kleiner Pfeil an der Part-Grenze oberhalb der Leiste
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.moveTo(px1 - 4, laneTop - 5);
+            ctx.lineTo(px1 + 4, laneTop - 5);
+            ctx.lineTo(px1, laneTop);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // Label (BREAKDOWN wird als BREAK angezeigt)
+          if (pw > 30) {
+            const label = p.name === 'BREAKDOWN' ? 'BREAK' : p.name;
+            ctx.font = 'bold 9px sans-serif';
+            const labelW = ctx.measureText(label).width;
+            if (labelW + 8 <= pw) {
+              ctx.fillStyle = 'rgba(0,0,0,0.55)';
+              ctx.fillRect(left + 3, laneTop + 3.5, labelW + 6, 11);
+              ctx.fillStyle = '#ffffff';
+              ctx.fillText(label, left + 6, laneTop + 12.5);
+            }
+          }
+
+          // Takt-Angabe rechtsbündig, wenn Platz vorhanden
+          if (pw > 110) {
+            const barsLabel = `${p.endBar - p.startBar} BARS`;
+            ctx.font = '8px monospace';
+            ctx.fillStyle = 'rgba(255,255,255,0.75)';
+            ctx.textAlign = 'right';
+            ctx.fillText(barsLabel, right - 4, laneTop + 12.5);
+            ctx.textAlign = 'left';
+          }
+        });
+      } else {
+        // Leere, dezent markierte Leiste als Hinweis auf die Part-Analyse
+        ctx.fillStyle = '#0d0f14';
+        ctx.fillRect(0, laneTop, width, PHRASE_LANE_HEIGHT);
+        ctx.strokeStyle = '#1c1f2b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, laneTop);
+        ctx.lineTo(width, laneTop);
+        ctx.stroke();
+        ctx.fillStyle = '#495066';
+        ctx.font = '9px sans-serif';
+        ctx.fillText('Keine Track-Parts analysiert — „PARTS“ klicken für Intro/Build/Drop/Break-Erkennung', 8, laneTop + 12.5);
       }
 
       // 4. Draw Cues and Markers
@@ -778,17 +913,39 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!isDraggingOver) setIsDraggingOver(true);
+        const supported = hasPaletteClipDrag(e.dataTransfer) || Array.from(e.dataTransfer.types).includes('Files');
+        e.dataTransfer.dropEffect = supported ? 'copy' : 'none';
+        if (supported && !isDraggingOver) setIsDraggingOver(true);
+        if (!supported && isDraggingOver) setIsDraggingOver(false);
       }}
       onDragLeave={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingOver(false);
+        // Ignore transitions into child controls/canvas; only clear when the
+        // pointer actually leaves the complete waveform drop zone.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setIsDraggingOver(false);
+        }
       }}
       onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
+
+        const clipId = readPaletteClipDrag(e.dataTransfer);
+        if (clipId && track && canvasRef.current) {
+          const rect = canvasRef.current.getBoundingClientRect();
+          const rawDropTime = paletteDropTime(
+            e.clientX,
+            rect.left,
+            rect.width,
+            viewOffset,
+            viewDuration,
+            track.duration
+          );
+          onDropPaletteClip?.(clipId, snapTime(rawDropTime));
+          return;
+        }
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           onDropFile?.(e.dataTransfer.files[0]);
         }
@@ -820,6 +977,22 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               title="Rekordbox Datenbank & Visualisierungs-Daten"
             >
               DATA
+            </button>
+          )}
+
+          {/* Track-Part-Analyse (Intro/Build/Drop/Break) mit Auto-Cues */}
+          {onAnalyzeParts && (
+            <button
+              onClick={onAnalyzeParts}
+              disabled={!track || !track.analysis}
+              className={`w-full py-0.5 rounded-xs text-[7.5px] font-bold tracking-tight transition-colors text-center ${
+                track && track.analysis
+                  ? 'bg-[#f59e0b]/15 hover:bg-[#f59e0b] text-[#f59e0b] hover:text-black border border-[#f59e0b]/30'
+                  : 'bg-[#15161c] text-neutral-600 border border-neutral-800 cursor-not-allowed'
+              }`}
+              title="Track-Parts analysieren (Intro, Build-Up, Drop, Break, Outro) und Cue-Punkte an prägnanten Stellen setzen"
+            >
+              PARTS
             </button>
           )}
         </div>
@@ -1180,6 +1353,19 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
               <span className="text-[10px] font-mono text-[#34d399]">AUTO</span>
             </button>
 
+            {onAnalyzeParts && (
+              <button
+                onClick={() => {
+                  onAnalyzeParts();
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#b45309] text-[#fbbf24] hover:text-white flex items-center justify-between"
+              >
+                <span>Track-Parts analysieren + Auto-Cues</span>
+                <span className="text-[10px] font-mono text-[#f59e0b]">PARTS</span>
+              </button>
+            )}
+
             <div className="h-px bg-[#262832] my-1" />
 
             {selection && (
@@ -1221,7 +1407,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                   onClick={() => { onDelete(); setContextMenu(null); }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#ff3b30] hover:text-white text-[#ff453a]"
                 >
-                  Delete Selection
+                  Delete… (Variante auswählen)
                 </button>
                 <button
                   onClick={() => { onClear(); setContextMenu(null); }}
