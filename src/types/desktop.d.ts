@@ -32,6 +32,13 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      /** Verbindliches Master-DB-/SQLCipher-Gate für einen einzelnen Track. */
+      resolveTrackFromMasterDb(request: {
+        dbPath?: string;
+        trackId?: string | number;
+        audioPath?: string;
+        location?: string;
+      }): Promise<unknown>;
       saveExportFile(payload: {
         kind: 'WAV' | 'XML' | 'JSON' | 'PROJECT';
         data: Uint8Array;

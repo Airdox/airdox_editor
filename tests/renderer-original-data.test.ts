@@ -262,6 +262,13 @@ runTest('no own analysis', 'XML deck-load path never calls analyzeAudioBuffer', 
   assert(end > start, 'Deck-load function end marker found');
   const deckLoadSource = SRC.app.slice(start, end);
   assert(!deckLoadSource.includes('analyzeAudioBuffer('), 'No own analysis in the Rekordbox deck path');
+  // Der Metadata-Fallback ist erlaubt — aber NUR nach dem Master-DB-Gate und
+  // klar gekennzeichnet (GENERATED_FALLBACK), nie als echte ANLZ-Waveform.
+  assert(
+    deckLoadSource.indexOf('runMasterDbGate(') >= 0 &&
+      deckLoadSource.indexOf('runMasterDbGate(') < deckLoadSource.indexOf('generateAnalysisFromMetadata('),
+    'Master-DB-Gate must run before the metadata waveform fallback'
+  );
 });
 
 // ---------------------------------------------------------------------------
