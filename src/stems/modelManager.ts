@@ -232,7 +232,7 @@ export class ModelManager {
     const config = await this.inspect(descriptor.config, 'config');
     const problems: string[] = [];
     if (!checkpoint?.exists) problems.push(`Checkpoint fehlt: ${descriptor.checkpoint.file}`);
-    if (checkpoint?.hashVerifiable && !checkpoint.hashVerified) problems.push('Checkpoint-Hash stimmt nicht überein');
+    if (checkpoint?.exists && checkpoint.hashVerifiable && !checkpoint.hashVerified) problems.push('Checkpoint-Hash stimmt nicht überein');
     if (descriptor.config && !config?.exists) problems.push(`Config fehlt: ${descriptor.config.file}`);
     if (checkpoint?.exists && checkpoint.expectedBytes && Math.abs(checkpoint.bytes - checkpoint.expectedBytes) > 1024) {
       problems.push(`Checkpoint-Größe ${checkpoint.bytes} != erwartet ${checkpoint.expectedBytes}`);

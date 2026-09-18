@@ -95,12 +95,15 @@ declare global {
       }>;
       readLogTail(maxBytes?: number): Promise<{ file: string | null; text: string }>;
       openLogFolder(): Promise<{ opened: boolean; target: string; logDirectory: string }>;
+      getStemDiagnostics(): Promise<Record<string, unknown>>;
+      getStemPreflight(): Promise<Record<string, unknown>>;
       installStemEngine(): Promise<{
         ok: boolean;
         error?: string;
         python?: string;
         model?: string;
         weightsReady?: boolean;
+        restartRequired?: boolean;
       }>;
       onStemInstallProgress(
         callback: (progress: StemInstallProgress) => void

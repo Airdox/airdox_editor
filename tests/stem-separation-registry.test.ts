@@ -72,7 +72,8 @@ async function run() {
   assert.equal(registry.selectForProfile('MAXIMUM_QUALITY').family, 'bs_roformer');
   assert.equal(registry.selectForProfile('PREVIEW').family, 'htdemucs', 'PREVIEW nutzt die schnellere Engine');
   const fourStem = registry.require('bsroformer-musdb18hq-4stem-zfturbo');
-  assert.deepEqual(fourStem.stemOrder, ['vocals', 'bass', 'drums', 'other']);
+  // Authoritative: release v1.0.12 config_bs_roformer_384_8_2_485100.yaml, training.instruments.
+  assert.deepEqual(fourStem.stemOrder, ['drums', 'bass', 'other', 'vocals']);
   assert.equal(fourStem.sampleRate, 44100);
   assert.equal(fourStem.inputChannels, 2);
   console.log(`  ✓ HIGH_QUALITY -> ${registry.selectForProfile('HIGH_QUALITY').id}`);
@@ -127,9 +128,9 @@ async function run() {
   // ---- 5. StemRegistry maps by declared order ------------------------------
   console.log('\n[ TEST ] #5 StemRegistry bildet Ausgaben über stem_order ab');
   const stems = new StemRegistry(fourStem);
-  assert.equal(stems.stemAt(0), 'vocals');
-  assert.equal(stems.stemAt(2), 'drums');
-  assert.equal(stems.indexOf('other'), 3);
+  assert.equal(stems.stemAt(0), 'drums');
+  assert.equal(stems.stemAt(2), 'other');
+  assert.equal(stems.indexOf('other'), 2);
   assert.throws(() => stems.stemAt(9), /nicht definiert/);
   assert.throws(() => stems.indexOf('guitar'), /wird von Modell/);
 
@@ -142,8 +143,8 @@ async function run() {
     ],
     ['vocals', 'bass', 'drums', 'other']
   );
-  assert.equal(byIndex.get('drums')?.filePath, '/tmp/2.wav', 'Output-Index 2 ist drums, nicht bass');
-  assert.equal(byIndex.get('other')?.filePath, '/tmp/3.wav');
+  assert.equal(byIndex.get('drums')?.filePath, '/tmp/0.wav', 'Output-Index 0 ist drums gemäß Release-Config');
+  assert.equal(byIndex.get('other')?.filePath, '/tmp/2.wav');
 
   const byName = stems.mapOutputs(
     ['other', 'vocals', 'drums', 'bass'].map((name) => ({ name, filePath: `/tmp/${name}.wav` })),
@@ -155,7 +156,7 @@ async function run() {
     [0, 1, 2, 3].map((index) => ({ name: `stem_${index}_x`, filePath: `/tmp/${index}.wav` })),
     ['vocals', 'bass', 'drums', 'other']
   );
-  assert.equal(indexedNames.get('vocals')?.filePath, '/tmp/0.wav');
+  assert.equal(indexedNames.get('vocals')?.filePath, '/tmp/3.wav');
 
   assert.throws(
     () => stems.mapOutputs([{ name: 'vocals', filePath: '/tmp/v.wav' }], ['vocals', 'bass', 'drums', 'other']),
