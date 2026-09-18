@@ -19,6 +19,7 @@
     "stems:setup": "bash scripts/setup-stem-model.sh",
     "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
     "stems:diagnose": "tsx scripts/stems-diagnose.ts",
+    "stems:live:preflight": "node scripts/stems-live-preflight.mjs",
     "stems:runtime": "node scripts/setup-stem-runtime.mjs",
     "stems:bundle": "tsx scripts/bundle-stem-engine.ts",
     "stems:bundle:check": "tsx scripts/bundle-stem-engine.ts --check-only",
