@@ -6,7 +6,7 @@
  * work happens and re-verified afterwards. Nothing in the engine ever writes
  * into the directory of the original.
  */
-import { open, mkdir, writeFile, readFile, access, constants } from 'node:fs/promises';
+import { open, mkdir, writeFile, access, constants } from 'node:fs/promises';
 import path from 'node:path';
 import { StemSeparationError, classifyFailure } from './errors';
 import {
@@ -17,6 +17,8 @@ import {
   fileFingerprint,
   resample,
   sha256Bytes,
+  sha256File,
+  ResampleCancelledError,
   type DecodedAudio,
   type ExternalDecoder,
 } from './wavIo';
@@ -46,6 +48,16 @@ export interface WorkingCopy {
   integrity: OriginalIntegrity;
 }
 
+/**
+ * Phasen der Arbeitskopie-Vorbereitung. `fraction` ist der Fortschritt *innerhalb*
+ * der Phase (0..1); die Engine mappt das auf den Job-Fortschritt, damit die UI
+ * während mehrminütiger Preps (Resampling) keinen statischen Text sieht.
+ */
+export interface WorkingCopyProgress {
+  phase: 'fingerprint' | 'decode' | 'resample' | 'encode' | 'verify';
+  fraction: number;
+}
+
 export interface PrepareOptions {
   workingRoot: string;
   /** Override of the engine sample rate; the engine default is 44.1 kHz. */
@@ -53,6 +65,9 @@ export interface PrepareOptions {
   externalDecoder?: ExternalDecoder;
   /** Base name for the working copy, defaults to the original base name. */
   baseName?: string;
+  /** Job-Token (oder beliebiger Abbruchzustand) – Abbruch auch während der Prep. */
+  token?: { readonly cancelled: boolean };
+  onProgress?: (progress: WorkingCopyProgress) => void;
 }
 
 async function assertReadable(filePath: string): Promise<void> {
@@ -128,9 +143,19 @@ export async function verifyOriginalIntegrity(snapshot: OriginalIntegrity): Prom
  * The returned working copy is the only file the separation engine reads.
  */
 export async function prepareWorkingCopy(originalPath: string, options: PrepareOptions): Promise<WorkingCopy> {
-  await assertReadable(originalPath);
-  const integrity = await fingerprintOriginal(originalPath);
+  const progress = options.onProgress;
+  const token = options.token;
+  const assertNotCancelled = (): void => {
+    if (token?.cancelled) throw new StemSeparationError('INFERENCE_CANCELLED', 'Arbeitskopie-Vorbereitung abgebrochen');
+  };
 
+  await assertReadable(originalPath);
+  progress?.({ phase: 'fingerprint', fraction: 0 });
+  const integrity = await fingerprintOriginal(originalPath);
+  progress?.({ phase: 'fingerprint', fraction: 1 });
+
+  assertNotCancelled();
+  progress?.({ phase: 'decode', fraction: 0 });
   let decoded: DecodedAudio;
   try {
     decoded = await decodeAudioFile(originalPath, options.externalDecoder);
@@ -140,6 +165,7 @@ export async function prepareWorkingCopy(originalPath: string, options: PrepareO
     const code = /header|RIFF|fmt|data-Chunk|kleiner/i.test(message) ? 'AUDIO_CORRUPT' : 'AUDIO_UNSUPPORTED_FORMAT';
     throw classifyFailure(code, `Audiodatei konnte nicht dekodiert werden: ${originalPath}`, error);
   }
+  progress?.({ phase: 'decode', fraction: 1 });
 
   if (!Number.isFinite(decoded.sampleRate) || decoded.sampleRate < 8000 || decoded.sampleRate > 384000) {
     throw new StemSeparationError('AUDIO_INVALID_SAMPLE_RATE', `Samplerate ${decoded.sampleRate} Hz wird nicht unterstützt`, {
@@ -153,11 +179,24 @@ export async function prepareWorkingCopy(originalPath: string, options: PrepareO
   const targetSampleRate = options.targetSampleRate ?? TARGET_SAMPLE_RATE;
   const stereo = ensureStereo(decoded);
   const resampled = decoded.sampleRate !== targetSampleRate;
+  // Resampling ist der dominante Teil der Arbeitskopie (mehrere Minuten bei
+  // 48 kHz-Quellen auf CPUs). Es gibt in Teilschritten an die Event-Loop-Hände
+  // und meldet Fortschritt, damit IPC/UI weiterlaufen und Abbruch greift.
   const data = resampled
-    ? resample(stereo.data, TARGET_CHANNELS, decoded.sampleRate, targetSampleRate)
+    ? await resample(stereo.data, TARGET_CHANNELS, decoded.sampleRate, targetSampleRate, {
+        yieldEveryFrames: 100_000,
+        isCancelled: token ? () => token.cancelled : undefined,
+        onProgress: (fraction) => progress?.({ phase: 'resample', fraction }),
+      }).catch((error) => {
+        if (error instanceof ResampleCancelledError) {
+          throw new StemSeparationError('INFERENCE_CANCELLED', 'Arbeitskopie-Vorbereitung abgebrochen');
+        }
+        throw error;
+      })
     : stereo.data;
   const frames = resampled ? Math.floor(data.length / TARGET_CHANNELS) : stereo.frames;
 
+  assertNotCancelled();
   const stats = analyzeAudio(data, TARGET_CHANNELS, frames);
   if (!stats.finite) {
     throw new StemSeparationError('AUDIO_CORRUPT', 'Audiodaten enthalten NaN/Infinity');
@@ -168,6 +207,8 @@ export async function prepareWorkingCopy(originalPath: string, options: PrepareO
     throw new StemSeparationError('AUDIO_INVALID_SAMPLE_RATE', `Engine-Ziel-Samplerate ${targetSampleRateHz} Hz ist nicht 44100 Hz`, {});
   }
 
+  assertNotCancelled();
+  progress?.({ phase: 'encode', fraction: 0 });
   const baseName = sanitizeBaseName(options.baseName ?? path.basename(originalPath, path.extname(originalPath)));
   const workingPath = path.join(options.workingRoot, `${baseName}_${targetSampleRate / 1000}k_stereo.wav`);
   const wav = encodeWavFloat32(targetSampleRate, TARGET_CHANNELS, data, frames);
@@ -180,10 +221,15 @@ export async function prepareWorkingCopy(originalPath: string, options: PrepareO
   }
 
   // The working copy must be byte exact: re-read and compare before inference.
-  const roundTrip = await readFile(workingPath);
-  if (sha256Bytes(new Uint8Array(roundTrip)) !== sha256Bytes(wav)) {
+  // Beide Seiten per Stream/View hashen (statt Buffer-Kopien): bei 127 MB
+  // Arbeitskopie spart das zwei Vollkopien plus einen kompletten Re-Read in
+  // den Heap.
+  progress?.({ phase: 'verify', fraction: 0 });
+  const [diskHash, memoryHash] = await Promise.all([sha256File(workingPath), Promise.resolve(sha256Bytes(wav))]);
+  if (diskHash !== memoryHash) {
     throw new StemSeparationError('AUDIO_CORRUPT', 'Arbeitskopie stimmt nicht mit dem geschriebenen Inhalt überein', { workingPath });
   }
+  progress?.({ phase: 'verify', fraction: 1 });
 
   return {
     originalPath,

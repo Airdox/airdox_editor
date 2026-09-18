@@ -1026,8 +1026,11 @@ export class StemJobService {
     await mkdir(this.roots.staging, { recursive: true });
     const safe = nameHint.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'input';
     const file = path.join(this.roots.staging, `${safe}_${randomUUID().slice(0, 8)}.wav`);
-    await writeFile(file, toBuffer(bytes));
-    this.options.logger?.debug?.('STEMS', 'Mix für Separation abgelegt', { file, bytes: toBuffer(bytes).byteLength });
+    // Einmal kopieren, einmal schreiben: bei 127 MB Mix kostete die frühere
+    // doppelte `toBuffer`-Aufruf (Write + Debug-Log) eine zweite Vollkopie.
+    const buffer = toBuffer(bytes);
+    await writeFile(file, buffer);
+    this.options.logger?.debug?.('STEMS', 'Mix für Separation abgelegt', { file, bytes: buffer.byteLength });
     return file;
   }
 

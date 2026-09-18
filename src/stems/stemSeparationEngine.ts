@@ -26,7 +26,7 @@ import { SeparationJob } from './separationJob';
 import { SeparationCancellationToken, planChunks, validateChunkPlan, MIN_OVERLAP_SAMPLES, type ChunkPlan } from './chunkProcessor';
 import { OverlapAddReconstructor } from './reconstructor';
 import { validateSeparation } from './qualityValidator';
-import { prepareWorkingCopy, verifyOriginalIntegrity, type WorkingCopy } from './preprocessor';
+import { prepareWorkingCopy, verifyOriginalIntegrity, type WorkingCopy, type WorkingCopyProgress } from './preprocessor';
 import { encodeWavFloat32, readWavFile, sha256File, analyzeAudio, type ExternalDecoder } from './wavIo';
 import type { BackendKind, ComputeDevice, ModelDescriptor, ModelPrecision, OriginalIntegrity, ProcessingMode, ProgressCallback, QualityProfile, SeparationJobSummary, SeparationSettings, StemDescriptor, StemId } from './types';
 import type { IStemSeparator, BackendSeparationResponse, BackendAvailability } from './backends/types';
@@ -471,19 +471,16 @@ export class StemSeparationEngine {
     const backend = await this.selectBackend(descriptor, request.backend);
 
     // ---- 1. read-only fingerprint + working copy ---------------------------
-    const working = await prepareWorkingCopy(request.inputPath, {
-      workingRoot: this.options.workingRoot,
-      externalDecoder: this.options.externalDecoder,
-      baseName: request.trackName,
-    });
-    const integrity: OriginalIntegrity = working.integrity;
-    const stemRegistry = new StemRegistry(descriptor);
-
+    // Der Job existiert VOR der Arbeitskopie: die Prep ist der langsamste
+    // Vorbereitungsblock (Resampling mehrminütig auf CPUs) und muss
+    // Fortschritt melden und abbrechen können, bevor das erste Sample
+    // inferiert wird.
+    const trackName = request.trackName ?? path.basename(request.inputPath, path.extname(request.inputPath));
     const job = new SeparationJob({
       inputPath: request.inputPath,
-      inputFormat: working.sourceFormat,
+      inputFormat: '',
       workingRoot: this.options.workingRoot,
-      outputRoot: path.join(this.options.outputRoot, request.trackName ?? path.basename(request.inputPath, path.extname(request.inputPath))),
+      outputRoot: path.join(this.options.outputRoot, trackName),
       settings: this.buildSettings(descriptor, profile, request, backend),
       onProgress: request.onProgress,
       token: request.token,
@@ -497,6 +494,33 @@ export class StemSeparationEngine {
       job.token.waitForResume().catch(() => undefined);
       void watcher;
     }
+
+    // Prep-Phasen auf den 0–2%-Bereich des Job-Fortschritts mappen, damit die
+    // UI keinen statischen „Arbeitskopie vorbereiten“-Text für Minuten sieht.
+    const prepProgress = (p: WorkingCopyProgress): void => {
+      const spans: Record<WorkingCopyProgress['phase'], [number, number, (fraction: number) => string]> = {
+        fingerprint: [0, 0.6, () => 'Arbeitskopie: Original wird geprüft (read-only)…'],
+        decode: [0.6, 1.0, () => 'Arbeitskopie wird dekodiert…'],
+        resample: [1.0, 1.7, (fraction) => `Arbeitskopie: Resampling auf 44100 Hz … ${Math.round(fraction * 100)}%`],
+        encode: [1.7, 1.9, () => 'Arbeitskopie wird geschrieben…'],
+        verify: [1.9, 2.0, () => 'Arbeitskopie wird verifiziert…'],
+      };
+      const [from, to, label] = spans[p.phase];
+      job.report(from + p.fraction * (to - from), label(p.fraction));
+    };
+
+    const prepareStartedAt = Date.now();
+    let integrity: OriginalIntegrity | undefined;
+    const working = await prepareWorkingCopy(request.inputPath, {
+      workingRoot: this.options.workingRoot,
+      externalDecoder: this.options.externalDecoder,
+      baseName: request.trackName,
+      token: request.token,
+      onProgress: prepProgress,
+    });
+    integrity = working.integrity;
+    job.timings.prepareMs = Date.now() - prepareStartedAt;
+    const stemRegistry = new StemRegistry(descriptor);
     job.inputAudioHash = working.inputAudioHash;
     job.originalIntegrity = integrity;
     job.workingCopyPath = working.workingPath;
@@ -678,6 +702,7 @@ export class StemSeparationEngine {
 
       // ---- 7. validation before promotion (§17) ----------------------------
       const boundaryOffsets = plans.filter((plan) => plan.index > 0).map((plan) => plan.startSample);
+      const validateStartedAt = Date.now();
       const { report: validation, stems: descriptors } = await validateSeparation(stemFiles, {
         mode: this.modeFor(request),
         expectedSampleRate: working.sampleRate,
@@ -689,6 +714,7 @@ export class StemSeparationEngine {
         recombinationLimitDb: this.options.recombinationLimitDb,
         boundaryErrorExcessDb: this.options.boundaryErrorExcessDb,
       });
+      job.timings.validateMs = Date.now() - validateStartedAt;
       job.stems = descriptors.map((stem) => ({ ...stem, displayName: stemRegistry.displayName(stem.id) }));
       job.validation = validation;
 
@@ -772,7 +798,10 @@ export class StemSeparationEngine {
     return report;
   }
 
-  private async finishIntegrity(job: SeparationJob, integrity: OriginalIntegrity): Promise<void> {
+  private async finishIntegrity(job: SeparationJob, integrity: OriginalIntegrity | undefined): Promise<void> {
+    // Ein Abbruch/Fehler *während* der Arbeitskopie hat noch keinen
+    // Original-Snapshot – dann gibt es nichts zu verifizieren.
+    if (!integrity) return;
     const after = await verifyOriginalIntegrity(integrity);
     job.originalIntegrity = after;
     await job.persist();
