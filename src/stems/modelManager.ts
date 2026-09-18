@@ -55,16 +55,39 @@ export interface ModelAvailabilityReport {
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
-async function hashOfFile(filePath: string): Promise<string> {
-  const hash = createHash('sha256');
-  const { createReadStream } = await import('node:fs');
-  await new Promise<void>((resolve, reject) => {
-    const stream = createReadStream(filePath);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolve());
-    stream.on('error', reject);
+const fileHashCache = new Map<string, { size: number; mtimeMs: number; sha256: string }>();
+const fileHashInflight = new Map<string, Promise<string>>();
+
+async function hashOfFile(filePath: string, fileInfo?: Awaited<ReturnType<typeof stat>>): Promise<string> {
+  const info = fileInfo ?? await stat(filePath);
+  const size = Number(info.size);
+  const mtimeMs = Number(info.mtimeMs);
+  const cached = fileHashCache.get(filePath);
+  if (cached && cached.size === size && cached.mtimeMs === mtimeMs) {
+    return cached.sha256;
+  }
+
+  const key = `${filePath}|${size}|${mtimeMs}`;
+  const inflight = fileHashInflight.get(key);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const hash = createHash('sha256');
+    const { createReadStream } = await import('node:fs');
+    await new Promise<void>((resolve, reject) => {
+      const stream = createReadStream(filePath);
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('end', () => resolve());
+      stream.on('error', reject);
+    });
+    const sha256 = hash.digest('hex');
+    fileHashCache.set(filePath, { size, mtimeMs, sha256 });
+    return sha256;
+  })().finally(() => {
+    fileHashInflight.delete(key);
   });
-  return hash.digest('hex');
+  fileHashInflight.set(key, task);
+  return task;
 }
 
 export class ModelManager {
@@ -115,17 +138,18 @@ export class ModelManager {
     const filePath = this.resolvePath(ref);
     let exists = false;
     let bytes = 0;
+    let fileInfo: Awaited<ReturnType<typeof stat>> | undefined;
     try {
-      const info = await stat(filePath);
-      exists = info.isFile();
-      bytes = info.size;
+      fileInfo = await stat(filePath);
+      exists = fileInfo.isFile();
+      bytes = fileInfo.size;
     } catch {
       exists = false;
     }
     const hashVerifiable = Boolean(ref.sha256 && SHA256_RE.test(ref.sha256));
     let sha256: string | undefined;
-    if (exists) {
-      sha256 = await hashOfFile(filePath);
+    if (exists && fileInfo) {
+      sha256 = await hashOfFile(filePath, fileInfo);
     }
     return {
       role,

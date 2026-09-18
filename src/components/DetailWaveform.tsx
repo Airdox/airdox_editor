@@ -896,20 +896,29 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     });
   };
 
-  // Zoom via mouse wheel
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+  // Zoom via mouse wheel. React/Chromium registers delegated wheel
+  // listeners as passive in modern Electron, so calling preventDefault() from
+  // an `onWheel` prop logs "Unable to preventDefault inside passive event
+  // listener invocation". Attach a local non-passive listener instead.
+  const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     if (e.deltaY < 0) {
       onZoomIn();
     } else {
       onZoomOut();
     }
-  };
+  }, [onZoomIn, onZoomOut]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    node.addEventListener('wheel', handleWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
 
   return (
     <div
       ref={containerRef}
-      onWheel={handleWheel}
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();

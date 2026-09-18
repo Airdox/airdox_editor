@@ -52,10 +52,10 @@ export class HTDemucsSeparator implements IStemSeparator {
 
   async isAvailable(): Promise<BackendAvailability> {
     const python = this.options.pythonCommand ?? 'python3';
-    const probe = await probeExecutable(python, ['-c', 'import demucs, torch; print("ok")']);
+    const probe = await probeExecutable(python, ['-c', 'import demucs, torch; print("ok")'], 60000, this.options.env);
     return {
       available: probe.found,
-      reason: probe.found ? undefined : `Demucs ist in ${python} nicht importierbar`,
+      reason: probe.found ? undefined : `Demucs ist in ${python} nicht importierbar${probe.detail ? `: ${probe.detail}` : ''}`,
       probes: [{ name: python, found: probe.found, detail: probe.detail }],
     };
   }

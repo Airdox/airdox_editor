@@ -23,8 +23,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ModelRegistry } from '../src/stems/modelRegistry';
-import { StemSeparationEngine } from '../src/stems/stemSeparationEngine';
+import { StemSeparationEngine, type BackendFactory } from '../src/stems/stemSeparationEngine';
 import { StemJobService } from '../src/stems/stemJobService';
+import type { IStemSeparator } from '../src/stems/backends/types';
 
 console.log('═══════════════════════════════════════════════════════════════════');
 console.log('  STEM PROFILE FALLBACK – VORSCHAU OHNE DEMUCS-GEWICHTE          ');
@@ -44,6 +45,32 @@ interface CatalogModel {
 async function loadCatalog(): Promise<{ models: CatalogModel[] }> {
   const raw = await readFile(path.join(process.cwd(), 'src', 'stems', 'modelCatalog.json'), 'utf8');
   return JSON.parse(raw) as { models: CatalogModel[] };
+}
+
+function availableRoformerBackend(available = true): BackendFactory {
+  const separator: IStemSeparator = {
+    kind: 'python-torch',
+    family: 'bs_roformer',
+    name: 'test-bs-roformer-runtime',
+    capabilities: () => ({
+      kind: 'python-torch',
+      family: 'bs_roformer',
+      name: 'test-bs-roformer-runtime',
+      supportedDevices: ['auto', 'cpu', 'cuda'],
+      supportedPrecision: ['native', 'f32', 'f16', 'bf16', 'q8_0'],
+      streamsProgress: true,
+      cancellable: true,
+      trainedModel: true,
+      inMemory: false,
+    }),
+    isAvailable: async () => (available ? { available: true } : { available: false, reason: 'Test-Runtime fehlt' }),
+    separate: async () => {
+      throw new Error('Test-Backend wird in diesem Status-Test nicht ausgeführt');
+    },
+  };
+  return {
+    candidates: (descriptor) => (descriptor.family === 'bs_roformer' ? [separator] : []),
+  };
 }
 
 async function run() {
@@ -110,9 +137,9 @@ async function run() {
 
   // ---- #3: dieselbe Matrix für die UI (StemJobService) ---------------------
   console.log('\n[ TEST ] #3 Die UI-Matrix nennt genau das Modell, das ein Job nutzt');
-  const service = new StemJobService({ root, registry, chunkSizeSamples: 44100 });
+  const service = new StemJobService({ root, registry, chunkSizeSamples: 44100, backendFactory: availableRoformerBackend() });
   const status = await service.status();
-  assert.equal(status.usable, true, 'mit Gewichten ist die Engine nutzbar');
+  assert.equal(status.usable, true, 'mit Gewichten und Backend ist die Engine nutzbar');
   const previewProfile = status.profiles.find((entry) => entry.profile === 'PREVIEW')!;
   assert.equal(previewProfile.modelId, PRIMARY_ID);
   assert.equal(previewProfile.available, true, 'Vorschau darf nicht mehr „keine Gewichte" zeigen');
@@ -122,6 +149,21 @@ async function run() {
   // Und die Auflösung, die der Jobstart benutzt, stimmt damit überein:
   assert.equal(service.engine.resolveModel('PREVIEW').id, previewProfile.modelId);
   console.log(`  ✓ PREVIEW: modelId=${previewProfile.modelId}, available=${previewProfile.available}, num_overlap=${previewProfile.parameters.numOverlap}`);
+
+  const unavailableRuntimeService = new StemJobService({
+    root,
+    registry,
+    chunkSizeSamples: 44100,
+    backendFactory: availableRoformerBackend(false),
+  });
+  const unavailableStatus = await unavailableRuntimeService.status();
+  assert.equal(unavailableStatus.usable, false, 'Gewichte ohne Runtime dürfen nicht als nutzbar gelten');
+  assert.match(
+    unavailableStatus.profiles.find((entry) => entry.profile === 'PREVIEW')?.reason ?? '',
+    /Test-Runtime fehlt/,
+    'UI-Preflight muss Backendfehler vor dem Jobstart nennen'
+  );
+  console.log('  ✓ installierte Gewichte ohne Runtime -> Status nicht nutzbar');
 
   // ---- #4: das Test-Double wird nie zum Standard ---------------------------
   console.log('\n[ TEST ] #4 Das Pipeline-Double bleibt ein explizites Testwerkzeug');

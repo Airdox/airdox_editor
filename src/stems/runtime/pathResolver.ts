@@ -228,7 +228,7 @@ export function resolveStemRuntime(options: {
 
   // 5. System Python – ONLY as diagnostic fallback, never primary
   // We still return it as candidate but mark reason that it's system python
-  // and must be version-checked (3.9-3.13 only)
+  // and must be version-checked (3.10-3.12 only for the pinned PyTorch runtime)
   const systemCandidates = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
   for (const c of systemCandidates) candidates.push(c);
 
