@@ -82,6 +82,14 @@ import {
   STEM_TYPES,
 } from './audio/stemEngine';
 import { applyStemMixDuringPlayback, isCustomStemMix } from './audio/stemPlayback';
+import {
+  loadStemArchitectureSettings,
+  resolveArchitectureJobOptions,
+  saveStemArchitectureSettings,
+  type StemArchitectureOption,
+  type StemArchitectureSettings,
+  type StemArchitectureViewState,
+} from './audio/stemArchitectures';
 import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
@@ -469,19 +477,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
   const [stemEngineInfo, setStemEngineInfo] = useState<StemEngineInfo | null>(null);
   const [stemEngineUnavailableReason, setStemEngineUnavailableReason] = useState<string | null>(null);
-  // Architektur-Auswahl (Settings-Menü): welche Modell-Familie die Separation
-  // verwenden soll. `null` = automatische Auswahl der Engine (bisheriges Verhalten).
-  const [stemFamily, setStemFamily] = useState<ModelFamily | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const stored = window.localStorage.getItem('airdox.stemFamily');
-    return stored && (SELECTABLE_MODEL_FAMILIES as string[]).includes(stored) ? (stored as ModelFamily) : null;
-  });
+  // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
+  // Separationen und wird wie die übrigen Settings lokal persistiert.
+  const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
+    loadStemArchitectureSettings(typeof window === 'undefined' ? null : window.localStorage)
+  );
+  const [stemArchitectures, setStemArchitectures] = useState<StemArchitectureOption[]>([]);
+  const [stemArchitectureState, setStemArchitectureState] = useState<StemArchitectureViewState | null>(null);
+  const [stemArchitecturesLoading, setStemArchitecturesLoading] = useState<boolean>(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (stemFamily) window.localStorage.setItem('airdox.stemFamily', stemFamily);
-    else window.localStorage.removeItem('airdox.stemFamily');
-  }, [stemFamily]);
+    saveStemArchitectureSettings(typeof window === 'undefined' ? null : window.localStorage, stemArchitecture);
+  }, [stemArchitecture]);
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
@@ -1051,6 +1058,38 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const resolvedStemProfile: StemQualityProfile =
     stemProfile ?? (stemEngineInfo?.usable ? 'HIGH' : 'BALANCED');
 
+  /**
+   * Architekturliste für das Einstellungsmenü: kommt aus derselben Quelle wie
+   * die Profilanzeige (Desktop-IPC oder HTTP) und braucht keine Gewichte.
+   */
+  const refreshStemArchitectures = useCallback(async () => {
+    setStemArchitecturesLoading(true);
+    try {
+      const result = await stemEngine.listArchitectures();
+      setStemArchitectures(result.options);
+      setStemArchitectureState({ transport: result.transport, reason: result.reason, onnx: result.onnx });
+    } catch (error) {
+      setStemArchitectureState({
+        transport: 'unavailable',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setStemArchitecturesLoading(false);
+    }
+  }, []);
+
+  // Einmal beim Start …
+  useEffect(() => {
+    void refreshStemArchitectures();
+  }, [refreshStemArchitectures]);
+
+  // … und jedes Mal, wenn die Einstellungen geöffnet werden: die
+  // Installationslage kann sich zwischenzeitlich geändert haben.
+  useEffect(() => {
+    if (!settingsModalOpen) return;
+    void refreshStemArchitectures();
+  }, [settingsModalOpen, refreshStemArchitectures]);
+
   // Stem separation & mixer handlers – BS-RoFormer only, no spectral fallback per §2,§38
   const runStemSeparation = useCallback(async (profile: StemQualityProfile = 'BALANCED') => {
     if (!activeTrack || !workingAudioBuffer) {
@@ -1062,7 +1101,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       const separated = await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
         profile,
-        family: stemFamily ?? undefined,
+        ...resolveArchitectureJobOptions(stemArchitecture),
         onProgress: (prog) => setSeparationProgress(prog),
       });
       setActiveTrackStems(separated);
@@ -1091,7 +1130,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setIsSeparatingStems(false);
       setSeparationProgress(null);
     }
-  }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemFamily]);
+  }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemArchitecture]);
 
   const handleCancelStemSeparation = useCallback(() => {
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
@@ -1102,6 +1141,22 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleSeparateStems = useCallback(async () => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
+      return;
+    }
+    // Feste Architektur aus dem Einstellungsmenü vor dem Preflight prüfen:
+    // lieber eine klare Ansage als ein Job, der in MODEL_MISSING endet.
+    const pinnedArchitecture =
+      stemArchitecture.architectureId === 'auto'
+        ? undefined
+        : stemArchitectures.find((entry) => entry.id === stemArchitecture.architectureId);
+    if (pinnedArchitecture && !pinnedArchitecture.installed) {
+      const reason = pinnedArchitecture.reason ?? `Modell ${pinnedArchitecture.id} ist nicht installiert.`;
+      logger.warn('EDITING', `Stem-Preflight: Architektur ${pinnedArchitecture.id} nicht nutzbar — ${reason}`);
+      setStemEngineUnavailableReason(reason);
+      setStemQualityWarning(
+        `Architektur „${pinnedArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
+          'Installation: npm run stems:bundle bzw. der In-App-Installer – oder im Einstellungsmenü auf „Automatisch" stellen.'
+      );
       return;
     }
     const profile = resolvedStemProfile;
@@ -1127,7 +1182,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const info = await stemEngine.getEngineInfo();
     setStemEngineInfo(info);
     const chosen = info.profiles.find((entry) => entry.profile === profile);
-    if (!info.ok || (chosen && !chosen.available)) {
+    // Bei fest gewählter Architektur entscheidet deren Verfügbarkeit (oben
+    // geprüft) – die Profil-Reserve darf den Job nicht blockieren.
+    if (!pinnedArchitecture && (!info.ok || (chosen && !chosen.available))) {
       logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
       setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
       setStemQualityWarning(
@@ -1136,20 +1193,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       );
       return;
     }
-    if (stemFamily) {
-      const family = info.families.find((entry) => entry.family === stemFamily);
-      if (family && !family.available) {
-        logger.warn('EDITING', `Stem-Preflight: Architektur ${family.label} nicht nutzbar — ${family.reason}`);
-        setStemEngineUnavailableReason(family.reason || `Architektur ${family.label} nicht verfügbar`);
-        setStemQualityWarning(
-          `Architektur ${family.label} nicht verfügbar: ${family.reason || 'Engine nicht erreichbar'}. ` +
-            'Wähle in den Einstellungen eine andere Stem-Architektur oder installiere das fehlende Modell.'
-        );
-        return;
-      }
-    }
     await runStemSeparation(profile);
-  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile, stemFamily]);
+  }, [activeTrack, workingAudioBuffer, runStemSeparation, resolvedStemProfile, stemArchitecture, stemArchitectures]);
 
   const updateLiveStemPlayback = useCallback((next: StemsMixerState) => {
     applyStemMixDuringPlayback(
@@ -4019,9 +4064,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onSetConfirmDestructiveEdits={setConfirmDestructiveEdits}
         autoSaveProject={autoSaveProject}
         onSetAutoSaveProject={setAutoSaveProject}
-        stemFamilies={stemEngineInfo?.families}
-        stemFamily={stemFamily}
-        onSetStemFamily={setStemFamily}
+        stemArchitectures={stemArchitectures}
+        stemArchitectureId={stemArchitecture.architectureId}
+        onSetStemArchitectureId={(id) => setStemArchitecture((prev) => ({ ...prev, architectureId: id }))}
+        stemValidationMode={stemArchitecture.validationMode}
+        onSetStemValidationMode={(mode) => setStemArchitecture((prev) => ({ ...prev, validationMode: mode }))}
+        stemDevice={stemArchitecture.device}
+        onSetStemDevice={(device) => setStemArchitecture((prev) => ({ ...prev, device }))}
+        stemEngineState={stemArchitectureState}
+        stemArchitecturesLoading={stemArchitecturesLoading}
+        onRefreshStemArchitectures={() => { void refreshStemArchitectures(); }}
       />
       {activeTrack && (
         <>

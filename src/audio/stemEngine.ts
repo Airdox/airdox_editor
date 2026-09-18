@@ -18,8 +18,9 @@
 
 import { BufferFactory } from './editingEngine';
 import { logger } from '../utils/logger';
-import type { StemJobView, StemServiceStatus } from '../stems/transportTypes';
+import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
 import type { ModelFamily } from '../stems/types';
+import { describeArchitectures, type StemArchitectureOption } from './stemArchitectures';
 
 export type { ModelFamily } from '../stems/types';
 
@@ -138,9 +139,14 @@ export interface StemEngineInfo {
 
 export interface EngineSeparationOptions {
   profile?: StemQualityProfile;
+  /** Fest gewählte Architektur (Modell-ID). Ohne Angabe entscheidet das Profil. */
   modelId?: string;
   /** Explicit architecture (model family) to use; ignored when `modelId` is set. */
   family?: ModelFamily;
+  /** Rechengerät der in-process-Engine (ONNX): auto/cpu/directml/cuda/coreml. */
+  device?: StemComputeDevice;
+  /** Validierungstiefe: live (fast_dj) oder Studio (volle Grenzanalyse). */
+  mode?: StemValidationMode;
   onProgress?: StemProgressCallback;
   signal?: { aborted: boolean };
   chunkSizeSamples?: number;
@@ -595,6 +601,46 @@ class StemEngine {
   }
 
   /**
+   * Architekturen für das Einstellungsmenü: dieselbe Statusquelle wie die
+   * Profilanzeige (Desktop-IPC oder HTTP), aber in eine Auswahlliste
+   * übersetzt. Der Aufruf braucht keine Gewichte und startet keine Inferenz.
+   */
+  public async listArchitectures(): Promise<{ options: StemArchitectureOption[]; onnx?: StemServiceStatus['onnx']; transport: 'desktop-ipc' | 'http' | 'unavailable'; reason?: string }> {
+    let status: StemServiceStatus | undefined;
+    let transport: 'desktop-ipc' | 'http' | 'unavailable' = 'unavailable';
+    let reason: string | undefined;
+    try {
+      const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop : undefined;
+      if (desktop?.stemEngine?.getStemEngineStatus) {
+        const result = await desktop.stemEngine.getStemEngineStatus();
+        if (result.ok === true) {
+          status = result.data;
+          transport = 'desktop-ipc';
+        } else {
+          reason = result.message;
+        }
+      } else if (typeof fetch === 'function') {
+        const response = await fetch('/api/stems/engine');
+        const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: StemServiceStatus; message?: string };
+        if (response.ok && payload.data) {
+          status = payload.data;
+          transport = 'http';
+        } else {
+          reason = payload.message ?? `Stem-Service antwortet mit HTTP ${response.status}.`;
+        }
+      } else {
+        reason = 'Kein Transport zum Stem-Service (weder Desktop-IPC noch HTTP).';
+      }
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+    }
+    if (!status) {
+      return { options: describeArchitectures([]), transport, reason };
+    }
+    return { options: describeArchitectures(status.models ?? []), onnx: status.onnx, transport };
+  }
+
+  /**
    * Separation über die neue Engine (BS-RoFormer).
    * Job-basiert, echte AI-Inference, Original unverändert.
    */
@@ -623,7 +669,15 @@ class StemEngine {
 
       let job: StemJobView;
       if (desktop?.startStemJob) {
-        const started = await desktop.startStemJob({ bytes: wav, trackName, profile, modelId: options.modelId, family: options.modelId ? undefined : options.family });
+        const started = await desktop.startStemJob({
+          bytes: wav,
+          trackName,
+          profile,
+          modelId: options.modelId,
+          family: options.modelId ? undefined : options.family,
+          device: options.device,
+          mode: options.mode,
+        });
         if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
         job = started.data;
         this.activeJobId = job.jobId;
@@ -647,7 +701,15 @@ class StemEngine {
         const response = await fetch('/api/stems/jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bytes: base64FromBytes(wav), trackName, profile, modelId: options.modelId, family: options.modelId ? undefined : options.family }),
+          body: JSON.stringify({
+            bytes: base64FromBytes(wav),
+            trackName,
+            profile,
+            modelId: options.modelId,
+            family: options.modelId ? undefined : options.family,
+            device: options.device,
+            mode: options.mode,
+          }),
         });
         const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; code?: string; data?: StemJobView };
         if (!response.ok || !payload.ok || !payload.data) {

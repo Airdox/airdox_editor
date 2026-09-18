@@ -34,7 +34,7 @@ export interface RegistryValidationResult {
 
 /** Every model family the catalog schema accepts. Exported so callers never hard code this list. */
 export const KNOWN_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
-const KNOWN_BACKENDS: BackendKind[] = ['native-cli', 'python-torch', 'in-process'];
+const KNOWN_BACKENDS: BackendKind[] = ['native-cli', 'python-torch', 'in-process', 'onnx'];
 const KNOWN_PRECISION: ModelPrecision[] = ['native', 'f32', 'f16', 'bf16', 'q8_0'];
 const SHA256_RE = /^[a-f0-9]{64}$/;
 /** Synthetic checkpoints (pipeline double) carry a non-downloadable id instead. */
@@ -200,11 +200,14 @@ export class ModelRegistry {
   }
 
   /**
-   * Deterministic model selection:
-   * HIGH_QUALITY / MAXIMUM_QUALITY / HIGH / BALANCED always prefer `bs_roformer` (primary engine),
-   * then other RoFormer families. PREVIEW prefers the fastest available family.
+   * Deterministic candidate order for a profile (ranked, not filtered).
+   *
+   * HIGH_QUALITY / MAXIMUM_QUALITY / HIGH / BALANCED prefer `bs_roformer` (the
+   * primary engine), then the other RoFormer families. PREVIEW prefers the
+   * fastest family (`htdemucs`) – but only as a *preference*: `selectForProfile`
+   * skips candidates that are not actually usable.
    */
-  selectForProfile(profile: QualityProfile, family?: ModelFamily): ModelDescriptor {
+  rankForProfile(profile: QualityProfile, family?: ModelFamily): ModelDescriptor[] {
     const candidates = this.candidatesForProfile(profile, family);
     if (candidates.length === 0) {
       throw new StemSeparationError(
@@ -224,8 +227,41 @@ export class ModelRegistry {
       // Primary model first
       if (a.id === 'bsroformer-musdb18hq-4stem-zfturbo') return -1;
       if (b.id === 'bsroformer-musdb18hq-4stem-zfturbo') return 1;
-      return a.id.localeCompare(b.id);
-    })[0];
+      // Within one family the catalog order decides – and the order is part of
+      // the contract (tests + the phase-1 rule that nothing gets re-sorted
+      // silently). The in-process ONNX graph therefore works through
+      // availability: it is picked as soon as it is the only installed member
+      // of its family, and stays behind htdemucs_ft when that one is present.
+      return 0;
+    });
+  }
+
+  /**
+   * The model that serves a profile.
+   *
+   * `options.isAvailable` hands in what the catalog cannot know: whether the
+   * weights are on disk. That is what keeps "Vorschau" usable – the catalog
+   * declares PREVIEW for both families, and the faster Demucs weights are
+   * optional (no installer ships them), so a BS-RoFormer installation must be
+   * able to serve the preview profile instead of leaving the button dead
+   * forever with "keine Gewichte".
+   *
+   * Without a predicate the catalog order alone decides (pure catalog
+   * questions, tests). If a predicate rejects every candidate, the top-ranked
+   * one is returned, so the UI keeps naming the primary model together with its
+   * concrete reason instead of a generic one.
+   */
+  selectForProfile(
+    profile: QualityProfile,
+    family?: ModelFamily,
+    options: { isAvailable?: (descriptor: ModelDescriptor) => boolean } = {}
+  ): ModelDescriptor {
+    const ranked = this.rankForProfile(profile, family);
+    if (options.isAvailable) {
+      const usable = ranked.find((descriptor) => options.isAvailable?.(descriptor));
+      if (usable) return usable;
+    }
+    return ranked[0];
   }
 
   /** Overlap/ensemble parameters of a model for one profile. */

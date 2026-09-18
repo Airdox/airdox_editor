@@ -75,7 +75,11 @@ async function run() {
   assert.deepEqual(bsRoformer.modelIds, ['bsroformer-musdb18hq-4stem-zfturbo', 'bsroformer-viperx-vocals-1297']);
   assert.ok(bsRoformer.serves.includes('HIGH_QUALITY'), 'BS-RoFormer bedient HIGH_QUALITY');
   const htdemucs = status.families.find((entry) => entry.family === 'htdemucs')!;
-  assert.deepEqual(htdemucs.serves, ['PREVIEW'], 'htdemucs bedient nur PREVIEW laut Katalog');
+  assert.deepEqual(
+    htdemucs.serves,
+    ['PREVIEW', 'BALANCED', 'HIGH'],
+    'htdemucs bedient laut Katalog PREVIEW/BALANCED/HIGH (Subprozess-Demucs + in-process ONNX), aber nicht HIGH_QUALITY/MAXIMUM_QUALITY'
+  );
   console.log(`  ✓ ${status.families.length} Architekturen mit Label/Beschreibung/Modellen: ${familyIds.join(', ')}`);
 
   // =========================================================================

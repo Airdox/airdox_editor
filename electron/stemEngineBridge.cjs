@@ -41,6 +41,9 @@ const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALIT
 // Test-Double-Request nicht schon hier verworfen, sondern mit dem echten Fehlercode
 // des Kerns beantwortet wird.
 const FAMILIES = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
+/** Rechengeräte und Validierungstiefe, die ein Job aus dem Renderer wählen darf. */
+const DEVICES = ['auto', 'cpu', 'cuda', 'vulkan', 'metal', 'directml', 'coreml'];
+const MODES = ['fast_dj', 'studio_master'];
 
 /** Shared by the desktop and HTTP hosts; directories alone are not models. */
 function resolveEnginePaths(repoRoot, stemsRoot) {
@@ -118,7 +121,8 @@ function sanitizeRequest(raw) {
   if (typeof raw.modelId === 'string' && raw.modelId.length) request.modelId = raw.modelId.slice(0, 120);
   if (PROFILES.includes(raw.profile)) request.profile = raw.profile;
   if (FAMILIES.includes(raw.family)) request.family = raw.family;
-  if (typeof raw.device === 'string') request.device = raw.device;
+  if (typeof raw.device === 'string' && DEVICES.includes(raw.device)) request.device = raw.device;
+  if (MODES.includes(raw.mode)) request.mode = raw.mode;
   if (typeof raw.precision === 'string') request.precision = raw.precision;
   if (typeof raw.overlap === 'number' && raw.overlap >= 0 && raw.overlap <= 0.95) request.overlap = raw.overlap;
   if (typeof raw.chunkSizeSamples === 'number' && raw.chunkSizeSamples >= 4096) request.chunkSizeSamples = Math.floor(raw.chunkSizeSamples);
@@ -164,6 +168,12 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     root: roots.root,
     env: process.env,
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    // DJ-Pfad: die App validiert standardmäßig schnell (Geometrie, endliche
+    // Samples, Peak) statt der vollen Grenz-/Rekombinationsanalyse. Über
+    // AIRODOX_STEM_MODE=studio_master lässt sich das verschärfen, und
+    // AIRODOX_STEM_DEVICE wählt das Rechengerät der ONNX-Engine.
+    mode: process.env.AIRDOX_STEM_MODE || 'fast_dj',
+    device: process.env.AIRDOX_STEM_DEVICE,
     ...resolveEnginePaths(repoRoot, roots.root),
     logger: {
       debug: (category, message, details) => log(logger, 'debug', `[bridge] ${message}`, details),

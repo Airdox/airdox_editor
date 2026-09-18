@@ -25,13 +25,33 @@ export type ModelFamily =
  * - `native-cli`  : native C++ binary (audio.cpp / BSRoformer.cpp style)
  * - `python-torch`: Python + PyTorch runtime (development / offline tests)
  * - `in-process`  : inside this process (contract double for automated tests)
+ * - `onnx`        : ONNX Runtime inside this process – GPU via DirectML/CUDA/
+ *                   CoreML, no Python, no subprocess, no chunk files on disk
  */
-export type BackendKind = 'native-cli' | 'python-torch' | 'in-process';
+export type BackendKind = 'native-cli' | 'python-torch' | 'in-process' | 'onnx';
 
 /** Weight storage precision. Mirrors the modes exposed by native runtimes. */
 export type ModelPrecision = 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
 
-export type ComputeDevice = 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
+/**
+ * Requested compute device.
+ * `directml` is the Windows DX12 path (AMD/NVIDIA/Intel), `coreml` the Apple
+ * path – the ONNX backend maps both onto its execution providers.
+ */
+export type ComputeDevice = 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal' | 'directml' | 'coreml';
+
+/**
+ * Processing mode (§ new, DJ path).
+ *
+ * - `studio_master`: full validation – boundary metrics, recombination check,
+ *   continuity measurement. Slow, but every artefact is reported.
+ * - `fast_dj`: validation reduced to the checks that actually protect the user
+ *   (file geometry, finite samples, peak, non-silence). Meant for live work
+ *   where a stem must be there in seconds.
+ */
+export type ProcessingMode = 'fast_dj' | 'studio_master';
+
+export const PROCESSING_MODES: ProcessingMode[] = ['fast_dj', 'studio_master'];
 
 /**
  * Quality profiles – per §23.
@@ -54,6 +74,7 @@ export type CheckpointFormat =
   | 'pytorch-ckpt'
   | 'yaml'
   | 'demucs-th'
+  | 'onnx'
   | 'synthetic';
 
 export interface ModelCheckpointRef {
@@ -255,11 +276,18 @@ export interface QualityValidationReport {
   pass: boolean;
   issues: StemValidationIssue[];
   stems: StemValidationReport[];
-  continuity: BoundaryContinuityReport;
+  /**
+   * Boundary/continuity analysis. `null` in `fast_dj` mode: the metric was
+   * **not measured** – that is different from "measured and fine" and must be
+   * displayed as such.
+   */
+  continuity: BoundaryContinuityReport | null;
   /** Sum of all stems vs. the working copy, in dB (recombination sanity). */
-  recombinationErrorDb: number;
+  recombinationErrorDb: number | null;
   /** True when the result came from a trained model rather than a double. */
   fromTrainedModel: boolean;
+  /** Which validation depth produced this report. */
+  mode?: ProcessingMode;
 }
 
 /** Immutable integrity snapshot of the read-only original. */

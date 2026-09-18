@@ -42,6 +42,7 @@ export class HTDemucsSeparator implements IStemSeparator {
       streamsProgress: false,
       cancellable: true,
       trainedModel: true,
+      inMemory: false,
     };
   }
 

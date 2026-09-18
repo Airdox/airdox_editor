@@ -16,10 +16,37 @@ import type {
   StemId,
 } from '../types';
 
+/**
+ * One stem that a backend produced **in memory**.
+ *
+ * In-memory is the DJ path: a chunk never becomes a file. A backend that
+ * declares `capabilities().inMemory` receives the slice as interleaved
+ * float32 and answers with interleaved float32 – the engine then never writes
+ * `chunk_NNNN.wav` nor the stem WAVs of that chunk. Final stems are still
+ * written once, because the product has to exist as a file.
+ */
+export interface InlineStem {
+  name: string;
+  /** Interleaved float32, `frames * channels` samples. */
+  samples: Float32Array;
+  frames: number;
+  channels: number;
+  /** Model output index, resolved through the descriptor's stem order. */
+  outputIndex?: number;
+}
+
 export interface BackendSeparationRequest {
   descriptor: ModelDescriptor;
   /** Path of the 44.1 kHz stereo float32 WAV slice to separate. */
   workingWavPath: string;
+  /**
+   * In-memory slice for backends with `capabilities().inMemory`.
+   * Interleaved float32 of the *whole* slice (not a segment).
+   */
+  workingSamples?: Float32Array;
+  /** Sample rate / channels of `workingSamples` (defaults: descriptor values). */
+  sampleRate?: number;
+  channels?: number;
   /** Directory the backend writes its stem WAV files into. */
   outputDir: string;
   /** Absolute offset of this slice inside the full working copy. */
@@ -52,7 +79,10 @@ export interface BackendSeparationResponse {
   /** Family that actually produced the result, e.g. `bs_roformer`. */
   engine: ModelFamily;
   backend: BackendKind;
+  /** File based result; empty for pure in-memory backends. */
   stems: BackendStemFileRef[];
+  /** In-memory result; present when `capabilities().inMemory` is true. */
+  inlineStems?: InlineStem[];
   device: ComputeDevice;
   /** True when the requested device was unavailable and CPU was used. */
   cpuFallback?: boolean;
@@ -80,6 +110,12 @@ export interface BackendCapabilities {
   cancellable: boolean;
   /** True for trained models; false for the pipeline test double. */
   trainedModel: boolean;
+  /**
+   * True when the backend accepts `workingSamples` and answers with
+   * `inlineStems`. The engine then skips chunk WAVs entirely – no
+   * `chunk_NNNN.wav`, no per-chunk output directory, no temporary stem files.
+   */
+  inMemory: boolean;
 }
 
 export interface IStemSeparator {

@@ -211,6 +211,10 @@ async function startServer() {
     // Dasselbe (und nur per Env gesetzte) Test-Double-Gate wie im
     // Electron-Host: Produktionsläufe können es nicht erreichen.
     allowPipelineDouble: process.env.AIRDOX_STEM_ALLOW_PIPELINE_DOUBLE === '1',
+    // DJ-Pfad: Der Dev-/App-Server validiert schnell (AIRODOX_STEM_MODE steuert
+    // die Tiefe, AIRODOX_STEM_DEVICE das Rechengerät der ONNX-Engine).
+    mode: (process.env.AIRDOX_STEM_MODE as 'fast_dj' | 'studio_master' | undefined) ?? 'fast_dj',
+    device: process.env.AIRDOX_STEM_DEVICE as 'auto' | 'cpu' | 'cuda' | 'directml' | 'coreml' | undefined,
     ...stemEngineHost.resolveEnginePaths(process.cwd(), stemsDataRoot),
     logger: {
       debug: (category, message, details) => logger.debug(category, message, details),
@@ -246,7 +250,10 @@ async function startServer() {
         modelId?: string;
         family?: 'bs_roformer' | 'mel_band_roformer' | 'htdemucs' | 'pipeline_double';
         stems?: string[];
-        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal';
+        // Architektur-/Gerätewahl aus dem Einstellungsmenü. Explizit gewählte
+        // Werte schlagen die Umgebungs-Defaults (AIRDOX_STEM_MODE/DEVICE).
+        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal' | 'directml' | 'coreml';
+        mode?: 'fast_dj' | 'studio_master';
         precision?: 'native' | 'f32' | 'f16' | 'bf16' | 'q8_0';
         overlap?: number;
         chunkSizeSamples?: number;
@@ -263,6 +270,7 @@ async function startServer() {
         family: body.family,
         stems: Array.isArray(body.stems) ? body.stems : undefined,
         device: body.device,
+        mode: body.mode,
         precision: body.precision,
         overlap: typeof body.overlap === 'number' ? body.overlap : undefined,
         chunkSizeSamples: typeof body.chunkSizeSamples === 'number' ? body.chunkSizeSamples : undefined,

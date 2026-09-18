@@ -77,8 +77,17 @@ export class StemRegistry {
    * never presented as complete (§17).
    */
   mapOutputs(files: BackendStemFile[], expected: StemId[]): Map<StemId, BackendStemFile> {
-    const mapped = new Map<StemId, BackendStemFile>();
-    const consumed = new Set<BackendStemFile>();
+    return this.mapStemEntries(files, expected);
+  }
+
+  /**
+   * The same mapping for *in-memory* results (`InlineStem`): the ONNX backend
+   * returns samples instead of files, but the naming rules – and therefore the
+   * safety against a swapped stem order – are identical.
+   */
+  mapStemEntries<T extends { name: string; outputIndex?: number }>(files: T[], expected: StemId[]): Map<StemId, T> {
+    const mapped = new Map<StemId, T>();
+    const consumed = new Set<T>();
 
     for (const file of files) {
       if (typeof file.outputIndex === 'number' && this.indexToStem.has(file.outputIndex)) {

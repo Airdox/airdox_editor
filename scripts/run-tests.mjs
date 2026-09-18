@@ -17,7 +17,7 @@
  *   (tests/support/**, tests/fixtures/** und *.helper.* laufen nicht mit)
  *
  * Steuerung über Direktiven im Kommentar-Kopf einer Testdatei:
- *   // @requires: python, torch, demucs, model, network
+ *   // @requires: python, torch, demucs, model, network, onnxruntime
  *     → der Test wird übersprungen (SKIP, kein Fehler), wenn die Umgebung
  *       etwas davon nicht bietet. Erfüllt ein Test seine requirements nicht und
  *       `--fail-on-skip` ist gesetzt, gilt das als Fehler (Freigabe-Läufe).
@@ -53,7 +53,7 @@ const GROUPS = {
   // TypeScript und ohne Python ausführbar (die python-abhängigen Suiten
   // erklären sich über @requires-Direktiven selbst für SKIP).
   stems: (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
   // Die Freigabe-Läufe mit echten Gewichten (Checkpoint + PyTorch nötig). Beide
   // sind ohne installierten Checkpoint ein sauberer SKIP – `test:stems:release`
   // dreht das mit --fail-on-skip um, damit niemand "grün" liest, wo nichts lief.
@@ -61,7 +61,7 @@ const GROUPS = {
   'stems-live': (file) => /stem-separation-.*live|stem-isolation-gate-live/.test(file),
   // CI-Freigabe: alles, was ohne Spezialumgebung wirklich laufen muss.
   'stems-release': (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-(?:paths|regression)|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
   logging: (file) => /logger/.test(file),
   all: () => true,
 };
@@ -143,6 +143,15 @@ const REQUIREMENTS = {
       ? { ok: true }
       : { ok: false, reason: `Checkpoint fehlt in ${dir} (erwartet: ${checkpoint}; Setup: npm run stems:setup:bsroformer)` };
   },
+  // onnxruntime-node wird als optionale Abhängigkeit installiert; fehlt sie
+  // (oder ist das Binary für diese Plattform nicht vorhanden), skippen die
+  // ONNX-Pipeline-Tests sauber statt rot zu werden.
+  onnxruntime: async () => {
+    const probe = await cached('onnxruntime', () => runQuiet('node', ['-e', "require('onnxruntime-node'); process.stdout.write('ok')"], 30000));
+    return probe.ok
+      ? { ok: true }
+      : { ok: false, reason: 'onnxruntime-node ist nicht installiert (npm install onnxruntime-node)' };
+  },
   network: async () => {
     const result = await cached('network', () => new Promise((resolve) => {
       const socket = net.connect({ host: 'registry.npmjs.org', port: 443 });
@@ -161,6 +170,7 @@ const SKIP_MARKERS = {
   torch: 'PyTorch im venv',
   demucs: 'Demucs-Paket',
   model: 'trainierten BS-RoFormer-Checkpoint',
+  onnxruntime: 'onnxruntime-node (npm install onnxruntime-node)',
   network: 'Netzwerkzugriff',
 };
 
