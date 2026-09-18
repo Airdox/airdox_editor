@@ -1,0 +1,17 @@
+{
+  "sample_rate": 44100,
+  "buffer_size": 512,
+  "theme": "dark",
+  "recent_tracks_limit": 20,
+  "auto_save": true,
+  "cloud": {
+    "drive_base_folder": "AudioEditor_Stems",
+    "drive_input_folder": "AudioEditor_Stems/Input",
+    "drive_output_folder": "AudioEditor_Stems/Output",
+    "poll_interval": 15,
+    "poll_timeout": 3600,
+    "use_mock_drive": false,
+    "colab_webhook_url": null,
+    "auto_download_stems": true
+  }
+}

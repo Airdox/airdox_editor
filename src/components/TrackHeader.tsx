@@ -1,0 +1,162 @@
+/**
+ * @license
+ * Rekordbox TrackHeader Component
+ * Artwork, Title, Time, Key, BPM, and Track Overview Waveform matching Screenshots 01, 02, 03.
+ */
+
+import React from 'react';
+import { FileAudio, Check, Info } from 'lucide-react';
+import { TrackModel } from '../types/rekordbox';
+import { TrackOverview } from './TrackOverview';
+import { Tooltip } from './Tooltip';
+
+interface TrackHeaderProps {
+  track: TrackModel | null;
+  currentTime: number;
+  viewOffset: number; // start of detail window in seconds
+  viewDuration: number; // duration of detail window in seconds
+  onSeek: (time: number) => void;
+  onPanView: (newOffset: number) => void;
+  onLoadAudioClick?: () => void;
+}
+
+export const TrackHeader: React.FC<TrackHeaderProps> = ({
+  track,
+  currentTime,
+  viewOffset,
+  viewDuration,
+  onSeek,
+  onPanView,
+  onLoadAudioClick,
+}) => {
+  // Format 05:26.3
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    const tenths = Math.floor((secs % 1) * 10);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${tenths}`;
+  };
+
+  const waveformSourceLabel = (() => {
+    if (!track?.analysis) return 'KEINE WAVEFORM-ANALYSE';
+    const provenance = track.analysis.provenance;
+    if (track.analysis.origin === 'REKORDBOX_ANLZ' && !provenance) return 'REKORDBOX ANLZ (ORIGINAL)';
+    if (provenance?.nativeCoverage && provenance.projectCoverage) {
+      return `ANLZ ${Math.round(provenance.nativeCoverage * 100)}% + PROJEKT ${Math.round(provenance.projectCoverage * 100)}%`;
+    }
+    if (provenance?.nativeCoverage) return `REKORDBOX ANLZ ${Math.round(provenance.nativeCoverage * 100)}%`;
+    return track.analysis.origin === 'PROJECT' ? 'PROJEKT-AUDIOANALYSE' : track.analysis.origin;
+  })();
+
+  return (
+    <div className="bg-[#0b0c0f] border-b border-[#1a1b22] px-3 py-1.5 flex flex-col select-none">
+      {/* Upper info row: Artwork, Title, Metadata (Time, Key, BPM) */}
+      <div className="flex items-center justify-between mb-1.5">
+        {/* Left: Artwork + Track Title */}
+        <div className="flex items-center space-x-3">
+          {/* Authentic blue disc artwork or empty disc */}
+          <div
+            className="w-10 h-10 rounded-xs bg-gradient-to-br from-[#0c4085] via-[#082a5c] to-[#041433] border border-[#1b4d8c] flex items-center justify-center shadow-inner relative overflow-hidden flex-shrink-0"
+            title={track ? `Track: ${track.title} von ${track.artist}` : 'Kein Track geladen'}
+          >
+            <div className="w-6 h-6 rounded-full border border-[#f5b800]/60 flex items-center justify-center">
+              <span className="font-serif italic font-bold text-[#f5b800] text-[10px] tracking-tighter">
+                {track ? 'SB' : 'RB'}
+              </span>
+            </div>
+            <div className="absolute inset-0 bg-blue-500/10 pointer-events-none" />
+          </div>
+
+          <div className="flex flex-col">
+            <div className="flex items-center space-x-2">
+              <span
+                className="text-white font-semibold text-[13px] tracking-wide"
+                title={`Titel: ${track ? track.title : 'Kein Track geladen'}`}
+              >
+                {track ? track.title : 'Kein Track geladen'}
+              </span>
+              {track && !track.audioBuffer && onLoadAudioClick && (
+                <button
+                  onClick={onLoadAudioClick}
+                  className="flex items-center space-x-1 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 text-[10px] font-semibold transition-all cursor-pointer shadow-sm animate-pulse"
+                  title="Audiodatei (MP3/WAV/FLAC) für diesen Track verknüpfen"
+                >
+                  <FileAudio size={11} />
+                  <span>Audiodatei fehlt – Klicken zum Verknüpfen</span>
+                </button>
+              )}
+              {track && track.audioBuffer && (
+                <span
+                  className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 text-[9.5px] font-mono"
+                  title={`Aktive Audiodatei: ${track.sampleRate} Hz, ${track.channels} Kanäle (${track.duration.toFixed(2)}s)`}
+                >
+                  <Check size={10} />
+                  <span>Audio aktiv ({track.sampleRate}Hz)</span>
+                </span>
+              )}
+            </div>
+            <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">
+              <span title="Interpret / Artist">{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
+              <span>•</span>
+              <span
+                className="text-[#00a2ff] font-mono text-[9.5px]"
+                title="Datenherkunft: Original Rekordbox XML oder lokale Arbeitskopie"
+              >
+                {!track
+                  ? 'LEERES PROJEKT'
+                  : track.origin === 'REKORDBOX_XML'
+                  ? 'REKORDBOX XML'
+                  : 'EDIT WORKING COPY'}
+              </span>
+              {track && (
+                <>
+                  <span>•</span>
+                  <span
+                    className="max-w-[250px] truncate text-emerald-400 font-mono text-[9.5px]"
+                    title="Anzeigequelle der Wellenform; ANLZ-Werte stammen direkt aus der read-only Rekordbox-Analyse."
+                  >
+                    {waveformSourceLabel}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Time, Key, BPM */}
+        <div className="flex items-center space-x-6 font-mono text-neutral-200 text-xs">
+          {/* Duration */}
+          <div className="flex items-center space-x-1" title="Gesamtlaufzeit des Tracks (Minuten:Sekunden.Zehntel)">
+            <span className="text-white font-bold text-[13px]">
+              {track ? formatTime(track.duration) : '00:00.0'}
+            </span>
+          </div>
+
+          {/* Key */}
+          <div className="flex items-center space-x-1" title="Tonart (Camelot / Musikalische Notation aus Rekordbox)">
+            <span className="text-white font-bold text-[13px] tracking-wide">
+              {track ? track.key : '--'}
+            </span>
+          </div>
+
+          {/* BPM */}
+          <div className="flex items-center space-x-1" title="Tempo in Beats per Minute (BPM aus Beatgrid-Analyse)">
+            <span className="text-white font-bold text-[13px]">
+              {track ? track.bpm.toFixed(2) : '--.--'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Lower row: Thin horizontal Track Overview Waveform */}
+      <TrackOverview
+        track={track}
+        currentTime={currentTime}
+        viewOffset={viewOffset}
+        viewDuration={viewDuration}
+        onSeek={onSeek}
+        onPanView={onPanView}
+      />
+    </div>
+  );
+};

@@ -1,0 +1,101 @@
+name: Windows-Build
+
+on:
+  push:
+    branches: ['main', 'release/**', 'arena/**']
+    tags: ['v*']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:      # manuell auf Knopfdruck
+  schedule:
+    - cron: '0 3 * * *'  # täglich 03:00 UTC = 05:00 DE
+
+permissions:
+  contents: write         # wird für das Erstellen von GitHub-Releases benötigt
+
+jobs:
+  build:
+    name: Windows Installer (Setup-exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js aufsetzen
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # package.json VOR der Installation prüfen: eine doppelt vorhandene
+      # „test“-Zeile (Kollisionsklasse aus parallelen Branches) macht das JSON
+      # ungültig, und `npm ci` scheitert dann mit einer kryptischen Meldung,
+      # bevor irgendein Build-Schritt läuft. Diese Prüfung nennt die Datei.
+      - name: Manifest prüfen (package.json)
+        run: npm run test:package
+
+      # Das Colab-Notebook wird aus colab/*.md gebaut. Würde jemand nur die
+      # .ipynb anfassen, misst das Notebook irgendwann etwas anderes als das
+      # Repo dokumentiert – dieser Schritt hält beide Dateien zusammen.
+      - name: Notebook-Manifest prüfen (colab/*.ipynb aus colab/*.md)
+        run: npm run stems:gate:notebook -- --check
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: TypeScript-Prüfung
+        run: npm run lint
+
+      # Die Stem-Engine ist reines TypeScript und läuft ohne Python: Registry-,
+      # Backend-Vertrags-, Technical-Gate- und Job-Service-Suite fangen
+      # Engine-Regressionen ab, bevor gebaut wird. Tests mit requirement-
+      # Direktive (@requires: python/torch/model) werden sauber übersprungen.
+      - name: Stem-Engine-Prüfung (Registry, Backend-Vertrag, Technical Gate, Job-Service)
+        run: npm run test:stems
+
+      # Ferndiagnose: die Job-Logs liegen auf externem Blob-Storage, das nicht
+      # von jeder Umgebung erreichbar ist. Der Runner schreibt die vollständige
+      # Ausgabe fehlender Tests in test-runner-failure.txt → hier als Artefakt.
+      - name: Test-Ausgabe bei Fehlschlag anhängen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-runner-failure-stems
+          path: test-runner-failure.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Renderer bauen (Vite)
+        run: npm run build
+
+      # Volle Suite nur im Nachtlauf/manuell: sie enthält lang laufende
+      # Audio- und Import-Tests, die pro PR den Windows-Runner aufhalten.
+      - name: Komplette Test-Suite (Nachtlauf / manueller Lauf)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm test
+
+      # Nur das NSIS-Setup: das Portable-Paket wird vorerst nicht mehr
+      # gebraucht. Zum Reaktivieren später einfach wieder
+      # `--win nsis --win portable` setzen.
+      - name: Electron Windows-Paket (NSIS-Setup)
+        run: npx electron-builder --win nsis --publish never
+        env:
+          # Kein Signieren in der offenen CI
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Artefakte anhängen (immer)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airdox-smart-editor-windows
+          path: release/*-setup.exe
+          retention-days: 30
+
+      - name: GitHub-Release bei Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: airdox_SMART_Editor ${{ github.ref_name }}
+          files: release/*-setup.exe
+          generate_release_notes: true

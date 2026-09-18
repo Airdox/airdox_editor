@@ -1,0 +1,291 @@
+{
+  "$schema": "./modelCatalog.schema.json",
+  "catalogVersion": "2026-09-18",
+  "notes": "Modelle sind Daten, kein Code. BS-RoFormer ist primäre HQ-Engine. Nur AVAILABLE Modelle dürfen für echte Separation verwendet werden. Spectral Fallback ist KEINE Stem Separation.",
+  "models": [
+    {
+      "id": "bsroformer-musdb18hq-4stem-zfturbo",
+      "family": "bs_roformer",
+      "architecture": "BS-RoFormer",
+      "version": "ep17-sdr9.6568",
+      "checkpoint": {
+        "file": "model_bs_roformer_ep_17_sdr_9.6568.ckpt",
+        "format": "pytorch-ckpt",
+        "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/model_bs_roformer_ep_17_sdr_9.6568.ckpt",
+        "sha256": "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb"
+      },
+      "config": {
+        "file": "config_bs_roformer_384_8_2_485100.yaml",
+        "format": "yaml",
+        "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/config_bs_roformer_384_8_2_485100.yaml"
+      },
+      "checkpointSha256": "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
+      "stemDisplayNames": {
+        "vocals": "Vocals",
+        "bass": "Bass",
+        "drums": "Drums",
+        "other": "Other"
+      },
+      "modelHash": "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb",
+      "sourceUrl": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/model_bs_roformer_ep_17_sdr_9.6568.ckpt",
+      "license": "MIT (architecture: lucidrains/BS-RoFormer)",
+      "weightLicense": "MIT (ZFTurbo Music-Source-Separation-Training community weights)",
+      "licenseUrl": "https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/LICENSE",
+      "backendSupport": ["python-torch", "native-cli"],
+      "precision": ["f32", "f16", "q8_0"],
+      "recommendedOverlap": 4,
+      "chunkSizeSamples": 131584,
+      "qualityProfile": {
+        "serves": ["PREVIEW", "BALANCED", "HIGH", "HIGH_QUALITY", "MAXIMUM_QUALITY"],
+        "numOverlap": {
+          "PREVIEW": 2,
+          "BALANCED": 4,
+          "HIGH": 4,
+          "HIGH_QUALITY": 4,
+          "MAXIMUM_QUALITY": 6
+        },
+        "ensemblePasses": {
+          "PREVIEW": 1,
+          "BALANCED": 1,
+          "HIGH": 1,
+          "HIGH_QUALITY": 1,
+          "MAXIMUM_QUALITY": 3
+        },
+        "rationale": "Primäre 4-Stem BS-RoFormer Engine. BALANCED=4 overlaps, HIGH=4, MAXIMUM_QUALITY=6 overlaps + 3 ensemble. Publiziert: MUSDB avg 9.65 SDR."
+      },
+      "notes": "Primärer 4-Stem-Kandidat. Output-Reihenfolge entspricht training.instruments der Release-Config v1.0.12: drums, bass, other, vocals. Kein Spectral-Fallback."
+    },
+    {
+      "id": "bsroformer-viperx-vocals-1297",
+      "family": "bs_roformer",
+      "architecture": "BS-RoFormer",
+      "version": "ep317-sdr12.9755",
+      "checkpoint": {
+        "file": "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+        "format": "pytorch-ckpt",
+        "url": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+        "sha256": "unverified"
+      },
+      "config": {
+        "file": "model_bs_roformer_ep_317_sdr_12.9755.yaml",
+        "format": "yaml",
+        "url": "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/configs/viperx/model_bs_roformer_ep_317_sdr_12.9755.yaml"
+      },
+      "checkpointSha256": "unverified",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["vocals", "other"],
+      "stemOrder": ["vocals", "other"],
+      "supportedStems": ["vocals", "other"],
+      "stemDisplayNames": {
+        "vocals": "Vocals",
+        "other": "Instrumental (Other)"
+      },
+      "modelHash": "unverified",
+      "sourceUrl": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+      "license": "MIT (lucidrains/BS-RoFormer)",
+      "weightLicense": "viperx community release",
+      "backendSupport": ["python-torch", "native-cli"],
+      "precision": ["f32", "f16", "q8_0"],
+      "recommendedOverlap": 2,
+      "chunkSizeSamples": 352800,
+      "qualityProfile": {
+        "serves": ["BALANCED", "HIGH", "HIGH_QUALITY", "MAXIMUM_QUALITY"],
+        "numOverlap": {
+          "BALANCED": 2,
+          "HIGH": 2,
+          "HIGH_QUALITY": 2,
+          "MAXIMUM_QUALITY": 4
+        },
+        "ensemblePasses": {
+          "BALANCED": 1,
+          "HIGH": 1,
+          "HIGH_QUALITY": 1,
+          "MAXIMUM_QUALITY": 3
+        },
+        "rationale": "Vocal-only BS-RoFormer, other als Residual."
+      },
+      "notes": "Vocal-Alternative, 2 Stems."
+    },
+    {
+      "id": "melbandroformer-viperx-vocals-3005",
+      "family": "mel_band_roformer",
+      "architecture": "Mel-Band RoFormer",
+      "version": "ep3005-sdr11.4360",
+      "checkpoint": {
+        "file": "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt",
+        "format": "pytorch-ckpt",
+        "url": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt",
+        "sha256": "unverified"
+      },
+      "config": {
+        "file": "model_mel_band_roformer_ep_3005_sdr_11.4360.yaml",
+        "format": "yaml",
+        "url": "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/main/configs/viperx/model_mel_band_roformer_ep_3005_sdr_11.4360.yaml"
+      },
+      "checkpointSha256": "unverified",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["vocals", "other"],
+      "stemOrder": ["vocals", "other"],
+      "supportedStems": ["vocals", "other"],
+      "stemDisplayNames": {
+        "vocals": "Vocals",
+        "other": "Instrumental (Other)"
+      },
+      "modelHash": "unverified",
+      "sourceUrl": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt",
+      "license": "MIT (lucidrains)",
+      "weightLicense": "viperx community release",
+      "backendSupport": ["python-torch", "native-cli"],
+      "precision": ["f32", "f16", "q8_0"],
+      "recommendedOverlap": 2,
+      "chunkSizeSamples": 352800,
+      "qualityProfile": {
+        "serves": ["BALANCED", "HIGH"],
+        "numOverlap": {
+          "BALANCED": 2,
+          "HIGH": 2,
+          "MAXIMUM_QUALITY": 4
+        },
+        "rationale": "Mel-Band-Variante für A/B."
+      },
+      "notes": "Vergleichsfamilie."
+    },
+    {
+      "id": "htdemucs-ft-4stem",
+      "family": "htdemucs",
+      "architecture": "HTDemucs",
+      "version": "htdemucs_ft",
+      "checkpoint": {
+        "file": "htdemucs_ft",
+        "format": "demucs-th",
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "sha256": "unverified"
+      },
+      "checkpointSha256": "unverified",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
+      "stemDisplayNames": {
+        "drums": "Drums",
+        "bass": "Bass",
+        "other": "Other",
+        "vocals": "Vocals"
+      },
+      "modelHash": "unverified",
+      "sourceUrl": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+      "license": "MIT (Meta Research, demucs)",
+      "weightLicense": "MIT (Meta)",
+      "backendSupport": ["python-torch"],
+      "precision": ["f32"],
+      "recommendedOverlap": 1,
+      "chunkSizeSamples": 349056,
+      "qualityProfile": {
+        "serves": ["PREVIEW"],
+        "numOverlap": {
+          "PREVIEW": 1
+        },
+        "rationale": "Legacy PREVIEW-Engine, optional. Darf BS-RoFormer nicht blockieren."
+      },
+      "notes": "Demucs legacy, optional."
+    },
+    {
+      "id": "htdemucs-onnx-4stem-fp16",
+      "family": "htdemucs",
+      "architecture": "HTDemucs (ONNX Runtime, in-process)",
+      "version": "htdemucs-opset17-fp16weights",
+      "checkpoint": {
+        "file": "htdemucs_fp16weights.onnx",
+        "format": "onnx",
+        "url": "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx",
+        "sha256": "unverified"
+      },
+      "checkpointSha256": "unverified",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
+      "stemDisplayNames": {
+        "drums": "Drums",
+        "bass": "Bass",
+        "other": "Other",
+        "vocals": "Vocals"
+      },
+      "modelHash": "unverified",
+      "sourceUrl": "https://huggingface.co/StemSplitio/htdemucs-onnx",
+      "license": "MIT (HT-Demucs, Meta Research)",
+      "weightLicense": "MIT (ONNX-Export: StemSplit/demucs-onnx, Gewichte: Meta HT-Demucs)",
+      "licenseUrl": "https://huggingface.co/StemSplitio/htdemucs-onnx",
+      "backendSupport": ["onnx"],
+      "precision": ["f32"],
+      "recommendedOverlap": 1,
+      "chunkSizeSamples": 343980,
+      "qualityProfile": {
+        "serves": ["PREVIEW", "BALANCED", "HIGH"],
+        "numOverlap": {
+          "PREVIEW": 1,
+          "BALANCED": 1,
+          "HIGH": 1
+        },
+        "ensemblePasses": {
+          "PREVIEW": 1,
+          "BALANCED": 1,
+          "HIGH": 1
+        },
+        "rationale": "DJ-Pfad: ein ONNX-Graph, in-process, kein Python und keine Chunk-Dateien. 7,8-s-Segmente (343980 Samples) mit 25 % Überlappung, Ausgabe in Graph-Reihenfolge drums/bass/other/vocals. Genauigkeit leicht unter BS-RoFormer (MUSDB vocals ~8.8 dB SDR), dafür um Größenordnungen schneller."
+      },
+      "notes": "Performance-Modell für den Live-Betrieb. Die Datei speichert fp16-Gewichte, gerechnet wird fp32 (I/O des Graphen ist float32) – deshalb precision: f32. Exakter Datei-Hash wird beim Bundling (npm run stems:bundle) berechnet und im bundle-manifest.json festgehalten; stimmt er, den Wert hier als checkpoint.sha256 und modelHash eintragen."
+    },
+    {
+      "id": "pipeline-double-v1",
+      "family": "pipeline_double",
+      "architecture": "Pipeline Double (Synthetic)",
+      "version": "1.0.0",
+      "checkpoint": {
+        "file": "pipeline-double-v1.synthetic",
+        "format": "synthetic"
+      },
+      "checkpointSha256": "synthetic:pipeline-double-v1-deterministic",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["vocals", "drums", "bass", "other"],
+      "stemOrder": ["vocals", "drums", "bass", "other"],
+      "supportedStems": ["vocals", "drums", "bass", "other"],
+      "stemDisplayNames": {
+        "vocals": "Vocals (Double)",
+        "drums": "Drums (Double)",
+        "bass": "Bass (Double)",
+        "other": "Other (Double)"
+      },
+      "modelHash": "synthetic:pipeline-double-v1-deterministic",
+      "sourceUrl": "",
+      "license": "project internal",
+      "weightLicense": "project internal",
+      "backendSupport": ["in-process"],
+      "precision": ["f32"],
+      "recommendedOverlap": 2,
+      "chunkSizeSamples": 132300,
+      "qualityProfile": {
+        "serves": ["PREVIEW"],
+        "numOverlap": {
+          "PREVIEW": 1,
+          "BALANCED": 2,
+          "HIGH": 2,
+          "HIGH_QUALITY": 2,
+          "MAXIMUM_QUALITY": 4
+        },
+        "rationale": "Test-Double, kein Modell."
+      },
+      "notes": "Nur mit allowPipelineDouble=true."
+    }
+  ]
+}

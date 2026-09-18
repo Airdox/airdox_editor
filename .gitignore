@@ -3,13 +3,11 @@ __pycache__/
 *.py[cod]
 *.so
 *.egg-info/
-dist/
-build/
 .venv/
 venv/
 *.log
 
-# Audio Editor
+# Audio Editor Python
 data/
 stems/
 temp/
@@ -26,6 +24,30 @@ token.json
 .env
 config.json
 *.key
+
+# Node / Electron
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+stem-test-output/
+.env*
+!.env.example
+logs/
+stem-engine-data/
+stem-gate-run/
+stem-gate-colab.tar.gz
+test-runner-failure.txt
+
+# Gebündelte Stem-Gewichte und Python-Runtime
+resources/models/*
+!resources/models/README.md
+resources/stem-runtime/*
+!resources/stem-runtime/README.md
+*.onnx
+!tests/fixtures/onnx/*.onnx
 
 # OS
 .DS_Store
