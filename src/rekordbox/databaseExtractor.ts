@@ -11,6 +11,7 @@
 
 import {
   BeatGrid,
+  BeatNode,
   CuePoint,
   DataOrigin,
   ExtractedDatabaseRecord,
@@ -21,7 +22,7 @@ import {
 } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
 import { parseRekordboxXml, buildBeatGridFromTempo } from './xmlParser';
-import { parseAnlzBinary as parseAnlzFile } from './anlzParser';
+import { parseAnlzBinary as parseAnlzFile, WAVEFORM_PRIORITY } from './anlzParser';
 
 /**
  * Parses binary Rekordbox ANLZ file (.DAT, .EXT, .2EX).
@@ -41,6 +42,7 @@ export interface AnlzExtractionResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  /** Every decoded PWV variant (source-tagged); `waveform` is the best of these. */
   waveformVariants: WaveformAnalysisData[];
   beatGrid?: BeatGrid;
   bpm?: number;
@@ -60,7 +62,7 @@ function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtra
     loops: parsed.loops,
     phrases: parsed.phrases,
     waveform: parsed.waveform,
-    waveformVariants: parsed.waveformVariants ?? (parsed.waveform ? [parsed.waveform] : []),
+    waveformVariants: parsed.waveformVariants,
     beatGrid: parsed.beatGrid,
     bpm: parsed.bpm,
     firstBeat: parsed.firstBeat,
@@ -77,76 +79,91 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzExtractionResult {
   return toExtractionResult(parseAnlzFile(buffer));
 }
 
-const WAVEFORM_PRIORITY_MERGE: Record<string, number> = {
-  PWV7: 7,
-  PWV5: 6,
-  PWV6: 5,
-  PWV4: 4,
-  PWV3: 3,
-  PWV2: 2,
-  PWAV: 1,
-};
-
-function waveformPriority(tag?: string): number {
-  if (!tag) return 0;
-  return WAVEFORM_PRIORITY_MERGE[tag] ?? 0;
+/**
+ * Adopts a decoded ANLZ beat grid verbatim and extends it with a uniform,
+ * flagged tail so it spans the working duration. PQTZ node times are never
+ * re-quantized; the tail continues from the last verbatim beat at the grid
+ * tempo and every continuation node is marked `tailExtended`.
+ */
+function extendBeatGridToDuration(grid: BeatGrid, duration: number): BeatGrid {
+  const meter = grid.meter > 0 ? grid.meter : 4;
+  const spb = 60.0 / (grid.bpm > 0 ? grid.bpm : 130);
+  const beats: BeatNode[] = grid.beats.map((node, index) => ({ ...node, index }));
+  while (beats.length === 0 || beats[beats.length - 1].time < duration) {
+    const last = beats[beats.length - 1];
+    const beatInBar = last ? (last.beatInBar % meter) + 1 : 1;
+    beats.push({
+      index: beats.length,
+      time: last ? last.time + spb : grid.firstBeat,
+      isBarStart: beatInBar === 1,
+      barNumber: last ? (beatInBar === 1 ? last.barNumber + 1 : last.barNumber) : 1,
+      beatInBar,
+      tailExtended: true,
+    });
+  }
+  return { ...grid, beats };
 }
 
+/**
+ * Merges the DAT extraction with its EXT sibling (same folder, same basename).
+ *
+ * Both files describe the same track: the DAT carries the authoritative PQTZ
+ * beat grid and the preview waveform (PWV5), the EXT the full-resolution
+ * color waveforms (PWV3/PWV7), extended cues (PCO2) and phrase structure
+ * (PSSI). Merge rules (covered by tests/anlz-ext-merge.test.ts):
+ * - waveform variants: union, primary first, secondary source tags not
+ *   already present appended; the highest-priority variant becomes
+ *   `waveform` (adopted by reference, never re-decoded).
+ * - beat grid: the primary (DAT) grid stays authoritative; the secondary
+ *   grid is only adopted when the primary carries none.
+ * - cues / phrases: the secondary (PCO2 / PSSI) lists win when present,
+ *   with the primary as fallback; empty secondary loops fall back to the
+ *   primary loops.
+ * - tags and warnings: union without duplicates, primary listed first.
+ */
 export function mergeAnlzExtractions(
   primary: AnlzExtractionResult,
   secondary: AnlzExtractionResult
 ): AnlzExtractionResult {
-  const primaryHasData = primary.tagsFound.length > 0 || primary.waveformVariants.length > 0 || primary.cues.length > 0 || primary.loops.length > 0 || primary.phrases.length > 0 || !!primary.beatGrid;
-  const secondaryHasData = secondary.tagsFound.length > 0 || secondary.waveformVariants.length > 0 || secondary.cues.length > 0 || secondary.loops.length > 0 || secondary.phrases.length > 0 || !!secondary.beatGrid;
+  const primaryVariants = primary.waveformVariants ?? [];
+  const secondaryVariants = (secondary.waveformVariants ?? []).filter(
+    (variant) => !primaryVariants.some((existing) => existing.sourceTag === variant.sourceTag)
+  );
+  const waveformVariants = [...primaryVariants, ...secondaryVariants];
 
-  if (!primaryHasData) return secondary;
-  if (!secondaryHasData) return primary;
-
-  // Waveform variants union with priority: primary first, then secondary, dedup by object identity not needed, keep all
-  const mergedVariants = [...primary.waveformVariants, ...secondary.waveformVariants];
-  // Determine best waveform by priority
-  let best = mergedVariants[0];
-  let bestPrio = -1;
-  for (const v of mergedVariants) {
-    const prio = waveformPriority(v.sourceTag);
-    if (prio > bestPrio) {
-      bestPrio = prio;
-      best = v;
+  let waveform: WaveformAnalysisData | undefined;
+  let bestPriority = -1;
+  for (const variant of waveformVariants) {
+    const priority = WAVEFORM_PRIORITY[variant.sourceTag ?? ''] ?? 0;
+    if (priority > bestPriority) {
+      waveform = variant;
+      bestPriority = priority;
     }
   }
+  if (!waveform) {
+    waveform = primary.waveform ?? secondary.waveform;
+  }
 
-  // Beatgrid: DAT (primary) is authoritative
-  const mergedBeatGrid = primary.beatGrid ?? secondary.beatGrid;
-
-  // Cues/phrases: secondary (EXT) takes priority when non-empty, else primary
-  const mergedCues = secondary.cues.length > 0 ? secondary.cues : primary.cues;
-  const mergedPhrases = secondary.phrases.length > 0 ? secondary.phrases : primary.phrases;
-  const mergedLoops = secondary.loops.length > 0 ? secondary.loops : primary.loops;
-
-  // Tags union without duplicates, primary first
+  const beatGrid = primary.beatGrid ?? secondary.beatGrid;
+  // Union without duplicates, primary tags listed first (a single file may
+  // legitimately list the same section tag more than once).
   const tagsFound: string[] = [];
-  const seen = new Set<string>();
-  for (const t of [...primary.tagsFound, ...secondary.tagsFound]) {
-    if (!seen.has(t)) {
-      seen.add(t);
-      tagsFound.push(t);
-    }
+  for (const tag of [...primary.tagsFound, ...secondary.tagsFound]) {
+    if (!tagsFound.includes(tag)) tagsFound.push(tag);
   }
-
-  const warnings = [...primary.warnings, ...secondary.warnings];
 
   return {
     tagsFound,
-    cues: mergedCues,
-    loops: mergedLoops,
-    phrases: mergedPhrases,
-    waveform: best,
-    waveformVariants: mergedVariants,
-    beatGrid: mergedBeatGrid,
-    bpm: mergedBeatGrid ? (primary.bpm ?? secondary.bpm) ?? mergedBeatGrid.bpm : (primary.bpm ?? secondary.bpm),
-    firstBeat: mergedBeatGrid ? (primary.firstBeat ?? secondary.firstBeat) ?? mergedBeatGrid.firstBeat : (primary.firstBeat ?? secondary.firstBeat),
+    cues: secondary.cues.length > 0 ? secondary.cues : primary.cues,
+    loops: secondary.loops.length > 0 ? secondary.loops : primary.loops,
+    phrases: secondary.phrases.length > 0 ? secondary.phrases : primary.phrases,
+    waveform,
+    waveformVariants,
+    beatGrid,
+    bpm: beatGrid?.bpm ?? primary.bpm ?? secondary.bpm,
+    firstBeat: beatGrid?.firstBeat ?? primary.firstBeat ?? secondary.firstBeat,
     analysisPath: primary.analysisPath ?? secondary.analysisPath,
-    warnings,
+    warnings: [...primary.warnings, ...secondary.warnings],
     pssiMood: secondary.pssiMood ?? primary.pssiMood,
     pssiEndBeat: secondary.pssiEndBeat ?? primary.pssiEndBeat,
     pssiBank: secondary.pssiBank ?? primary.pssiBank,
@@ -158,30 +175,23 @@ export function mergeAnlzExtractions(
  * Applies only data that was genuinely found in an ANLZ container. XML
  * metadata and the immutable original-media reference are retained; an empty
  * or partial ANLZ file can never erase them or introduce a synthetic fallback.
- * Strict-PQTZ: only a beatGrid with actual beat nodes is considered genuine.
- * Tail extension: when ANLZ beats are shorter than the track, continue
- * uniformly with tailExtended flag, never rewriting original nodes.
  */
 export function applyAnlzExtractionToTrack(
   track: TrackModel,
   extraction: AnlzExtractionResult
 ): TrackModel {
-  const hasGenuineBeatGrid = !!extraction.beatGrid && (extraction.beatGrid.beats?.length ?? 0) > 0;
-  // Strict: scalar bpm without beats is NOT adopted.
-  const bpm = hasGenuineBeatGrid ? extraction.beatGrid!.bpm : track.bpm;
-  const firstBeat = hasGenuineBeatGrid ? extraction.beatGrid!.firstBeat : track.beatGrid.firstBeat;
+  const anlzBeats = extraction.beatGrid?.beats ?? [];
+  // Only stored PQTZ nodes authorize a grid replacement. A legacy bpm-only
+  // extraction keeps the XML grid — a scalar rebuild is never substituted.
+  const hasAnlzBeatNodes = anlzBeats.length > 0;
+  const bpm = hasAnlzBeatNodes ? extraction.beatGrid!.bpm : track.bpm;
+  const firstBeat = extraction.firstBeat ?? track.beatGrid.firstBeat;
   const hasAnlzCues = extraction.cues.length > 0;
   const hasAnlzLoops = extraction.loops.length > 0;
   const hasAnlzPhrases = extraction.phrases.length > 0;
-  const hasAnlzWaveform = extraction.waveform !== undefined || extraction.waveformVariants.length > 0;
   const waveform = extraction.waveform ?? track.analysis;
-  const variants = hasAnlzWaveform
-    ? extraction.waveformVariants.length > 0
-      ? extraction.waveformVariants
-      : extraction.waveform
-      ? [extraction.waveform]
-      : track.analysisVariants
-    : track.analysisVariants;
+  const analysisVariants =
+    extraction.waveformVariants.length > 0 ? extraction.waveformVariants : track.analysisVariants;
 
   const phrases = hasAnlzPhrases
     ? extraction.phrases.map((phrase) => ({
@@ -207,47 +217,9 @@ export function applyAnlzExtractionToTrack(
       })
     : track.cues;
 
-  let finalBeatGrid = track.beatGrid;
-  if (hasGenuineBeatGrid) {
-    const src = extraction.beatGrid!;
-    const beats = [...src.beats];
-    const last = beats[beats.length - 1];
-    if (last.time < track.duration) {
-      const spb = 60.0 / src.bpm;
-      let time = last.time + spb;
-      let barNumber = last.barNumber;
-      let beatInBar = last.beatInBar;
-      let idx = beats.length;
-      while (time <= track.duration + spb) {
-        beatInBar++;
-        if (beatInBar > src.meter) {
-          beatInBar = 1;
-          barNumber++;
-        }
-        beats.push({
-          index: idx++,
-          time,
-          isBarStart: beatInBar === 1,
-          barNumber,
-          beatInBar,
-          tailExtended: true,
-        });
-        time += spb;
-        if (beats.length > 200_000) break;
-      }
-    }
-    finalBeatGrid = {
-      firstBeat: src.firstBeat,
-      bpm: src.bpm,
-      meter: src.meter,
-      beats,
-      origin: DataOrigin.REKORDBOX_ANLZ,
-    };
-  }
-
   const databaseRecord: ExtractedDatabaseRecord = {
     trackId: track.id,
-    databaseSource: hasAnlzCues || hasAnlzWaveform || hasGenuineBeatGrid || hasAnlzPhrases || hasAnlzLoops ? 'REKORDBOX_ANLZ' : track.databaseRecord?.databaseSource ?? 'REKORDBOX_XML',
+    databaseSource: 'REKORDBOX_ANLZ',
     anlzTagsFound: extraction.tagsFound,
     memoryCuesCount: cues.filter((cue) => cue.type === 'MEMORY').length,
     hotCuesCount: cues.filter((cue) => cue.type === 'HOT_CUE').length,
@@ -264,12 +236,16 @@ export function applyAnlzExtractionToTrack(
   return {
     ...track,
     bpm,
-    beatGrid: finalBeatGrid,
+    // Verbatim PQTZ adoption (re-indexed, flags intact) with a flagged
+    // uniform tail to the working duration; never a re-quantized rebuild.
+    beatGrid: hasAnlzBeatNodes
+      ? extendBeatGridToDuration(extraction.beatGrid!, track.duration)
+      : track.beatGrid,
     cues,
     loops: hasAnlzLoops ? extraction.loops : track.loops,
     phrases,
-    analysis: waveform ?? track.analysis,
-    analysisVariants: variants,
+    analysis: waveform,
+    analysisVariants,
     databaseRecord,
   };
 }
@@ -330,8 +306,6 @@ export function generateRekordboxPhrases(
 /**
  * Extracts all visual assets (Memory Cues, Waveform Analysis, Beatgrid, Phrases)
  * from Rekordbox XML text into a unified TrackModel and ExtractedDatabaseRecord.
- * Honest empty state: without genuine ANLZ or decoded audio there is NO
- * synthetic waveform, NO template phrases, NO invented ANLZ tags.
  */
 export function extractTrackFromRekordboxXml(
   xmlContent: string,
@@ -366,14 +340,15 @@ export function extractTrackFromRekordboxXml(
     };
   });
 
-  // Honest: only when decoded audio is present we compute LOCAL_ANALYSIS,
-  // otherwise no waveform at all.
-  let analysis: WaveformAnalysisData | null = null;
-  if (audioBuffer) {
-    analysis = analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS);
-  }
-
-  // No template phrases — PSSI only exists after genuine ANLZ merge.
+  // Honest extraction (XML-exclusive rule): without a decoded audio buffer
+  // or a genuine ANLZ merge the track carries NO waveform and NO phrase
+  // structure — no metadata synthesis, no template phrases, no invented
+  // ANLZ tags. Renderers show the honest empty state; the ANLZ merge
+  // (applyAnlzExtractionToTrack) fills analysis, phrases and tags from real
+  // containers only.
+  const analysis: WaveformAnalysisData | null = audioBuffer
+    ? analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS)
+    : null;
   const phrases: PhraseSection[] = [];
 
   const dbRecord: ExtractedDatabaseRecord = {
@@ -383,7 +358,7 @@ export function extractTrackFromRekordboxXml(
     memoryCuesCount: memoryCues.filter((c) => c.type === 'MEMORY').length,
     hotCuesCount: memoryCues.filter((c) => c.type === 'HOT_CUE').length,
     loopsCount: (rawTrack.loops || []).length,
-    waveformBuckets: analysis?.length ?? 0,
+    waveformBuckets: analysis ? analysis.length : 0,
     waveformModeSupported: analysis ? ['BLUE', 'RGB', '3BAND'] : [],
     sampleRate: audioBuffer ? audioBuffer.sampleRate : 44100,
     checksum: 'REKORDBOX-XML-VALIDATED',
@@ -426,6 +401,7 @@ export function extractTrackFromRekordboxXml(
 
   return { track, record: dbRecord };
 }
+
 
 /**
  * Creates synthetic high-precision multi-band waveform data aligned to duration & cues

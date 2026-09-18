@@ -21,7 +21,12 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { scanAnlzForPaths, findAnlzFolders } = require('../electron/dbReader.cjs');
+const {
+  scanAnlzForPaths,
+  findAnlzFolders,
+  findAllAnlzFolders,
+  driveLettersFromPaths,
+} = require('../electron/dbReader.cjs');
 
 // ---------------------------------------------------------------------------
 // Build a fake %APPDATA%-like tree:
@@ -180,6 +185,46 @@ try {
     );
   } finally {
     fs.rmSync(disc, { recursive: true, force: true });
+  }
+}
+
+// ─── Drive discovery from the collection itself ─────────────────────────────
+// The scan must probe the drives the audio actually lives on: a library on E:
+// is analysed under E:\\PIONEER\\…, which a fixed C–H list can miss entirely.
+{
+  assert.deepStrictEqual(
+    driveLettersFromPaths(['D:\\Music\\A.wav', 'file://localhost/E:/Music/B.wav', '\\\\?\\F:\\X\\c.flac']),
+    ['D', 'E', 'F'],
+    'drive letters are extracted from Windows paths, file:// URLs and \\\\?\\ prefixes'
+  );
+  assert.deepStrictEqual(
+    driveLettersFromPaths(['', null, undefined, 42, '/home/user/music/a.wav']),
+    [],
+    'non-Windows and empty inputs yield no drive letters'
+  );
+  assert.deepStrictEqual(
+    driveLettersFromPaths(['d:\\Music\\a.wav', 'D:\\Music\\b.wav']),
+    ['D'],
+    'drive letters are deduplicated and upper-cased'
+  );
+}
+
+// ─── Folder discovery aggregates every source without duplicates ────────────
+{
+  const folders = findAllAnlzFolders(['D:\\Music\\A.wav']);
+  assert.ok(Array.isArray(folders), 'returns an array');
+  assert.strictEqual(
+    new Set(folders).size,
+    folders.length,
+    'no duplicate folders (a container is never scanned twice)'
+  );
+  for (const folder of folders) {
+    assert.ok(path.isAbsolute(folder), `folder path is absolute: ${folder}`);
+  }
+  // On non-Windows CI there are no drive roots; the call must still be safe
+  // and may only return folders that really exist.
+  for (const folder of folders) {
+    assert.ok(fs.existsSync(folder), `discovered folder exists: ${folder}`);
   }
 }
 

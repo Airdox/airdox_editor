@@ -216,6 +216,38 @@ export const PalettePanel: React.FC<PalettePanelProps> = ({
                         );
                       })}
                     </div>
+                  ) : clip.waveform && clip.waveform.length > 0 ? (
+                    // Genuine source waveform payload (ANLZ columns of the clip
+                    // range): aggregated per column, never synthesized.
+                    <div className="w-full h-full flex items-center px-1">
+                      {Array.from({ length: 24 }, (_, idx) => {
+                        const source = clip.waveform!;
+                        const from = Math.floor((idx / 24) * source.length);
+                        const to = Math.max(from + 1, Math.floor(((idx + 1) / 24) * source.length));
+                        let maxPeak = 0;
+                        for (let b = from; b < to && b < source.length; b++) {
+                          const p = source.peaks[b] || 0;
+                          if (p > maxPeak) maxPeak = p;
+                        }
+                        const low = source.lowEnergy[from] || 0;
+                        const mid = source.midEnergy[from] || 0;
+                        const high = source.highEnergy[from] || 0;
+                        let col = '#00a2ff';
+                        if (waveformMode === 'RGB' || waveformMode === '3BAND') {
+                          const r = Math.min(255, Math.floor(low * 255));
+                          const g = Math.min(255, Math.floor(mid * 255));
+                          const b = Math.min(255, Math.floor(high * 255 + 50));
+                          col = `rgb(${r},${g},${b})`;
+                        }
+                        return (
+                          <div
+                            key={idx}
+                            style={{ height: `${Math.max(2, maxPeak * 28)}px`, backgroundColor: col }}
+                            className="flex-1 mx-[0.5px] rounded-[0.5px]"
+                          />
+                        );
+                      })}
+                    </div>
                   ) : (
                     <div className="text-[10px] text-neutral-600">Keine Waveform-Daten</div>
                   )}

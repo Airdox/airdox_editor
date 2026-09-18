@@ -7,6 +7,8 @@ const { pathToFileURL } = require('node:url');
 const {
   readRekordboxDatabase,
   locateRekordboxDatabases,
+  findAllAnlzFolders,
+  scanAnlzForPaths,
 } = require('./dbReader.cjs');
 const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
 const { isProtectedTarget, toLocalPath } = require('./pathGuard.cjs');
@@ -215,6 +217,45 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
+});
+
+/**
+ * SQLCipher-unabhängige ANLZ-Zuordnung: liest nur die PPTH-Header der
+ * ANLZ-Container (read-only) und liefert exakte Treffer für die übergebenen
+ * Audio-Pfade. Das ist der Weg, der auch ohne natives SQLCipher-Modul und
+ * ohne lesbare master.db funktioniert — ohne ihn bleibt ein aus XML
+ * importierter Track ohne Waveform.
+ */
+ipcMain.handle('rekordbox:scan-anlz-paths', async (_event, targetPaths) => {
+  const targets = Array.isArray(targetPaths)
+    ? targetPaths.filter((t) => typeof t === 'string' && t.trim() !== '')
+    : [];
+  desktopLogWriter.append(
+    formatLogLine({
+      level: 'INFO',
+      category: 'DATABASE',
+      message: `[IPC] scan-anlz-paths: Start – ${targets.length} Ziel(e)`,
+      data: { targets: targets.length, first: targets.slice(0, 3) },
+    })
+  );
+  const folders = findAllAnlzFolders(targets);
+  const result = await scanAnlzForPaths(targets, folders);
+  desktopLogWriter.append(
+    formatLogLine({
+      level: 'INFO',
+      category: 'DATABASE',
+      message:
+        `[ANLZ PPTH-Scan] ${result.scanned} Dateien in ${result.folders.length} Ordnern ` +
+        `(${result.elapsedMs} ms) → ${result.matches.length} Treffer`,
+      data: {
+        scanned: result.scanned,
+        folders: result.folders,
+        matches: result.matches.length,
+        elapsedMs: result.elapsedMs,
+      },
+    })
+  );
+  return result;
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {

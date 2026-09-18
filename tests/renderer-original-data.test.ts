@@ -28,6 +28,7 @@ import {
   selectTrackWaveform,
   waveformMissingNotice,
 } from '../src/waveform/renderModel';
+import { resolveDeckWaveform } from '../src/waveform/deckWaveformSource';
 
 interface TestResult {
   suite: string;
@@ -264,11 +265,76 @@ runTest('no own analysis', 'XML deck-load path never calls analyzeAudioBuffer', 
   assert(!deckLoadSource.includes('analyzeAudioBuffer('), 'No own analysis in the Rekordbox deck path');
   // Der Metadata-Fallback ist erlaubt — aber NUR nach dem Master-DB-Gate und
   // klar gekennzeichnet (GENERATED_FALLBACK), nie als echte ANLZ-Waveform.
+  // Seit der Vereinigung von Waveform-Linie und Stem-Linie liegt die
+  // Fallback-Kette in src/waveform/deckWaveformSource.ts; der Deck-Loader ruft
+  // sie über resolveDeckWaveform() auf — zwingend NACH dem Gate.
+  const gateAt = deckLoadSource.indexOf('runMasterDbGate(');
+  const fallbackAt = deckLoadSource.indexOf('resolveDeckWaveform(');
+  assert(gateAt >= 0, 'Master-DB gate runs in the deck-load path');
+  assert(fallbackAt >= 0, 'Deck-load path resolves a waveform source');
   assert(
-    deckLoadSource.indexOf('runMasterDbGate(') >= 0 &&
-      deckLoadSource.indexOf('runMasterDbGate(') < deckLoadSource.indexOf('generateAnalysisFromMetadata('),
-    'Master-DB-Gate must run before the metadata waveform fallback'
+    gateAt < fallbackAt,
+    'Master-DB-Gate must run before the waveform fallback chain'
   );
+  // Die Fallback-Kette (src/waveform/deckWaveformSource.ts) muss eigene
+  // Berechnungen kennzeichnen: LOCAL_ANALYSIS für das Originalaudio und – über
+  // generateAnalysisFromMetadata() – GENERATED_FALLBACK für die Metadata-Stufe.
+  // Beides darf nie als Rekordbox-ANLZ-Daten ausgegeben werden.
+  const readSrc = (rel: string) =>
+    fs.readFileSync(new URL(`../src/${rel}`, import.meta.url), 'utf8');
+  const fallbackModule = readSrc('waveform/deckWaveformSource.ts');
+  const metadataModule = readSrc('rekordbox/databaseExtractor.ts');
+  assert(
+    fallbackModule.includes('DataOrigin.LOCAL_ANALYSIS'),
+    'Own audio analysis is tagged LOCAL_ANALYSIS'
+  );
+  assert(
+    fallbackModule.includes('generateAnalysisFromMetadata(') &&
+      metadataModule.includes('DataOrigin.GENERATED_FALLBACK'),
+    'Metadata preview is tagged GENERATED_FALLBACK'
+  );
+  // Vorrang wird als Verhalten geprüft, nicht als Textposition: ein Track mit
+  // echten ANLZ-Varianten UND geladenem Audio muss auf ANLZ aufgelöst werden.
+  const anlzVariant: WaveformAnalysisData = {
+    length: 4,
+    peaks: new Float32Array(4),
+    peaksL: new Float32Array(4),
+    peaksR: new Float32Array(4),
+    lowEnergy: new Float32Array(4),
+    midEnergy: new Float32Array(4),
+    highEnergy: new Float32Array(4),
+    origin: DataOrigin.REKORDBOX_ANLZ,
+    sourceTag: 'PWV5',
+  };
+  const fakeAudio = {
+    sampleRate: 44100,
+    numberOfChannels: 2,
+    length: 8,
+    duration: 8 / 44100,
+    getChannelData: () => new Float32Array(8),
+  } as unknown as AudioBuffer;
+  const priority = resolveDeckWaveform({
+    id: 'prio',
+    title: 'prio',
+    artist: 'prio',
+    album: 'prio',
+    bpm: 128,
+    key: '8A',
+    duration: 8,
+    sampleRate: 44100,
+    channels: 2,
+    originalSha256: 'prio',
+    isOriginalUntouched: true,
+    audioBuffer: fakeAudio,
+    beatGrid: { firstBeat: 0, bpm: 128, meter: 4, beats: [], origin: DataOrigin.REKORDBOX_ANLZ },
+    cues: [],
+    loops: [],
+    analysis: null,
+    analysisVariants: [anlzVariant],
+    origin: DataOrigin.REKORDBOX_XML,
+    workingSegments: [],
+  });
+  assert(priority.source === 'ANLZ', 'ANLZ data keeps priority over any locally computed waveform');
 });
 
 // ---------------------------------------------------------------------------

@@ -124,6 +124,8 @@ export interface PaletteClip {
   miniLow?: number[];
   miniMid?: number[];
   miniHigh?: number[];
+  /** Genuine source waveform slice (ANLZ columns of the clip range, never synthesized). */
+  waveform?: WaveformAnalysisData;
   origin: DataOrigin;
 }
 
@@ -202,6 +204,7 @@ export interface TrackModel {
   cues: CuePoint[];
   loops: LoopPoint[];
   analysis: WaveformAnalysisData | null;
+  /** Every genuine ANLZ waveform variant of this track, zoom-selected at render time. */
   analysisVariants?: WaveformAnalysisData[];
   origin: DataOrigin;
   databaseRecord?: ExtractedDatabaseRecord;
