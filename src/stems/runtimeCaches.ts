@@ -13,6 +13,7 @@
  */
 import { clearTorchProbeCache } from './backends/runtimeProbe';
 import { resetSharedOnnxRuntime } from './backends/onnxSeparator';
+import { clearModelHashCache } from './modelManager';
 
 export async function clearRuntimeCaches(): Promise<void> {
   // Positive Verdikte bleiben (ein installiertes PyTorch verschwindet nicht
@@ -20,4 +21,5 @@ export async function clearRuntimeCaches(): Promise<void> {
   // Grund, warum die App nach einer Installation weiter „nicht verfügbar“ sah.
   clearTorchProbeCache({ keepPositive: true });
   await resetSharedOnnxRuntime();
+  clearModelHashCache();
 }

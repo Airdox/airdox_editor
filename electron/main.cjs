@@ -54,6 +54,14 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
     'stems:install-engine': 60 * 60 * 1000,
     'stems:job-wait': 60 * 60 * 1000,
     'stems:separate': 60 * 60 * 1000,
+    // Native OS Dialoge warten auf Interaktion des Nutzers und dürfen keine
+    // Performance-Warnung auslösen, wenn der Nutzer im Explorer navigiert:
+    'rekordbox:choose-directory': 60 * 60 * 1000,
+    'rekordbox:choose-analysis-file': 60 * 60 * 1000,
+    'rekordbox:choose-rekordbox-database': 60 * 60 * 1000,
+    'rekordbox:save-export-file': 60 * 60 * 1000,
+    'rekordbox:open-project-file': 60 * 60 * 1000,
+    'logs:open-log-folder': 60 * 60 * 1000,
     // Status/preflight sind reine Abfragen und inzwischen gecacht (Backend-Probes,
     // ONNX-Runtime, Statusantwort). Mehr als drei Sekunden heißt: etwas probt
     // erneut, was längst gemessen ist – das soll im Log auffallen.
@@ -176,14 +184,14 @@ function createWindow() {
   });
   // Renderer-Konsolenmeldungen, die nicht über den Logger laufen, trotzdem
   // dauerhaft im Datei-Protokoll sichern (keine stillen Fehler mehr).
-  mainWindow.webContents.on('console-message', function onConsoleMessage(_event, details) {
-    // Electron 44 passes a WebContentsConsoleMessageEventParams object. Older
-    // versions pass legacy positional arguments; keep a small compatibility
-    // shim without declaring the deprecated listener arity (which itself emits
-    // a warning in current Electron).
+  mainWindow.webContents.on('console-message', function onConsoleMessage(event) {
+    // Electron >= 30 übergibt ein WebContentsConsoleMessageEventParams-Objekt als erstes Argument (event).
+    // Ältere Versionen übergaben positionale Argumente (event, level, message, line, source).
+    // Durch Listener-Arität 1 (nur ein deklarierter Parameter) unterdrückt Electron 44+ die
+    // 'console-message arguments are deprecated'-Warnung.
     const legacy = arguments;
-    const params = details && typeof details === 'object'
-      ? details
+    const params = event && typeof event === 'object' && ('message' in event || 'level' in event)
+      ? event
       : { level: legacy[1], message: legacy[2], lineNumber: legacy[3], sourceId: legacy[4] };
     const level = params.level;
     const message = String(params.message ?? '');
