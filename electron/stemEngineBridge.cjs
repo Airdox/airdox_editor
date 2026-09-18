@@ -31,6 +31,17 @@ const CHANNELS = {
   stem: 'stems:job-stem',
   metadata: 'stems:job-metadata',
   progress: 'stems:job-progress',
+  // High-Quality extern (Google Drive + Colab-Worker, §15). Eigene Kanäle,
+  // damit der lokale Pfad unverändert bleibt und eine ältere Brücke ohne
+  // Fernpfad weiter funktioniert (der Renderer prüft auf Vorhandensein).
+  remoteStatus: 'stems:remote-status',
+  remoteStart: 'stems:remote-start',
+  remoteJobs: 'stems:remote-jobs',
+  remotePoll: 'stems:remote-poll',
+  remoteCancel: 'stems:remote-cancel',
+  remoteResume: 'stems:remote-resume',
+  remoteConfigure: 'stems:remote-configure',
+  remoteProgress: 'stems:remote-progress',
 };
 
 /** Obergrenze für den Mix, den der Renderer hochreicht (float32-Stereo-WAV). */
@@ -196,6 +207,16 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
         }
       });
     }
+    if (typeof bridge.onRemoteEvent === 'function') {
+      bridge.onRemoteEvent((event) => {
+        if (!broadcast) return;
+        try {
+          broadcast(CHANNELS.remoteProgress, event);
+        } catch (error) {
+          log(logger, 'warn', 'Fern-Job-Event konnte nicht verteilt werden', { error: error.message });
+        }
+      });
+    }
   }
   attachEvents();
 
@@ -237,6 +258,61 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   ipcMain.handle(CHANNELS.resume, async (_event, jobId) => bridge.resume(String(jobId)));
   ipcMain.handle(CHANNELS.stem, async (_event, jobId, stemId) => bridge.stem(String(jobId), String(stemId).slice(0, 32)));
   ipcMain.handle(CHANNELS.metadata, async (_event, jobId) => bridge.metadata(String(jobId)));
+
+  /* --- High Quality extern (§15) ----------------------------------------- */
+  // Wie beim lokalen Job gilt: nur Bytes oder Pfade innerhalb des
+  // Engine-Datenordners. Die Arbeitskopie entsteht ausschließlich dort.
+  ipcMain.handle(CHANNELS.remoteStatus, async () => bridge.remoteStatus());
+  ipcMain.handle(CHANNELS.remoteStart, async (_event, payload) => {
+    const input = payload && typeof payload === 'object' ? payload : {};
+    const bytes = toBytes(input.bytes);
+    const request = {
+      trackName: typeof input.trackName === 'string' ? input.trackName.slice(0, 120) : undefined,
+      profile: PROFILES.includes(input.profile) ? input.profile : undefined,
+      modelId: typeof input.modelId === 'string' ? input.modelId.slice(0, 120) : undefined,
+      family: FAMILIES.includes(input.family) ? input.family : undefined,
+      device: DEVICES.includes(input.device) ? input.device : undefined,
+      mode: MODES.includes(input.mode) ? input.mode : undefined,
+    };
+    if (bytes) {
+      if (bytes.byteLength > MAX_INPUT_BYTES) {
+        return { ok: false, code: 'AUDIO_CORRUPT', message: `Mix zu groß (${bytes.byteLength} Bytes > ${MAX_INPUT_BYTES}).` };
+      }
+      request.bytes = bytes;
+    } else if (typeof input.inputPath === 'string' && input.inputPath.length) {
+      const resolved = path.resolve(input.inputPath);
+      const allowedRoot = path.resolve(roots.root);
+      if (!resolved.startsWith(allowedRoot + path.sep)) {
+        return { ok: false, code: 'WRITE_DENIED', message: 'inputPath liegt außerhalb des Engine-Datenordners.' };
+      }
+      request.inputPath = resolved;
+    } else {
+      return { ok: false, code: 'AUDIO_MISSING', message: 'Fern-Job braucht bytes (Arbeitskopie) oder einen inputPath im Engine-Ordner.' };
+    }
+    log(logger, 'info', 'Fern-Job (High Quality extern) über IPC gestartet', {
+      profile: request.profile,
+      model: request.modelId,
+      trackName: request.trackName,
+    });
+    return bridge.startRemoteJob(request);
+  });
+  ipcMain.handle(CHANNELS.remoteJobs, async () => bridge.listRemoteJobs());
+  ipcMain.handle(CHANNELS.remotePoll, async () => bridge.pollRemoteJobs());
+  ipcMain.handle(CHANNELS.remoteCancel, async (_event, jobId, reason) =>
+    bridge.cancelRemoteJob(String(jobId), typeof reason === 'string' ? reason.slice(0, 200) : undefined)
+  );
+  ipcMain.handle(CHANNELS.remoteResume, async () => bridge.resumeRemoteJobs());
+  ipcMain.handle(CHANNELS.remoteConfigure, async (_event, settings) => {
+    const input = settings && typeof settings === 'object' ? settings : {};
+    const sanitized = {
+      kind: input.kind === 'rclone' || input.kind === 'folder' ? input.kind : undefined,
+      root: typeof input.root === 'string' ? input.root.slice(0, 400) : undefined,
+      pollIntervalMs: Number.isFinite(Number(input.pollIntervalMs)) ? Number(input.pollIntervalMs) : undefined,
+      workerLeaseMs: Number.isFinite(Number(input.workerLeaseMs)) ? Number(input.workerLeaseMs) : undefined,
+      jobTimeoutMs: Number.isFinite(Number(input.jobTimeoutMs)) ? Number(input.jobTimeoutMs) : undefined,
+    };
+    return bridge.configureRemoteJobs(sanitized);
+  });
 
   log(logger, 'info', 'Stem-Engine IPC registriert', { bundle: loaded.bundlePath, root: roots.root });
 

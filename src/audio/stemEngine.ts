@@ -19,10 +19,14 @@
 import { BufferFactory } from './editingEngine';
 import { logger } from '../utils/logger';
 import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
+// Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
+// Vertragstest („Renderer importiert den Vertrag typ-only“) unverändert gilt.
+import type { RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
 import type { ModelFamily } from '../stems/types';
 import { describeArchitectures, type StemArchitectureOption } from './stemArchitectures';
 
 export type { ModelFamily } from '../stems/types';
+export type { RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 export const STEM_TYPES: StemType[] = ['vocals', 'drums', 'bass', 'other'];
@@ -790,6 +794,277 @@ class StemEngine {
       return result;
     } finally {
       this.activeJobId = undefined;
+      this.isProcessing = false;
+    }
+  }
+
+  /* --------------------------------------------------------------------- *
+   * High Quality extern (Google Drive + Colab-Worker, §15–§22)
+   * --------------------------------------------------------------------- */
+
+  /** Fern-Job-Status für die UI (konfiguriert? erreichbar? welche Jobs?). */
+  public async remoteStatus(): Promise<RemoteServiceStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    try {
+      if (desktop?.remoteStatus) {
+        const result = await desktop.remoteStatus();
+        if (result.ok === true) return result.data;
+        return {
+          configured: false,
+          reachable: false,
+          jobs: [],
+          active: 0,
+          completed: 0,
+          failed: 0,
+          pollIntervalMs: 15_000,
+          reason: result.message,
+        };
+      }
+      const response = await fetch('/api/stems/remote/status');
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: RemoteServiceStatus; message?: string };
+      if (payload.ok && payload.data) return payload.data;
+      return null;
+    } catch (error) {
+      logger.warn('STEMS', `Fern-Status nicht abrufbar: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /** Konfiguriert die Jobablage (Drive-Ordner bzw. rclone-Remote). */
+  public async configureRemote(settings: RemoteSettings): Promise<RemoteServiceStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (desktop?.configureRemoteStemJobs) {
+      const result = await desktop.configureRemoteStemJobs(settings);
+      return result.ok === true ? result.data : null;
+    }
+    const response = await fetch('/api/stems/remote/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: RemoteServiceStatus };
+    return payload.ok && payload.data ? payload.data : null;
+  }
+
+  /**
+   * Ein Poll-Zyklus: erkennt fertige Jobs, lädt die Ergebnisse herunter, prüft
+   * sie und importiert sie über den bestehenden Stem-Pfad. Wird beim App-Start
+   * aufgerufen (Job-Wiederaufnahme nach Neustart, §32).
+   */
+  public async pollRemoteJobs(): Promise<RemoteServiceStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    try {
+      if (desktop?.pollRemoteStemJobs) {
+        const result = await desktop.pollRemoteStemJobs();
+        return result.ok === true ? result.data : null;
+      }
+      const response = await fetch('/api/stems/remote/poll', { method: 'POST' });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: RemoteServiceStatus };
+      return payload.ok && payload.data ? payload.data : null;
+    } catch (error) {
+      logger.warn('STEMS', `Fern-Job-Poll fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  public async resumeRemoteJobs(): Promise<RemoteServiceStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    try {
+      if (desktop?.resumeRemoteStemJobs) {
+        const result = await desktop.resumeRemoteStemJobs();
+        return result.ok === true ? result.data : null;
+      }
+      const response = await fetch('/api/stems/remote/resume', { method: 'POST' });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: RemoteServiceStatus };
+      return payload.ok && payload.data ? payload.data : null;
+    } catch (error) {
+      logger.warn('STEMS', `Fern-Jobs konnten nicht fortgesetzt werden: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  public async cancelRemoteJob(jobId: string, reason = 'Abbruch durch Benutzer'): Promise<boolean> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (desktop?.cancelRemoteStemJob) {
+      const result = await desktop.cancelRemoteStemJob(jobId, reason);
+      return result.ok === true && result.data.accepted;
+    }
+    const response = await fetch(`/api/stems/remote/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: { accepted?: boolean } };
+    return Boolean(payload.ok && payload.data?.accepted);
+  }
+
+  /**
+   * High-Quality-Separation auf einem externen Worker (Colab).
+   *
+   * Der Editor bildet eine Arbeitskopie, lädt sie in die Drive-Ablage und
+   * verfolgt den Job. Das Ergebnis kommt über denselben Stem-Lesepfad zurück
+   * wie ein lokaler Lauf (der Fern-Dienst trägt es als fertigen Job ein), also
+   * ist `TrackStems` hier exakt dasselbe wie aus `separateWithEngine`.
+   */
+  public async separateRemoteWithEngine(
+    sourceBuffer: AudioBuffer,
+    trackId: string,
+    originalSha256: string,
+    options: EngineSeparationOptions = {}
+  ): Promise<TrackStems> {
+    if (this.isProcessing) throw new Error('Es läuft bereits eine Separation.');
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    const duration = sourceBuffer.duration;
+    const profile = options.profile ?? 'HIGH_QUALITY';
+    this.isProcessing = true;
+    const startedAt = Date.now();
+    try {
+      const wav = encodeStereoFloatWav(sourceBuffer);
+      const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+      options.onProgress?.({
+        percent: 1,
+        phaseText: 'Stem-Separation wird vorbereitet (Arbeitskopie für Google Drive)…',
+        processedSeconds: 0,
+        totalSeconds: duration,
+      });
+
+      let job: RemoteStemJobView;
+      if (desktop?.startRemoteStemJob) {
+        const started = await desktop.startRemoteStemJob({
+          bytes: wav,
+          trackName,
+          profile,
+          modelId: options.modelId,
+          family: options.modelId ? undefined : options.family,
+          device: options.device,
+          mode: options.mode,
+        });
+        if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
+        job = started.data;
+      } else {
+        const response = await fetch('/api/stems/remote/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bytes: base64FromBytes(wav),
+            trackName,
+            profile,
+            modelId: options.modelId,
+            family: options.modelId ? undefined : options.family,
+            device: options.device,
+            mode: options.mode,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; code?: string; data?: RemoteStemJobView };
+        if (!response.ok || !payload.ok || !payload.data) {
+          throw Object.assign(new Error(payload.message ?? `Fern-Job konnte nicht angelegt werden (HTTP ${response.status}).`), {
+            code: payload.code ?? 'REMOTE_UNAVAILABLE',
+          });
+        }
+        job = payload.data;
+      }
+      logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} angelegt (${job.modelId}, ${profile}, ${job.trackName})`, {
+        jobId: job.jobId,
+        model: job.modelId,
+      });
+
+      // Polling (§20): fertig wird der Job erst, wenn der Editor die Ergebnisse
+      // geprüft und importiert hat – nicht, wenn der Worker „fertig“ meldet.
+      const pollInterval = 5_000;
+      for (;;) {
+        if (options.signal?.aborted) {
+          await this.cancelRemoteJob(job.jobId, 'Abbruch über das Deck');
+          throw Object.assign(new Error('Die Fern-Separation wurde abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
+        }
+        const status = await this.pollRemoteJobs();
+        const current = status?.jobs.find((entry) => entry.jobId === job.jobId) ?? job;
+        job = current;
+        options.onProgress?.({
+          percent: Math.max(2, Math.round(current.percent || 0)),
+          phaseText: current.phase || 'Stem-Separation läuft (extern)…',
+          processedSeconds: duration * ((current.percent || 0) / 100),
+          totalSeconds: duration,
+        });
+        if (current.status === 'COMPLETED') break;
+        if (current.status === 'FAILED' || current.status === 'CANCELLED') break;
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      }
+
+      if (job.status === 'CANCELLED') {
+        throw Object.assign(new Error(job.error?.message ?? 'Die Fern-Separation wurde abgebrochen; es wurden keine Stems übernommen.'), {
+          code: 'INFERENCE_CANCELLED',
+        });
+      }
+      if (job.status !== 'COMPLETED') {
+        throw Object.assign(
+          new Error(
+            `Stem-Separation konnte nicht abgeschlossen werden (${job.error?.code ?? 'REMOTE_FAILED'}): ${job.error?.message ?? job.phase}`
+          ),
+          { code: job.error?.code ?? 'REMOTE_FAILED' }
+        );
+      }
+
+      // Ergebnisse liegen lokal (Import durch den Fern-Dienst) und werden über
+      // denselben Job-Kanal gelesen wie bei einem lokalen Lauf.
+      const jobId = job.localJobId ?? job.jobId;
+      options.onProgress?.({ percent: 97, phaseText: `${job.stems.length} Stems übernehmen…`, processedSeconds: duration, totalSeconds: duration });
+      const stemsById: Record<string, AudioBuffer> = {};
+      for (const stemId of job.stems) {
+        if (desktop?.readStemJobStem) {
+          const read = await desktop.readStemJobStem(jobId, stemId);
+          if (read.ok === false) throw Object.assign(new Error(`${read.code}: ${read.message}`), { code: read.code });
+          stemsById[stemId] = await decodeWavToAudioBuffer(read.data.wav);
+        } else {
+          const response = await fetch(`/api/stems/jobs/${encodeURIComponent(jobId)}/stems/${encodeURIComponent(stemId)}`);
+          if (!response.ok) throw new Error(`Stem ${stemId} konnte nicht geladen werden (HTTP ${response.status}).`);
+          stemsById[stemId] = await decodeWavToAudioBuffer(new Uint8Array(await response.arrayBuffer()));
+        }
+      }
+
+      const result = buildTrackStems({
+        trackId,
+        originalSha256,
+        job: {
+          jobId,
+          status: 'COMPLETED',
+          percent: 100,
+          phase: job.phase,
+          processedSeconds: duration,
+          totalSeconds: duration,
+          profile: job.profile,
+          modelId: job.modelId,
+          family: job.family,
+          stems: job.stems,
+          chunkCount: 0,
+          cacheHit: false,
+          trackName: job.trackName,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          device: job.device,
+          cpuFallback: job.cpuFallback,
+          fallbackReason: job.fallbackReason,
+          result: { outputDir: '', metadataPath: '', stems: [], validationPass: true, originalUnchanged: true, trainedModel: true },
+        },
+        stemsById,
+        profile,
+      });
+      this.cacheStems(trackId, result, originalSha256);
+      const deviceText = job.cpuFallback ? 'CPU-Fallback' : job.device ? String(job.device).toUpperCase() : 'externer Worker';
+      options.onProgress?.({
+        percent: 100,
+        phaseText: `Stem-Separation abgeschlossen (${job.modelId}, ${deviceText})`,
+        processedSeconds: duration,
+        totalSeconds: duration,
+      });
+      logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} importiert (${Date.now() - startedAt} ms)`, {
+        jobId: job.jobId,
+        model: job.modelId,
+        device: job.device,
+        cpuFallback: job.cpuFallback ?? false,
+        stems: job.stems,
+      });
+      return result;
+    } finally {
       this.isProcessing = false;
     }
   }

@@ -351,6 +351,13 @@ interface WarmSession {
   session: OnnxSessionLike;
   providers: string[];
   segmentSamples?: number;
+  /**
+   * Gesetzt, wenn die Session nur deshalb auf CPU gebaut wurde, weil die
+   * gewünschte Provider-Kette schon beim Erstellen scheiterte (fehlende
+   * CUDA-DLLs, alter DirectML-Treiber). Ohne dieses Feld war „CPU“ für den
+   * Nutzer nicht von einer bewussten CPU-Wahl zu unterscheiden.
+   */
+  fallbackReason?: string;
 }
 
 const warmSessions = new Map<string, Promise<WarmSession>>();
@@ -441,12 +448,23 @@ export class OnnxSeparator implements IStemSeparator {
       return loadSharedOnnxRuntime();
     }
     if (!this.runtimePromise) {
-      const loader = this.options.loadRuntime ?? (async () => {
-        // Optional dependency: a checkout without it must not fail at import.
-        const moduleName = 'onnxruntime-node';
-        const loaded = (await import(/* @vite-ignore */ moduleName)) as unknown as OnnxRuntimeLike & { default?: OnnxRuntimeLike };
-        return loaded?.InferenceSession ? loaded : (loaded.default as OnnxRuntimeLike);
-      });
+      /*
+       * Eine **vorhandene** Runtime gewinnt immer. Vorher wurde sie ignoriert
+       * und stattdessen `onnxruntime-node` dynamisch importiert: in einem
+       * Test-/Embedded-Setup (Runtime eingespritzt) scheiterte der Lauf dann mit
+       * „onnxruntime-node ist nicht verfügbar“, obwohl eine voll funktionsfähige
+       * Runtime bereitlag. Der Lazy-Import ist nur der Fall OHNE eingespritzte
+       * Runtime (Rest des Kommentarblocks oben).
+       */
+      const injected = this.options.runtime;
+      const loader = injected
+        ? async () => injected
+        : this.options.loadRuntime ?? (async () => {
+            // Optional dependency: a checkout without it must not fail at import.
+            const moduleName = 'onnxruntime-node';
+            const loaded = (await import(/* @vite-ignore */ moduleName)) as unknown as OnnxRuntimeLike & { default?: OnnxRuntimeLike };
+            return loaded?.InferenceSession ? loaded : (loaded.default as OnnxRuntimeLike);
+          });
       this.runtimePromise = Promise.resolve()
         .then(loader)
         .then((runtime) => {
@@ -580,7 +598,14 @@ export class OnnxSeparator implements IStemSeparator {
   ): Promise<WarmSession> {
     const modelPath = resolveOnnxModelPath(descriptor, this.options.modelStoreDir);
     const cpuOnly = providers.length === 1 && providers[0] === 'cpu';
-    const effective = !cpuOnly && crashedProviderChains.has(providerChainKey(modelPath, providers)) ? ['cpu'] : providers;
+    // Eine Kette, die zur Laufzeit im Treiber gestorben ist, wird ohne neuen
+    // GPU-Versuch direkt auf CPU aufgebaut – mit Begründung, damit UI und Log
+    // „CPU-Fallback“ von „bewusst CPU“ unterscheiden können.
+    const crashed = !cpuOnly && crashedProviderChains.has(providerChainKey(modelPath, providers));
+    const effective = crashed ? ['cpu'] : providers;
+    const crashReason = crashed
+      ? `GPU-Provider ${providers[0]} ist in diesem Prozess bereits bei der Inferenz abgestürzt (Treiberfehler) – CPU wird verwendet`
+      : undefined;
     const key = providerChainKey(modelPath, effective);
     const cached = warmSessions.get(key);
     if (cached) return cached;
@@ -599,6 +624,7 @@ export class OnnxSeparator implements IStemSeparator {
           session,
           providers: effective,
           segmentSamples: segmentSamplesFromMetadata(session.inputMetadata as never),
+          ...(crashReason ? { fallbackReason: crashReason } : {}),
         };
         warmSessionStates.set(key, warm);
         return warm;
@@ -606,6 +632,9 @@ export class OnnxSeparator implements IStemSeparator {
         // A provider that exists in the list but not on the machine (missing
         // CUDA DLLs, old driver) must not kill the job – CPU always remains.
         if (effective.length > 1) {
+          const cpuFallbackReason =
+            `Session-Erstellung mit ${effective.join('+')} fehlgeschlagen – CPU wird verwendet: ` +
+            (error instanceof Error ? error.message : String(error));
           const session = await runtime.InferenceSession.create(modelPath, {
             executionProviders: ['cpu'],
             graphOptimizationLevel: 'all',
@@ -615,6 +644,7 @@ export class OnnxSeparator implements IStemSeparator {
             session,
             providers: ['cpu'],
             segmentSamples: segmentSamplesFromMetadata(session.inputMetadata as never),
+            fallbackReason: cpuFallbackReason,
           };
           warmSessionStates.set(key, warm);
           return warm;
@@ -765,16 +795,27 @@ export class OnnxSeparator implements IStemSeparator {
 
     const device: ComputeDevice = active.providers[0] === 'dml' ? 'directml' : active.providers[0] === 'coreml' ? 'coreml' : active.providers[0] === 'cpu' ? 'cpu' : 'cuda';
     const requestedDevice = request.device ?? this.options.device ?? 'auto';
+    /*
+     * Ein Rückfall ist „wir wollten etwas anderes und haben CPU bekommen“:
+     * ein GPU-Treiberabsturz mitten im Lauf, eine Provider-Kette, die schon
+     * beim Session-Bau gescheitert ist, oder eine explizit gewünschte GPU auf
+     * einer Maschine ohne GPU. 'auto' ohne GPU ist dagegen kein Rückfall,
+     * sondern das erwartete Ergebnis (§7).
+     */
+    const fallbackReason =
+      (gpuCrashDetail
+        ? `GPU-Provider ist während der Inferenz abgestürzt (Treiberfehler) – Rest des Jobs auf CPU: ${gpuCrashDetail}`
+        : active.fallbackReason) ??
+      (device === 'cpu' && requestedDevice !== 'cpu' && requestedDevice !== 'auto'
+        ? `Gerät "${requestedDevice}" ist auf diesem System nicht nutzbar – CPU wird verwendet`
+        : undefined);
     return {
       engine: this.family,
       backend: this.kind,
       stems: [],
       inlineStems,
       device,
-      // Nur melden, wenn wirklich auf CPU zurückgefallen wurde – 'auto' ohne
-      // GPU ist kein Rückfall, sondern das erwartete Ergebnis. Ein
-      // Treiberabsturz mitten im Lauf dagegen ist immer berichtenswert.
-      cpuFallback: gpuCrashDetail !== undefined || (device === 'cpu' && requestedDevice !== 'cpu' && requestedDevice !== 'auto'),
+      cpuFallback: fallbackReason !== undefined,
       report: {
         backendName: this.name,
         totalMs: Date.now() - started,
@@ -786,6 +827,7 @@ export class OnnxSeparator implements IStemSeparator {
         precision: request.precision,
         warmSessions: warmSessionStates.size,
         zeroDiskChunks: true,
+        ...(fallbackReason ? { fallbackReason } : {}),
         ...(gpuCrashDetail ? { gpuCrash: gpuCrashDetail } : {}),
       },
     };

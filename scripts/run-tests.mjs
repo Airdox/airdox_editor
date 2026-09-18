@@ -53,7 +53,8 @@ const GROUPS = {
   // TypeScript und ohne Python ausführbar (die python-abhängigen Suiten
   // erklären sich über @requires-Direktiven selbst für SKIP).
   stems: (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-/.test(file) &&
+    (!/live/.test(file) || /onnx-fast-separation-live/.test(file)),
   // Die Freigabe-Läufe mit echten Gewichten (Checkpoint + PyTorch nötig). Beide
   // sind ohne installierten Checkpoint ein sauberer SKIP – `test:stems:release`
   // dreht das mit --fail-on-skip um, damit niemand "grün" liest, wo nichts lief.
@@ -61,7 +62,11 @@ const GROUPS = {
   'stems-live': (file) => /stem-separation-.*live|stem-isolation-gate-live/.test(file),
   // CI-Freigabe: alles, was ohne Spezialumgebung wirklich laufen muss.
   'stems-release': (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|onnx-/.test(file) && !/live/.test(file),
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-/.test(file) &&
+    !/live/.test(file) &&
+    // Die Python-ORT-Probe braucht ein zusätzliches Paket und ist kein
+    // Freigabekriterium der App – sie belegt den Testgraphen, nichts mehr.
+    !/onnx-fixture-python-ort/.test(file),
   logging: (file) => /logger/.test(file),
   all: () => true,
 };
@@ -146,6 +151,32 @@ const REQUIREMENTS = {
   // onnxruntime-node wird als optionale Abhängigkeit installiert; fehlt sie
   // (oder ist das Binary für diese Plattform nicht vorhanden), skippen die
   // ONNX-Pipeline-Tests sauber statt rot zu werden.
+  // Ein echter ONNX-Lauf ohne native Runtime: `onnxruntime-web` bringt die
+  // ORT-WASM-Kernel mit und läuft auch in Node. Damit ist der komplette
+  // In-Memory-Pfad (Session, Segmente, Rekonstruktion, Stem-Dateien) auf jeder
+  // Maschine prüfbar, auf der die native Runtime fehlt. Kein Ersatz für
+  // `onnxruntime`, sondern die zweite, unabhängige Probe.
+  onnxwasm: async () => {
+    const probe = await cached('onnxwasm', () =>
+      runQuiet('node', ['-e', "require('onnxruntime-web'); process.stdout.write('ok')"], 30000)
+    );
+    return probe.ok
+      ? { ok: true }
+      : { ok: false, reason: 'onnxruntime-web ist nicht installiert (npm install --no-save onnxruntime-web)' };
+  },
+  // Echte ORT-Session aus Python: prüft den Testgraphen selbst (Signatur,
+  // Werte, Determinismus). Fehlt das Paket, bleibt der Editor-Test mit der
+  // Referenz-Runtime lauffähig – hier wird nur sauber übersprungen.
+  onnxruntime_python: async () => {
+    const python = await cached('python', findPython);
+    if (!python) return { ok: false, reason: 'kein Python gefunden' };
+    const probe = await cached('onnxruntime_python', () =>
+      runQuiet(python, ['-c', 'import onnxruntime; print(onnxruntime.__version__)'], 30000)
+    );
+    return probe.ok
+      ? { ok: true }
+      : { ok: false, reason: `${python} hat kein onnxruntime (pip install onnxruntime)` };
+  },
   onnxruntime: async () => {
     const probe = await cached('onnxruntime', () => runQuiet('node', ['-e', "require('onnxruntime-node'); process.stdout.write('ok')"], 30000));
     return probe.ok

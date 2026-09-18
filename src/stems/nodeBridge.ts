@@ -15,13 +15,22 @@
  */
 import { StemJobService, type StemJobServiceOptions, type StartStemJobRequest } from './stemJobService';
 import { clearRuntimeCaches } from './runtimeCaches';
+import { RemoteStemJobService, type RemoteServiceEvent, type StartRemoteStemJobRequest } from './remote/remoteStemJobService';
 
 export { clearRuntimeCaches };
-import type { StemBridgeError, StemBridgeResult, StemJobView, StemServiceStatus } from './transportTypes';
+import type {
+  RemoteServiceStatus,
+  RemoteSettings,
+  RemoteStemJobView,
+  StemBridgeError,
+  StemBridgeResult,
+  StemJobView,
+  StemServiceStatus,
+} from './transportTypes';
 import { isStemError } from './errors';
 
 /** Bumped whenever the IPC payload shape changes, so the renderer can refuse a stale bridge. */
-export const STEM_BRIDGE_VERSION = 1;
+export const STEM_BRIDGE_VERSION = 2;
 
 function failure(error: unknown): StemBridgeError {
   if (isStemError(error)) {
@@ -44,6 +53,17 @@ export interface StemBridge {
   metadata(jobId: string): Promise<StemBridgeResult<{ metadata: unknown }>>;
   /** Attaches a listener for job events; returns the detach function. */
   onEvent(listener: (event: unknown) => void): () => void;
+
+  /* --- High-Quality extern (Google Drive + Colab-Worker, §15) ------------- */
+  remoteStatus(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  startRemoteJob(request: StartRemoteStemJobRequest): Promise<StemBridgeResult<RemoteStemJobView>>;
+  listRemoteJobs(): StemBridgeResult<RemoteStemJobView[]>;
+  pollRemoteJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  cancelRemoteJob(jobId: string, reason?: string): Promise<StemBridgeResult<{ accepted: boolean }>>;
+  resumeRemoteJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  configureRemoteJobs(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  onRemoteEvent(listener: (event: unknown) => void): () => void;
+
   close(): void;
 }
 
@@ -61,6 +81,35 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
         listener(event);
       } catch {
         /* a broken UI listener must never break a running job */
+      }
+    }
+  });
+
+  /*
+   * Fernpfad (High Quality extern). Er hängt am selben Service: die Ergebnisse
+   * werden später über `registerCompletedJob` in dessen Jobliste eingetragen,
+   * sodass der Renderer sie über die bestehenden Kanäle liest (§42).
+   */
+  const remoteOptions = options as StemJobServiceOptions & {
+    remote?: Omit<ConstructorParameters<typeof RemoteStemJobService>[0], 'root' | 'localService' | 'logger'>;
+  };
+  const remote = new RemoteStemJobService({
+    root: options.root,
+    localService: service,
+    appVersion: process.env.npm_package_version ?? '0.4.2',
+    env: options.env as Record<string, string | undefined> | undefined,
+    registry: options.registry,
+    allowPipelineDouble: options.allowPipelineDouble,
+    logger: options.logger,
+    ...(remoteOptions.remote ?? {}),
+  });
+  const remoteListeners = new Set<(event: unknown) => void>();
+  const detachRemote = remote.onEvent((event: RemoteServiceEvent) => {
+    for (const listener of remoteListeners) {
+      try {
+        listener(event);
+      } catch {
+        /* ignore */
       }
     }
   });
@@ -128,9 +177,65 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    async remoteStatus() {
+      try {
+        return { ok: true, data: await remote.status() };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async startRemoteJob(request) {
+      try {
+        return { ok: true, data: await remote.start(request) };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    listRemoteJobs() {
+      try {
+        return { ok: true, data: remote.list() };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async pollRemoteJobs() {
+      try {
+        return { ok: true, data: await remote.poll() };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async cancelRemoteJob(jobId, reason) {
+      try {
+        return { ok: true, data: await remote.cancel(jobId, reason) };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async resumeRemoteJobs() {
+      try {
+        return { ok: true, data: await remote.resume() };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async configureRemoteJobs(settings) {
+      try {
+        return { ok: true, data: await remote.configure(settings) };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    onRemoteEvent(listener) {
+      remoteListeners.add(listener);
+      return () => remoteListeners.delete(listener);
+    },
     close() {
       detach();
+      detachRemote();
+      remote.dispose();
       listeners.clear();
+      remoteListeners.clear();
     },
   };
 }

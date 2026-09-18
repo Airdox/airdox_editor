@@ -784,11 +784,24 @@ export class StemSeparationEngine {
     extra?: { deviceUsed: ComputeDevice; cpuFallback: boolean; backendReports: Record<string, unknown>[] }
   ): SeparationJobSummary {
     const metadata = job.toMetadata();
+    /* Erster vom Backend gemeldeter Grund, warum es nicht bei der gewünschten
+     * GPU blieb (DirectML-Treiberfehler, fehlende CUDA-DLL, …). Der Grund steht
+     * im Backend-Report; hier wird er für die UI/Logs an eine Stelle gezogen. */
+    const fallbackReason = extra
+      ? extra.backendReports
+          .map((report) => report?.fallbackReason ?? report?.providerError ?? report?.reason)
+          .find((value): value is string => typeof value === 'string' && value.length > 0)
+      : undefined;
     if (extra) {
       metadata.events.push({
         at: Date.now(),
         phase: 'backend-report',
-        detail: JSON.stringify({ device: extra.deviceUsed, cpuFallback: extra.cpuFallback, reports: extra.backendReports }),
+        detail: JSON.stringify({
+          device: extra.deviceUsed,
+          cpuFallback: extra.cpuFallback,
+          fallbackReason,
+          reports: extra.backendReports,
+        }),
       });
     }
     return {
@@ -800,6 +813,9 @@ export class StemSeparationEngine {
       validation,
       originalIntegrity: job.originalIntegrity ?? metadata.originalIntegrity,
       metadata,
+      device: extra?.deviceUsed,
+      cpuFallback: extra?.cpuFallback,
+      fallbackReason,
     };
   }
 

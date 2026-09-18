@@ -339,20 +339,29 @@ export class RoFormerSeparator implements IStemSeparator {
       }
     }
 
+    /*
+     * Rückfall ist, was der Adapter am Ende meldet: wurde etwas anderes als
+     * CPU angefragt (auch 'auto' auf einer GPU-losen Kiste zählt nicht) und
+     * trotzdem auf CPU gerechnet, muss der Job das sehen – inklusive Grund,
+     * damit der Nutzer „CPU-Fallback“ von „bewusst CPU“ unterscheiden kann.
+     */
+    const cpuFallback = result.device === 'cpu' && request.device !== 'cpu' && request.device !== 'auto';
+    const fallbackReason = cpuFallback
+      ? result.logs.find((line) => /gpu|cuda|mps|fallback|rückfall|ausweich/i.test(line)) ??
+        `Gerät "${device}" war für ${this.family} nicht nutzbar – CPU wird verwendet`
+      : undefined;
     return {
       engine: this.family,
       backend: this.kind,
       stems,
       device: result.device,
-      // Rückfall ist, was der Adapter am Ende meldet: wurde etwas anderes als
-      // CPU angefragt (auch 'auto' auf einer GPU-losen Kiste zählt nicht) und
-      // trotzdem auf CPU gerechnet, muss der Job das sehen.
-      cpuFallback: result.device === 'cpu' && request.device !== 'cpu' && request.device !== 'auto',
+      cpuFallback,
       report: {
         ...result.report,
         backendName: this.name,
         processMs: result.durationMs,
         logs: result.logs.slice(-20),
+        ...(fallbackReason ? { fallbackReason } : {}),
         ...(pythonDeviceFor(device) !== device ? { deviceMappedFrom: device } : {}),
       },
     };
@@ -381,7 +390,14 @@ export class RoFormerSeparator implements IStemSeparator {
         const fallback = await this.runOnce(request, 'cpu').catch((cpuError) => {
           throw classifyFailure('GPU_UNAVAILABLE', `GPU-Inferenz fehlgeschlagen und CPU-Fallback ebenfalls: ${message}`, cpuError);
         });
-        return { ...fallback, cpuFallback: true };
+        return {
+          ...fallback,
+          cpuFallback: true,
+          report: {
+            ...fallback.report,
+            fallbackReason: `GPU-Inferenz fehlgeschlagen – CPU-Fallback: ${message.slice(0, 300)}`,
+          },
+        };
       }
       if (error instanceof StemSeparationError) throw error;
       throw classifyFailure('INFERENCE_FAILED', 'RoFormer-Inferenz fehlgeschlagen', error);

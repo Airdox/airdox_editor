@@ -10,6 +10,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 import { StemJobService } from './src/stems/stemJobService';
+import { RemoteStemJobService } from './src/stems/remote/remoteStemJobService';
 import { clearRuntimeCaches } from './src/stems/runtimeCaches';
 // Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
 // Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
@@ -235,7 +236,36 @@ async function startServer() {
     },
   });
   let stemJobs = createStemJobs();
+
+  /*
+   * High Quality extern: derselbe Fern-Job-Dienst wie im Desktop-Host. Der
+   * Dev-/Browser-Pfad und die Desktop-App dürfen hier nicht auseinanderlaufen,
+   * deshalb ist es dieselbe Klasse mit derselben Ablage (§42).
+   */
+  const createRemoteJobs = () => {
+    const service = new RemoteStemJobService({
+      root: stemsDataRoot,
+      localService: stemJobs,
+      appVersion: '0.4.2',
+      env: process.env as Record<string, string | undefined>,
+      logger: {
+        debug: (category, message, details) => logger.debug(category, message, details),
+        info: (category, message, details) => logger.info(category, message, details),
+        warn: (category, message, details) => logger.warn(category, message, details),
+        error: (category, message, details) => logger.error(category, message, details),
+      },
+    });
+    // Nach einem Neustart laufende Jobs weiterverfolgen und fertige Ergebnisse
+    // importieren – ohne dass der Nutzer etwas anklicken muss (§21 A, §32).
+    void service.resume().catch((error) => {
+      logger.warn('STEM-REMOTE', `Fern-Jobs konnten nicht fortgesetzt werden: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return service;
+  };
+  let remoteStemJobs = createRemoteJobs();
+
   app.use('/api/stems/jobs', express.json({ limit: '500mb' }));
+  app.use('/api/stems/remote', express.json({ limit: '1mb' }));
 
   const stemErrorPayload = (error: unknown) => {
     const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : 'INFERENCE_FAILED';
@@ -293,6 +323,85 @@ async function startServer() {
       const payload = stemErrorPayload(error);
       logger.error('STEMS', `HTTP Stem-Job abgelehnt: ${payload.message}`, { code: payload.code });
       return res.status(400).json(payload);
+    }
+  });
+
+  /* --- High Quality extern (Google Drive + Colab-Worker, §15) ------------- */
+
+  app.get('/api/stems/remote/status', async (_req, res) => {
+    try {
+      return res.json({ ok: true, data: await remoteStemJobs.status() });
+    } catch (error) {
+      return res.status(500).json(stemErrorPayload(error));
+    }
+  });
+
+  app.post('/api/stems/remote/start', async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as {
+        bytes?: string;
+        inputPath?: string;
+        trackName?: string;
+        profile?: 'PREVIEW' | 'BALANCED' | 'HIGH' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
+        modelId?: string;
+        family?: 'bs_roformer' | 'mel_band_roformer' | 'htdemucs';
+        device?: 'auto' | 'cpu' | 'cuda' | 'vulkan' | 'metal' | 'directml' | 'coreml';
+        mode?: 'fast_dj' | 'studio_master';
+      };
+      const bytes = typeof body.bytes === 'string' ? new Uint8Array(Buffer.from(body.bytes, 'base64')) : undefined;
+      const job = await remoteStemJobs.start({
+        bytes,
+        inputPath: typeof body.inputPath === 'string' ? body.inputPath : undefined,
+        trackName: typeof body.trackName === 'string' ? body.trackName.slice(0, 120) : undefined,
+        profile: body.profile,
+        modelId: body.modelId,
+        family: body.family,
+        device: body.device,
+        mode: body.mode,
+      });
+      return res.status(202).json({ ok: true, data: job });
+    } catch (error) {
+      const payload = stemErrorPayload(error);
+      logger.error('STEM-REMOTE', `HTTP Fern-Job abgelehnt: ${payload.message}`, { code: payload.code });
+      return res.status(400).json(payload);
+    }
+  });
+
+  app.get('/api/stems/remote/jobs', (_req, res) => res.json({ ok: true, data: remoteStemJobs.list() }));
+
+  app.post('/api/stems/remote/poll', async (_req, res) => {
+    try {
+      return res.json({ ok: true, data: await remoteStemJobs.poll() });
+    } catch (error) {
+      return res.status(500).json(stemErrorPayload(error));
+    }
+  });
+
+  app.post('/api/stems/remote/resume', async (_req, res) => {
+    try {
+      return res.json({ ok: true, data: await remoteStemJobs.resume() });
+    } catch (error) {
+      return res.status(500).json(stemErrorPayload(error));
+    }
+  });
+
+  app.post('/api/stems/remote/jobs/:id/cancel', async (req, res) => {
+    try {
+      const reason = typeof (req.body as { reason?: unknown })?.reason === 'string'
+        ? (req.body as { reason: string }).reason.slice(0, 200)
+        : undefined;
+      return res.json({ ok: true, data: await remoteStemJobs.cancel(req.params.id, reason) });
+    } catch (error) {
+      return res.status(400).json(stemErrorPayload(error));
+    }
+  });
+
+  app.put('/api/stems/remote/settings', async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as { kind?: 'folder' | 'rclone'; root?: string; pollIntervalMs?: number; workerLeaseMs?: number; jobTimeoutMs?: number };
+      return res.json({ ok: true, data: await remoteStemJobs.configure(body) });
+    } catch (error) {
+      return res.status(400).json(stemErrorPayload(error));
     }
   });
 

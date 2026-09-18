@@ -19,7 +19,7 @@
  *  - originals are read-only: bytes handed over by the renderer are staged
  *    under `Staging/`, the source file on disk is never written to.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isStemError, StemSeparationError } from './errors';
@@ -641,6 +641,20 @@ export class StemJobService {
       this.emit('progress', record);
     };
 
+    /*
+     * Strukturierte Laufzeile (§36). Technische Details (Backend, Gerät,
+     * Rückfallgrund) gehören ins Log – die UI zeigt daraus nur „läuft – GPU“
+     * bzw. „läuft – CPU“.
+     */
+    this.options.logger?.info?.('STEM', `backend=${descriptor.checkpoint?.format === 'onnx' ? 'local-mdx' : descriptor.family} status=running`, {
+      jobId,
+      backend: descriptor.checkpoint?.format === 'onnx' ? 'local-mdx' : descriptor.family,
+      model: descriptor.id,
+      profile,
+      device: request.device ?? this.options.device ?? 'auto',
+      status: 'running',
+    });
+
     this.options.logger?.info?.('STEMS', `Stem-Job ${jobId} gestartet`, {
       profile,
       model: descriptor.id,
@@ -711,8 +725,39 @@ export class StemJobService {
             ? 'Aus Cache geladen und validiert'
             : `Fertig: ${summary.stems.length} Stems (${view.modelId})`;
     view.error = metadata.error;
+    // Gerät + Rückfall gehören in die Job-Sicht: die UI zeigt „läuft – GPU“
+    // bzw. „CPU-Fallback“ und muss das nicht aus dem Backend-Report raten.
+    view.device = summary.device;
+    view.cpuFallback = summary.cpuFallback;
+    view.fallbackReason = summary.fallbackReason;
+    // Backend-Kennung wie im Log: der ONNX-Graph im Editor-Prozess ist der
+    // lokale Fast-Pfad (`local-mdx`), alles andere nennt seine Familie.
+    view.backend = this.registry.get(view.modelId)?.checkpoint?.format === 'onnx' ? 'local-mdx' : view.family;
     view.finishedAt = Date.now();
     view.updatedAt = Date.now();
+    /*
+     * Abschlusszeile mit Gerät und Rückfallzustand. Genau diese Zeile fehlte,
+     * wenn ein DirectML-Lauf still auf CPU gegangen ist – im Log stand nur
+     * „Stem-Job … COMPLETED“, nicht womit gerechnet wurde.
+     */
+    const backendLabel = view.backend ?? view.family;
+    if (summary.status === 'COMPLETED' || summary.status === 'FAILED' || summary.status === 'CANCELLED') {
+      const statusLabel = summary.cpuFallback ? 'fallback_cpu' : summary.status.toLowerCase();
+      this.options.logger?.[summary.status === 'FAILED' ? 'warn' : 'info']?.(
+        'STEM',
+        `backend=${backendLabel} device=${summary.device ?? 'unbekannt'} status=${statusLabel}`,
+        {
+          jobId,
+          backend: backendLabel,
+          device: summary.device,
+          status: statusLabel,
+          cpuFallback: summary.cpuFallback ?? false,
+          ...(summary.fallbackReason ? { reason: summary.fallbackReason } : {}),
+          model: view.modelId,
+          durationMs: summary.metadata?.timing?.totalMs,
+        }
+      );
+    }
     // Only a completed job hands out stems: after a cancel or a failure the
     // engine has already discarded its partial files, and an unfinished stem
     // must never look finished on the transport layer (§10).
@@ -795,6 +840,160 @@ export class StemJobService {
     record.view.phase = phase;
     record.view.updatedAt = Date.now();
     this.emit('progress', record);
+  }
+
+  /**
+   * Trägt ein **außerhalb dieses Prozesses** entstandenes Ergebnis als fertigen
+   * Job ein (§15, §42).
+   *
+   * Der High-Quality-Fernpfad rechnet auf einem Colab-Worker; die Stems liegen
+   * nach dem Import lokal als Arbeitskopien. Statt dafür eine zweite
+   * Stem-Leseebene (IPC-Kanäle, HTTP-Routen, Renderer-Code) zu bauen, wird das
+   * Ergebnis hier registriert: `readStemJobStem`, `readStemJobMetadata`,
+   * `listStemJobs` und der bestehende Import im Renderer arbeiten unverändert
+   * weiter – ein fertiger Job ist ein fertiger Job, egal welcher Rechner
+   * gerechnet hat.
+   *
+   * Der Aufrufer (Remote-Service) hat Existenz, Größe, Header und Hash der
+   * Dateien bereits geprüft; hier wird zusätzlich hart geprüft, dass jede
+   * gemeldete Datei existiert und lesbar ist – ein unvollständiger Import darf
+   * niemals als COMPLETED erscheinen (§34 I/J/K).
+   */
+  async registerCompletedJob(input: {
+    jobId: string;
+    trackName: string;
+    profile: QualityProfile;
+    modelId: string;
+    family: ModelFamily;
+    stems: { id: StemId; filePath: string; sha256: string; frames: number; sampleRate: number; channels: number; peak: number; displayName?: string }[];
+    device?: ComputeDevice;
+    cpuFallback?: boolean;
+    fallbackReason?: string;
+    metadata?: unknown;
+    logTag?: string;
+  }): Promise<StemJobView> {
+    if (this.jobs.has(input.jobId)) {
+      const existing = this.jobs.get(input.jobId)!;
+      if (existing.view.status === 'COMPLETED') return snapshot(existing.view);
+    }
+    if (!input.stems.length) {
+      throw new StemSeparationError('VALIDATION_FAILED', `Job ${input.jobId} meldet keine Stems – Import abgelehnt.`);
+    }
+    const expected = this.registry.get(input.modelId)?.stemOrder ?? [];
+    const delivered: StemId[] = [];
+    const stemViews = [];
+    for (const stem of input.stems) {
+      if (expected.length > 0 && !expected.includes(stem.id)) {
+        throw new StemSeparationError('VALIDATION_FAILED', `Stem "${stem.id}" gehört nicht zu Modell ${input.modelId} (erwartet: ${expected.join(', ')})`);
+      }
+      let info;
+      try {
+        info = await stat(stem.filePath);
+      } catch {
+        throw new StemSeparationError('VALIDATION_FAILED', `Stem-Datei fehlt: ${stem.filePath}`);
+      }
+      if (!info.isFile() || info.size <= 44) {
+        throw new StemSeparationError('VALIDATION_FAILED', `Stem-Datei ist leer oder kein WAV: ${stem.filePath} (${info.size} Bytes)`);
+      }
+      delivered.push(stem.id);
+      stemViews.push({
+        ...stem,
+        fileSize: info.size,
+        displayName: stem.displayName ?? this.descriptorStemDisplayNames(input.modelId)[stem.id] ?? stem.id,
+      });
+    }
+    /*
+     * Vollständigkeit statt „einige Stems reichen“ (§21 K): fehlt einer der
+     * vom Deskriptor verlangten Stems, ist der Job nicht fertig.
+     */
+    const missing = expected.filter((stem) => !delivered.includes(stem));
+    if (expected.length > 0 && missing.length > 0) {
+      throw new StemSeparationError('VALIDATION_FAILED', `Unvollständiges Ergebnis für ${input.jobId}: es fehlen ${missing.join(', ')}`);
+    }
+
+    const now = Date.now();
+    const record: JobRecord = {
+      view: {
+        jobId: input.jobId,
+        status: 'COMPLETED',
+        percent: 100,
+        phase: `Fertig: ${stemViews.length} Stems (${input.modelId}, extern)`,
+        processedSeconds: 0,
+        totalSeconds: 0,
+        profile: input.profile,
+        modelId: input.modelId,
+        family: input.family,
+        stems: delivered,
+        chunkCount: 0,
+        cacheHit: false,
+        trackName: input.trackName,
+        createdAt: now,
+        updatedAt: now,
+        finishedAt: now,
+        device: input.device,
+        cpuFallback: input.cpuFallback,
+        fallbackReason: input.fallbackReason,
+        backend: input.family,
+        result: {
+          outputDir: path.dirname(stemViews[0].filePath),
+          metadataPath: '',
+          stems: stemViews.map((stem) => ({
+            id: stem.id,
+            displayName: stem.displayName,
+            filePath: stem.filePath,
+            sha256: stem.sha256,
+            frames: stem.frames,
+            sampleRate: stem.sampleRate,
+            channels: stem.channels,
+            peak: stem.peak,
+          })),
+          validationPass: true,
+          originalUnchanged: true,
+          trainedModel: true,
+        },
+      },
+      summary: input.metadata
+        ? {
+            jobId: input.jobId,
+            status: 'COMPLETED',
+            metadataPath: '',
+            /*
+             * Die Stem-Beschreibungen müssen auch im Summary stehen: genau dort
+             * liest `stemBytes()` die Dateipfade (derselbe Pfad wie bei einem
+             * lokalen Lauf). Vorher blieb das Summary leer und importierte
+             * Fern-Ergebnisse waren in der UI nicht abrufbar.
+             */
+            stems: stemViews.map((stem, index) => ({
+              id: stem.id,
+              displayName: stem.displayName,
+              outputIndex: expected.length > 0 ? Math.max(0, expected.indexOf(stem.id)) : index,
+              channelCount: stem.channels,
+              sampleRate: stem.sampleRate,
+              frames: stem.frames,
+              filePath: stem.filePath,
+              sha256: stem.sha256,
+              bytes: stem.fileSize,
+              peak: stem.peak,
+              rms: 0,
+              complete: true,
+            })),
+            cacheHit: false,
+            originalIntegrity: { path: '', sha256Before: '', sizeBefore: 0, mtimeMsBefore: 0, unchanged: true, checkedAt: now },
+            metadata: input.metadata as SeparationJobSummary['metadata'],
+            device: input.device,
+            cpuFallback: input.cpuFallback,
+            fallbackReason: input.fallbackReason,
+          }
+        : undefined,
+    };
+    this.jobs.set(input.jobId, record);
+    this.options.logger?.info?.(input.logTag ?? 'STEM', `Fremdergebnis übernommen: ${input.jobId} (${input.modelId}, ${delivered.join(', ')})`, {
+      device: input.device,
+      cpuFallback: input.cpuFallback ?? false,
+      stems: delivered,
+    });
+    this.emit('completed', record);
+    return snapshot(record.view);
   }
 
   /** Reads one separated stem back as WAV bytes for the renderer to decode. */

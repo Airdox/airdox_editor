@@ -28,6 +28,7 @@ import {
 import {
   StemEngineProfileInfo,
   StemQualityProfile,
+  type RemoteServiceStatus,
   StemType,
   StemsMixerState,
   TrackStems,
@@ -73,7 +74,37 @@ interface DeckStemsControlProps {
   missingModel?: { id: string; label: string } | null;
   /** Öffnet den Installations-Dialog für `missingModel`. */
   onInstallModel?: () => void;
+  /**
+   * Fern-Ziel (Google Drive) für „High Quality extern": nur Anzeige von
+   * Machbarkeit/Status – Pfade und Intervalle, niemals Zugangsdaten (§23).
+   */
+  remoteStatus?: RemoteServiceStatus | null;
+  /** True, wenn High Quality auf dem externen Rechner laufen soll. */
+  remoteEnabled?: boolean;
+  onRemoteEnabledChange?: (enabled: boolean) => void;
 }
+
+/**
+ * Die zwei Betriebsarten, die der Nutzer sieht (§13): „Schnell" rechnet lokal
+ * (ONNX, GPU wenn vorhanden, sonst CPU) und „High Quality" rechnet lokal oder –
+ * wenn eingerichtet – auf dem externen Rechner. Die übrigen Profile bleiben als
+ * Expertenauswahl erhalten; nichts ist entfernt, nur der Normalfall ist
+ * einfacher.
+ */
+const STEM_MODES: { id: 'fast' | 'hq'; label: string; hint: string; profiles: StemQualityProfile[] }[] = [
+  {
+    id: 'fast',
+    label: 'Schnell',
+    hint: 'Rechnet lokal – in-process, GPU wenn vorhanden, sonst CPU.',
+    profiles: ['BALANCED', 'PREVIEW', 'HIGH'],
+  },
+  {
+    id: 'hq',
+    label: 'High Quality',
+    hint: 'Höchste Trennung – lokal oder (wenn eingerichtet) auf dem externen Rechner.',
+    profiles: ['HIGH_QUALITY', 'MAXIMUM_QUALITY'],
+  },
+];
 
 const PROFILE_LABELS: Record<StemQualityProfile, string> = {
   PREVIEW: 'Vorschau',
@@ -179,7 +210,23 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   onOpenInstaller,
   missingModel = null,
   onInstallModel,
+  remoteStatus,
+  remoteEnabled = false,
+  onRemoteEnabledChange,
 }) => {
+  const [expertProfiles, setExpertProfiles] = React.useState(false);
+  const currentMode = STEM_MODES.find((mode) => mode.profiles.includes(selectedProfile))?.id ?? 'fast';
+  const remoteAvailable = Boolean(remoteStatus?.configured);
+  const remoteReady = remoteAvailable && remoteStatus?.reachable !== false;
+  const activeRemoteJob = (remoteStatus?.jobs ?? []).find(
+    (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
+  );
+  const remoteLabel = remoteStatus?.label ?? 'Google Drive';
+  const remoteHint = !remoteAvailable
+    ? 'Kein externer Rechenort eingerichtet – High Quality läuft lokal.'
+    : remoteStatus?.reachable === false
+      ? `${remoteLabel} ist gerade nicht erreichbar. Der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
+      : `Bereit: ${remoteLabel}. Arbeitskopie wird hochgeladen, die Stems kommen automatisch zurück.`;
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
     const known = STEM_CONFIGS.find((cfg) => cfg.id === id);
@@ -455,7 +502,81 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
         </div>
       )}
 
-      {profiles.length > 0 && (
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+        <span className="uppercase tracking-wider text-neutral-500 font-bold">Qualität:</span>
+        {STEM_MODES.map((mode) => {
+          const active = currentMode === mode.id;
+          const modeProfiles = profiles.filter((profile) => mode.profiles.includes(profile.profile));
+          const usable = modeProfiles.some((profile) => profile.available);
+          return (
+            <button
+              key={mode.id}
+              onClick={() => {
+                const target = modeProfiles.find((profile) => profile.available) ?? modeProfiles[0];
+                if (target) onProfileChange?.(target.profile);
+                if (mode.id === 'fast' && remoteEnabled) onRemoteEnabledChange?.(false);
+              }}
+              disabled={isSeparating}
+              title={`${mode.hint}${usable ? '' : '\nZurzeit nicht nutzbar (keine Gewichte installiert).'}`}
+              className={`px-2.5 py-1 rounded border font-semibold transition-colors ${
+                active
+                  ? 'bg-[#00284a] border-[#00a2ff] text-[#00e5ff]'
+                  : 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#0088ff] hover:text-white'
+              } ${usable ? '' : 'opacity-70'}`}
+            >
+              {mode.label}
+            </button>
+          );
+        })}
+        {currentMode === 'hq' && remoteAvailable && (
+          <label
+            className={`flex items-center space-x-1 px-2 py-1 rounded border cursor-pointer ${
+              remoteEnabled ? 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0]' : 'bg-[#161922] border-[#232738] text-neutral-400'
+            }`}
+            title="High Quality auf dem externen Rechner rechnen lassen (Transport: Google Drive). Der Editor lädt die Arbeitskopie hoch und die Stems automatisch zurück."
+          >
+            <input
+              type="checkbox"
+              className="accent-[#1f9d55]"
+              checked={remoteEnabled}
+              disabled={isSeparating}
+              onChange={(event) => onRemoteEnabledChange?.(event.target.checked)}
+            />
+            <span>Extern rechnen</span>
+          </label>
+        )}
+        <button
+          onClick={() => setExpertProfiles((value) => !value)}
+          className="px-1.5 py-1 rounded border border-[#232738] bg-[#121419] text-neutral-500 hover:text-neutral-300"
+          title="Weitere Qualitätsprofile anzeigen (Vorschau, High, Max)"
+        >
+          {expertProfiles ? 'Profile ausblenden' : 'Weitere Profile'}
+        </button>
+        {currentMode === 'hq' && (
+          <span className={`text-[9.5px] ${remoteEnabled && remoteStatus?.reachable === false ? 'text-[#fbbf24]' : 'text-neutral-500'}`}>
+            {remoteEnabled ? remoteHint : 'Lokal – kann je nach Rechner deutlich länger dauern.'}
+          </span>
+        )}
+      </div>
+
+      {currentMode === 'hq' && remoteEnabled && activeRemoteJob && (
+        <div className="mt-1 text-[10px] text-[#7ef0b0] flex items-center space-x-2">
+          <span>
+            Externer Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
+            {activeRemoteJob.cpuFallback ? ' (CPU-Fallback)' : activeRemoteJob.device ? ` (${activeRemoteJob.device})` : ''}
+          </span>
+          {onCancelSeparation && (
+            <button
+              onClick={onCancelSeparation}
+              className="px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5]"
+            >
+              Abbrechen
+            </button>
+          )}
+        </div>
+      )}
+
+      {expertProfiles && profiles.length > 0 && (
         <div className="mt-1.5 flex items-center space-x-1.5 text-[10px]">
           <span className="uppercase tracking-wider text-neutral-500 font-bold">Qualitätsprofil:</span>
           {profiles.map((profile) => {
