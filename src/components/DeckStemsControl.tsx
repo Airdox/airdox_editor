@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   Download,
   Timer,
+  Cloud,
 } from 'lucide-react';
 import {
   StemEngineProfileInfo,
@@ -75,13 +76,23 @@ interface DeckStemsControlProps {
   /** Öffnet den Installations-Dialog für `missingModel`. */
   onInstallModel?: () => void;
   /**
-   * Fern-Ziel (Google Drive) für „High Quality extern": nur Anzeige von
-   * Machbarkeit/Status – Pfade und Intervalle, niemals Zugangsdaten (§23).
+   * Fern-Ziel (Google Drive) für die externe Zerlegung auf Colab: Status von
+   * Machbarkeit/Erreichbarkeit – Pfade und Intervalle, niemals Zugangsdaten (§23).
    */
   remoteStatus?: RemoteServiceStatus | null;
-  /** True, wenn High Quality auf dem externen Rechner laufen soll. */
+  /** True, wenn die externe Zerlegung (Google Colab) als Zielmodus gewählt ist. */
   remoteEnabled?: boolean;
   onRemoteEnabledChange?: (enabled: boolean) => void;
+  /**
+   * Startet die externe Zerlegung sofort (Arbeitskopie → Drive → Colab →
+   * Rückimport). Der eindeutige Button in der Qualitätszeile ruft diese an.
+   */
+  onStartExternalSeparation: () => void;
+  /**
+   * Öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker),
+   * wenn noch kein Transport eingerichtet ist oder der Nutzer nachschauen will.
+   */
+  onOpenRemoteSetup: () => void;
 }
 
 /**
@@ -213,6 +224,8 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   remoteStatus,
   remoteEnabled = false,
   onRemoteEnabledChange,
+  onStartExternalSeparation,
+  onOpenRemoteSetup,
 }) => {
   const [expertProfiles, setExpertProfiles] = React.useState(false);
   const currentMode = STEM_MODES.find((mode) => mode.profiles.includes(selectedProfile))?.id ?? 'fast';
@@ -223,10 +236,10 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   );
   const remoteLabel = remoteStatus?.label ?? 'Google Drive';
   const remoteHint = !remoteAvailable
-    ? 'Kein externer Rechenort eingerichtet – High Quality läuft lokal.'
+    ? `Noch nicht eingerichtet – Button „Externe Zerlegung (Google Colab)" öffnet die Einrichtung (Drive-Ordner + Colab-Worker). Bis dahin läuft High Quality lokal.`
     : remoteStatus?.reachable === false
       ? `${remoteLabel} ist gerade nicht erreichbar. Der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
-      : `Bereit: ${remoteLabel}. Arbeitskopie wird hochgeladen, die Stems kommen automatisch zurück.`;
+      : `Bereit: ${remoteLabel}. Klick auf „Externe Zerlegung (Google Colab)" startet: Arbeitskopie hochladen → Colab rechnet → Stems automatisch zurück.`;
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
     const known = STEM_CONFIGS.find((cfg) => cfg.id === id);
@@ -528,23 +541,56 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             </button>
           );
         })}
-        {currentMode === 'hq' && remoteAvailable && (
-          <label
-            className={`flex items-center space-x-1 px-2 py-1 rounded border cursor-pointer ${
-              remoteEnabled ? 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0]' : 'bg-[#161922] border-[#232738] text-neutral-400'
-            }`}
-            title="High Quality auf dem externen Rechner rechnen lassen (Transport: Google Drive). Der Editor lädt die Arbeitskopie hoch und die Stems automatisch zurück."
-          >
-            <input
-              type="checkbox"
-              className="accent-[#1f9d55]"
-              checked={remoteEnabled}
-              disabled={isSeparating}
-              onChange={(event) => onRemoteEnabledChange?.(event.target.checked)}
-            />
-            <span>Extern rechnen</span>
-          </label>
-        )}
+        {/*
+         * Der eindeutige Button für den externen Zerlegungs-Workflow
+         * (Google Drive + Google Colab). Er ist immer sichtbar:
+         *  - noch nicht eingerichtet  → öffnet den Einrichtungs-Dialog
+         *  - eingerichtet             → startet die Zerlegung sofort
+         *  - externer Job aktiv       → zeigt Status, Abbrechen daneben
+         */}
+        <button
+          onClick={() => {
+            if (activeRemoteJob) return; // läuft bereits – „Abbrechen" in der Statuszeile
+            if (!remoteAvailable) {
+              onOpenRemoteSetup();
+              return;
+            }
+            if (remoteEnabled) {
+              // Externer Modus ist gewählt (grün) – erneut klicken stellt
+              // „lokal" wieder ein, damit „Stems jetzt trennen" auf diesem
+              // Rechner rechnet und nicht in Colab.
+              onRemoteEnabledChange?.(false);
+              return;
+            }
+            onStartExternalSeparation();
+          }}
+          disabled={isSeparating && !activeRemoteJob}
+          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded border font-semibold transition-colors ${
+            activeRemoteJob
+              ? 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0] opacity-75 cursor-default'
+              : !remoteAvailable
+              ? 'bg-[#161922] border-dashed border-[#3a3f52] text-neutral-400 hover:text-white hover:border-[#0088ff] cursor-pointer'
+              : remoteEnabled || remoteStatus?.reachable === false
+              ? remoteStatus?.reachable === false
+                ? 'bg-[#2a2108] border-[#f0b429]/60 text-[#f5d78e] hover:border-[#f0b429] cursor-pointer'
+                : 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0] cursor-pointer'
+              : 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#1f9d55] hover:text-[#7ef0b0] cursor-pointer'
+          }`}
+          title={
+            activeRemoteJob
+              ? 'Externer Colab-Job läuft – Status unten, Abbrechen rechts daneben.'
+              : !remoteAvailable
+              ? 'Diesen Track auf Google Colab zerlegen lassen (externe Zerlegung: Arbeitskopie → Google Drive → Colab-Worker → 4 Stems zurück in den Editor). Noch nicht eingerichtet – Klick öffnet die Einrichtung (Drive-Ordner + Colab-Worker).'
+              : remoteStatus?.reachable === false
+              ? 'Google Drive ist gerade nicht erreichbar – der Job bleibt erhalten und läuft automatisch weiter, sobald die Verbindung steht. Klick startet dennoch (Warteverhalten).'
+              : remoteEnabled
+              ? 'Externer Modus ist AKTIV: die Trennung läuft auf Google Colab. Erneut klicken, um wieder lokal zu rechnen.'
+              : 'Externe Zerlegung auf Google Colab starten: Der Editor lädt die Arbeitskopie nach Google Drive hoch, der Colab-Worker trennt in High Quality (BS-RoFormer) und die 4 Stems (Vocals, Drums, Bass, Other) kommen automatisch zurück, werden dauerhaft gespeichert und mit dem Original-Track verknüpft. Original, rekordbox.xml und master.db werden nicht verändert.'
+          }
+        >
+          <Cloud size={12} className={activeRemoteJob ? 'animate-pulse' : undefined} />
+          <span>{activeRemoteJob ? 'Colab-Job läuft…' : 'Externe Zerlegung (Google Colab)'}</span>
+        </button>
         <button
           onClick={() => setExpertProfiles((value) => !value)}
           className="px-1.5 py-1 rounded border border-[#232738] bg-[#121419] text-neutral-500 hover:text-neutral-300"
@@ -559,10 +605,10 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
         )}
       </div>
 
-      {currentMode === 'hq' && remoteEnabled && activeRemoteJob && (
+      {activeRemoteJob && (
         <div className="mt-1 text-[10px] text-[#7ef0b0] flex items-center space-x-2">
           <span>
-            Externer Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
+            Externer Colab-Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
             {activeRemoteJob.cpuFallback ? ' (CPU-Fallback)' : activeRemoteJob.device ? ` (${activeRemoteJob.device})` : ''}
           </span>
           {onCancelSeparation && (

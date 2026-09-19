@@ -24,7 +24,7 @@ In der Deck-Stem-Leiste steht nur noch:
 | --- | --- |
 | **Schnell** | lokaler In-Process-Pfad (ONNX, GPU wenn vorhanden, sonst CPU) |
 | **High Quality** | höchste Trennung – lokal oder extern |
-| **Extern rechnen** | Schalter, nur sichtbar, wenn ein Transport eingerichtet ist |
+| **Externe Zerlegung (Google Colab)** | der eindeutige Workflow-Button, immer sichtbar: nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → startet die Zerlegung sofort; grün markiert = extern gewählt, erneut klicken stellt „lokal“ wieder ein |
 | Statuszeile | „Arbeitskopie wird hochgeladen“, „Wartet auf den externen Rechner“, „Verarbeitung läuft – GPU/CPU“, „Stem-Separation abgeschlossen“ |
 | **Abbrechen** | setzt `cancel.flag`; der Worker hört auf, ein späteres Ergebnis wird verworfen |
 
@@ -36,15 +36,25 @@ Die übrigen Qualitätsprofile (`Vorschau`, `High`, `Max`) bleiben unter
 
 ## 2. Ablage einrichten
 
-Einmalig, auf dem Editor-Rechner:
+**Im Editor (empfohlen):** Button **„Externe Zerlegung (Google Colab)"** in der
+Deck-Stem-Leiste → Einrichtungs-Dialog:
 
-* **Google Drive (Ordner)** – Drive-Desktop/Sync installiert, Ordner z. B.
-  `~/Google Drive/airdox-stem-jobs`. Der Editor schreibt in diesen Ordner;
-  Drive synchronisiert, Colab mountet denselben Ordner.
-* **rclone** – `rclone config` einrichten (das Token liegt **bei rclone**, nicht
-  im Projekt) und dem Editor das Remote nennen: `gdrive:airdox-stem-jobs`.
+1. **Jobablage wählen** – Drive-Sync-Ordner (Empfehlung:
+   `My Drive → airdox-stem-jobs`, per Systemdialog wählbar) oder rclone-Remote
+   (`gdrive:airdox-stem-jobs`). „Speichern & Verbindung prüfen" schreibt die
+   Einstellung nach `RemoteJobs/settings.json` und zeigt sofort, ob die Ablage
+   erreichbar ist.
+2. **Colab-Worker (einmalig):** Notebook `colab/airdox-stem-remote-worker.ipynb`
+   (Bau: `npm run stems:remote:notebook`) nach Google Drive hochladen, in Colab
+   öffnen, Laufzeit T4/CPU wählen, „Alles ausführen". `JOB_ORDNER` in der
+   ersten Code-Zelle muss den gewählten Drive-Ordner benennen.
 
-Umgebungsvariablen (oder `RemoteJobs/settings.json` im Engine-Datenordner):
+Danach genügt ein Klick auf den Button – Upload, Warten, Rückimport,
+Speicherung und Verknüpfung mit dem Original-Track laufen ohne Bedienung.
+
+Für Entwickler bleiben Umgebungsvariablen (oder `RemoteJobs/settings.json` im
+Engine-Datenordner) als Programmierpfad; die Datei, die der Dialog schreibt,
+hat gegenüber Umgebungsvariablen Vorrang:
 
 | Variable | Default | Bedeutung |
 | --- | --- | --- |

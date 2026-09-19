@@ -50,6 +50,7 @@ import {
 } from './manifest';
 import {
   createTransport,
+  REMOTE_TRANSPORT_MISSING,
   RemoteUnreachableError,
   type IRemoteTransport,
 } from './transport';
@@ -247,7 +248,18 @@ export class RemoteStemJobService {
   async start(request: StartRemoteStemJobRequest): Promise<RemoteStemJobView> {
     await this.ensureLoaded();
     const settings = await this.effectiveSettings();
-    const transport = this.transportFor(settings);
+    let transport: IRemoteTransport;
+    try {
+      transport = this.transportFor(settings);
+    } catch (error) {
+      // Ohne Jobablage gibt es keinen Fern-Job – stabile Fehlermeldung statt
+      // eines nackten Transport-Fehlers (UI: „Google-Drive-Ziel einrichten").
+      throw new RemoteProtocolError(
+        REMOTE_TRANSPORT_MISSING,
+        error instanceof Error ? error.message : String(error),
+        { settings: { kind: settings.kind, root: settings.root ? true : false } }
+      );
+    }
 
     const profile = request.profile ?? 'HIGH_QUALITY';
     const descriptor = this.resolveDescriptor(profile, request.modelId, request.family);

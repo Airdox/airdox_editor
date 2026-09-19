@@ -222,11 +222,15 @@ function encodeStereoFloatWav(buffer: AudioBuffer): Uint8Array {
   const left = buffer.getChannelData(0);
   const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
   let offset = 44;
+  // Explizit L/R: die frühere Schreibweise legte pro Frame ein kleines
+  // `[left, right]`-Array an (17 Mio Arrays pro 6-Minuten-Track) – reiner
+  // GC-Druck ohne Nutzen.
   for (let i = 0; i < buffer.length; i++) {
-    for (const sample of [left[i], right[i]]) {
-      view.setFloat32(offset, Number.isFinite(sample) ? sample : 0, true);
-      offset += bytesPerSample;
-    }
+    const l = left[i];
+    const r = right[i];
+    view.setFloat32(offset, Number.isFinite(l) ? l : 0, true);
+    view.setFloat32(offset + bytesPerSample, Number.isFinite(r) ? r : 0, true);
+    offset += bytesPerSample * 2;
   }
   return bytes;
 }
