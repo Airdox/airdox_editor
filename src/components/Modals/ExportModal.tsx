@@ -4,14 +4,20 @@
  * Export master audio to WAV, MP3, FLAC, AAC, OGG, WEBM, Rekordbox XML, or Project JSON.
  */
 
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import { X, Download, FileAudio, FileCode, CheckCircle2, Layers, HardDrive, Info } from 'lucide-react';
 import { TrackModel, PaletteClip } from '../../types/rekordbox';
 import { exportAudioBuffer, AudioExportFormat } from '../../audio/audioExporter';
 import { exportToRekordboxXml } from '../../rekordbox/xmlParser';
 import { OperationTelemetry } from './OperationFeedbackModal';
-import { MultiLayerRenderInspector } from './MultiLayerRenderInspector';
 import { logger } from '../../utils/logger';
+
+// three.js (~600 KB) wird ausschließlich für den Multi-Layer-Render-Inspector
+// benötigt. Lazy-Loading hält three aus dem Initial-Bundle – die App lädt
+// dadurch deutlich schneller (Ladezeiten).
+const MultiLayerRenderInspector = lazy(() =>
+  import('./MultiLayerRenderInspector').then((m) => ({ default: m.MultiLayerRenderInspector }))
+);
 
 export type ExportFormatType = AudioExportFormat | 'XML' | 'JSON';
 
@@ -423,15 +429,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
       </div>
 
-      {/* Multi-Layer Composition Animation & Inspector Modal */}
-      <MultiLayerRenderInspector
-        isOpen={showLayerInspector}
-        track={track}
-        clips={clips}
-        format={format}
-        onStartDownload={triggerActualDownload}
-        onCancel={() => setShowLayerInspector(false)}
-      />
+      {/* Multi-Layer Composition Animation & Inspector Modal (three.js on-demand) */}
+      {showLayerInspector && (
+        <Suspense fallback={null}>
+          <MultiLayerRenderInspector
+            isOpen={showLayerInspector}
+            track={track}
+            clips={clips}
+            format={format}
+            onStartDownload={triggerActualDownload}
+            onCancel={() => setShowLayerInspector(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

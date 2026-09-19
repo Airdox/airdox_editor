@@ -90,80 +90,43 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // ── Performance: Playhead-Zeit als Ref, Canvas-Draws imperativ ─────────────
+  // Vorher hat die rAF-Loop 60×/s setCurrentTime() aufgerufen und damit die
+  // komplette Komponente + dichte Wellenform neu gerendert. Jetzt: Canvas wird
+  // pro Frame direkt gezeichnet, React-State (Time-Text) nur ~10 Hz frisch.
+  const timeRef = useRef(0);
+  const activeClipRef = useRef(activeClip);
+  activeClipRef.current = activeClip;
+  const zoomRef = useRef(zoomLevel);
+  zoomRef.current = zoomLevel;
+  const waveformModeRef = useRef(waveformMode);
+  waveformModeRef.current = waveformMode;
+  const clipSelectionRef = useRef(clipSelection);
+  clipSelectionRef.current = clipSelection;
+  const loopActiveRef = useRef(loopActive);
+  loopActiveRef.current = loopActive;
+
   // Stop playback if clip switches
   useEffect(() => {
     setIsPlaying(false);
     setCurrentTime(0);
+    timeRef.current = 0;
     audioEngine.stop();
   }, [activeClip?.id]);
 
-  // Real-time animation loop for playhead
-  useEffect(() => {
-    let animId: number;
-    const update = () => {
-      if (isPlaying && activeClip && activeClip.audioBuffer) {
-        const time = audioEngine.getCurrentTime();
-        if (time >= activeClip.duration) {
-          if (loopActive) {
-            audioEngine.play(activeClip.audioBuffer, 0, true, 0, activeClip.duration);
-            setCurrentTime(0);
-          } else {
-            setIsPlaying(false);
-            setCurrentTime(0);
-            audioEngine.stop();
-          }
-        } else {
-          setCurrentTime(time);
-        }
-      }
-      animId = requestAnimationFrame(update);
-    };
-    animId = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(animId);
-  }, [isPlaying, activeClip, loopActive]);
-
-  // Transport handlers
-  const handleTogglePlay = () => {
-    if (!activeClip || !activeClip.audioBuffer) return;
-    if (isPlaying) {
-      audioEngine.stop();
-      setIsPlaying(false);
-    } else {
-      audioEngine.play(
-        activeClip.audioBuffer,
-        currentTime < activeClip.duration ? currentTime : 0,
-        loopActive,
-        0,
-        activeClip.duration
-      );
-      setIsPlaying(true);
-    }
-  };
-
-  const handleReturnToCue = () => {
-    audioEngine.stop();
-    setIsPlaying(false);
-    setCurrentTime(0);
-  };
-
-  // Harmonic adaptation preview
-  const harmonicPreview = activeClip && activeTrack
-    ? calculateHarmonicPitchShift(activeClip.key, activeTrack.key)
-    : { semitones: 0, harmonicRelation: 'Keine Tonartdaten' };
-
-  const tempoRatio = activeClip && activeTrack && activeClip.bpm > 0
-    ? activeTrack.bpm / activeClip.bpm
-    : 1.0;
-  const bpmDiff = activeClip && activeTrack
-    ? (activeTrack.bpm - activeClip.bpm).toFixed(1)
-    : '0.0';
-
-  // Draw interactive Waveform Canvas
-  useEffect(() => {
+  // Zeichnet die komplette Deck-B-Canvas für einen Zeitpunkt. Wird pro Frame
+  // aus der rAF-Loop (während Wiedergabe) und bei Bedarf aus Effekten/Seeks
+  // aufgerufen – niemals über React-State pro Frame.
+  const drawDeckCanvas = useCallback((time: number) => {
     const canvas = canvasRef.current;
+    const activeClip = activeClipRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const zoomLevel = zoomRef.current;
+    const waveformMode = waveformModeRef.current;
+    const clipSelection = clipSelectionRef.current;
 
     const width = canvas.width;
     const height = canvas.height;
@@ -178,13 +141,14 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
       ctx.font = '12px Segoe UI, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('Wähle einen Clip aus der Palette oder erstelle einen neuen', width / 2, height / 2);
+      ctx.textAlign = 'left';
       return;
     }
 
     const duration = activeClip.duration;
 
     const visibleDuration = duration / zoomLevel;
-    const visibleStart = Math.max(0, Math.min(currentTime - visibleDuration * 0.4, duration - visibleDuration));
+    const visibleStart = Math.max(0, Math.min(time - visibleDuration * 0.4, duration - visibleDuration));
 
     const timeToX = (t: number) => ((t - visibleStart) / visibleDuration) * width;
 
@@ -233,7 +197,7 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
     }
 
     // 4. Draw Playhead (White vertical line + Red top triangle)
-    const playheadX = timeToX(currentTime);
+    const playheadX = timeToX(time);
     if (playheadX >= 0 && playheadX <= width) {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
@@ -251,7 +215,92 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
       ctx.closePath();
       ctx.fill();
     }
-  }, [activeClip, currentTime, zoomLevel, waveformMode, clipSelection]);
+  }, []);
+
+  // Real-time animation loop for playhead (imperativ, ohne State-Updates pro Frame)
+  useEffect(() => {
+    if (!isPlaying) return;
+    let animId = 0;
+    let lastUiSync = 0;
+    const update = () => {
+      const activeClip = activeClipRef.current;
+      if (activeClip && activeClip.audioBuffer) {
+        const time = audioEngine.getCurrentTime();
+        if (time >= activeClip.duration) {
+          if (loopActiveRef.current) {
+            audioEngine.play(activeClip.audioBuffer, 0, true, 0, activeClip.duration);
+            timeRef.current = 0;
+            setCurrentTime(0);
+          } else {
+            setIsPlaying(false);
+            setCurrentTime(0);
+            timeRef.current = 0;
+            audioEngine.stop();
+            drawDeckCanvas(0);
+            return;
+          }
+        } else {
+          timeRef.current = time;
+        }
+        drawDeckCanvas(timeRef.current);
+        // Time-Text-Anzeige nur grob synchronisieren (~10 Hz) – kein
+        // Komponenten-Re-Render pro Frame.
+        if (Math.abs(timeRef.current - lastUiSync) >= 0.1) {
+          lastUiSync = timeRef.current;
+          setCurrentTime(timeRef.current);
+        }
+      }
+      animId = requestAnimationFrame(update);
+    };
+    animId = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(animId);
+  }, [isPlaying, drawDeckCanvas]);
+
+  // Transport handlers
+  const handleTogglePlay = () => {
+    if (!activeClip || !activeClip.audioBuffer) return;
+    if (isPlaying) {
+      audioEngine.pause();
+      setIsPlaying(false);
+    } else {
+      const resumeAt = timeRef.current < activeClip.duration ? timeRef.current : 0;
+      audioEngine.play(
+        activeClip.audioBuffer,
+        resumeAt,
+        loopActive,
+        0,
+        activeClip.duration
+      );
+      setIsPlaying(true);
+    }
+  };
+
+  const handleReturnToCue = () => {
+    audioEngine.stop();
+    setIsPlaying(false);
+    setCurrentTime(0);
+    timeRef.current = 0;
+    drawDeckCanvas(0);
+  };
+
+  // Harmonic adaptation preview
+  const harmonicPreview = activeClip && activeTrack
+    ? calculateHarmonicPitchShift(activeClip.key, activeTrack.key)
+    : { semitones: 0, harmonicRelation: 'Keine Tonartdaten' };
+
+  const tempoRatio = activeClip && activeTrack && activeClip.bpm > 0
+    ? activeTrack.bpm / activeClip.bpm
+    : 1.0;
+  const bpmDiff = activeClip && activeTrack
+    ? (activeTrack.bpm - activeClip.bpm).toFixed(1)
+    : '0.0';
+
+  // Canvas neu zeichnen, wenn sich Clip/Zoom/Modus/Auswahl ändert.
+  // (Während der Wiedergabe zeichnet die rAF-Loop imperativ – kein Re-Render.)
+  useEffect(() => {
+    drawDeckCanvas(timeRef.current);
+  }, [activeClip, zoomLevel, waveformMode, clipSelection, drawDeckCanvas]);
+
 
   // Canvas click / drag to seek or select
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -261,7 +310,7 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
     const width = rect.width;
 
     const visibleDuration = activeClip.duration / zoomLevel;
-    const visibleStart = Math.max(0, Math.min(currentTime - visibleDuration * 0.4, activeClip.duration - visibleDuration));
+    const visibleStart = Math.max(0, Math.min(timeRef.current - visibleDuration * 0.4, activeClip.duration - visibleDuration));
     const clickTime = Math.max(0, Math.min(activeClip.duration, visibleStart + (x / width) * visibleDuration));
 
     if (e.shiftKey) {
@@ -271,8 +320,13 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
     } else {
       // Seek
       setCurrentTime(clickTime);
+      timeRef.current = clickTime;
       if (isPlaying && activeClip.audioBuffer) {
         audioEngine.play(activeClip.audioBuffer, clickTime, loopActive, 0, activeClip.duration);
+      } else {
+        // Pausierter Seek: Playhead sofort imperativ neu zeichnen
+        audioEngine.setTransportPosition(clickTime);
+        drawDeckCanvas(clickTime);
       }
     }
   };
@@ -284,7 +338,7 @@ export const ClipDeckView: React.FC<ClipDeckViewProps> = ({
     const width = rect.width;
 
     const visibleDuration = activeClip.duration / zoomLevel;
-    const visibleStart = Math.max(0, Math.min(currentTime - visibleDuration * 0.4, activeClip.duration - visibleDuration));
+    const visibleStart = Math.max(0, Math.min(timeRef.current - visibleDuration * 0.4, activeClip.duration - visibleDuration));
     const curTime = Math.max(0, Math.min(activeClip.duration, visibleStart + (x / width) * visibleDuration));
 
     setClipSelection({

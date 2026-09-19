@@ -35,6 +35,7 @@ import {
   readPaletteClipDrag,
 } from '../utils/paletteDrag';
 import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
+import { playbackClock } from '../audio/playbackClock';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -133,8 +134,28 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
-  const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
+
+  // ── Performance: zweischichtiges Canvas-Rendering ─────────────────────────
+  // Die statische Szene (Hintergrund, Beatgrid, Waveform, Cues, Loops) wird in
+  // ein Offscreen-Canvas gezeichnet und NUR bei echten Änderungen (Track,
+  // Zoom/Pan, Modus, Größe) neu gerendert. Pro Frame wird lediglich das
+  // Offscreen-Canvas geblittet und Playhead/Auswahl/Hover darüber gezeichnet.
+  // Vorher wurde die komplette Szene 60×/Sekunde neu gezeichnet und dabei die
+  // ganze React-App mitgerendert – dadurch reagierten Buttons erst Sekunden
+  // nach dem Klick.
+  const staticCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  // Per-Frame-Daten als Refs: dürfen KEIN Re-Render und keinen Effect-Neustart
+  // auslösen (Playhead-Zeit kommt aus dem playbackClock).
+  const timeRef = useRef<number>(currentTime);
+  const selectionRef = useRef<SelectionRange | null>(selection);
+  const hoveredTimeRef = useRef<number | null>(null);
+  const trackRef = useRef<TrackModel | null>(track);
+  const timeToPixelRef = useRef<(t: number, width: number) => number>(() => 0);
+  const snapTimeRef = useRef<(t: number) => number>((t) => t);
+  selectionRef.current = selection;
+  trackRef.current = track;
 
   // Dynamic canvas sizing to respond to panel collapse/expand and container layout changes
   useEffect(() => {
@@ -149,6 +170,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         if (canvasRef.current.width !== w || canvasRef.current.height !== h) {
           canvasRef.current.width = w;
           canvasRef.current.height = h;
+          // Größenänderung → statische Szene muss neu gerendert werden.
+          setCanvasSize({ w, h });
         }
       }
     };
@@ -181,6 +204,10 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     [viewOffset, viewDuration]
   );
 
+  // Frische Callback-Identitäten für den Frame-Overlay-Pfad bereitstellen
+  // (Refs vermeiden Effect-Neustarts bei jedem Render).
+  timeToPixelRef.current = timeToPixel;
+
   // Helper to snap time to nearest beat
   const snapTime = useCallback(
     (t: number) => {
@@ -192,21 +219,32 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     },
     [quantize, track]
   );
+  snapTimeRef.current = snapTime;
 
-  // Render detail waveform loop
+  // ── Statische Szene (Hintergrund, Beatgrid, Waveform, Phrasen, Cues, Loops) ──
+  // Wird in ein Offscreen-Canvas gezeichnet und ausschließlich bei echten
+  // Änderungen (Track, Zoom/Pan, Anzeigemodus, Canvas-Größe) neu berechnet.
   useEffect(() => {
-    let animId: number;
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width <= 0 || canvas.height <= 0) return;
 
-    const render = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+    let off = staticCanvasRef.current;
+    if (!off) {
+      off = document.createElement('canvas');
+      staticCanvasRef.current = off;
+    }
+    if (off.width !== canvas.width || off.height !== canvas.height) {
+      off.width = canvas.width;
+      off.height = canvas.height;
+    }
+    const ctx = off.getContext('2d');
+    if (!ctx) return;
 
-      const width = canvas.width;
-      const height = canvas.height;
-      ctx.clearRect(0, 0, width, height);
+    const width = off.width;
+    const height = off.height;
+    ctx.clearRect(0, 0, width, height);
 
+    const renderStatic = () => {
       // 1. Dark background
       ctx.fillStyle = '#0b0c0f';
       ctx.fillRect(0, 0, width, height);
@@ -244,7 +282,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.lineTo(x, height);
           ctx.stroke();
         }
-        animId = requestAnimationFrame(render);
         return;
       }
 
@@ -613,6 +650,33 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         ctx.strokeRect(lx1, 18, lx2 - lx1, height - 18);
       });
 
+    };
+
+    renderStatic();
+  }, [track, viewOffset, viewDuration, waveformMode, timeToPixel, canvasSize]);
+
+  // ── Dynamische Overlay-Szene (Auswahl, Hover-Guide, Playhead) ──────────────
+  // Läuft über den zentralen playbackClock: pro Frame nur ein Blit des
+  // Offscreen-Canvas plus wenige Primitive – keine React-Re-Renders, keine
+  // Neuberechnung der Waveform. Die Playhead-Zeit kommt direkt aus dem
+  // Audio-Engine (auch im Pausenzustand korrekt, siehe setTransportPosition).
+  useEffect(() => {
+    const drawFrame = () => {
+      const canvas = canvasRef.current;
+      const off = staticCanvasRef.current;
+      if (!canvas || !off || canvas.width <= 0) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(off, 0, 0);
+
+      if (!trackRef.current) return;
+      const timeToPixel = timeToPixelRef.current;
+      const selection = selectionRef.current;
+
       // 6. Draw SELECTION BOX (Screenshots 01, 02, 03)
       if (selection && selection.duration > 0) {
         const selX1 = timeToPixel(selection.start, width);
@@ -677,10 +741,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       }
 
       // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
-      if (track && hoveredTime !== null) {
+      const hoveredTime = hoveredTimeRef.current;
+      if (trackRef.current && hoveredTime !== null) {
+        const track = trackRef.current;
         const bg = track.beatGrid;
         const spb = 60.0 / bg.bpm;
-        const snappedTime = snapTime(hoveredTime);
+        const snappedTime = snapTimeRef.current(hoveredTime);
         const snappedX = timeToPixel(snappedTime, width);
         const rawX = timeToPixel(hoveredTime, width);
 
@@ -744,8 +810,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 8. Draw Playhead (White vertical hairline)
-      const playX = timeToPixel(currentTime, width);
+      // 8. Draw Playhead (White vertical hairline) – Zeit aus dem playbackClock
+      const playX = timeToPixel(timeRef.current, width);
       if (playX >= 0 && playX <= width) {
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1.5;
@@ -763,23 +829,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         ctx.closePath();
         ctx.fill();
       }
-
-      animId = requestAnimationFrame(render);
     };
 
-    render();
-    return () => cancelAnimationFrame(animId);
-  }, [
-    track,
-    currentTime,
-    viewOffset,
-    viewDuration,
-    waveformMode,
-    selection,
-    hoveredTime,
-    snapTime,
-    timeToPixel,
-  ]);
+    return playbackClock.subscribe((frame) => {
+      timeRef.current = frame.time;
+      drawFrame();
+    });
+  }, []);
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -828,12 +884,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const currX = e.clientX - rect.left;
-    const currY = e.clientY - rect.top;
     const rawTime = pixelToTime(currX, rect.width);
 
-    // Track hover position for snap-to-beat guide
-    setHoveredTime(rawTime);
-    setHoveredPos({ x: currX, y: currY });
+    // Track hover position for snap-to-beat guide (Ref statt State:
+    // kein Re-Render pro Mausbewegung, Overlay zeichnet über den Clock).
+    hoveredTimeRef.current = rawTime;
 
     if (!isSelecting || dragStartSec === null) return;
     const currTime = snapTime(rawTime);
@@ -847,8 +902,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   };
 
   const handleMouseLeave = () => {
-    setHoveredTime(null);
-    setHoveredPos(null);
+    hoveredTimeRef.current = null;
     setIsSelecting(false);
     setDragStartSec(null);
   };

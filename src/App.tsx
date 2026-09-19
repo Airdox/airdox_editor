@@ -26,6 +26,7 @@ import {
   sliceWaveformAnalysis,
 } from './waveform/analysisComposer';
 import { audioEngine } from './audio/audioEngine';
+import { playbackClock } from './audio/playbackClock';
 import { exportAudioBuffer } from './audio/audioExporter';
 import { measureRecordingAudio, optimizeRecordingBuffer } from './audio/recordingProcessor';
 import { FileAudio, ShieldCheck } from 'lucide-react';
@@ -365,8 +366,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loopActive, setLoopActive] = useState<boolean>(false);
   const [masterVolume, setMasterVolume] = useState<number>(0.9);
-  const [meterL, setMeterL] = useState<number>(0);
-  const [meterR, setMeterR] = useState<number>(0);
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -1038,32 +1037,56 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, []);
 
-  // Real-time animation loop for playhead progress and VU stereo meters
+  // ── Performance: Playhead/Meter laufen IMPERATIV über den playbackClock ────
+  // Vorher hat diese Schleife 60×/Sekunde setCurrentTime/setMeterL/setMeterR
+  // aufgerufen und damit die komplette App (4.500+ Zeilen Komponentenbaum)
+  // neu gerendert – Button-Klicks wurden dadurch erst Sekunden später
+  // verarbeitet. Jetzt:
+  //   • Playhead + VU-Meter: DetailWaveform/TrackOverview/EditModeBar
+  //     abonnieren den playbackClock direkt (kein React-State pro Frame).
+  //   • View-Follow: seltene setViewOffset-Updates nur, wenn der Playhead
+  //     den sichtbaren Bereich erreicht (wie bisher).
+  //   • currentTime-State: wird grob getaktet (5 Hz) synchron gehalten, damit
+  //     abgeleitete Kontexte (z. B. Chatbot-Track-Kontext) aktuell bleiben.
+  //     Frame-genaue Aktionen (Cue setzen, Paste, …) lesen die Position
+  //     direkt über audioEngine.getCurrentTime().
+  const viewOffsetRef = useRef(viewOffset);
+  const viewDurationRef = useRef(viewDuration);
+  viewOffsetRef.current = viewOffset;
+  viewDurationRef.current = viewDuration;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  // currentTime-State wird während der Wiedergabe nur dann grob (5 Hz)
+  // synchronisiert, wenn ein Konsument offen ist (derzeit: AI-Copilot-Kontext).
+  // Geschlossen → KEIN Re-Render während der Wiedergabe.
+  const chatbotOpenRef = useRef(chatbotOpen);
+  chatbotOpenRef.current = chatbotOpen;
+
   useEffect(() => {
-    let animId: number;
-    const updateLoop = () => {
-      if (audioEngine.getIsPlaying()) {
-        const time = audioEngine.getCurrentTime();
-        setCurrentTime(time);
-
-        // Keep detail view centered or following playhead if near boundary
-        if (time > viewOffset + viewDuration * 0.9) {
-          setViewOffset(Math.max(0, time - viewDuration * 0.2));
-        }
-
-        const meter = audioEngine.getMasterMeter();
-        setMeterL(meter.left);
-        setMeterR(meter.right);
-      } else {
-        setMeterL((prev) => Math.max(0, prev * 0.85));
-        setMeterR((prev) => Math.max(0, prev * 0.85));
+    let lastSyncedTime = -1;
+    return playbackClock.subscribe((frame) => {
+      // Natürliches Track-Ende: Engine hat gestoppt – UI-State nachziehen,
+      // damit der Play-Button nicht im "Play"-Zustand hängen bleibt.
+      if (!frame.isPlaying && isPlayingRef.current) {
+        setIsPlaying(false);
+        setCurrentTime(frame.time);
+        lastSyncedTime = frame.time;
+        return;
       }
-      animId = requestAnimationFrame(updateLoop);
-    };
-
-    animId = requestAnimationFrame(updateLoop);
-    return () => cancelAnimationFrame(animId);
-  }, [viewOffset, viewDuration]);
+      if (!frame.isPlaying) return;
+      // Detail-View folgt dem Playhead, sobald dieser den Randbereich erreicht
+      if (frame.time > viewOffsetRef.current + viewDurationRef.current * 0.9) {
+        setViewOffset(Math.max(0, frame.time - viewDurationRef.current * 0.2));
+      }
+      // Grobe 5-Hz-Synchronisation des currentTime-State – nur solange ein
+      // Konsument (AI-Copilot) offen ist. Frame-genaue Aktionen lesen die
+      // Position direkt über audioEngine.getCurrentTime().
+      if (chatbotOpenRef.current && Math.abs(frame.time - lastSyncedTime) >= 0.2) {
+        lastSyncedTime = frame.time;
+        setCurrentTime(frame.time);
+      }
+    });
+  }, []);
 
   // Master volume control
   const handleMasterVolumeChange = useCallback((vol: number) => {
@@ -1581,8 +1604,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
 
     if (isPlaying) {
-      audioEngine.pause();
+      const pausedAt = audioEngine.pause();
       setIsPlaying(false);
+      // State einfrieren, damit pausierte Aktionen (Cue setzen, …) von der
+      // korrekten Position ausgehen – Playhead selbst läuft über den Clock.
+      setCurrentTime(pausedAt);
     } else {
       let loopStart = 0;
       let loopEnd = 0;
@@ -1590,14 +1616,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         loopStart = selection.start;
         loopEnd = selection.end;
       }
+      // Startposition frame-genau aus dem Engine lesen (currentTime-State ist
+      // nur grob getaktet synchronisiert).
+      const startPosition = audioEngine.getCurrentTime();
       if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.playWithStems(activeTrackStems, stemsMixerState, startPosition, loopActive, loopStart, loopEnd);
       } else {
-        audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.play(workingAudioBuffer, startPosition, loopActive, loopStart, loopEnd);
       }
       setIsPlaying(true);
     }
-  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom, currentTime]);
+  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom]);
 
   const handleReturnToStart = useCallback(() => {
     audioEngine.stop();
@@ -1609,12 +1638,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleSeek = useCallback((targetTime: number) => {
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
     setCurrentTime(clamped);
+    // Position auch im Engine setzen: im Pausenzustand liest der playbackClock
+    // die Playhead-Position direkt vom Engine (setTransportPosition), während
+    // der Wiedergabe wird die Quelle neu gestartet.
     if (isPlaying && workingAudioBuffer) {
       if (activeTrackStems && stemsMixIsCustom) {
         audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
       } else {
         audioEngine.play(workingAudioBuffer, clamped, loopActive);
       }
+    } else {
+      audioEngine.setTransportPosition(clamped);
     }
   }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
 
@@ -1650,7 +1684,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           break;
         case 'SEEK':
           if (action.value !== undefined) {
-            handleSeek(currentTime + action.value * 0.15);
+            // Frame-genaue Position direkt aus dem Engine (State ist nur 5 Hz synchronisiert)
+            handleSeek(audioEngine.getCurrentTime() + action.value * 0.15);
           }
           break;
         case 'MASTER_VOLUME':
@@ -1668,7 +1703,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       unsubState();
       unsubActions();
     };
-  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, currentTime, handleMasterVolumeChange]);
+  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, handleMasterVolumeChange]);
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -1709,14 +1744,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
 
       const half = targetDuration / 2;
-      let newOffset = Math.max(0, currentTime - half);
+      let newOffset = Math.max(0, audioEngine.getCurrentTime() - half);
       if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
         newOffset = Math.max(0, activeTrack.duration - targetDuration);
       }
       setViewDuration(targetDuration);
       setViewOffset(newOffset);
     },
-    [activeTrack, currentTime]
+    [activeTrack]
   );
   const handlePanView = (newOffset: number) => {
     const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
@@ -1732,10 +1767,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately before current time (with small buffer)
-    const prevCues = memCues.filter((c) => c.position < currentTime - 0.08);
+    const now = audioEngine.getCurrentTime();
+    const prevCues = memCues.filter((c) => c.position < now - 0.08);
     const target = prevCues.length > 0 ? prevCues[prevCues.length - 1] : memCues[memCues.length - 1];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack, handleSeek]);
 
   const handleNextMemoryCue = useCallback(() => {
     if (!activeTrack) return;
@@ -1745,10 +1781,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately after current time
-    const nextCues = memCues.filter((c) => c.position > currentTime + 0.08);
+    const now = audioEngine.getCurrentTime();
+    const nextCues = memCues.filter((c) => c.position > now + 0.08);
     const target = nextCues.length > 0 ? nextCues[0] : memCues[0];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack, handleSeek]);
 
   // Set new Memory Cue with precise database millisecond timestamp and bar/beat calculation
   const handleAddMemoryCue = useCallback(() => {
@@ -1756,14 +1793,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const existingMems = activeTrack.cues.filter((c) => c.type === 'MEMORY');
     const nextIndex = existingMems.length + 1;
     const spb = 60.0 / activeTrack.bpm;
-    const beatIndex = Math.max(0, Math.round((currentTime - (activeTrack.beatGrid.firstBeat || 0)) / spb));
+    // Frame-genaue Playhead-Position direkt aus dem Engine lesen.
+    const playhead = audioEngine.getCurrentTime();
+    const beatIndex = Math.max(0, Math.round((playhead - (activeTrack.beatGrid.firstBeat || 0)) / spb));
     const barNumber = Math.floor(beatIndex / 4) + 1;
     const beatNumber = (beatIndex % 4) + 1;
 
     const newCue: CuePoint = {
       id: `mem-${Date.now()}`,
-      position: currentTime,
-      inMsec: Math.round(currentTime * 1000),
+      position: playhead,
+      inMsec: Math.round(playhead * 1000),
       type: 'MEMORY',
       name: `MEM ${nextIndex}`,
       color: '#ff2222',
@@ -1785,12 +1824,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Set Beat 1.1 at current playhead position (Pioneer Rekordbox "Set 1.1 Here")
   const handleSetFirstBeatHere = useCallback(() => {
     if (!activeTrack) return;
-    const newFirstBeat = Math.max(0, currentTime);
+    const newFirstBeat = Math.max(0, audioEngine.getCurrentTime());
     const spb = 60.0 / activeTrack.bpm;
 
     setTracks((prev) =>
@@ -1819,7 +1858,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Fine-tune Beatgrid offset (Pioneer Rekordbox Grid Shift: +/- 1ms or 10ms)
   const handleShiftBeatgrid = useCallback((deltaSeconds: number) => {
@@ -1863,7 +1902,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!analysis || analysis.peaks.length === 0) return;
 
     const secPerBucket = analysis.secPerBucket || (activeTrack.duration / analysis.length);
-    const searchCenterBucket = Math.round(currentTime / secPerBucket);
+    const searchCenterBucket = Math.round(audioEngine.getCurrentTime() / secPerBucket);
     const searchRadius = Math.round(0.1 / secPerBucket); // search within +/- 100ms
     const minBucket = Math.max(0, searchCenterBucket - searchRadius);
     const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
@@ -1884,7 +1923,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const beatDistance = (alignedTime - currentFirst) % spb;
     const shift = beatDistance > spb / 2 ? beatDistance - spb : beatDistance;
     handleShiftBeatgrid(shift);
-  }, [activeTrack, currentTime, handleShiftBeatgrid]);
+  }, [activeTrack, handleShiftBeatgrid]);
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
@@ -2102,7 +2141,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const spb = 60.0 / bg.bpm;
 
     // Start from either current playhead or snapped bar start
-    let startSec = currentTime;
+    let startSec = audioEngine.getCurrentTime();
     if (quantize) {
       const beatIndex = Math.round((startSec - bg.firstBeat) / spb);
       startSec = Math.max(0, bg.firstBeat + beatIndex * spb);
@@ -2289,7 +2328,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Paste at playhead (validated by Edit Assistant)
   const handlePaste = () => {
-    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, currentTime);
+    const playhead = audioEngine.getCurrentTime();
+    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, playhead);
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2297,7 +2337,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Paste');
 
-    const insertTime = validation.sanitizedInsertionTime ?? currentTime;
+    const insertTime = validation.sanitizedInsertionTime ?? playhead;
     const result = executePaste(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2333,7 +2373,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Insert (shifts timeline and subsequent markers, validated by Edit Assistant)
   const handleInsert = () => {
-    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, currentTime);
+    const playhead = audioEngine.getCurrentTime();
+    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, playhead);
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2341,7 +2382,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Insert');
 
-    const insertPos = validation.sanitizedInsertionTime ?? currentTime;
+    const insertPos = validation.sanitizedInsertionTime ?? playhead;
     const result = executeInsert(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2376,7 +2417,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime = currentTime) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime?: number) => {
+    const effectiveInsertTime = requestedInsertTime ?? audioEngine.getCurrentTime();
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -2390,7 +2432,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     // path is a lossless copy; no WSOLA/pitch processing is allowed to invent a
     // tail of silence.
     const adapted = audioEngine.adaptClipToTrack(clip, activeTrack, matchPitchOnInsert);
-    const insertPos = Math.max(0, Math.min(workingAudioBuffer.duration, requestedInsertTime));
+    const insertPos = Math.max(0, Math.min(workingAudioBuffer.duration, effectiveInsertTime));
     const isExactSameSourceSlot = isExactSameSourceSlotRoundTrip({
       targetBuffer: workingAudioBuffer,
       clipBuffer: adapted.adaptedBuffer,
@@ -3763,7 +3805,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           } else if (typeof mixTime === 'number' && typeof mixBar !== 'number') {
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           } else if (typeof mixTime !== 'number' && typeof mixBar !== 'number') {
-            mixTime = currentTime;
+            mixTime = audioEngine.getCurrentTime();
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           }
 
@@ -3857,7 +3899,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             const secPerBeat = 60 / activeTrack.bpm;
             const beats = action.params.beats || 16;
             const dur = beats * secPerBeat;
-            const start = action.params.start ?? currentTime;
+            const start = action.params.start ?? audioEngine.getCurrentTime();
             const end = Math.min(activeTrack.duration, start + dur);
             setSelection({
               start,
@@ -3871,7 +3913,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
           break;
         case 'ADD_CUE':
-          handleAddCue(action.params.time ?? currentTime);
+          handleAddCue(action.params.time ?? audioEngine.getCurrentTime());
           break;
         case 'ADD_MEMORY_CUE':
           handleAddMemoryCue();
@@ -3910,7 +3952,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     },
     [
       activeTrack,
-      currentTime,
       selection,
       tracks,
       handleSelectZoomPreset,
@@ -4015,8 +4056,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenSettings={() => setSettingsModalOpen(true)}
         masterVolume={masterVolume}
         onMasterVolumeChange={handleMasterVolumeChange}
-        meterL={meterL}
-        meterR={meterR}
         paletteViewMode={paletteViewMode}
         onTogglePaletteViewMode={() =>
           setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))

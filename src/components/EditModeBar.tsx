@@ -5,7 +5,7 @@
  * EDIT dropdown, transport controls, quantize, master stereo meters, Free Plus badge.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ChevronDown,
   RotateCcw,
@@ -14,6 +14,7 @@ import {
   Volume2,
   CircleStop,
 } from 'lucide-react';
+import { playbackClock } from '../audio/playbackClock';
 
 interface EditModeBarProps {
   projectName: string;
@@ -31,8 +32,9 @@ interface EditModeBarProps {
   onOpenSettings?: () => void;
   masterVolume: number;
   onMasterVolumeChange: (vol: number) => void;
-  meterL: number;
-  meterR: number;
+  /** Nur noch Initialwert – live Pegel kommen imperativ über den playbackClock. */
+  meterL?: number;
+  meterR?: number;
   paletteViewMode?: 'SIDEBAR' | 'FULL_DECK';
   onTogglePaletteViewMode?: () => void;
   bottomControlOpen?: boolean;
@@ -61,8 +63,8 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onOpenSettings,
   masterVolume,
   onMasterVolumeChange,
-  meterL,
-  meterR,
+  meterL = 0,
+  meterR = 0,
   paletteViewMode = 'SIDEBAR',
   onTogglePaletteViewMode,
   bottomControlOpen = true,
@@ -75,6 +77,33 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   recorderActive = false,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('15:21');
+
+  // Master-Pegel (L/R) imperativ über den zentralen playbackClock aktualisieren.
+  // Vorher kamen die Werte als React-State aus App.tsx – 60 State-Updates/Sekunde
+  // haben die komplette App neu gerendert und die Bedienung blockiert.
+  const meterFillLRef = useRef<HTMLDivElement>(null);
+  const meterFillRRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const applyMeter = (fill: HTMLDivElement | null, value: number) => {
+      if (!fill) return;
+      const v = Math.max(0, Math.min(1, value));
+      fill.style.width = `${Math.min(100, v * 100)}%`;
+      fill.style.background =
+        v > 0.85
+          ? 'linear-gradient(90deg, #00c853 60%, #ffd600 85%, #ff3b30 100%)'
+          : v > 0.65
+          ? 'linear-gradient(90deg, #00c853 75%, #ffd600 100%)'
+          : '#00c853';
+      if (fill.parentElement) {
+        fill.parentElement.title = `Peak ${fill.dataset.side || ''}: ${Math.round(v * 100)}%`;
+      }
+    };
+    return playbackClock.subscribe((frame) => {
+      applyMeter(meterFillLRef.current, frame.meter.left);
+      applyMeter(meterFillRRef.current, frame.meter.right);
+    });
+  }, []);
 
   useEffect(() => {
     const updateTime = () => {
@@ -219,12 +248,14 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             />
           </div>
 
-          {/* Dual Stereo LED Meter (Left / Right) */}
+          {/* Dual Stereo LED Meter (Left / Right) – Live-Update via playbackClock */}
           <div className="flex flex-col space-y-[2px] w-14">
             {/* L */}
             <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex" title={`Peak L: ${Math.round(meterL * 100)}%`}>
               <div
-                className="h-full transition-all duration-75"
+                ref={meterFillLRef}
+                data-side="L"
+                className="h-full"
                 style={{
                   width: `${Math.min(100, meterL * 100)}%`,
                   background:
@@ -239,7 +270,9 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
             {/* R */}
             <div className="h-[4px] bg-[#1a1b22] rounded-xs overflow-hidden flex" title={`Peak R: ${Math.round(meterR * 100)}%`}>
               <div
-                className="h-full transition-all duration-75"
+                ref={meterFillRRef}
+                data-side="R"
+                className="h-full"
                 style={{
                   width: `${Math.min(100, meterR * 100)}%`,
                   background:

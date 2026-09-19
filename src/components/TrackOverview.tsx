@@ -8,6 +8,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
 import { spectralRgb } from '../waveform/spectralColor';
+import { playbackClock } from '../audio/playbackClock';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -30,15 +31,35 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Draw overview canvas
+  // ── Performance: Statische Übersicht in Offscreen-Canvas cachen ────────────
+  // Vorher wurde die komplette Übersicht (Spalten-Loop über alle Buckets) bei
+  // JEDER currentTime-Änderung – also 60×/Sekunde während der Wiedergabe –
+  // komplett neu gezeichnet. Jetzt: statische Szene nur bei Track/View-Änderung,
+  // pro Frame nur noch Blit + Playhead-Linie über den zentralen playbackClock.
+  const staticCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const timeRef = useRef<number>(currentTime);
+  const durationRef = useRef<number>(1);
+  durationRef.current = Math.max(1, track?.duration ?? 1);
+
+  // Statische Szene: Hintergrund, Wellenform, Phrasen, Cues, Detail-Fenster
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+
+    let off = staticCanvasRef.current;
+    if (!off) {
+      off = document.createElement('canvas');
+      staticCanvasRef.current = off;
+    }
+    if (off.width !== canvas.width || off.height !== canvas.height) {
+      off.width = canvas.width;
+      off.height = canvas.height;
+    }
+    const ctx = off.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const width = off.width;
+    const height = off.height;
     ctx.clearRect(0, 0, width, height);
 
     // Dark container background
@@ -165,16 +186,36 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     ctx.fillStyle = 'rgba(0, 153, 255, 0.18)';
     ctx.fillRect(viewLeft, 1, viewWidth, height - 2);
     ctx.strokeRect(viewLeft, 1, viewWidth, height - 2);
+  }, [track, viewOffset, viewDuration]);
 
-    // Draw Playhead line in overview
-    const playheadX = (currentTime / duration) * width;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, height);
-    ctx.stroke();
-  }, [track, currentTime, viewOffset, viewDuration]);
+  // Dynamische Szene: Pro Frame nur Blit + Playhead-Linie (playbackClock).
+  useEffect(() => {
+    const drawFrame = () => {
+      const canvas = canvasRef.current;
+      const off = staticCanvasRef.current;
+      if (!canvas || !off) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(off, 0, 0);
+
+      if (!track) return;
+      const playheadX = (timeRef.current / durationRef.current) * width;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(playheadX, 0);
+      ctx.lineTo(playheadX, height);
+      ctx.stroke();
+    };
+
+    return playbackClock.subscribe((frame) => {
+      timeRef.current = frame.time;
+      drawFrame();
+    });
+  }, [track]);
 
   // Handle click or drag on overview to seek / pan
   const handlePointerInteraction = useCallback(

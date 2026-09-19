@@ -282,6 +282,15 @@ class AudioEngine {
 
     source.onended = () => {
       if (this.currentSource === source) {
+        // Natürliches Ende: Position am Track-Ende halten (nicht auf den
+        // Start der Wiedergabe zurückspringen) – der playbackClock liest
+        // die Playhead-Position imperativ aus getCurrentTime().
+        if (this.activeBuffer && this.ctx) {
+          this.pauseOffset = Math.min(
+            this.activeBuffer.duration,
+            Math.max(0, this.ctx.currentTime - this.startTime)
+          );
+        }
         this.isPlaying = false;
         this.currentSource = null;
         logger.debug('AUDIO_ENGINE', 'Wiedergabe natürlich beendet (onended).');
@@ -350,7 +359,12 @@ class AudioEngine {
         // a live mixer transition. Otherwise the stale vocal source can stop
         // the newly started stem set and make Vocal Solo sound completely dead.
         if (this.isPlayingStems && this.stemSources.vocals === leadSource) {
+          // Natürliches Ende: Position halten (siehe play()/onended).
+          const endedAt = this.activeBuffer && this.ctx
+            ? Math.min(this.activeBuffer.duration, Math.max(0, this.ctx.currentTime - this.startTime))
+            : this.pauseOffset;
           this.stop();
+          this.pauseOffset = endedAt;
         }
       };
     }
@@ -364,7 +378,23 @@ class AudioEngine {
     return pos;
   }
 
+  /**
+   * Setzt die Transport-Position, während die Wiedergabe gestoppt ist.
+   * Wird bei Seeks im Pausenzustand benötigt: die UI liest die Playhead-
+   * Position imperativ über getCurrentTime() und darf dafür nicht auf
+   * React-State angewiesen sein.
+   */
+  public setTransportPosition(position: number) {
+    if (this.isPlaying) return; // während Wiedergabe treiben die Sources die Position
+    this.pauseOffset = Math.max(0, position);
+  }
+
   public stop() {
+    // Vollständiger Stopp setzt die Transport-Position zurück (im Gegensatz zu
+    // pause(), das die Position NACH stop() wiederherstellt). Alle Stopp-
+    // Stellen in der UI gehen von Position 0 aus – der playbackClock liest die
+    // Position imperativ und muss denselben Wert sehen wie der React-State.
+    this.pauseOffset = 0;
     if (this.currentSource) {
       try {
         this.currentSource.stop();
