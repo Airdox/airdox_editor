@@ -28,7 +28,8 @@ export interface RekordboxXmlImportModalProps {
   onClose: () => void;
   xmlTracks: TrackModel[];
   fileName?: string;
-  onSelectTrack: (track: TrackModel) => void;
+  analysisIndexStatus?: string;
+  onSelectTrack: (track: TrackModel) => void | Promise<void>;
   currentTrackId?: string;
 }
 
@@ -41,6 +42,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   onClose,
   xmlTracks,
   fileName = 'Rekordbox XML Collection',
+  analysisIndexStatus,
   onSelectTrack,
   currentTrackId,
 }) => {
@@ -52,6 +54,8 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [cueFilter, setCueFilter] = useState<CueFilter>('all');
   const [visibleTrackLimit, setVisibleTrackLimit] = useState(200);
+  const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sourceStatus, setSourceStatus] = useState<{
     kind: 'NOT_PROVIDED' | 'CHECKING' | 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE';
     detail: string;
@@ -212,9 +216,18 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
     }
   };
 
-  const handleLoadTrack = (track: TrackModel) => {
-    onSelectTrack(track);
-    onClose();
+  const handleLoadTrack = async (track: TrackModel) => {
+    if (loadingTrackId) return;
+    setLoadingTrackId(track.id);
+    setLoadError(null);
+    try {
+      await onSelectTrack(track);
+      onClose();
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoadingTrackId(null);
+    }
   };
 
   if (!isOpen) return null;
@@ -318,6 +331,16 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
             </button>
           </div>
         </div>
+
+        <div className="px-4 py-2 border-b border-[#20222d] bg-[#11131a] text-[10px] text-[#fbbf24]">
+          <div>Beim Laden müssen Original-Audio und eine passende Rekordbox-ANLZ-Waveform erreichbar sein. Ohne native Daten gibt es keine Ersatz-Waveform.</div>
+          {analysisIndexStatus && <div className="mt-1 text-neutral-400">{analysisIndexStatus}</div>}
+        </div>
+        {loadError && (
+          <div role="alert" className="px-4 py-2 border-b border-red-900/60 bg-red-950/40 text-[11px] text-red-200">
+            {loadError}
+          </div>
+        )}
 
         {/* Main Content Area: Table of Tracks + Details Preview */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -501,13 +524,14 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleLoadTrack(tr);
+                              void handleLoadTrack(tr);
                             }}
-                            className="px-2.5 py-1 bg-[#0088ff] hover:bg-[#0070d6] active:bg-[#005bb5] text-white rounded-xs font-semibold text-[11px] shadow-sm transition-colors inline-flex items-center space-x-1.5"
-                            title="Diesen Track in das DJ-Deck laden"
+                            disabled={loadingTrackId !== null}
+                            className="px-2.5 py-1 bg-[#0088ff] hover:bg-[#0070d6] active:bg-[#005bb5] text-white rounded-xs font-semibold text-[11px] shadow-sm transition-colors inline-flex items-center space-x-1.5 disabled:opacity-50"
+                            title="Diesen Track mit Original-Audio und nativer ANLZ-Waveform ins DJ-Deck laden"
                           >
                             <Play size={11} fill="currentColor" />
-                            <span>In Deck laden</span>
+                            <span>{loadingTrackId === tr.id ? 'Lädt…' : 'In Deck laden'}</span>
                           </button>
                         </td>
                       </tr>
@@ -624,11 +648,12 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
             </button>
             {selectedTrack && (
               <button
-                onClick={() => handleLoadTrack(selectedTrack)}
-                className="px-4 py-1.5 bg-[#0088ff] hover:bg-[#0070d6] active:bg-[#005bb5] text-white rounded-xs font-bold text-xs shadow-md transition-colors flex items-center space-x-1.5"
+                onClick={() => { void handleLoadTrack(selectedTrack); }}
+                disabled={loadingTrackId !== null}
+                className="px-4 py-1.5 bg-[#0088ff] hover:bg-[#0070d6] active:bg-[#005bb5] text-white rounded-xs font-bold text-xs shadow-md transition-colors flex items-center space-x-1.5 disabled:opacity-50"
               >
                 <Play size={12} fill="currentColor" />
-                <span>"{selectedTrack.title}" in Deck laden</span>
+                <span>{loadingTrackId === selectedTrack.id ? 'Originaldaten werden geladen…' : `"${selectedTrack.title}" in Deck laden`}</span>
               </button>
             )}
           </div>

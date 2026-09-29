@@ -945,7 +945,7 @@ function generateOfflineCopilotResponse(query: string, ctx: any) {
   // General DJ assistant advice
   return {
     text: `Hallo! Ich bin dein airdox DJ Smart Copilot. ${
-      ctx.title ? `Aktuell ist der Track "${ctx.title}" (${ctx.bpm?.toFixed(2)} BPM, Key ${ctx.key}) geladen.` : 'Das Projekt ist aktuell leer. Du kannst eine Rekordbox XML oder Audiodatei importieren.'
+      ctx.title ? `Aktuell ist der Track "${ctx.title}" (${ctx.bpm?.toFixed(2)} BPM, Key ${ctx.key}) geladen.` : 'Das Projekt ist aktuell leer. Nutze Track-Import für die eingebettete Rekordbox-Sammlung oder öffne eine Audiodatei.'
     }\n\nWas möchtest du tun? Ich kann Takte zoomen, Cues setzen, Loops in die Palette übernehmen oder Bearbeitungsschritte selbstständig für dich anstoßen.`,
     actions: [
       {

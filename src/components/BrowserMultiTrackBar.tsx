@@ -18,7 +18,6 @@ import {
   ChevronDown,
   Music,
   Disc,
-  Upload,
   Search,
   Folder,
   FolderOpen,
@@ -35,9 +34,9 @@ interface BrowserBarProps {
   tracks: TrackModel[];
   activeTrackId: string;
   onSelectTrack: (trackId: string) => void;
-  onImportXml: () => void;
+  onImportTracks: () => void;
+  trackImportLoading?: boolean;
   onImportAudio: () => void;
-  onOpenXmlCollection?: () => void;
   currentTime?: number;
 }
 
@@ -47,9 +46,9 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
   tracks,
   activeTrackId,
   onSelectTrack,
-  onImportXml,
+  onImportTracks,
+  trackImportLoading = false,
   onImportAudio,
-  onOpenXmlCollection,
 }) => {
   const [selectedFolder, setSelectedFolder] = useState<'ALL' | 'XML' | 'AUDIO' | 'PLAYLIST'>('ALL');
   const [browserSearchQuery, setBrowserSearchQuery] = useState<string>('');
@@ -115,26 +114,16 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
           )}
         </div>
 
-        {/* Right action tools: XML Track-Auswahl, XML Import, Audio Import */}
+        {/* Right action tools: bundled Rekordbox track import and standalone audio */}
         <div className="flex items-center space-x-2 text-xs text-neutral-400">
-          {onOpenXmlCollection && (
-            <button
-              onClick={onOpenXmlCollection}
-              className="px-2.5 py-0.5 bg-[#181a24] hover:bg-[#0088ff] hover:text-white text-neutral-300 border border-[#2b2e3e] rounded-xs text-[10.5px] transition-colors flex items-center space-x-1.5"
-              title="Rekordbox XML Track-Auswahl mit Suchleiste im Pop-up öffnen"
-            >
-              <Disc size={12} className="text-[#00e5ff]" />
-              <span className="font-semibold text-white">XML Track-Auswahl (Pop-up)</span>
-            </button>
-          )}
-
           <button
-            onClick={onImportXml}
-            className="px-2 py-0.5 bg-[#16171e] hover:bg-[#20222b] hover:text-white border border-[#262835] rounded-xs text-[10.5px] transition-colors flex items-center space-x-1"
-            title="Rekordbox XML importieren"
+            onClick={onImportTracks}
+            disabled={trackImportLoading}
+            className="px-2.5 py-0.5 bg-[#181a24] hover:bg-[#0088ff] hover:text-white text-neutral-300 border border-[#2b2e3e] rounded-xs text-[10.5px] transition-colors flex items-center space-x-1.5 disabled:opacity-50"
+            title="Eingebettete Rekordbox-Sammlung öffnen und Originaltrack auswählen"
           >
-            <Upload size={11} />
-            <span>XML Import</span>
+            <Disc size={12} className="text-[#00e5ff]" />
+            <span className="font-semibold text-white">{trackImportLoading ? 'Sammlung lädt…' : 'Track-Import'}</span>
           </button>
 
           <button

@@ -56,6 +56,15 @@ try {
   assert.ok(usbMatch, 'USB media path resolves');
   assert.equal(usbMatch.analysisPath.endsWith('.EXT'), true, 'USB mapping is not confused with local library');
 
+  const strictWindowsMatch = index.find({
+    mediaPath: 'file://localhost/C:/Music/Sets/Voltage.wav',
+    requireExactMediaPath: true,
+  });
+  assert.ok(strictWindowsMatch, 'strict lookup normalizes Rekordbox Windows file URLs on POSIX too');
+  assert.equal(strictWindowsMatch.analysisPath, windowsMatch.analysisPath, 'strict lookup uses the exact media path');
+  assert.equal(index.find({ trackId: '101', title: 'Obsidian Voltage', artist: 'Klangfeld', requireExactMediaPath: true }), null,
+    'strict lookup never falls back to a reused ID or matching title/artist');
+
   // Reload from disk: the second session does not have to read master.db.
   const reopened = new AnalysisPathRegistry(indexPath, { maxEntries: 20 });
   const recovered = reopened.find({

@@ -18,7 +18,6 @@ import {
   AnalysisFileReference,
 } from './types/rekordbox';
 import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
-import { generateElectronicDjTrack } from './audio/synthesizerTrack';
 import { analyzeAudioBuffer, extractMiniPeaks, estimateBpm } from './waveform/analyzer';
 import {
   composeWaveformFromEditSegments,
@@ -30,10 +29,7 @@ import { exportAudioBuffer } from './audio/audioExporter';
 import { measureRecordingAudio, optimizeRecordingBuffer } from './audio/recordingProcessor';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
-  parseRekordboxXml,
   parseRekordboxXmlAsync,
-  XmlImportProgress,
-  DEFAULT_REKORDBOX_XML,
   buildBeatGridFromTempo,
 } from './rekordbox/xmlParser';
 import { applyAnlzExtractionToTrack, generateRekordboxPhrases, parseAnlzBinary } from './rekordbox/databaseExtractor';
@@ -60,7 +56,6 @@ import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
 import { ExportModal } from './components/Modals/ExportModal';
 import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
 import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportModal';
-import { ImportProgressModal } from './components/Modals/ImportProgressModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { SystemLogModal } from './components/Modals/SystemLogModal';
 import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
@@ -214,6 +209,8 @@ function createEditContext(
   };
 }
 
+const BUNDLED_REKORDBOX_XML_FILENAME = 'rekordbox_export2.xml';
+
 function buildCollectionTrackModel(
   pt: PartialTrackModel,
   idx: number,
@@ -266,6 +263,36 @@ function buildCollectionTrackModel(
       },
     ],
   };
+}
+
+/**
+ * Normalizes Rekordbox file:// URLs and Windows/POSIX paths for the strict
+ * media-path-to-ANLZ provenance check used by the bundled collection.
+ */
+function normalizeMediaPathForComparison(value?: string): string {
+  if (!value) return '';
+  let normalized = value.trim();
+  try {
+    if (/^file:/i.test(normalized)) {
+      const url = new URL(normalized);
+      let path = decodeURIComponent(url.pathname);
+      if (url.hostname && url.hostname.toLowerCase() !== 'localhost') {
+        path = `//${url.hostname}${path}`;
+      }
+      normalized = path;
+    }
+  } catch {
+    // A malformed URL cannot be a positive identity match; retain its text so
+    // the caller will fail closed if it differs from the source path.
+  }
+  normalized = normalized.replace(/^\/([A-Za-z]:\/)/, '$1');
+  return normalized.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase();
+}
+
+function areSameMediaPath(left?: string, right?: string): boolean {
+  const normalizedLeft = normalizeMediaPathForComparison(left);
+  const normalizedRight = normalizeMediaPathForComparison(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 /** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
@@ -411,11 +438,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [dbExtractionModalOpen, setDbExtractionModalOpen] = useState<boolean>(false);
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
   const [xmlImportedTracks, setXmlImportedTracks] = useState<TrackModel[]>([]);
-  const [xmlFileName, setXmlFileName] = useState<string>('rekordbox_collection.xml');
+  const [xmlFileName, setXmlFileName] = useState<string>(BUNDLED_REKORDBOX_XML_FILENAME);
+  const [trackImportLoading, setTrackImportLoading] = useState(false);
+  const [analysisIndexStatus, setAnalysisIndexStatus] = useState('');
 
-  // Real-time Transparency Modals (Non-blocking parser & operation feedback)
-  const [importProgress, setImportProgress] = useState<XmlImportProgress | null>(null);
-  const [importProgressModalOpen, setImportProgressModalOpen] = useState<boolean>(false);
+  // The bundled XML and the local Rekordbox DB/ANLZ index are each prepared at
+  // most once per app session; these contain only read-only source references.
+  const bundledCollectionPromiseRef = useRef<Promise<TrackModel[]> | null>(null);
+  const nativeAnalysisIndexPromiseRef = useRef<Promise<string> | null>(null);
+
+  // Operation feedback
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState<boolean>(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
@@ -576,8 +608,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     return Array.from(set);
   }, [tracks]);
 
-  // Hidden file inputs
-  const xmlFileInputRef = useRef<HTMLInputElement>(null);
+  // Standalone audio file input. Rekordbox XML is bundled and has no file picker.
   const audioFileInputRef = useRef<HTMLInputElement>(null);
 
   // Active track helper (supports empty state)
@@ -849,7 +880,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
    */
   const hydrateNativeAnalysis = useCallback(async (
     track: TrackModel,
-    options?: { preserveProjectMetadata?: boolean; sourceDuration?: number }
+    options?: {
+      preserveProjectMetadata?: boolean;
+      sourceDuration?: number;
+      requireExactMediaPath?: boolean;
+    }
   ): Promise<TrackModel> => {
     if (isNativeRekordboxWaveform(track.analysis) || !window.rekordboxDesktop) return track;
 
@@ -873,6 +908,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           mediaPath: track.originalMedia?.resolvedPath || track.originalMedia?.location,
           title: track.title,
           artist: track.artist,
+          requireExactMediaPath: options?.requireExactMediaPath,
         });
       } catch (error) {
         logger.warn('DATABASE', `[ANLZ-Pfadindex] Suche fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
@@ -882,9 +918,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const sourceDuration = options?.sourceDuration || track.analysisSource?.sourceDuration ||
       mapping.sourceDuration || track.audioBuffer?.duration || track.duration;
 
+    let observedSourceMediaPath = mapping.sourceMediaPath;
     try {
       const source = await window.rekordboxDesktop.readAnalysisFile(mapping.analysisPath);
       const extraction = parseAnlzBinary(source.data);
+      observedSourceMediaPath = extraction.analysisPath || mapping.sourceMediaPath;
+      const mediaPath = track.originalMedia?.resolvedPath || track.originalMedia?.location;
+      if (
+        options?.requireExactMediaPath &&
+        observedSourceMediaPath &&
+        !areSameMediaPath(mediaPath, observedSourceMediaPath)
+      ) {
+        throw new Error('Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
+      }
       const enriched = applyAnlzExtractionToTrack(track, extraction);
       // ANLZ waveform chunks do not reliably embed their total media duration.
       // Stamp the known original duration now, before a later edited project
@@ -901,7 +947,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         status: 'AVAILABLE' as const,
         size: source.size,
         modifiedAt: source.modifiedAt,
-        sourceMediaPath: extraction.analysisPath || mapping.sourceMediaPath,
+        sourceMediaPath: observedSourceMediaPath,
         sourceDuration,
         format: (source.path.split('.').pop() || 'ANLZ').toUpperCase() as 'DAT' | 'EXT' | '2EX' | 'ANLZ',
       };
@@ -925,7 +971,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       await cacheAnalysisMapping(withSource, source.path, 'CACHE_REOPEN', {
         size: source.size,
         modifiedAt: source.modifiedAt,
-        sourceMediaPath: extraction.analysisPath || mapping.sourceMediaPath,
+        sourceMediaPath: observedSourceMediaPath,
         sourceDuration,
       });
       return withSource;
@@ -937,124 +983,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           path: mapping.analysisPath,
           accessMode: 'READ_ONLY',
           status: 'MISSING',
-          sourceMediaPath: mapping.sourceMediaPath,
+          sourceMediaPath: observedSourceMediaPath,
           sourceDuration: mapping.sourceDuration || sourceDuration,
           format: mapping.format,
         },
       };
     }
   }, [cacheAnalysisMapping]);
-
-  // Manual loader for reference track and palette clips from DEFAULT_REKORDBOX_XML
-  // (Disabled on startup so the app opens with a completely empty project as requested)
-  const handleLoadDemoTrack = useCallback(() => {
-    try {
-      const parsed = parseRekordboxXml(DEFAULT_REKORDBOX_XML);
-      if (parsed.tracks.length > 0) {
-        const rawTrack = parsed.tracks[0];
-        const audioCtx = audioEngine.getContext();
-        const bpm = rawTrack.bpm || 130.0;
-        const firstBeat = rawTrack.beatGrid?.firstBeat || 0.0;
-        const duration = rawTrack.duration || 326.0;
-        const bars = Math.max(32, Math.ceil(duration / (240 / bpm)));
-        const synthBuf = generateElectronicDjTrack(audioCtx, bpm, bars, firstBeat);
-        const analysis = analyzeAudioBuffer(synthBuf, DataOrigin.REKORDBOX_XML);
-        const sha256 = audioEngine.computeBufferChecksum(synthBuf);
-        const phrases = generateRekordboxPhrases(bpm, synthBuf.duration, firstBeat);
-
-        const initialTrack: TrackModel = {
-          id: rawTrack.id || 'track-1',
-          title: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
-          artist: rawTrack.artist || 'La Roux',
-          album: rawTrack.album || 'Quicksand',
-          bpm,
-          key: rawTrack.key || '3A',
-          duration: synthBuf.duration,
-          sampleRate: synthBuf.sampleRate,
-          channels: synthBuf.numberOfChannels,
-          originalSha256: sha256,
-          isOriginalUntouched: true,
-          audioBuffer: synthBuf,
-          beatGrid: buildBeatGridFromTempo(firstBeat, bpm, synthBuf.duration, 4, DataOrigin.REKORDBOX_XML),
-          cues: rawTrack.cues || [],
-          loops: rawTrack.loops || [],
-          analysis,
-          phrases,
-          origin: DataOrigin.REKORDBOX_XML,
-          workingSegments: [
-            {
-              id: 'seg-init-1',
-              type: 'ORIGINAL',
-              trackId: rawTrack.id || 'track-1',
-              sourceStart: 0,
-              sourceEnd: synthBuf.duration,
-              projectStart: 0,
-              projectDuration: synthBuf.duration,
-              gain: 1.0,
-            },
-          ],
-        };
-
-        // Extract palette clips from this authentic audio buffer matching screenshot
-        const secPerBeat = 60 / bpm;
-        const makeClip = (id: string, name: string, startBeat: number, numBeats: number, color: string): PaletteClip => {
-          const startSec = startBeat * secPerBeat;
-          const durSec = numBeats * secPerBeat;
-          const startSample = Math.floor(startSec * synthBuf.sampleRate);
-          const numSamples = Math.floor(durSec * synthBuf.sampleRate);
-          const subBuf = audioCtx.createBuffer(2, numSamples, synthBuf.sampleRate);
-          for (let ch = 0; ch < 2; ch++) {
-            const src = synthBuf.getChannelData(ch);
-            const dest = subBuf.getChannelData(ch);
-            for (let i = 0; i < numSamples; i++) {
-              dest[i] = src[startSample + i] || 0;
-            }
-          }
-          return {
-            id,
-            name,
-            sourceTrackId: rawTrack.id || 'track-1',
-            sourceTrackName: rawTrack.title || 'Quicksand (Boy 8 Bit mix)',
-            sourceStart: startSec,
-            sourceEnd: startSec + durSec,
-            duration: durSec,
-            beats: numBeats,
-            bars: Math.max(1, Math.round(numBeats / 4)),
-            bpm,
-            key: '3A',
-            color,
-            audioBuffer: subBuf,
-            miniPeaks: extractMiniPeaks(subBuf, 64),
-            // Detailed native-resolution analysis so the palette renders the
-            // same dense waveform as the main editor (BLUE/RGB/3BAND).
-            analysis: analyzeAudioBuffer(subBuf, DataOrigin.REKORDBOX_XML),
-            beatOffsets: Array.from({ length: numBeats }, (_, i) => i * secPerBeat),
-            origin: DataOrigin.REKORDBOX_XML,
-          };
-        };
-
-        const sampleClips: PaletteClip[] = [
-          makeClip('clip-1', 'Intro Kick 4B', 0, 16, '#ff2b2b'),
-          makeClip('clip-2', '8-Bit Arp 8B', 432, 32, '#00a2ff'),
-          makeClip('clip-3', 'Main Drop 8B', 448, 32, '#10b981'),
-          makeClip('clip-4', 'Breakdown 16B', 384, 64, '#f59e0b'),
-        ];
-
-        setTracks([initialTrack]);
-        setActiveTrackId(initialTrack.id);
-        setWorkingAudioBuffer(synthBuf);
-        setPaletteClips(sampleClips);
-
-        // Position initial viewport to match the authentic Rekordbox EDIT mode reference (Bar 109 to 117)
-        const dropTime = 112 * 4 * (60 / bpm); // ~206.69s (Bar 113)
-        setCurrentTime(dropTime);
-        setViewOffset(Math.max(0, dropTime - 9.85));
-        setViewDuration(14.76);
-      }
-    } catch (err) {
-      logger.error('XML_IMPORT', `Fehler beim Laden des Referenz-Tracks: ${err instanceof Error ? err.message : String(err)}`, err);
-    }
-  }, []);
 
   // Real-time animation loop for playhead progress and VU stereo meters
   useEffect(() => {
@@ -2784,81 +2719,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setTracks([...tracks]);
   };
 
-  // Non-blocking async Rekordbox XML file loading
-  const loadXmlFile = async (file: File) => {
-    const importStartedAt = Date.now();
-    logger.info('XML_IMPORT', `Rekordbox-XML-Import gestartet: ${file.name}`, {
-      fileName: file.name,
-      sizeBytes: file.size,
-      type: file.type,
-    });
-    try {
-      setImportProgressModalOpen(true);
-      setImportProgress({
-        phase: 'READING',
-        phaseText: `Datei wird geladen: ${file.name}...`,
-        percent: 0,
-        processedTracks: 0,
-        totalTracks: 0,
-        memoryCuesFound: 0,
-        hotCuesFound: 0,
-        loopsFound: 0,
-        logMessages: [`Datei wird geladen: ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`],
-      });
-
-      const text = await file.text();
-
-      const { tracks: parsedTracks } = await parseRekordboxXmlAsync(text, (prog) => {
-        setImportProgress(prog);
-      });
-
-      // Convert parsed entries to complete TrackModel instances
-      const fullTrackModels: TrackModel[] = parsedTracks.map((pt, idx) =>
-        buildCollectionTrackModel(pt, idx, DataOrigin.REKORDBOX_XML)
-      );
-
-      setXmlImportedTracks(fullTrackModels);
-      setXmlFileName(file.name);
-      logger.info('XML_IMPORT', `Rekordbox-XML erfolgreich geparst: ${fullTrackModels.length} Track(s) in ${Date.now() - importStartedAt} ms`, {
-        fileName: file.name,
-        tracks: fullTrackModels.length,
-        durationMs: Date.now() - importStartedAt,
-      });
-
-      // The XML is a collection browser: never put an arbitrary first track in
-      // the deck. The user explicitly selects the record whose metadata should
-      // be used to build the active track view.
-      // Auto-close progress modal after short delay, then open the collection.
-      setTimeout(() => {
-        setImportProgressModalOpen(false);
-        if (fullTrackModels.length > 0) {
-          setXmlCollectionModalOpen(true);
-        }
-      }, 1200);
-
-    } catch (err: any) {
-      logger.error('XML_IMPORT', `Fehler beim Einlesen der Rekordbox-XML: ${err?.message || String(err)}`, err);
-      setImportProgress({
-        phase: 'ERROR',
-        phaseText: `Fehler beim Import: ${err?.message || err}`,
-        percent: 0,
-        processedTracks: 0,
-        totalTracks: 0,
-        memoryCuesFound: 0,
-        hotCuesFound: 0,
-        loopsFound: 0,
-        logMessages: [`Kritischer Fehler beim Parsen: ${err?.message || err}`],
-      });
-    }
-  };
-
-  const handleImportXmlFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    loadXmlFile(file);
-    e.target.value = '';
-  };
-
   // ANLZ belongs to the explicitly active XML/DB track. It is read-only input
   // and takes priority over XML values only for analysis fields it actually
   // holds. Desktop imports additionally remember the safe, read-only path.
@@ -3008,13 +2868,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           sourceDuration: track.analysisSource!.sourceDuration,
           source: result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB',
         }));
+      let indexedAnalysisMappings = 0;
       if (analysisMappings.length > 0) {
         try {
-          await window.rekordboxDesktop.cacheAnalysisMappings(analysisMappings);
+          const cached = await window.rekordboxDesktop.cacheAnalysisMappings(analysisMappings);
+          indexedAnalysisMappings = cached.accepted;
         } catch (cacheError) {
           logger.warn('DATABASE', `[ANLZ-Pfadindex] DB-Zuordnungen konnten nicht gespeichert werden: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`, cacheError);
         }
       }
+      setAnalysisIndexStatus(
+        indexedAnalysisMappings > 0
+          ? `ANLZ-Pfadindex aktualisiert: ${indexedAnalysisMappings} read-only Zuordnungen.`
+          : 'Aus dieser Datenbank wurden keine nutzbaren ANLZ-Pfadzuordnungen gelesen.'
+      );
 
       setXmlImportedTracks(fullTrackModels);
       setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
@@ -3070,59 +2937,240 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   };
 
-  // Load a selected track from Rekordbox XML into the DJ Deck
+  const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => {
+    if (!bundledCollectionPromiseRef.current) {
+      const loading = import('./rekordbox/bundledCollection')
+        .then(({ BUNDLED_REKORDBOX_XML }) => parseRekordboxXmlAsync(BUNDLED_REKORDBOX_XML))
+        .then(({ tracks }) => {
+          if (tracks.length === 0) throw new Error('Die eingebettete Rekordbox-Sammlung enthält keine Tracks.');
+          return tracks.map((track, index) =>
+            buildCollectionTrackModel(track, index, DataOrigin.REKORDBOX_XML)
+          );
+        });
+      bundledCollectionPromiseRef.current = loading;
+      void loading.catch(() => {
+        if (bundledCollectionPromiseRef.current === loading) bundledCollectionPromiseRef.current = null;
+      });
+    }
+    return bundledCollectionPromiseRef.current;
+  }, []);
+
+  /**
+   * Automatically discover the local read-only Rekordbox DB once and cache
+   * only its AnalysisDataPath → original-media associations. Missing DB/ANLZ
+   * data is reported honestly; selecting a track never falls back to DSP.
+   */
+  const ensureNativeAnalysisIndex = useCallback((): Promise<string> => {
+    if (!nativeAnalysisIndexPromiseRef.current) {
+      const indexing = (async () => {
+        if (!window.rekordboxDesktop) {
+          return 'ANLZ-Pfadindex nicht verfügbar: Track-Import benötigt die Desktop-App.';
+        }
+
+        let existingEntries = 0;
+        try {
+          existingEntries = (await window.rekordboxDesktop.getAnalysisMappingStats()).entries;
+        } catch (error) {
+          logger.warn('DATABASE', `[ANLZ-Pfadindex] Status konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`, error);
+        }
+
+        let candidates: Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }> = [];
+        try {
+          candidates = await window.rekordboxDesktop.locateRekordboxDatabases();
+        } catch (error) {
+          logger.warn('DATABASE', `[Rekordbox DB] Automatische Suche fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
+          return existingEntries > 0
+            ? `Lokaler ANLZ-Pfadindex vorhanden (${existingEntries} Zuordnungen); automatische Aktualisierung nicht möglich.`
+            : 'Keine lokale Rekordbox-Datenbank gefunden. Original-Audio und native ANLZ-Dateien bleiben erforderlich.';
+        }
+
+        if (candidates.length === 0) {
+          return existingEntries > 0
+            ? `Lokaler ANLZ-Pfadindex vorhanden (${existingEntries} Zuordnungen).`
+            : 'Keine lokale Rekordbox-Datenbank gefunden. Original-Audio und native ANLZ-Dateien bleiben erforderlich.';
+        }
+
+        const orderedCandidates = candidates.slice().sort((left, right) =>
+          left.kind === right.kind ? 0 : left.kind === 'MASTER_DB' ? -1 : 1
+        );
+        let lastReadError = '';
+        for (const candidate of orderedCandidates) {
+          try {
+            const result = await window.rekordboxDesktop.readRekordboxDatabase(candidate.path);
+            if (!result.available || !result.rows) {
+              lastReadError = result.reason || 'Die Rekordbox-Datenbank ist nicht lesbar.';
+              continue;
+            }
+
+            const mapped = mapRekordboxDatabaseRows(
+              {
+                content: result.rows.content,
+                cues: result.rows.cues,
+                artists: result.rows.artists,
+                albums: result.rows.albums,
+                genres: result.rows.genres,
+                keys: result.rows.keys,
+                labels: result.rows.labels,
+                playlists: result.rows.playlists,
+                songPlaylists: result.rows.songPlaylists,
+              },
+              result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
+            );
+            const analysisMappings = mapped.tracks
+              .filter((track) => Boolean(track.analysisSource?.path))
+              .map((track) => ({
+                trackId: track.id,
+                mediaPath: track.originalMedia?.location,
+                sourceMediaPath: track.analysisSource?.sourceMediaPath,
+                analysisPath: track.analysisSource!.path!,
+                title: track.title,
+                artist: track.artist,
+                format: track.analysisSource?.format,
+                sourceDuration: track.analysisSource?.sourceDuration,
+                source: result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB',
+              }));
+            if (analysisMappings.length === 0) continue;
+
+            const cached = await window.rekordboxDesktop.cacheAnalysisMappings(analysisMappings);
+            if (cached.accepted > 0) {
+              logger.info('DATABASE', `Nativer Rekordbox-ANLZ-Pfadindex aktualisiert: ${cached.accepted} Zuordnungen`, {
+                accepted: cached.accepted,
+                total: cached.total,
+                dbType: result.dbType,
+              });
+              return `ANLZ-Pfadindex bereit: ${cached.total} read-only Zuordnungen aus ${candidate.kind === 'ONE_LIBRARY' ? 'OneLibrary' : 'master.db'}.`;
+            }
+          } catch (error) {
+            lastReadError = error instanceof Error ? error.message : String(error);
+            logger.warn('DATABASE', `[Rekordbox DB] Read-only Zuordnung aus ${candidate.kind} fehlgeschlagen: ${lastReadError}`, error);
+          }
+        }
+
+        let currentEntries = existingEntries;
+        try {
+          currentEntries = (await window.rekordboxDesktop.getAnalysisMappingStats()).entries;
+        } catch {
+          // Keep the last known count; lookup itself remains fail-closed.
+        }
+        return currentEntries > 0
+          ? `Lokaler ANLZ-Pfadindex vorhanden (${currentEntries} Zuordnungen); keine neue Datenbankzuordnung gefunden.`
+          : lastReadError
+            ? `Die lokale Rekordbox-Datenbank konnte nicht gelesen werden: ${lastReadError}`
+            : 'Keine ANLZ-Pfade in der lokalen Rekordbox-Datenbank gefunden. Es wird keine Ersatz-Waveform erzeugt.';
+      })();
+      nativeAnalysisIndexPromiseRef.current = indexing;
+      void indexing.catch(() => {
+        if (nativeAnalysisIndexPromiseRef.current === indexing) nativeAnalysisIndexPromiseRef.current = null;
+      });
+    }
+    return nativeAnalysisIndexPromiseRef.current;
+  }, []);
+
+  const handleTrackImport = useCallback(async () => {
+    if (trackImportLoading) return;
+    if (xmlFileName === BUNDLED_REKORDBOX_XML_FILENAME && xmlImportedTracks.length > 0) {
+      setXmlCollectionModalOpen(true);
+      return;
+    }
+
+    setTrackImportLoading(true);
+    try {
+      const tracks = await loadBundledRekordboxCollection();
+      setXmlImportedTracks(tracks);
+      setXmlFileName(BUNDLED_REKORDBOX_XML_FILENAME);
+      setAnalysisIndexStatus(await ensureNativeAnalysisIndex());
+      setXmlCollectionModalOpen(true);
+      logger.info('XML_IMPORT', `Eingebettete Rekordbox-Sammlung bereit: ${tracks.length} Tracks`, {
+        fileName: BUNDLED_REKORDBOX_XML_FILENAME,
+        tracks: tracks.length,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('XML_IMPORT', `Eingebettete Rekordbox-Sammlung konnte nicht geladen werden: ${message}`, error);
+      alert(`Track-Import fehlgeschlagen: ${message}`);
+    } finally {
+      setTrackImportLoading(false);
+    }
+  }, [
+    ensureNativeAnalysisIndex,
+    loadBundledRekordboxCollection,
+    trackImportLoading,
+    xmlFileName,
+    xmlImportedTracks.length,
+  ]);
+
+  // Load a selected bundled-XML track only when both original sources are usable.
+  // No local analysis, generated audio, or synthetic waveform is an allowed fallback.
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
     const loadStartedAt = Date.now();
-    logger.info('XML_IMPORT', `Track aus Sammlung wird ins Deck geladen: "${selectedDef.title}" (${selectedDef.artist})`, {
+    logger.info('XML_IMPORT', `Track aus eingebetteter Sammlung wird geprüft: "${selectedDef.title}"`, {
       trackId: selectedDef.id,
       title: selectedDef.title,
       artist: selectedDef.artist,
-      bpm: selectedDef.bpm,
       origin: selectedDef.origin,
     });
-    try {
-      const resolvedDef = await hydrateNativeAnalysis(selectedDef);
-      const audioCtx = audioEngine.getContext();
-      let originalAudio = resolvedDef.audioBuffer || null;
-      let originalMedia = resolvedDef.originalMedia;
 
-      // The native bridge can resolve the XML Location and only ever opens the
-      // original audio read-only. In a browser or when no Location exists, the
-      // track is provisioned with high-fidelity audio matching its BPM, beatgrid,
-      // and key, ensuring beatgrid, waveform, playback, and editing work immediately.
-      if (!originalAudio && originalMedia?.location && window.rekordboxDesktop) {
-        try {
-          const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-          originalAudio = await audioCtx.decodeAudioData(source.data);
-          originalMedia = {
-            ...originalMedia,
-            resolvedPath: source.path,
-            size: source.size,
-            modifiedAt: source.modifiedAt,
-            status: 'AVAILABLE',
-          };
-        } catch (error) {
-          logger.warn('XML_IMPORT', `[XML Location] Originalaudio konnte nicht gelesen werden; erzeuge kompatibles Deck-Audio: ${error instanceof Error ? error.message : String(error)}`, error);
-          originalMedia = { ...originalMedia, status: 'MISSING' };
-        }
+    try {
+      const mediaLocation = selectedDef.originalMedia?.location;
+      if (!mediaLocation) {
+        throw new Error('Für diesen XML-Eintrag ist kein Original-Audiopfad vorhanden.');
+      }
+      if (!window.rekordboxDesktop) {
+        throw new Error('Original-Audio und Rekordbox-ANLZ können nur in der Desktop-App read-only geöffnet werden.');
       }
 
+      const resolvedDef = await hydrateNativeAnalysis(selectedDef, { requireExactMediaPath: true });
+      if (resolvedDef.analysisSource?.status === 'MISSING') {
+        const sourcePath = resolvedDef.analysisSource.sourceMediaPath;
+        if (sourcePath && !areSameMediaPath(mediaLocation, sourcePath)) {
+          throw new Error('Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
+        }
+        throw new Error('Die passende Rekordbox-ANLZ-Datei konnte nicht read-only geöffnet werden.');
+      }
+      if (
+        !isNativeRekordboxWaveform(resolvedDef.analysis) ||
+        resolvedDef.analysis.origin !== DataOrigin.REKORDBOX_ANLZ
+      ) {
+        throw new Error('Keine passende, nichtleere Rekordbox-ANLZ-Waveform gefunden. Es wird keine Ersatzanalyse erzeugt.');
+      }
+      if (!resolvedDef.analysisSource?.path) {
+        throw new Error('Die native Waveform hat keinen verifizierbaren Rekordbox-ANLZ-Quellpfad.');
+      }
+
+      const source = await window.rekordboxDesktop.readOriginalAudio(mediaLocation);
+      if (!areSameMediaPath(mediaLocation, source.path)) {
+        throw new Error('Der gelesene Audiopfad stimmt nicht exakt mit der Location des XML-Tracks überein.');
+      }
+      if (
+        resolvedDef.analysisSource.sourceMediaPath &&
+        !areSameMediaPath(source.path, resolvedDef.analysisSource.sourceMediaPath)
+      ) {
+        throw new Error('ANLZ-PPTH und Original-Audio verweisen nicht auf dieselbe Datei.');
+      }
+
+      const audioCtx = audioEngine.getContext();
+      const originalAudio = await audioCtx.decodeAudioData(source.data.slice(0));
+      const duration = originalAudio.duration;
+      const nativeAnalysis = {
+        ...resolvedDef.analysis,
+        secPerBucket: duration / Math.max(1, resolvedDef.analysis.length),
+        provenance: {
+          sourceOrigins: [DataOrigin.REKORDBOX_ANLZ],
+          nativeCoverage: 1,
+          projectCoverage: 0,
+          operation: 'DIRECT' as const,
+        },
+      };
+      const originalMedia = {
+        ...selectedDef.originalMedia,
+        resolvedPath: source.path,
+        size: source.size,
+        modifiedAt: source.modifiedAt,
+        status: 'AVAILABLE' as const,
+        accessMode: 'READ_ONLY' as const,
+      };
       const bpm = resolvedDef.bpm || 130.0;
-      const durationDef = resolvedDef.duration || 300.0;
-      const firstBeatDef = resolvedDef.beatGrid?.firstBeat || 0.0;
-
-      // In accordance with VORHABEN.md: No synthetic replacement track is generated when original audio is missing
-      const duration = originalAudio ? originalAudio.duration : durationDef;
-      const analysis = originalAudio
-        ? (resolvedDef.analysis || analyzeAudioBuffer(originalAudio, DataOrigin.LOCAL_ANALYSIS))
-        : (resolvedDef.analysis || null);
-      const sha256 = originalAudio
-        ? audioEngine.computeBufferChecksum(originalAudio)
-        : (resolvedDef.originalSha256 || 'missing-audio');
-      const phrases = resolvedDef.phrases && resolvedDef.phrases.length > 0
-        ? resolvedDef.phrases
-        : generateRekordboxPhrases(bpm, duration, firstBeatDef);
-
+      const firstBeat = resolvedDef.beatGrid?.firstBeat || 0.0;
       const loadedTrack: TrackModel = {
         ...resolvedDef,
         id: resolvedDef.id || `track-${Date.now()}`,
@@ -3132,36 +3180,36 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         bpm,
         key: resolvedDef.key || '2A',
         duration,
-        sampleRate: originalAudio ? originalAudio.sampleRate : 44100,
-        channels: originalAudio ? originalAudio.numberOfChannels : 2,
-        originalSha256: sha256,
+        sampleRate: originalAudio.sampleRate,
+        channels: originalAudio.numberOfChannels,
+        originalSha256: audioEngine.computeBufferChecksum(originalAudio),
         isOriginalUntouched: true,
         audioBuffer: originalAudio,
-        // Preserve the precise PQTZ/PQT2 grid when an ANLZ cache supplied it.
-        // Only compact XML/DB metadata is expanded synthetically for UI grid
-        // lines; native Rekordbox beat timestamps remain untouched.
         beatGrid: resolvedDef.beatGrid?.origin === DataOrigin.REKORDBOX_ANLZ
           ? {
               ...resolvedDef.beatGrid,
               beats: resolvedDef.beatGrid.beats.filter((beat) => beat.time <= duration),
             }
           : buildBeatGridFromTempo(
-              firstBeatDef,
+              firstBeat,
               resolvedDef.beatGrid?.bpm ?? bpm,
               duration,
               resolvedDef.beatGrid?.meter ?? 4,
-              resolvedDef.origin ?? DataOrigin.REKORDBOX_XML
+              DataOrigin.REKORDBOX_XML
             ),
         cues: resolvedDef.cues || [],
         loops: resolvedDef.loops || [],
-        analysis,
-        phrases,
-        originalMedia: originalMedia || {
-          location: resolvedDef.title,
+        analysis: nativeAnalysis,
+        // Phrase/structure data is shown only when Rekordbox supplied it.
+        phrases: resolvedDef.phrases || [],
+        originalMedia,
+        analysisSource: {
+          ...resolvedDef.analysisSource,
+          sourceDuration: duration,
+          status: 'AVAILABLE',
           accessMode: 'READ_ONLY',
-          status: originalAudio ? 'AVAILABLE' : 'MISSING',
         },
-        origin: resolvedDef.origin ?? DataOrigin.REKORDBOX_XML,
+        origin: DataOrigin.REKORDBOX_XML,
         workingSegments: [
           {
             id: `seg-${Date.now()}`,
@@ -3176,16 +3224,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         ],
       };
 
-      setTracks((prev) => {
-        const existingIdx = prev.findIndex((t) => t.id === loadedTrack.id);
-        if (existingIdx >= 0) {
-          const updated = [...prev];
-          updated[existingIdx] = loadedTrack;
+      setTracks((previous) => {
+        const existingIndex = previous.findIndex((track) => track.id === loadedTrack.id);
+        if (existingIndex >= 0) {
+          const updated = [...previous];
+          updated[existingIndex] = loadedTrack;
           return updated;
         }
-        return [loadedTrack, ...prev];
+        return [loadedTrack, ...previous];
       });
-
       setActiveTrackId(loadedTrack.id);
       setWorkingAudioBuffer(originalAudio);
       setClipboardBuffer(null);
@@ -3195,15 +3242,19 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
-      logger.info('AUDIO_ENGINE', `Track "${loadedTrack.title}" in ${Date.now() - loadStartedAt} ms ins Deck geladen`, {
-        duration: loadedTrack.duration,
+      logger.info('AUDIO_ENGINE', `Originaltrack "${loadedTrack.title}" mit nativer Rekordbox-Waveform in ${Date.now() - loadStartedAt} ms geladen`, {
+        duration,
         sampleRate: loadedTrack.sampleRate,
         channels: loadedTrack.channels,
-        hasOriginalAudio: Boolean(originalAudio),
-        cues: loadedTrack.cues.length,
+        waveformBuckets: nativeAnalysis.length,
+        waveformOrigin: nativeAnalysis.origin,
+        mediaPathMatched: true,
+        anlzPathMatched: true,
       });
-    } catch (err) {
-      logger.error('AUDIO_ENGINE', `Fehler beim Laden des Tracks in das Deck: ${err instanceof Error ? err.message : String(err)}`, err);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('AUDIO_ENGINE', `Track-Import verweigert: ${message}`, error);
+      throw new Error(`"${selectedDef.title}" wurde nicht geladen: ${message}`);
     }
   };
 
@@ -3635,11 +3686,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     e.target.value = '';
   };
 
-  // Drag & drop file handler (accepts Rekordbox XML, ANLZ analysis, and audio files)
+  // Drag & drop accepts read-only ANLZ files and standalone original audio.
+  // The bundled XML is opened only through the Track-Import action.
   const handleDropFile = (file: File) => {
     const nameLower = file.name.toLowerCase();
     if (nameLower.endsWith('.xml')) {
-      loadXmlFile(file);
+      alert('Ein externer XML-Import ist deaktiviert. Verwende „Track-Import“ für die eingebettete Rekordbox-Sammlung.');
     } else if (
       nameLower.endsWith('.dat') ||
       nameLower.endsWith('.ext') ||
@@ -3659,7 +3711,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     ) {
       loadAudioFile(file);
     } else {
-      alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte Rekordbox XML (.xml), ANLZ (.dat, .ext, .2ex) oder Audio (.wav, .mp3, .flac) verwenden.`);
+      alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte ANLZ (.dat, .ext, .2ex) oder Audio (.wav, .mp3, .flac) verwenden.`);
     }
   };
 
@@ -3688,6 +3740,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
         e.preventDefault();
         handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyO') {
+        e.preventDefault();
+        void handleTrackImport();
       } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyX') {
         e.preventDefault();
         handleCut();
@@ -3975,14 +4030,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   return (
     <div className="w-screen h-screen bg-[#0a0b0d] flex flex-col overflow-hidden select-none text-neutral-200">
-      {/* Hidden file pickers */}
-      <input
-        ref={xmlFileInputRef}
-        type="file"
-        accept=".xml"
-        onChange={handleImportXmlFile}
-        className="hidden"
-      />
+      {/* Standalone audio file picker; Rekordbox XML is bundled in the app. */}
       <input
         ref={audioFileInputRef}
         type="file"
@@ -3999,7 +4047,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onNewProject={handleNewProject}
         onSaveProject={handleSaveProject}
         onOpenProject={handleOpenProject}
-        onImportXml={() => xmlFileInputRef.current?.click()}
+        onImportTracks={handleTrackImport}
+        trackImportLoading={trackImportLoading}
         onImportAudio={() => audioFileInputRef.current?.click()}
         onExportWav={() => setExportModalOpen(true)}
         onExportXml={() => setExportModalOpen(true)}
@@ -4018,10 +4067,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onToggleBrowser={() => setBrowserOpen(!browserOpen)}
         chatbotOpen={chatbotOpen}
         onToggleChatbot={() => setChatbotOpen(!chatbotOpen)}
-        onLoadDemoTrack={handleLoadDemoTrack}
         onShowInfo={() => setInfoModalOpen(true)}
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
-        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
         hasHistory={undoStack.length > 0 || redoStack.length > 0}
@@ -4166,7 +4213,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           onShiftBeatgrid={handleShiftBeatgrid}
           onAutoAlignBeatgrid={handleAutoAlignBeatgrid}
           onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
-          onImportXmlClick={() => xmlFileInputRef.current?.click()}
+          onImportTracksClick={handleTrackImport}
           onLoadAudioClick={() => audioFileInputRef.current?.click()}
           onDropFile={handleDropFile}
           onDropPaletteClip={handleDropPaletteClip}
@@ -4278,9 +4325,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             audioEngine.stop();
           }
         }}
-        onImportXml={() => xmlFileInputRef.current?.click()}
+        onImportTracks={handleTrackImport}
+        trackImportLoading={trackImportLoading}
         onImportAudio={() => audioFileInputRef.current?.click()}
-        onOpenXmlCollection={() => setXmlCollectionModalOpen(true)}
       />
 
       {/* Modals */}
@@ -4401,7 +4448,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onApplyTrack={handleApplyExtractedTrack}
             onImportAnlzFile={handleImportAnlzFile}
             onImportAnlzFromDesktop={handleImportAnlzFromDesktop}
-            onImportXmlFile={loadXmlFile}
             onOpenRekordboxDatabase={handleOpenRekordboxDatabase}
             onLocateRekordboxDatabases={handleLocateRekordboxDatabases}
             onLoadRekordboxDatabase={handleLoadRekordboxDatabase}
@@ -4415,19 +4461,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onClose={() => setXmlCollectionModalOpen(false)}
         xmlTracks={xmlImportedTracks}
         fileName={xmlFileName}
+        analysisIndexStatus={analysisIndexStatus}
         onSelectTrack={handleSelectTrackFromXml}
         currentTrackId={activeTrackId}
-      />
-
-      {/* Real-time Non-blocking Import Telemetry Progress Modal */}
-      <ImportProgressModal
-        isOpen={importProgressModalOpen}
-        progress={importProgress}
-        onClose={() => setImportProgressModalOpen(false)}
-        onOpenCollection={() => {
-          setImportProgressModalOpen(false);
-          setXmlCollectionModalOpen(true);
-        }}
       />
 
       {/* Real-time Operation Feedback Modal (Insert, Replace, Delete, etc.) */}

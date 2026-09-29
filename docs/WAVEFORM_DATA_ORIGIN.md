@@ -48,9 +48,10 @@ Pioneer Rekordbox speichert bei der Track-Analyse vorberechnete Wellenform-Bucke
   * `djmdCue`: Memory-Cues und Hot-Cues mit exakten Microsekunden-Offsets.
 * Ist ein ANLZ-Verzeichnis verknüpft, wird die Wellenform mit dem Status `DataOrigin.REKORDBOX_ANLZ` markiert.
 
-### 1.3 Rekordbox XML-Kollektion (`rekordbox.xml`)
-* Liest offizielle `<COLLECTION>`-Knoten mit `<TEMPO>` (Bpm, Metro, Inizio) und `<POSITION_MARK>` (Cues & Loops).
-* Wenn die XML zusammen mit den zugehörigen ANLZ-Dateien geladen wird, bleibt die Wellenform 100% nativ Rekordbox.
+### 1.3 Eingebettete Rekordbox XML-Kollektion (`rekordbox_export2.xml`)
+* Die Originaldatei ist in der App gebündelt und liefert `<COLLECTION>`-Metadaten, `<TEMPO>`, `<POSITION_MARK>` und die Original-`Location`-Pfade. Playlist-`<TRACK Key>`-Verweise ohne Medienpfad werden nicht als Tracks ausgegeben.
+* XML enthält keine Waveform-Buckets. Der gebündelte Track-Import öffnet Original-Audio und ANLZ ausschließlich read-only, verlangt eine exakte Medienpfad-Zuordnung und vergleicht einen vorhandenen ANLZ-`PPTH`-Pfad mit dem Original.
+* Fehlt die native ANLZ-Waveform oder das Original-Audio, wird der Track nicht ins Deck geladen; es gibt in diesem Pfad keine lokale oder synthetische Ersatz-Waveform.
 
 ---
 
@@ -79,11 +80,11 @@ Wird eine externe Audiodatei (`.mp3`, `.wav`, `.aiff`, `.flac`) direkt in das De
 * Transienten-Detektion (`detectBeatgridAlignment`): Kickdrum-Onsets werden über einen 180 Hz Tiefpassfilter und Energy-Flux-Detektion gescannt, um den ersten Beat (`firstBeat`) auf die Millisekunde genau zu ermitteln.
 * BPM-Schätzung (`estimateBpm`): Autokorrelation des Energiedifferenz-Signals im DJ-Bereich [85, 175 BPM].
 
-### 2.3 Synthetische Tracks / XML-Metadaten-Fallback (`DataOrigin.GENERATED_FALLBACK`)
-Wird eine Rekordbox-XML geladen, zu der die physische Audiodatei auf dem Dateisystem fehlt:
-* Das System erzeugt über `src/audio/synthesizerTrack.ts` einen rhythmisch exakten, synthetischen 16-Bit PCM-Stereo-Audiopuffer mit 44,1 kHz.
-* Bassdrums, synthetische Snare-Transienten und Hi-Hats werden exakt auf das XML-Beatgrid gerendert.
-* Die daraus resultierende Wellenform ist vollständig synthetisch generiert und trägt den Ursprung `DataOrigin.GENERATED_FALLBACK`.
+### 2.3 Fehlende Originalquellen beim gebündelten XML-Track-Import
+Der bisherige Demo-Lader, der synthetisches Audio unter einem Rekordbox-Ursprung darstellen konnte, wurde entfernt. Beim gebündelten Track-Import gilt jetzt:
+* Ohne lesbare Original-Audiodatei oder passende native ANLZ-Waveform wird das Laden verweigert.
+* `DataOrigin.GENERATED_FALLBACK` wird für diesen Importpfad nicht gesetzt; XML-Metadaten werden nicht als Waveform ausgegeben.
+* Unabhängige Audioimporte und nicht-destruktive Edit-Workflows können weiterhin `LOCAL_ANALYSIS` bzw. `PROJECT` erzeugen; sie sind nicht Bestandteil des nativen Rekordbox-Track-Imports.
 
 ### 2.4 Tonhöhen- und Zeitanpassung von Clips (`pitchTempoEngine.ts`)
 Werden Clips aus der Palette in Deck A eingefügt, während "Tonhöhe anpassen" (`matchPitch`) aktiv ist:

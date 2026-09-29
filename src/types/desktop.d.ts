@@ -132,6 +132,8 @@ declare global {
     sourceMediaPath?: string;
     title?: string;
     artist?: string;
+    /** Refuse ID/title/artist fallback; require normalized original-media-path equality. */
+    requireExactMediaPath?: boolean;
   }
 
   interface RekordboxAnalysisPathMapping extends RekordboxAnalysisPathLookup {

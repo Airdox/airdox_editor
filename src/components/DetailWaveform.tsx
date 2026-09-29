@@ -25,6 +25,7 @@ import {
   ChevronRight,
   UploadCloud,
   FolderOpen,
+  Disc,
   FileAudio,
   ShieldCheck,
   ZoomIn,
@@ -69,7 +70,7 @@ interface DetailWaveformProps {
   onSetFirstBeatHere?: () => void;
   onAutoAlignBeatgrid?: () => void;
   onAdjustBpm?: (deltaOrMultiplier: number) => void;
-  onImportXmlClick?: () => void;
+  onImportTracksClick?: () => void;
   onLoadAudioClick?: () => void;
   onDropFile?: (file: File) => void;
   onDropPaletteClip?: (clipId: string, time: number) => void;
@@ -120,7 +121,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onSetFirstBeatHere,
   onAutoAlignBeatgrid,
   onAdjustBpm,
-  onImportXmlClick,
+  onImportTracksClick,
   onLoadAudioClick,
   onDropFile,
   onDropPaletteClip,
@@ -1215,17 +1216,17 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
                 Kein Track geladen (Bereit für Import)
               </h3>
               <p className="text-xs text-neutral-400 mb-4 max-w-xs">
-                Ziehe eine <span className="text-[#00a2ff] font-mono font-medium">Rekordbox XML</span> oder <span className="text-white font-mono font-medium">Audiodatei</span> direkt hierher:
+                Wähle einen Track aus der eingebetteten Rekordbox-Sammlung oder öffne eine eigenständige Audiodatei.
               </p>
 
               <div className="flex flex-wrap gap-2 justify-center mb-4">
-                {onImportXmlClick && (
+                {onImportTracksClick && (
                   <button
-                    onClick={onImportXmlClick}
+                    onClick={onImportTracksClick}
                     className="flex items-center space-x-1.5 px-3 py-1.5 bg-[#0088ff] hover:bg-[#0077ee] text-white rounded text-xs font-semibold shadow transition-colors"
                   >
-                    <FolderOpen size={13} />
-                    <span>Rekordbox XML importieren</span>
+                    <Disc size={13} />
+                    <span>Track-Import</span>
                   </button>
                 )}
                 {onLoadAudioClick && (

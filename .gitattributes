@@ -29,3 +29,5 @@
 *.exe binary
 *.dylib binary
 *.so binary
+# Keep the bundled Rekordbox export byte-for-byte; its source hash includes CRLF line endings.
+rekordbox_export2.xml -text -eol
