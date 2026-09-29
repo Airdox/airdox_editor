@@ -266,6 +266,128 @@ function readRekordboxDatabase(filePath) {
   }
 }
 
+/**
+ * Targeted single-track read for the Master-DB-Gate (Phase 5).
+ *
+ * Opens the database read-only, validates the schema of the content table and
+ * returns exactly ONE djmdContent/content row (plus its cue rows) instead of
+ * shipping the whole library over IPC. The gate maps the returned flags to its
+ * state machine:
+ *
+ *   { available:false, schemaInvalid:true } → MASTER_DB_SCHEMA_INVALID
+ *   { available:false, reason }             → MASTER_DB_OPEN_FAILED
+ *   { available:true,  row:null }           → TRACK_NOT_FOUND_IN_MASTER_DB
+ *
+ * @param {string} filePath master.db or exportLibrary.db
+ * @param {string|number} trackId XML TrackID (= djmdContent.ID)
+ * @returns {{available:boolean, schemaInvalid?:boolean, dbType?:string,
+ *   reason?:string, row?:object|null, cues?:object[]}}
+ */
+function openContentRow(filePath, trackId) {
+  const opened = openRekordboxDb(filePath);
+  if (!opened.available) return { available: false, reason: opened.reason };
+
+  const { db, dbType } = opened;
+  try {
+    const table = dbType === 'MASTER_DB' ? 'djmdContent' : 'content';
+    let columns = [];
+    try {
+      columns = db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all()
+        .map((row) => row.name);
+    } catch (error) {
+      return {
+        available: false,
+        schemaInvalid: true,
+        dbType,
+        reason: `Schemaabfrage für ${table} fehlgeschlagen: ${error.message || error}`,
+      };
+    }
+    if (columns.length === 0) {
+      return { available: false, schemaInvalid: true, dbType, reason: `Tabelle ${table} fehlt.` };
+    }
+
+    let idColumn = null;
+    if (dbType === 'MASTER_DB') {
+      const required = ['ID', 'FolderPath', 'FileNameL', 'AnalysisDataPath'];
+      const missing = required.filter((name) => !columns.includes(name));
+      if (missing.length > 0) {
+        return {
+          available: false,
+          schemaInvalid: true,
+          dbType,
+          reason: `Pflichtspalten in ${table} fehlen: ${missing.join(', ')}`,
+        };
+      }
+      idColumn = 'ID';
+    } else {
+      idColumn = columns.includes('ID') ? 'ID' : columns.includes('content_id') ? 'content_id' : null;
+      if (!idColumn) {
+        return {
+          available: false,
+          schemaInvalid: true,
+          dbType,
+          reason: `Spalte ID/content_id in ${table} fehlt.`,
+        };
+      }
+    }
+
+    let row = null;
+    try {
+      const stmt = db.prepare(`SELECT * FROM ${table} WHERE ${idColumn} = ? LIMIT 1`);
+      row = stmt.get(String(trackId)) || null;
+      if (!row && /^\d+$/.test(String(trackId))) {
+        row = stmt.get(Number(trackId)) || null;
+      }
+    } catch (error) {
+      return { available: false, dbType, reason: `Abfrage von ${table} fehlgeschlagen: ${error.message || error}` };
+    }
+
+    // Cue rows are optional context for the gate (best effort; missing cue
+    // tables must not invalidate an otherwise usable content row).
+    let cues = [];
+    if (row) {
+      const cueTable = dbType === 'MASTER_DB' ? 'djmdCue' : 'cue';
+      const cueColumns = (() => {
+        try {
+          return db.prepare(`PRAGMA table_info(${cueTable})`).all().map((r) => r.name);
+        } catch {
+          return [];
+        }
+      })();
+      const foreignKey = cueColumns.includes('ContentID')
+        ? 'ContentID'
+        : cueColumns.includes('content_id')
+          ? 'content_id'
+          : null;
+      if (foreignKey) {
+        try {
+          cues = db
+            .prepare(`SELECT * FROM ${cueTable} WHERE ${foreignKey} = ? LIMIT 512`)
+            .all(String(row[idColumn] ?? trackId))
+            .map(normalizeRow);
+        } catch {
+          cues = [];
+        }
+      }
+    }
+
+    return {
+      available: true,
+      dbType,
+      row: row ? normalizeRow(row) : null,
+      cues,
+    };
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auto-location candidates (read-only directory inspection)
 // ---------------------------------------------------------------------------
@@ -358,6 +480,7 @@ module.exports = {
   getOneLibraryKey,
   detectDbType,
   readRekordboxDatabase,
+  openContentRow,
   locateRekordboxDatabases,
   isCipherAvailable: () => getCipherModule() !== null,
 };

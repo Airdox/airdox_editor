@@ -34,6 +34,18 @@ declare global {
         Array<{ path: string; kind: 'MASTER_DB' | 'ONE_LIBRARY'; label: string }>
       >;
       readRekordboxDatabase(dbPath: string): Promise<RekordboxDatabaseReadResult>;
+      /**
+       * Phase 5 – verbindlicher Master-DB-Gate für den Track-Lade-Pfad:
+       * TrackID → djmdContent → AnalysisDataPath → ANLZ → Original-Audio,
+       * ausschließlich lesend. `ok: false` bedeutet harter Verzicht – der
+       * Renderer darf in diesem Fall keine Ersatz-Waveform erzeugen.
+       */
+      resolveTrackFromMasterDb(query: RekordboxTrackGateQuery): Promise<RekordboxTrackGateResult>;
+      /**
+       * Liefert die app-eigene `rekordbox_export2.xml` (kein Benutzerdatei-
+       * dialog): im Paket als Ressource, im Entwicklungsmodus aus dem Repo.
+       */
+      readBundledRekordboxXml(): Promise<RekordboxBundledXmlResult>;
       cacheAnalysisMappings(mappings: RekordboxAnalysisPathMapping[]): Promise<{
         accepted: number;
         updated: number;
@@ -171,5 +183,74 @@ declare global {
       playlists: RekordboxDatabaseReadRow[];
       songPlaylists: RekordboxDatabaseReadRow[];
     };
+  }
+
+  /** Zustandsmaschine des Master-DB-Gates (electron/masterDbGate.cjs). */
+  type RekordboxTrackGateCode =
+    | 'OK'
+    | 'MASTER_DB_NOT_FOUND'
+    | 'SQLCIPHER_UNAVAILABLE'
+    | 'MASTER_DB_OPEN_FAILED'
+    | 'MASTER_DB_SCHEMA_INVALID'
+    | 'TRACK_NOT_FOUND_IN_MASTER_DB'
+    | 'ANLZ_NOT_FOUND'
+    | 'ANLZ_READ_FAILED'
+    | 'ANLZ_INVALID'
+    | 'REKORDBOX_WAVEFORM_MISSING'
+    | 'ORIGINAL_AUDIO_NOT_FOUND';
+
+  interface RekordboxTrackGateQuery {
+    /** TrackID aus der eingebetteten rekordbox_export2.xml (= djmdContent.ID). */
+    trackId: string;
+    /** XML `Location` des Original-Audios (file://-URL oder lokaler Pfad). */
+    mediaPath?: string;
+    title?: string;
+    artist?: string;
+  }
+
+  interface RekordboxTrackGateResult {
+    ok: boolean;
+    code: RekordboxTrackGateCode;
+    reason?: string;
+    dbPath?: string;
+    dbType?: 'MASTER_DB' | 'ONE_LIBRARY';
+    content?: {
+      id: string;
+      title?: string;
+      folderPath?: string;
+      fileName?: string;
+      analysisDataPath?: string;
+      originalPath?: string;
+    };
+    analysis?: {
+      path: string;
+      size: number;
+      modifiedAt: number;
+      /** Gelesene ANLZ-Sektionstags (PMAI/PPTH/PQTZ/.../PWV*). */
+      tags: string[];
+      hasWaveform: boolean;
+      truncated?: boolean;
+    };
+    original?: {
+      path: string;
+      /** Woher der Pfad stammt: XML-Location, master.db oder ANLZ-PPTH. */
+      source: 'XML_LOCATION' | 'MASTER_DB' | 'ANLZ_PPTH';
+      xmlLocation?: string;
+      databasePath?: string;
+      size: number;
+      modifiedAt: number;
+    };
+    /** djmdCue-/cue-Rows des Datensatzes (best effort, max. 512). */
+    cues?: RekordboxDatabaseReadRow[];
+  }
+
+  interface RekordboxBundledXmlResult {
+    available: boolean;
+    data?: string;
+    path?: string;
+    size?: number;
+    modifiedAt?: number;
+    reason?: string;
+    accessMode: 'READ_ONLY';
   }
 }

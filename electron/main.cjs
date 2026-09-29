@@ -9,6 +9,7 @@ const {
 } = require('./dbReader.cjs');
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
+const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
 const { inspectStemRuntime } = require('./stemRuntime.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
@@ -526,6 +527,69 @@ ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {
   }
   originalSourceRegistry.register(dbPath);
   return readRekordboxDatabase(dbPath);
+});
+
+// Verbindlicher Master-DB-Gate (Phase 5): TrackID → djmdContent →
+// AnalysisDataPath → ANLZ → Original-Audio, ausschließlich lesend. Der Gate
+// liefert hartes OK oder einen Fehlercode; es gibt keinen Analyse-Fallback.
+ipcMain.handle('rekordbox:resolve-track-gate', async (_event, query) => {
+  if (!query || typeof query !== 'object') {
+    throw new Error('Kein Gate-Query übergeben.');
+  }
+  const result = await resolveTrackFromMasterDb(query);
+  if (result.ok) {
+    if (result.dbPath) originalSourceRegistry.register(result.dbPath);
+    if (result.analysis?.path) originalSourceRegistry.register(result.analysis.path);
+    if (result.original?.path) originalSourceRegistry.register(result.original.path);
+    logger.info('DATABASE', `[Master-DB-Gate] OK für TrackID ${result.content?.id}`, {
+      trackId: query.trackId,
+      dbType: result.dbType,
+      dbPath: result.dbPath,
+      analysisPath: result.analysis?.path,
+      anlzTags: result.analysis?.tags,
+      originalPath: result.original?.path,
+      cues: result.cues?.length ?? 0,
+    });
+  } else {
+    logger.warn('DATABASE', `[Master-DB-Gate] ${result.code}: ${result.reason}`, {
+      trackId: query.trackId,
+      dbPath: result.dbPath,
+      dbType: result.dbType,
+    });
+  }
+  return result;
+});
+
+// Eingebettete rekordbox_export2.xml als App-Ressource (kein Benutzerdatei-
+// dialog). Im Paket: resources/rekordbox/rekordbox_export2.xml (extraResources),
+// im Entwicklungsmodus: Repo-Root. Die Datei wird nur lesend geöffnet und als
+// Originalquelle registriert.
+ipcMain.handle('rekordbox:read-bundled-xml', async () => {
+  const target = app.isPackaged
+    ? path.join(process.resourcesPath, 'rekordbox', 'rekordbox_export2.xml')
+    : path.join(app.getAppPath(), 'rekordbox_export2.xml');
+  try {
+    await access(target, constants.R_OK);
+    const details = await stat(target);
+    if (!details.isFile()) throw new Error('Die gebündelte XML-Ressource ist keine Datei.');
+    const data = await readFile(target, 'utf-8');
+    originalSourceRegistry.register(target);
+    return {
+      available: true,
+      data,
+      path: target,
+      size: details.size,
+      modifiedAt: details.mtimeMs,
+      accessMode: 'READ_ONLY',
+    };
+  } catch (error) {
+    return {
+      available: false,
+      path: target,
+      reason: error.message || String(error),
+      accessMode: 'READ_ONLY',
+    };
+  }
 });
 
 // Persistent, app-owned association index. It intentionally stores neither
