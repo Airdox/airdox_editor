@@ -17,7 +17,7 @@ import {
   CuePoint,
   AnalysisFileReference,
 } from './types/rekordbox';
-import { mapRekordboxDatabaseRows } from './rekordbox/dbParser';
+import { buildCues, mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { analyzeAudioBuffer, extractMiniPeaks, estimateBpm } from './waveform/analyzer';
 import {
   composeWaveformFromEditSegments,
@@ -2939,14 +2939,52 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => {
     if (!bundledCollectionPromiseRef.current) {
-      const loading = import('./rekordbox/bundledCollection')
-        .then(({ BUNDLED_REKORDBOX_XML }) => parseRekordboxXmlAsync(BUNDLED_REKORDBOX_XML))
-        .then(({ tracks }) => {
-          if (tracks.length === 0) throw new Error('Die eingebettete Rekordbox-Sammlung enthält keine Tracks.');
-          return tracks.map((track, index) =>
-            buildCollectionTrackModel(track, index, DataOrigin.REKORDBOX_XML)
-          );
+      const loading = (async () => {
+        // Verbindliche Quelle in der Desktop-App: die app-eigene Ressource
+        // (resources/rekordbox/rekordbox_export2.xml bzw. Repo-Root im
+        // Entwicklungsmodus), ausschließlich lesend über den Main-Prozess.
+        // Kein Dateidialog, keine Benutzerdatei, keine zweite XML.
+        let xml = '';
+        let source: 'DESKTOP_RESOURCE' | 'BUNDLED_ASSET' = 'BUNDLED_ASSET';
+        const bridge = window.rekordboxDesktop;
+        if (bridge?.readBundledRekordboxXml) {
+          try {
+            const bundled = await bridge.readBundledRekordboxXml();
+            if (bundled.available && bundled.data) {
+              xml = bundled.data;
+              source = 'DESKTOP_RESOURCE';
+            } else {
+              logger.warn(
+                'XML_IMPORT',
+                `Eingebettete Rekordbox-Sammlung nicht als Ressource lesbar: ${bundled.reason || 'unbekannter Grund'}`,
+                { path: bundled.path }
+              );
+            }
+          } catch (error) {
+            logger.warn(
+              'XML_IMPORT',
+              `Eingebettete Rekordbox-Sammlung konnte nicht über die Desktop-Brücke gelesen werden: ${error instanceof Error ? error.message : String(error)}`,
+              error
+            );
+          }
+        }
+        if (!xml) {
+          // Browser-/Dev-Fallback ohne Electron-Brücke: dieselbe Datei,
+          // zur Laufzeit als Vite-Asset gebündelt (per Test auf denselben
+          // SHA-256 festgenagelt).
+          const bundled = await import('./rekordbox/bundledCollection');
+          xml = bundled.BUNDLED_REKORDBOX_XML;
+        }
+        const { tracks } = await parseRekordboxXmlAsync(xml);
+        if (tracks.length === 0) throw new Error('Die eingebettete Rekordbox-Sammlung enthält keine Tracks.');
+        logger.info('XML_IMPORT', `Eingebettete Sammlung dekodiert (${source}): ${tracks.length} Tracks`, {
+          source,
+          tracks: tracks.length,
         });
+        return tracks.map((track, index) =>
+          buildCollectionTrackModel(track, index, DataOrigin.REKORDBOX_XML)
+        );
+      })();
       bundledCollectionPromiseRef.current = loading;
       void loading.catch(() => {
         if (bundledCollectionPromiseRef.current === loading) bundledCollectionPromiseRef.current = null;
@@ -3099,8 +3137,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     xmlImportedTracks.length,
   ]);
 
-  // Load a selected bundled-XML track only when both original sources are usable.
-  // No local analysis, generated audio, or synthetic waveform is an allowed fallback.
+  // Load a selected bundled-XML track only after the mandatory Master-DB-Gate
+  // approved TrackID → djmdContent → ANLZ → original audio. No local analysis,
+  // generated audio, or synthetic waveform is an allowed fallback.
   const handleSelectTrackFromXml = async (selectedDef: TrackModel) => {
     const loadStartedAt = Date.now();
     logger.info('XML_IMPORT', `Track aus eingebetteter Sammlung wird geprüft: "${selectedDef.title}"`, {
@@ -3113,39 +3152,119 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     try {
       const mediaLocation = selectedDef.originalMedia?.location;
       if (!mediaLocation) {
-        throw new Error('Für diesen XML-Eintrag ist kein Original-Audiopfad vorhanden.');
+        throw new Error('[ORIGINAL_AUDIO_NOT_FOUND] Für diesen XML-Eintrag ist kein Original-Audiopfad vorhanden.');
       }
       if (!window.rekordboxDesktop) {
         throw new Error('Original-Audio und Rekordbox-ANLZ können nur in der Desktop-App read-only geöffnet werden.');
       }
 
-      const resolvedDef = await hydrateNativeAnalysis(selectedDef, { requireExactMediaPath: true });
+      // MASTER DB GATE – verbindliche Kette TrackID → djmdContent →
+      // AnalysisDataPath → ANLZ → Original-Audio. Ohne grünen Gate-Status
+      // wird der Track nicht geladen. Es gibt bewusst keinen lokalen
+      // Analyse-Fallback (analyzeAudioBuffer / LOCAL_ANALYSIS); fehlen
+      // Rekordbox-Daten, ist das ein harter Fehler.
+      const gate = await window.rekordboxDesktop.resolveTrackFromMasterDb({
+        trackId: selectedDef.id,
+        mediaPath: mediaLocation,
+        title: selectedDef.title,
+        artist: selectedDef.artist,
+      });
+      if (!gate.ok || gate.code !== 'OK') {
+        throw new Error(`[${gate.code}] ${gate.reason || 'Der Master-DB-Gate hat den Track abgelehnt.'}`);
+      }
+      logger.info('DATABASE', `Master-DB-Gate OK für TrackID ${gate.content?.id}`, {
+        trackId: selectedDef.id,
+        dbType: gate.dbType,
+        dbPath: gate.dbPath,
+        analysisPath: gate.analysis?.path,
+        anlzTags: gate.analysis?.tags,
+        originalPath: gate.original?.path,
+        gateCues: gate.cues?.length ?? 0,
+      });
+
+      // Den geprüften Originalpfad des Gates als resolvedPath setzen: daran
+      // misst hydrateNativeAnalysis die PPTH-Quelle der ANLZ (bei XML-Locations
+      // mit geräteinternen //contents_-Pfaden ist das der master.db-Pfad).
+      // Den geprüften AnalysisDataPath setzen wir zusätzlich als direkte
+      // ANLZ-Quelle, damit die Kette TrackID → djmdContent → AnalysisDataPath
+      // nicht allein vom lokalen Pfadindex abhängt.
+      const gateSeeded: TrackModel = {
+        ...selectedDef,
+        originalMedia: gate.original
+          ? { ...selectedDef.originalMedia, resolvedPath: gate.original.path }
+          : selectedDef.originalMedia,
+        analysisSource:
+          gate.analysis && !selectedDef.analysisSource?.path
+            ? {
+                path: gate.analysis.path,
+                accessMode: 'READ_ONLY',
+                status: 'UNVERIFIED',
+                size: gate.analysis.size,
+                modifiedAt: gate.analysis.modifiedAt,
+                sourceMediaPath: gate.original?.path || mediaLocation,
+                sourceDuration: selectedDef.duration,
+                format: (gate.analysis.path.split('.').pop() || 'ANLZ').toUpperCase() as
+                  | 'DAT'
+                  | 'EXT'
+                  | '2EX'
+                  | 'ANLZ',
+              }
+            : selectedDef.analysisSource,
+      };
+
+      let resolvedDef = await hydrateNativeAnalysis(gateSeeded, { requireExactMediaPath: true });
       if (resolvedDef.analysisSource?.status === 'MISSING') {
         const sourcePath = resolvedDef.analysisSource.sourceMediaPath;
-        if (sourcePath && !areSameMediaPath(mediaLocation, sourcePath)) {
-          throw new Error('Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
+        const referencePath = gate.original?.path || mediaLocation;
+        if (sourcePath && !areSameMediaPath(referencePath, sourcePath)) {
+          throw new Error('[ANLZ_INVALID] Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
         }
-        throw new Error('Die passende Rekordbox-ANLZ-Datei konnte nicht read-only geöffnet werden.');
+        throw new Error('[ANLZ_READ_FAILED] Die passende Rekordbox-ANLZ-Datei konnte nicht read-only geöffnet werden.');
       }
       if (
         !isNativeRekordboxWaveform(resolvedDef.analysis) ||
         resolvedDef.analysis.origin !== DataOrigin.REKORDBOX_ANLZ
       ) {
-        throw new Error('Keine passende, nichtleere Rekordbox-ANLZ-Waveform gefunden. Es wird keine Ersatzanalyse erzeugt.');
+        throw new Error('[REKORDBOX_WAVEFORM_MISSING] Keine passende, nichtleere Rekordbox-ANLZ-Waveform gefunden. Es wird keine Ersatzanalyse erzeugt.');
       }
       if (!resolvedDef.analysisSource?.path) {
-        throw new Error('Die native Waveform hat keinen verifizierbaren Rekordbox-ANLZ-Quellpfad.');
+        throw new Error('[ANLZ_NOT_FOUND] Die native Waveform hat keinen verifizierbaren Rekordbox-ANLZ-Quellpfad.');
       }
 
-      const source = await window.rekordboxDesktop.readOriginalAudio(mediaLocation);
-      if (!areSameMediaPath(mediaLocation, source.path)) {
-        throw new Error('Der gelesene Audiopfad stimmt nicht exakt mit der Location des XML-Tracks überein.');
+      // Fallback-Cues aus djmdCue: nur, wenn weder XML noch ANLZ Positionsmarker
+      // geliefert haben. Die Spalten kommen direkt aus dem Master-DB-Gate.
+      if (gate.cues && gate.cues.length > 0 && (!resolvedDef.cues || resolvedDef.cues.length === 0)) {
+        const mappedCues = buildCues(
+          gate.content?.id || String(selectedDef.id),
+          gate.cues,
+          resolvedDef.bpm || 130,
+          resolvedDef.beatGrid?.firstBeat || 0
+        );
+        resolvedDef = {
+          ...resolvedDef,
+          cues: mappedCues.cues,
+          loops:
+            resolvedDef.loops && resolvedDef.loops.length > 0 ? resolvedDef.loops : mappedCues.loops,
+        };
+      }
+
+      // Original-Audio über den vom Gate verifizierten Pfad lesen (die XML-
+      // Location kann bei Geräte-Sync-Einträgen ein internes //contents_-Pfad
+      // sein; der Gate löst ihn über master.db auf).
+      const originalTarget = gate.original?.path || mediaLocation;
+      const source = await window.rekordboxDesktop.readOriginalAudio(originalTarget).catch((error: unknown) => {
+        throw new Error(
+          `[ORIGINAL_AUDIO_NOT_FOUND] Original-Audio konnte nicht read-only geöffnet werden: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+      if (!areSameMediaPath(originalTarget, source.path)) {
+        throw new Error('[ORIGINAL_AUDIO_NOT_FOUND] Der gelesene Audiopfad stimmt nicht exakt mit dem vom Gate geprüften Originalpfad überein.');
       }
       if (
         resolvedDef.analysisSource.sourceMediaPath &&
         !areSameMediaPath(source.path, resolvedDef.analysisSource.sourceMediaPath)
       ) {
-        throw new Error('ANLZ-PPTH und Original-Audio verweisen nicht auf dieselbe Datei.');
+        throw new Error('[ANLZ_INVALID] ANLZ-PPTH und Original-Audio verweisen nicht auf dieselbe Datei.');
       }
 
       const audioCtx = audioEngine.getContext();

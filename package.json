@@ -92,6 +92,10 @@
     ],
     "extraResources": [
       {
+        "from": "rekordbox_export2.xml",
+        "to": "rekordbox/rekordbox_export2.xml"
+      },
+      {
         "from": "resources/stem-runtime",
         "to": "stem-runtime",
         "filter": [

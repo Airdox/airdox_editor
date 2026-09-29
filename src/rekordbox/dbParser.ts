@@ -116,7 +116,7 @@ function normalizeCueRow(row: Record<string, string | number | null>): CueRowNor
   };
 }
 
-function buildCues(
+export function buildCues(
   contentId: string,
   cueRows: RekordboxDatabaseRows['cues'],
   bpm: number,

@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   chooseRekordboxDatabase: () => ipcRenderer.invoke('rekordbox:choose-rekordbox-database'),
   locateRekordboxDatabases: () => ipcRenderer.invoke('rekordbox:locate-rekordbox-databases'),
   readRekordboxDatabase: (dbPath) => ipcRenderer.invoke('rekordbox:read-library-db', dbPath),
+  // Verbindlicher Master-DB-Gate (Phase 5): TrackID → djmdContent →
+  // AnalysisDataPath → ANLZ → Original-Audio. Liefert hartes OK oder einen
+  // Fehlercode aus der Zustandsmaschine – nie eine Ersatzanalyse.
+  resolveTrackFromMasterDb: (query) => ipcRenderer.invoke('rekordbox:resolve-track-gate', query),
+  // Eingebettete rekordbox_export2.xml als App-Ressource (kein Dateidialog).
+  readBundledRekordboxXml: () => ipcRenderer.invoke('rekordbox:read-bundled-xml'),
   // Small app-owned index of track ↔ ANLZ paths. This never writes to
   // Rekordbox's master.db or source files.
   cacheAnalysisMappings: (mappings) => ipcRenderer.invoke('rekordbox:cache-analysis-mappings', mappings),
