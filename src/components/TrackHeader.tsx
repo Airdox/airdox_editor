@@ -96,7 +96,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
               )}
             </div>
             <div className="flex items-center space-x-2 text-[10.5px] text-neutral-400">
-              <span title="Interpret / Artist">{track ? track.artist : 'Bereit für Rekordbox XML- oder Audio-Import'}</span>
+              <span title="Interpret / Artist">{track ? track.artist : 'Bereit für Track-Import oder Audiodatei'}</span>
               <span>•</span>
               <span
                 className="text-[#00a2ff] font-mono text-[9.5px]"

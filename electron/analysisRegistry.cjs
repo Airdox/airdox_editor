@@ -39,6 +39,9 @@ function normalizePath(value) {
   } catch {
     // Keep the raw path below; a malformed file URL simply cannot be a strong key.
   }
+  // Node on POSIX represents a Windows file URL as `/C:/...`; normalize that
+  // back to the drive path so it matches Rekordbox's database entry.
+  input = input.replace(/^\/([A-Za-z]:\/)/, '$1');
   input = input.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
   // Rekordbox's Windows paths are case-insensitive even when an index is being
   // inspected on another platform.
@@ -213,12 +216,16 @@ class AnalysisPathRegistry {
     const mediaPath = normalizePath(query.mediaPath || query.sourceMediaPath);
     const title = cleanString(query.title, 1024).toLocaleLowerCase();
     const artist = cleanString(query.artist, 1024).toLocaleLowerCase();
+    const requireExactMediaPath = query.requireExactMediaPath === true;
 
     let best = null;
     let bestScore = 0;
     for (const entry of this.entries.values()) {
       let score = 0;
       const candidateMedia = normalizePath(entry.mediaPath || entry.sourceMediaPath);
+      if (requireExactMediaPath && (!mediaPath || !candidateMedia || mediaPath !== candidateMedia)) {
+        continue;
+      }
       if (mediaPath && candidateMedia && mediaPath === candidateMedia) score += 100;
       if (trackId && entry.trackId && trackId === entry.trackId) score += 25;
       if (title && entry.title && title === entry.title.toLocaleLowerCase()) score += 8;

@@ -2,7 +2,7 @@
  * @license
  * Rekordbox Database & Visualization Data Extraction Inspector Modal
  * 
- * Inspects all data extracted from Rekordbox XML, SQLite Database, and ANLZ files:
+ * Inspects data loaded from the Rekordbox database and native ANLZ files:
  * - Memory Cues (exact milliseconds, beat alignment, comment, CDJ color)
  * - Waveform Visualization (peaks, multi-band Low/Mid/High spectral energies)
  * - Song Structure Phrases (PSSI)
@@ -41,7 +41,6 @@ interface DatabaseExtractionModalProps {
   onImportAnlzFile?: (file: File) => void;
   /** Windows desktop path: opens the analysis file via the read-only bridge. */
   onImportAnlzFromDesktop?: () => void;
-  onImportXmlFile?: (file: File) => void;
   /** Rekordbox 6/7 SQLCipher database (master.db / OneLibrary), read-only. */
   onOpenRekordboxDatabase?: () => void;
   onLocateRekordboxDatabases?: () => Promise<
@@ -60,7 +59,6 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
   onLoadTrackByIndex,
   onImportAnlzFile,
   onImportAnlzFromDesktop,
-  onImportXmlFile,
   onOpenRekordboxDatabase,
   onLocateRekordboxDatabases,
   onLoadRekordboxDatabase,
@@ -285,7 +283,7 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
             }`}
           >
             <Upload size={13} className="text-[#10b981]" />
-            <span>ANLZ / XML / DB Datei-Import</span>
+            <span>Rekordbox-ANLZ / DB-Quellen</span>
           </button>
         </div>
 
@@ -629,36 +627,6 @@ export const DatabaseExtractionModal: React.FC<DatabaseExtractionModalProps> = (
                       />
                     </label>
                   </div>
-                </div>
-
-                {/* XML Import */}
-                <div className="bg-[#151720] border border-[#252835] p-4 rounded flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center space-x-2 text-white font-semibold text-xs mb-1">
-                      <FileCode size={15} className="text-[#f59e0b]" />
-                      <span>Rekordbox XML Kollektion (&lt;DJ_PLAYLISTS&gt;)</span>
-                    </div>
-                    <p className="text-[11px] text-neutral-400">
-                      Standard XML-Kollektion mit vollständigen POSITION_MARK Memory Cues und TEMPO-Markern.
-                    </p>
-                  </div>
-
-                  <label className="mt-4 cursor-pointer w-full py-2 bg-[#f59e0b] hover:bg-[#d97706] text-black font-semibold rounded text-center text-[11px] transition-colors flex items-center justify-center space-x-1.5">
-                    <Upload size={13} />
-                    <span>Rekordbox XML auswählen...</span>
-                    <input
-                      type="file"
-                      accept=".xml"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          onImportXmlFile(file);
-                          onClose();
-                        }
-                      }}
-                    />
-                  </label>
                 </div>
 
                 {/* Rekordbox 6/7 SQLCipher Database */}

@@ -28,7 +28,8 @@ interface MenuBarProps {
   onNewProject: () => void;
   onSaveProject: () => void;
   onOpenProject: () => void;
-  onImportXml: () => void;
+  onImportTracks: () => void;
+  trackImportLoading?: boolean;
   onImportAudio: () => void;
   onExportWav: () => void;
   onExportXml: () => void;
@@ -47,10 +48,8 @@ interface MenuBarProps {
   onToggleBrowser: () => void;
   chatbotOpen?: boolean;
   onToggleChatbot?: () => void;
-  onLoadDemoTrack?: () => void;
   onShowInfo: () => void;
   onOpenDatabaseInspector?: () => void;
-  onOpenXmlCollection?: () => void;
   onOpenSystemLogs?: () => void;
   onClearHistory?: () => void;
   hasHistory?: boolean;
@@ -72,7 +71,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
   onSaveProject,
   onOpenProject,
-  onImportXml,
+  onImportTracks,
+  trackImportLoading = false,
   onImportAudio,
   onExportWav,
   onExportXml,
@@ -91,10 +91,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onToggleBrowser,
   chatbotOpen,
   onToggleChatbot,
-  onLoadDemoTrack,
   onShowInfo,
   onOpenDatabaseInspector,
-  onOpenXmlCollection,
   onOpenSystemLogs,
   onClearHistory,
   hasHistory,
@@ -182,26 +180,14 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                 </button>
               )}
               <button
-                onClick={() => { onImportXml(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Rekordbox XML-Sammlung mit Beatgrids, Cues und Keys importieren"
+                onClick={() => { onImportTracks(); setActiveMenu(null); }}
+                disabled={trackImportLoading}
+                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-50 flex justify-between"
+                title="Die eingebettete Rekordbox-Sammlung öffnen und einen Originaltrack auswählen"
               >
-                <span>Rekordbox XML importieren...</span>
+                <span>{trackImportLoading ? 'Rekordbox-Sammlung wird geladen…' : 'Track-Import…'}</span>
                 <span className="text-neutral-500 hover:text-neutral-200">Ctrl+O</span>
               </button>
-              {onOpenXmlCollection && (
-                <button
-                  onClick={() => { onOpenXmlCollection(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#00e5ff] font-medium"
-                  title="Auswahlfenster für Tracks aus der importierten XML-Sammlung öffnen"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Disc size={13} className="text-[#00e5ff]" />
-                    <span>Rekordbox XML Track-Auswahl...</span>
-                  </span>
-                  <span className="text-[9px] bg-[#0088ff]/30 text-[#00a2ff] px-1 rounded font-mono">LISTE</span>
-                </button>
-              )}
               <button
                 onClick={() => { onImportAudio(); setActiveMenu(null); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
@@ -505,7 +491,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
               activeMenu === 'hilfe' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
             }`}
-            title="Hilfe, Ersteinrichtung, Demotrack und System-Diagnose"
+            title="Hilfe, Ersteinrichtung und System-Diagnose"
           >
             Hilfe
           </button>
@@ -522,15 +508,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     <span>Ersteinrichtung &amp; KI-Installer…</span>
                   </span>
                   <span className="text-[9px] bg-[#0088ff]/20 text-[#00c8ff] px-1 rounded font-mono">SETUP</span>
-                </button>
-              )}
-              {onLoadDemoTrack && (
-                <button
-                  onClick={() => { onLoadDemoTrack(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00a2ff]"
-                  title="Lädt den mitgelieferten Demo-Referenztrack mit Beatgrid und Cues"
-                >
-                  Demo-Referenztrack laden (La Roux)...
                 </button>
               )}
               <button
@@ -570,16 +547,15 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             <span className={`w-1.5 h-1.5 rounded-full ${chatbotOpen ? 'bg-emerald-400 animate-ping' : 'bg-[#00a2ff]'}`} />
           </button>
         )}
-        {onOpenXmlCollection && (
-          <button
-            onClick={onOpenXmlCollection}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#181a24] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2c2f3f] text-[10px] transition-colors"
-            title="Rekordbox XML Track-Auswahl Pop-up öffnen (Schnellzugriff auf alle importierten Tracks)"
-          >
-            <Disc size={11} className="text-[#00e5ff]" />
-            <span className="font-semibold tracking-wide">XML Track-Auswahl</span>
-          </button>
-        )}
+        <button
+          onClick={onImportTracks}
+          disabled={trackImportLoading}
+          className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#181a24] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2c2f3f] text-[10px] transition-colors disabled:opacity-50"
+          title="Eingebettete Rekordbox-Sammlung durchsuchen und Originaltrack laden"
+        >
+          <Disc size={11} className="text-[#00e5ff]" />
+          <span className="font-semibold tracking-wide">{trackImportLoading ? 'SAMMLUNG…' : 'TRACK-IMPORT'}</span>
+        </button>
         {onOpenDatabaseInspector && (
           <button
             onClick={onOpenDatabaseInspector}
