@@ -1,0 +1,38 @@
+# TEMPORÄRER DIAGNOSE-WORKFLOW (Session arena/01a0efaf-airdox-editor):
+# Die nächtliche „Komplette Test-Suite" ist seit ~10 Tagen rot, und
+# workflow_dispatch steht dem Token nicht zur Verfügung. Dieser Probe läuft
+# bei jedem Push auf diesem Zweig und führt exakt den Nachtlauf-Schritt aus;
+# fehlgeschlagene Tests erscheinen über run-tests.mjs als ::error-Annotations
+# (lesbar über die Checks-API, unabhängig vom gesperrten Blob-Storage).
+# Nach grünem Lauf wird diese Datei wieder entfernt.
+name: Full-Suite-Probe
+
+on:
+  push:
+    branches: ['arena/01a0efaf-airdox-editor']
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    name: Komplette Test-Suite (Probe, entspricht Nachtlauf)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js aufsetzen
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Manifest prüfen (package.json)
+        run: npm run test:package
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Komplette Test-Suite
+        run: npm test
