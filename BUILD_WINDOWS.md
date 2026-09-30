@@ -13,11 +13,17 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 1. **Node.js** (LTS, ≥ 20) – https://nodejs.org
 2. **Git** (für den Klon aus GitHub)
+3. **Visual Studio Build Tools** mit „Desktopentwicklung mit C++“ – nur falls
+   `npm ci` für `better-sqlite3-multiple-ciphers` kein fertiges Binary laden
+   kann. Der GitHub-Workflow `windows-latest` bringt die Build Tools bereits
+   mit; auf einem normalen Entwicklerrechner genügt in der Regel der
+   mitgelieferte Prebuild.
 
-Der Basis-Build benötigt **kein** Visual Studio: XML-/ANLZ-Import, Audio-Editor
-und Export funktionieren vollständig. Das optionale SQLCipher-Modul ist per
-`"npmRebuild": false` abgeschaltet, sodass der Build auch in Pfaden **mit
-Leerzeichen** und ohne C++-Toolchain durchläuft.
+`better-sqlite3-multiple-ciphers` ist **Pflichtabhängigkeit** (nicht mehr
+`optionalDependencies`): Ohne sie kann die App keine Rekordbox-`master.db`
+lesen, und der Track-Import liefert `SQLCIPHER_UNAVAILABLE`. Das ist eine
+bewusste Entscheidung – ein still fehlendes natives Modul war die Ursache
+dafür, dass „erfolgreiche“ Builds trotzdem kaputt ausgeliefert wurden.
 
 ## Bauen (PowerShell – Windows)
 
@@ -38,21 +44,57 @@ beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
 Tag (z. B. `git tag v0.4.1 && git push --tags`) wird automatisch ein GitHub
 Release mit den `.exe`-Dateien erzeugt.
 
-## Optional: Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
+## Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 
-Der DB-Import (`better-sqlite3-multiple-ciphers`) ist optional. Ohne ihn bleibt
-der XML-/ANLZ-Import voll funktionsfähig; die App meldet den nicht verfügbaren
-DB-Import nachvollziehbar. Zum Aktivieren:
+Der DB-Import läuft über `better-sqlite3-multiple-ciphers`. Das Modul wird
+automatisch für die Electron-Version des Builds kompiliert – **es ist kein
+manueller Schritt nötig**:
 
-1. Visual Studio **Build Tools** mit „Desktopentwicklung mit C++“ installieren.
-2. Modul für Electron kompilieren und erneut bauen:
-   ```powershell
-   npm run rebuild:electron
-   npm run package:win
-   ```
+| Schritt | Was passiert |
+| --- | --- |
+| `npm run desktop` | baut das native Modul für die Entwicklungs-Electron-Version (stamp-basiert, wiederholt sich nur bei Versionswechsel) und startet Electron |
+| `npm run package:win` | `electron-builder` baut das Modul neu (`npmRebuild: true`) und führt `scripts/electron-builder-hooks.cjs` aus |
+| `beforePack` | baut gezielt nur das SQLCipher-Modul und **lädt es in der echten Electron-Laufzeit** (`ELECTRON_RUN_AS_NODE`); Fehler ⇒ Build bricht ab |
+| `afterPack` | prüft `app.asar`, prüft das native Binary im `app.asar.unpacked` und **lädt das gepackte Modul in Electron**; Fehler ⇒ Build bricht ab |
+
+Ein Build läuft also nicht mehr „erfolgreich“ durch, obwohl SQLCipher
+anschließend fehlt.
+
+### Manuelle Befehle (Diagnose)
+
+```powershell
+npm run rekordbox:native:rebuild   # Modul für Electron neu bauen (--force)
+npm run rekordbox:native:check     # nur melden, ob ein Rebuild nötig ist
+npm run rekordbox:preflight        # Laufzeitnachweis in Node (Preflight)
+npm run rekordbox:doctor -- 142225026   # vollständige Gate-Diagnose
+npm run test:rekordbox:runtime -- 142225026   # echter Windows-Lauf
+```
+
+`npm run rekordbox:doctor` druckt je Glied der Kette einen Status und ändert
+niemals eine Datei. `npm run test:rekordbox:runtime` läuft ausschließlich unter
+Windows; ohne installiertes Rekordbox ist das ein klarer `SKIP`, mit
+Rekordbox ein harter Fehler.
+
+### Bibliothek an einem ungewöhnlichen Ort
+
+`AIRODOX_REKORDBOX_DB` (durch `;` getrennt) überschreibt die Suche in den
+Pioneer-AppData-Ordnern, z. B. für eine externe Library:
+
+```powershell
+$env:AIRODOX_REKORDBOX_DB = 'E:\Rekordbox\master.db'
+npm run rekordbox:doctor -- 142225026
+```
 
 ## Hinweise
 
+- **Vollständigkeit der ANLZ-Spezifikation:** `src/rekordbox/anlzStructure.ts`
+  ist die einzige Quelle des ANLZ-Container-Formats. Renderer und
+  Electron-Hauptprozess benutzen dieselbe Implementierung; für den
+  Hauptprozess erzeugt `npm run build:anlz-structure` das Spiegelmodul
+  `electron/generated/anlzStructure.cjs` (wird mit committet). Die CI prüft mit
+  `npm run build:anlz-structure:check`, dass das Spiegelmodul nicht veraltet
+  ist, und `tests/anlz-structure-parity.test.ts` beweist die Gleichheit beider
+  Implementierungen über dieselben Fixtures.
 - **Read-Only-Garantie:** Original-Audio, XML, ANLZ und Datenbanken werden
   ausschließlich lesend geöffnet; Exporte/Projektdateien als neue Datei
   gespeichert (`electron/pathGuard.cjs`).

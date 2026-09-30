@@ -33,6 +33,32 @@ export interface WaveformProvenance {
 }
 
 /**
+ * Proven waveform of a Rekordbox ANLZ container, as accepted by the master.db
+ * gate and decoded by the renderer parser from the very same bytes.
+ */
+export interface RekordboxWaveformProvenance {
+  /** Section tag the peaks were decoded from (PWAV / PWV2..PWV7). */
+  tag: string;
+  /** Number of waveform buckets. Must equal the decoded analysis length. */
+  buckets: number;
+  entryBytes: number;
+  style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
+  /** Highest decoded peak (0 would mean "no usable amplitude data"). */
+  peakMax: number;
+}
+
+/**
+ * Where the markers shown for a track came from. The order is the enforced
+ * priority: ANLZ PCO2 → ANLZ PCOB → djmdCue → Rekordbox XML.
+ */
+export type RekordboxCueSource =
+  | 'ANLZ_PCO2'
+  | 'ANLZ_PCOB'
+  | 'DJMD_CUE'
+  | 'REKORDBOX_XML'
+  | 'NONE';
+
+/**
  * Read-only reference to an actual Rekordbox ANLZ container.  The file is
  * never modified; its path is kept so the native waveform can be reopened
  * without querying master.db again.
@@ -52,6 +78,25 @@ export interface AnalysisFileReference {
    */
   sourceDuration?: number;
   format?: 'DAT' | 'EXT' | '2EX' | 'ANLZ';
+  // --- Master-DB-Gate provenance (electron/masterDbGate.cjs) ---------------
+  /** Rekordbox TrackID from the embedded XML (= djmdContent.ID). */
+  rekordboxTrackId?: string;
+  /** djmdContent.ID the gate resolved the TrackID to. */
+  contentId?: string;
+  /** Read-only database file the content row was read from. */
+  databasePath?: string;
+  databaseType?: 'MASTER_DB' | 'ONE_LIBRARY';
+  /** Source audio path recorded in the ANLZ PPTH section. */
+  ppthPath?: string;
+  /** Read-only original audio path proven by the gate. */
+  originalPath?: string;
+  /** Waveform section + bucket count the gate proved decodable. */
+  waveform?: RekordboxWaveformProvenance;
+  /** Marker source that ended up on the deck. */
+  cueSource?: RekordboxCueSource;
+  /** 'OK' – a track is only ever loaded after a green gate. */
+  gateCode?: 'OK';
+  gateVerifiedAt?: number;
 }
 
 export interface SourcedValue<T> {
@@ -121,6 +166,25 @@ export interface ExtractedDatabaseRecord {
   checksum: string;
   extractedAt: number;
   filePath?: string;
+  // --- Master-DB-Gate provenance (electron/masterDbGate.cjs) ---------------
+  /** Rekordbox TrackID (djmdContent.ID) the gate resolved. */
+  rekordboxTrackId?: string;
+  contentId?: string;
+  /** master.db / exportLibrary.db that was opened read-only. */
+  databasePath?: string;
+  databaseType?: 'MASTER_DB' | 'ONE_LIBRARY';
+  /** Rekordbox-ANLZ file that produced the waveform. */
+  analysisPath?: string;
+  /** Section tag the waveform was decoded from. */
+  waveformTag?: string;
+  /** Source audio path recorded in the ANLZ PPTH section. */
+  ppthPath?: string;
+  /** Read-only original audio path proven by the gate. */
+  originalPath?: string;
+  /** Marker source that ended up on the deck. */
+  cueSource?: RekordboxCueSource;
+  /** 'OK' – a failed gate never produces a record. */
+  gateCode?: 'OK';
 }
 
 export interface LoopPoint {

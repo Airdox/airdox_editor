@@ -7,8 +7,8 @@
  *   TrackID (eingebettete XML)
  *        → master.db / exportLibrary.db   (read-only, SQLCipher)
  *        → djmdContent (ID, FolderPath, FileNameL, AnalysisDataPath)
- *        → Rekordbox-ANLZ                (read-only, Struktur- + Waveform-Check)
- *        → Original-Audio                (read-only)
+ *        → Rekordbox-ANLZ                (read-only, Struktur- + Waveform-Dekoder)
+ *        → Original-Audio                (read-only, PPTH-konsistent)
  *
  * Es gibt bewusst keinen Fallback. Fehlt ein Glied der Kette, liefert der
  * Gate einen harten Fehlercode – eine lokal berechnete Ersatz-Waveform ist
@@ -16,16 +16,27 @@
  *
  * Zustandsmaschine (GATE_CODES):
  *   OK
- *   MASTER_DB_NOT_FOUND        – keine master.db/exportLibrary.db auffindbar
- *   SQLCIPHER_UNAVAILABLE      – better-sqlite3-multiple-ciphers fehlt
- *   MASTER_DB_OPEN_FAILED      – Datei nicht entschlüssel-/lesbar
- *   MASTER_DB_SCHEMA_INVALID   – Tabellen/Spalten djmdContent unbrauchbar
+ *   MASTER_DB_NOT_FOUND          – keine master.db/exportLibrary.db auffindbar
+ *   SQLCIPHER_UNAVAILABLE        – better-sqlite3-multiple-ciphers fehlt/ABI-Fehler
+ *   MASTER_DB_OPEN_FAILED        – Datei nicht entschlüssel-/lesbar
+ *   MASTER_DB_SCHEMA_INVALID     – Tabellen/Spalten djmdContent unbrauchbar
  *   TRACK_NOT_FOUND_IN_MASTER_DB – TrackID in keiner Datenbank enthalten
- *   ANLZ_NOT_FOUND             – (AnalysisDataPath-)Datei fehlt
- *   ANLZ_READ_FAILED           – ANLZ nicht lesbar / zu groß
- *   ANLZ_INVALID               – keine gültige ANLZ-Sektionsstruktur
- *   REKORDBOX_WAVEFORM_MISSING – gültige ANLZ ohne PWAV/PWV2..PWV7-Abschnitt
- *   ORIGINAL_AUDIO_NOT_FOUND   – Originaldatei fehlt oder Pfad ungültig
+ *   ANLZ_NOT_FOUND               – (AnalysisDataPath-)Datei fehlt
+ *   ANLZ_READ_FAILED             – ANLZ nicht lesbar / zu groß
+ *   ANLZ_INVALID                 – keine gültige ANLZ-Sektionsstruktur
+ *   REKORDBOX_WAVEFORM_MISSING   – gültige ANLZ ohne PWAV/PWV2..PWV7-Abschnitt
+ *   ANLZ_WAVEFORM_UNREADABLE     – Waveform-Abschnitt vorhanden, aber nicht dekodierbar
+ *   ANLZ_SOURCE_MISMATCH         – ANLZ-PPTH und der gewählte Originalpfad sind
+ *                                  nicht dieselbe Datei (die Waveform gehörte zu
+ *                                  einer anderen Datei)
+ *   ORIGINAL_AUDIO_NOT_FOUND     – Originaldatei fehlt oder Pfad ungültig
+ *
+ * Die ANLZ-Struktur wird NICHT in diesem Modul definiert: Sektions-Walk,
+ * PPTH-Decoder und Waveform-Layout stammen aus `src/rekordbox/anlzStructure.ts`
+ * und liegen hier als generiertes CommonJS-Spiegelmodul vor
+ * (`npm run build:anlz-structure`). Damit gilt für Gate und Renderer
+ * wörtlich dasselbe: was der Gate als "Waveform akzeptiert", dekodiert der
+ * Renderer exakt so – und umgekehrt.
  *
  * Das Modul ist Electron-frei. Sämtliche I/O-Abhängigkeiten sind injectbar,
  * damit tests/master-db-gate.test.mjs die vollständige Zustandsmaschine ohne
@@ -37,6 +48,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 const dbReader = require('./dbReader.cjs');
+const anlz = require('./generated/anlzStructure.cjs');
 
 const GATE_CODES = Object.freeze([
   'OK',
@@ -49,12 +61,14 @@ const GATE_CODES = Object.freeze([
   'ANLZ_READ_FAILED',
   'ANLZ_INVALID',
   'REKORDBOX_WAVEFORM_MISSING',
+  'ANLZ_WAVEFORM_UNREADABLE',
+  'ANLZ_SOURCE_MISMATCH',
   'ORIGINAL_AUDIO_NOT_FOUND',
 ]);
 
 /** Waveform sections of the documented ANLZ format (Deep Symmetry). */
-const WAVEFORM_TAGS = Object.freeze(['PWAV', 'PWV2', 'PWV3', 'PWV4', 'PWV5', 'PWV6', 'PWV7']);
-const ANLZ_EXTENSIONS = Object.freeze(['.dat', '.ext', '.2ex']);
+const WAVEFORM_TAGS = anlz.WAVEFORM_TAGS;
+const ANLZ_EXTENSIONS = anlz.ANLZ_EXTENSIONS;
 /** Same hard cap as the existing read-analysis-file IPC channel. */
 const MAX_ANALYSIS_BYTES = 1024 * 1024 * 1024;
 
@@ -85,6 +99,18 @@ function toLocalPath(location) {
   }
 }
 
+/**
+ * True for a Rekordbox device-internal location such as
+ * `file://localhost//contents_4136090260/unknownartist/.../track.mp3`.
+ * Those entries describe a library on a connected player/drive; they are not a
+ * local file and must never be loaded as one.
+ */
+function isDeviceInternalLocation(location) {
+  if (typeof location !== 'string' || !location) return false;
+  const withoutScheme = location.replace(/^file:\/\/localhost/i, '').replace(/^file:/i, '');
+  return /^\/+contents_\d+/i.test(withoutScheme.replace(/\\/g, '/'));
+}
+
 /** Mirrors dbParser.joinWindowsPath for FolderPath + FileNameL rows. */
 function joinWindowsPath(folder, fileName) {
   if (!fileName) return folder || undefined;
@@ -93,90 +119,34 @@ function joinWindowsPath(folder, fileName) {
   return folder.replace(/[\\/]+$/, '') + sep + fileName;
 }
 
-function isPrintableTag(value) {
-  return typeof value === 'string' && /^[\x20-\x7e]{4}$/.test(value);
-}
-
-function hasWaveformSection(tags) {
-  return tags.some((tag) => WAVEFORM_TAGS.includes(tag));
-}
-
 /**
- * Walks the ANLZ section envelope exactly like src/rekordbox/anlzParser.ts:
- * 4-byte tag, u32-BE @+4 (header length), u32-BE @+8 (total section length,
- * with @+4 as fallback for legacy writers), PMAI file header skipped first.
- *
- * Returns { valid, tags, hasWaveform, truncated, ppthPath?, reason? }.
- * `ppthPath` is the source-audio path recorded by Rekordbox inside the PPTH
- * section (UTF-16BE); `valid` means at least one section could be walked –
- * the full binary parse (waveform peaks, cues, grid) still happens
- * renderer-side with parseAnlzBinary.
+ * Canonical comparison key for media paths. Mirrors
+ * `normalizeMediaPathForComparison` in src/App.tsx so that the gate and the
+ * renderer can never disagree about "is this the same file".
  */
-function scanAnlzSections(input) {
-  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input || []);
-  const base = { tags: [], hasWaveform: false, truncated: false, ppthPath: undefined };
-  const len = buffer.length;
-
-  if (len < 12) {
-    return { ...base, valid: false, reason: `ANLZ-Datei ist kleiner als 12 Bytes (${len}).` };
-  }
-
-  let offset = 0;
-  const firstTag = buffer.toString('ascii', 0, 4);
-  if (firstTag === 'PMAI') {
-    const headerLength = buffer.readUInt32BE(4);
-    offset = headerLength >= 12 && headerLength <= len ? headerLength : 0;
-  } else if (!isPrintableTag(firstTag)) {
-    return { ...base, valid: false, reason: 'Erstes ANLZ-Sektionstag ist kein lesbares 4-Byte-Tag.' };
-  }
-
-  const tags = [];
-  let ppthPath;
-  const done = (reason) => ({
-    ...base,
-    tags,
-    ppthPath,
-    hasWaveform: hasWaveformSection(tags),
-    truncated: tags.length > 0,
-    valid: tags.length > 0,
-    ...(tags.length > 0 ? {} : { reason }),
-  });
-
-  while (offset + 12 <= len) {
-    const tag = buffer.toString('ascii', offset, offset + 4);
-    if (!isPrintableTag(tag)) {
-      return done('Unerwartete Bytes statt eines ANLZ-Sektionstags.');
-    }
-    const lenHeader = buffer.readUInt32BE(offset + 4);
-    const lenTag = buffer.readUInt32BE(offset + 8);
-    let chunkSize = lenTag;
-    if (chunkSize < 12 || offset + chunkSize > len) chunkSize = lenHeader;
-    if (chunkSize < 12 || offset + chunkSize > len) {
-      return done('Sektionslänge der ANLZ-Datei ist ungültig.');
-    }
-    if (tag === 'PPTH' && offset + 0x10 <= offset + chunkSize && !ppthPath) {
-      const byteLength = buffer.readUInt32BE(offset + 0x0c);
-      if (byteLength > 0 && byteLength <= chunkSize - 0x10) {
-        let decoded = '';
-        const units = byteLength >= 2 ? Math.floor(byteLength / 2) : byteLength;
-        for (let i = 0; i < units; i++) {
-          const code = byteLength >= 2
-            ? buffer.readUInt16BE(offset + 0x10 + i * 2)
-            : buffer.readUInt8(offset + 0x10 + i);
-          if (code === 0) break;
-          decoded += String.fromCharCode(code);
-        }
-        if (decoded.trim()) ppthPath = decoded.replace(/\0+$/, '').trim();
+function normalizeMediaPath(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  let normalized = value.trim();
+  try {
+    if (/^file:/i.test(normalized)) {
+      const url = new URL(normalized);
+      let pathname = decodeURIComponent(url.pathname);
+      if (url.hostname && url.hostname.toLowerCase() !== 'localhost') {
+        pathname = `//${url.hostname}${pathname}`;
       }
+      normalized = pathname;
     }
-    tags.push(tag);
-    offset += chunkSize;
+  } catch {
+    // A malformed URL cannot be a positive identity match.
   }
+  normalized = normalized.replace(/^\/([A-Za-z]:\/)/, '$1');
+  return normalized.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase();
+}
 
-  if (tags.length === 0) {
-    return { ...base, valid: false, reason: 'Keine ANLZ-Sektionen konnten gelesen werden.' };
-  }
-  return { ...base, tags, ppthPath, hasWaveform: hasWaveformSection(tags), truncated: false, valid: true };
+function isSameMediaPath(left, right) {
+  const a = normalizeMediaPath(left);
+  const b = normalizeMediaPath(right);
+  return Boolean(a && b && a === b);
 }
 
 function fail(code, reason, extra = {}) {
@@ -351,7 +321,9 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  const scan = scanAnlzSections(Buffer.isBuffer(analysisBytes) ? analysisBytes : Buffer.from(analysisBytes || []));
+  // Gemeinsamer Walk mit dem Renderer-Parser (electron/generated/anlzStructure.cjs
+  // ist das Spiegelmodul von src/rekordbox/anlzStructure.ts).
+  const { scan, columns, summary } = anlz.decodeAnlzWaveform(analysisBytes);
   if (!scan.valid) {
     return fail('ANLZ_INVALID', `${analysisPath}: ${scan.reason || 'Ungültige ANLZ-Struktur.'}`, {
       ...dbContext,
@@ -365,17 +337,53 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       { ...dbContext, content }
     );
   }
+  // Der Gate akzeptiert nicht nur "irgendein PWV-Tag", sondern die Welleform,
+  // die der Renderer später exakt so dekodieren wird.
+  if (!columns || !summary) {
+    return fail(
+      'ANLZ_WAVEFORM_UNREADABLE',
+      `Die ANLZ-Datei enthält einen Waveform-Abschnitt (${scan.tags.filter((t) => WAVEFORM_TAGS.includes(t)).join(', ')}), dessen Layout nicht lesbar ist: ${analysisPath}`,
+      { ...dbContext, content }
+    );
+  }
+  if (summary.length <= 0 || summary.nonZeroBuckets <= 0) {
+    return fail(
+      'ANLZ_WAVEFORM_UNREADABLE',
+      `Der Waveform-Abschnitt ${scan.waveform.tag} enthält keine verwertbaren Amplitudenwerte (0 von ${summary.length} Buckets): ${analysisPath}`,
+      { ...dbContext, content }
+    );
+  }
+
+  const waveformInfo = {
+    tag: scan.waveform.tag,
+    buckets: summary.length,
+    entryBytes: scan.waveform.entryBytes,
+    style: scan.waveform.style,
+    peakMax: Number(summary.peakMax.toFixed(6)),
+  };
 
   // --- Original-Audio (read-only) ------------------------------------------
   // Kandidatenreihenfolge: XML-Location zuerst (Bibliothekspfad), dann der
-  // master.db-Pfad (FolderPath + FileNameL). Letzterer ist zwingend, wenn die
-  // XML einen geräte-internen Pfad enthält (z. B. file://localhost//contents_…)
-  // oder die XML-Location nicht (mehr) existiert.
+  // master.db-Pfad (FolderPath + FileNameL), zuletzt die ANLZ-PPATH-Angabe.
+  // Geräte-interne XML-Locations (`file://localhost//contents_…`) sind keine
+  // lokale Datei und werden nie als Original-Audio geladen.
   const originalCandidates = [];
+  const rejected = [];
   const pushCandidate = (value, source) => {
+    if (isDeviceInternalLocation(value)) {
+      rejected.push({
+        path: String(value),
+        source,
+        reason: 'Rekordbox-Gerätepfad (file://localhost//contents_…); keine lokale Datei.',
+      });
+      return;
+    }
     const resolved = toLocalPath(value);
-    if (!resolved) return;
-    const normalized = resolved.replace(/\\/g, '/').toLowerCase();
+    if (!resolved) {
+      rejected.push({ path: String(value), source, reason: 'Kein lokaler Dateipfad.' });
+      return;
+    }
+    const normalized = normalizeMediaPath(resolved);
     if (originalCandidates.some((candidate) => candidate.normalized === normalized)) return;
     originalCandidates.push({ path: resolved, source, normalized });
   };
@@ -384,25 +392,17 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
   if (dbOriginal) pushCandidate(dbOriginal, 'MASTER_DB');
   if (scan.ppthPath) pushCandidate(scan.ppthPath, 'ANLZ_PPTH');
 
-  // Die Waveform wurde für die PPTH-Quelldatei berechnet; wenn XML und
-  // master.db auseinanderfallen (z. B. umgezogene Bibliothek, veraltete
+  // Die Waveform wurde für die PPTH-Quelldatei berechnet. Wenn XML und
+  // master.db auseinanderfallen (umgezogene Bibliothek, veraltete
   // Export-Location), bekommt der mit PPTH übereinstimmende Kandidat Vorrang.
   if (scan.ppthPath) {
     const resolvedPpth = toLocalPath(scan.ppthPath);
-    if (resolvedPpth) {
-      const ppthNorm = resolvedPpth.replace(/\\/g, '/').toLowerCase();
+    if (resolvedPpth && !isDeviceInternalLocation(scan.ppthPath)) {
+      const ppthNorm = normalizeMediaPath(resolvedPpth);
       originalCandidates.sort(
         (a, b) => Number(b.normalized === ppthNorm) - Number(a.normalized === ppthNorm)
       );
     }
-  }
-
-  if (originalCandidates.length === 0) {
-    return fail(
-      'ORIGINAL_AUDIO_NOT_FOUND',
-      'Weder XML-Location noch FolderPath/FileNameL ergeben einen Original-Audiopfad.',
-      { ...dbContext, content }
-    );
   }
 
   let originalPath = null;
@@ -419,15 +419,38 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
         break;
       }
       originalErrors.push(`${candidate.path}: verweist nicht auf eine Datei`);
+      rejected.push({ path: candidate.path, source: candidate.source, reason: 'Kein regulärer Dateieintrag.' });
     } catch (error) {
       originalErrors.push(`${candidate.path}: ${error.message || error}`);
+      rejected.push({ path: candidate.path, source: candidate.source, reason: error.message || String(error) });
     }
   }
+
+  // Konsistenzbeweis: die geladene Waveform gehört zu genau der Datei, für die
+  // Rekordbox die ANLZ geschrieben hat. Ohne diesen Beweis würde der Editor die
+  // Waveform eines anderen Tracks anzeigen.
+  if (scan.ppthPath && !isDeviceInternalLocation(scan.ppthPath)) {
+    if (!originalPath) {
+      return fail(
+        'ORIGINAL_AUDIO_NOT_FOUND',
+        `Original-Audio nicht gefunden: ${originalErrors.join(' | ') || 'keine Kandidaten'}`,
+        { ...dbContext, content, ppthPath: scan.ppthPath, rejected }
+      );
+    }
+    if (!isSameMediaPath(originalPath, scan.ppthPath)) {
+      return fail(
+        'ANLZ_SOURCE_MISMATCH',
+        `Die ANLZ-Datei wurde für "${scan.ppthPath}" erzeugt, der Gate hat aber "${originalPath}" gewählt. Eine Waveform eines anderen Tracks darf nicht geladen werden.`,
+        { ...dbContext, content, ppthPath: scan.ppthPath, original: { path: originalPath, source: originalSource }, rejected }
+      );
+    }
+  }
+
   if (!originalPath) {
     return fail(
       'ORIGINAL_AUDIO_NOT_FOUND',
-      `Original-Audio nicht gefunden: ${originalErrors.join(' | ')}`,
-      { ...dbContext, content }
+      `Original-Audio nicht gefunden: ${originalErrors.join(' | ') || 'keine Kandidaten'}`,
+      { ...dbContext, content, rejected }
     );
   }
 
@@ -443,16 +466,25 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       tags: scan.tags,
       hasWaveform: true,
       truncated: Boolean(scan.truncated),
+      /** Proven waveform: exactly what the renderer decodes from this file. */
+      waveform: waveformInfo,
+      /** Source audio path recorded by Rekordbox inside the ANLZ. */
+      ppthPath: scan.ppthPath,
     },
     original: {
       path: originalPath,
       source: originalSource,
       xmlLocation: requestedMedia || undefined,
       databasePath: dbOriginal || undefined,
+      ppthPath: scan.ppthPath,
       size: originalStat.size,
       modifiedAt: originalStat.mtimeMs,
     },
+    /** djmdCue is the *last* marker source: ANLZ PCO2/PCOB always wins. */
     cues: Array.isArray(result.cues) ? result.cues : [],
+    cueSource: 'DJMD_CUE',
+    /** Candidates the gate deliberately rejected (device path, wrong file). */
+    rejected,
   };
 }
 
@@ -461,7 +493,12 @@ module.exports = {
   WAVEFORM_TAGS,
   ANLZ_EXTENSIONS,
   resolveTrackFromMasterDb,
-  scanAnlzSections,
+  /** Re-exported from the shared ANLZ structure module (renderer parity). */
+  scanAnlzSections: anlz.scanAnlzSections,
+  decodeAnlzWaveform: anlz.decodeAnlzWaveform,
   toLocalPath,
+  normalizeMediaPath,
+  isSameMediaPath,
+  isDeviceInternalLocation,
   joinWindowsPath,
 };

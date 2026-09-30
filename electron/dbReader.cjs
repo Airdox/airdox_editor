@@ -448,9 +448,26 @@ function findDatabaseFiles(appDir) {
 /**
  * Scans the standard Pioneer/Rekordbox application data directories for
  * master.db / exportLibrary.db (read-only).
+ *
+ * `AIRODOX_REKORDBOX_DB` (durch `;` getrennt) überschreibt die Suche für
+ * Bibliotheken, die an einem ungewöhnlichen Ort liegen (externe Library,
+ * Netzwerkpfad, Diagnose eines Fremdrechners). Auch dieser Pfad wird
+ * ausschließlich lesend geöffnet.
  */
 function locateRekordboxDatabases() {
   const candidates = [];
+  const override = (process.env.AIRODOX_REKORDBOX_DB || '')
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const entry of override) {
+    const cleaned = entry.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1');
+    if (!fs.existsSync(cleaned) || !fs.statSync(cleaned).isFile()) continue;
+    const base = path.basename(cleaned).toLowerCase();
+    const kind = base === 'master.db' ? 'MASTER_DB' : base === 'exportlibrary.db' ? 'ONE_LIBRARY' : null;
+    if (kind) candidates.push({ path: cleaned, kind, label: `${base} (AIRODOX_REKORDBOX_DB)` });
+  }
+
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
     for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {

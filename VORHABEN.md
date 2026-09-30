@@ -30,7 +30,7 @@ Die lokale Rekordbox-6/7-Bibliothek (`master.db`) und die OneLibrary-Exportdaten
 - `electron/dbReader.cjs`: deobfusciert die dokumentierten Community-Schlüssel (`402fd…` master.db, `r8gd…` OneLibrary), öffnet die Datenbank mit SQLite-`readonly`, liest `djmdContent`/`djmdCue` (+ Artist/Album/Genre/Key/Label/Playlists) bzw. die OneLibrary-Tabellen (`content`, `cue`, `artist`, …) und schließt sie sofort wieder.
 - `src/rekordbox/dbParser.ts`: normalisiert beide Schemata (BPM × 100, Rating 0–255/0–5, ms/µs-Zeitstempel) auf denselben Collection-Vertrag wie der XML-Import; Cues, Hot Cues und Loops werden inkl. Takt/Beat-Alignment übernommen, eigene Audioberechnungen entstehen nicht.
 - Quellen werden wahlweise per Windows-Dateidialog oder über die automatische Ordnersuche (`Pioneer\rekordbox7|rekordbox6|rekordbox` + `rekordboxAgent/storage/options.json`) geladen.
-- Natives Modul: `better-sqlite3-multiple-ciphers` als optionale Abhängigkeit; `npm run rebuild:electron` baut es für Electron. Falls das Modul fehlt, bleibt der XML-Pfad voll funktionsfähig und die App meldet den nicht verfügbaren Datenbank-Import nachvollziehbar.
+- Natives Modul: `better-sqlite3-multiple-ciphers` ist **Pflichtabhängigkeit** (nicht mehr optional) und wird automatisch für die verwendete Electron-Version gebaut – siehe Phase 6.
 
 ## Phase 4 – Desktop-Export- & Projekt-Pfad ✅
 
@@ -55,7 +55,90 @@ TRACK IMPORT → eingebettete rekordbox_export2.xml (kein Dateidialog)
 ```
 
 - **Eingebettete XML statt Dateidialog.** Der Track-Import lädt `rekordbox_export2.xml` (10,5 MB, 12.246 Tracks) als App-Ressource: in der Desktop-App über `readBundledRekordboxXml()` aus `resources/rekordbox/rekordbox_export2.xml` (electron-builder `extraResources`), im Browser/Dev-Bundel als Vite-Asset derselben Datei. Externer XML-Import per Menü, Dateidialog oder Drag & Drop bleibt deaktiviert; der Parser (`src/rekordbox/xmlParser.ts`) bleibt unverändert im Einsatz.
-- **`electron/masterDbGate.cjs` (verbindlich).** Pro Track, read-only: `TrackID` → `djmdContent` (gezielte Einzelzeilen-Abfrage `openContentRow`, inkl. `djmdCue`) → `AnalysisDataPath` → ANLZ-Struktur- und Waveform-Check (`PWAV`/`PWV2`–`PWV7`) → Original-Audio. Die XML-Location hat Vorrang als Originalpfad; fällt sie aus (z. B. geräteinterne `file://localhost//contents_…`-Pfade), übernimmt `FolderPath`+`FileNameL` aus der `master.db`.
-- **Zustandsmaschine statt Fallback.** Fehlercode-Status statt stiller Ersatzanalyse: `MASTER_DB_NOT_FOUND`, `SQLCIPHER_UNAVAILABLE`, `MASTER_DB_OPEN_FAILED`, `MASTER_DB_SCHEMA_INVALID`, `TRACK_NOT_FOUND_IN_MASTER_DB`, `ANLZ_NOT_FOUND`, `ANLZ_READ_FAILED`, `ANLZ_INVALID`, `REKORDBOX_WAVEFORM_MISSING`, `ORIGINAL_AUDIO_NOT_FOUND`. `handleSelectTrackFromXml()` bricht bei `gate.ok === false` ab und erzeugt nie `analyzeAudioBuffer`/`LOCAL_ANALYSIS`; Waveform, Beatgrid, Cues und Phrasen stammen ausschließlich aus ANLZ (`DataOrigin.REKORDBOX_ANLZ`), XML oder – als letzte Marker-Quelle – `djmdCue` aus dem Gate. Als Originalpfad wird die XML-Location bevorzugt; weicht sie von der ANLZ-`PPTH`-Quelle ab (veraltete Export-Location, umgezogene Bibliothek), entscheidet die PPTH-Quelle – und nur wenn alle Kandidaten fehlen, gibt es `ORIGINAL_AUDIO_NOT_FOUND`.
+- **`electron/masterDbGate.cjs` (verbindlich).** Pro Track, read-only: `TrackID` → `djmdContent` (gezielte Einzelzeilen-Abfrage `openContentRow`, inkl. `djmdCue`) → `AnalysisDataPath` → ANLZ → Original-Audio. Der Gate akzeptiert nicht nur „die Datei sieht gültig aus“, sondern **dekodiert die Waveform selbst** und meldet Abschnitt, Bucket-Anzahl und Amplitudenhöhe; erst damit gilt die Kette als bestanden. Der ANLZ-Container wird über die gemeinsame Spezifikation `src/rekordbox/anlzStructure.ts` gelesen (siehe Phase 6).
+- **Zustandsmaschine statt Fallback.** Fehlercode-Status statt stiller Ersatzanalyse: `OK`, `MASTER_DB_NOT_FOUND`, `SQLCIPHER_UNAVAILABLE`, `MASTER_DB_OPEN_FAILED`, `MASTER_DB_SCHEMA_INVALID`, `TRACK_NOT_FOUND_IN_MASTER_DB`, `ANLZ_NOT_FOUND`, `ANLZ_READ_FAILED`, `ANLZ_INVALID`, `REKORDBOX_WAVEFORM_MISSING`, `ANLZ_WAVEFORM_UNREADABLE`, `ANLZ_SOURCE_MISMATCH`, `ORIGINAL_AUDIO_NOT_FOUND`. `handleSelectTrackFromXml()` bricht bei `gate.ok === false` ab und erzeugt nie `analyzeAudioBuffer`/`LOCAL_ANALYSIS`; Waveform, Beatgrid, Cues und Phrasen stammen ausschließlich aus ANLZ (`DataOrigin.REKORDBOX_ANLZ`), XML oder – als letzte Marker-Quelle – `djmdCue` aus dem Gate.
+- **Originalpfad = PPTH-Konsistenzbeweis.** Kandidaten sind XML-Location, `FolderPath`+`FileNameL` und ANLZ-`PPTH`. Geräteinterne Locations (`file://localhost//contents_…`) sind keine lokale Datei und werden nie geladen, sondern als verworfen dokumentiert. Existiert die `PPTH`-Quelle, hat sie Vorrang; passt keine existierende Datei zur `PPTH`, gibt es `ANLZ_SOURCE_MISMATCH` statt eine fremde Waveform anzuzeigen.
+- **Renderer gegen Gate abgeglichen.** Nach dem Dekodieren muss die Bucket-Anzahl des Renderers exakt der vom Gate gemeldeten entsprechen, sonst `ANLZ_WAVEFORM_UNREADABLE`. Damit ist „die Waveform, die der Gate freigibt“ dieselbe wie „die Waveform, die der Editor zeigt“.
 - **IPC-Brücke.** `rekordbox:resolve-track-gate` und `rekordbox:read-bundled-xml` (`electron/main.cjs`, `electron/preload.cjs`, `src/types/desktop.d.ts`); alle geprüften Quellpfade werden zusätzlich in der `OriginalSourceRegistry` registriert und bleiben damit vor Überschreibungen geschützt. Der lokale ANLZ-Pfadindex (`analysisRegistry.cjs`) bleibt als Cache für Projekt-Ladevorgänge erhalten, ist aber für den XML-Ladepfad nicht mehr die alleinige Quelle.
-- **Tests.** `tests/master-db-gate.test.mjs` (alle 11 Codes inkl. XML→master.db-Fallback, ANLZ-Sektionswalk exakt nach `anlzParser.ts`, Read-only-Kontrakt) und `tests/rekordbox-track-import-pipeline.test.ts` (kein XML-Dateidialog, echte Sammlung mit TrackID `142225026`, Gate-Verdrahtung preload→main→Gate, erzwungene `REKORDBOX_ANLZ`-Herkunft, kein `LOCAL_ANALYSIS`-Fallback im Ladepfad, electron-builder-Ressource).
+- **Tests.** `tests/master-db-gate.test.mjs` (Zustandsmaschine, XML→master.db-Fallback, ANLZ-Sektionswalk, Read-only-Kontrakt), `tests/rekordbox-track-import-pipeline.test.ts` (kein XML-Dateidialog, echte Sammlung mit TrackID `142225026`, Gate-Verdrahtung preload→main→Gate, erzwungene `REKORDBOX_ANLZ`-Herkunft, kein `LOCAL_ANALYSIS`-Fallback, electron-builder-Ressource), `tests/rekordbox-gate-hardening.test.mjs` und `tests/rekordbox-gate-integration.test.mjs` (siehe Phase 6).
+
+## Phase 6 – Laufzeit-Härtung: SQLCipher, Diagnose und ehrlicher Nachweis 🟡
+
+Ziel dieser Phase war **nicht** eine weitere Architektur, sondern der Nachweis,
+dass die Kette aus Phase 5 auf einem echten Windows-Rechner tatsächlich
+läuft – und dass der Build nicht erneut „erfolgreich“ sein kann, wenn sie es
+nicht tut.
+
+### Was implementiert ist
+
+- **Eine einzige ANLZ-Spezifikation für Gate und Renderer.**
+  `src/rekordbox/anlzStructure.ts` besitzt den Container-Walk (PMAI-Header,
+  Sektions-Envelope, Legacy-Längenregel), den `PPTH`-Decoder und das Layout
+  aller `PWAV`/`PWV2`–`PWV7`-Abschnitte samt Dekoder. `anlzParser.ts` importiert
+  es; der Electron-Hauptprozess nutzt das deterministisch erzeugte Spiegelmodul
+  `electron/generated/anlzStructure.cjs` (`npm run build:anlz-structure`).
+  Die CI prüft mit `npm run build:anlz-structure:check`, dass das Spiegelmodul
+  nicht veraltet ist, und `tests/anlz-structure-parity.test.ts` vergleicht beide
+  Implementierungen über neun Fixtures semantisch (Tags, PPTH, Waveform-Auswahl,
+  dekodierte Spalten Byte für Byte). Es gibt keine zweite, auseinanderlaufende
+  ANLZ-Spezifikation mehr.
+- **Gate und Renderer sind gekoppelt.** Der Gate dekodiert die Waveform und
+  liefert `analysis.waveform = { tag, buckets, entryBytes, style, peakMax }`. Der
+  Renderer muss `analysis.length === gate.analysis.waveform.buckets` liefern,
+  sonst `ANLZ_WAVEFORM_UNREADABLE`. Kein FFT, keine Beat-Erkennung, keine
+  Ersatzzählung – der gemeinsame Decoder liest ausschließlich Bytes, die
+  Rekordbox geschrieben hat.
+- **Original-Audio mit Konsistenzbeweis.** Kandidaten sind XML-Location,
+  `FolderPath`+`FileNameL` und `PPTH`; Gerätepfade (`file://localhost//contents_…`)
+  werden nie geladen. `PPTH` gewinnt, wenn es einen existierenden Kandidaten
+  eindeutig identifiziert; andernfalls `ANLZ_SOURCE_MISMATCH`. Die
+  Pfadnormalisierung ist mit `normalizeMediaPathForComparison()` im Renderer
+  identisch, damit beide Seiten nie unterschiedlich urteilen.
+- **Gate-Ergebnis landet am Track.** `analysisSource` und `databaseRecord`
+  tragen jetzt TrackID, `contentId`, Datenbankpfad/-typ, `AnalysisDataPath`,
+  `PPTH`, Originalpfad, Waveform-Herkunft, Cue-Quelle und `gateCode` –
+  erweitert, nicht als zweite parallele Struktur.
+- **Sichtbarer Herkunftsnachweis.** Nach dem Laden meldet die UI
+  `SOURCE / DATABASE / ANALYSIS / WAVEFORM / CUES / AUDIO` (kleine Leiste im
+  Track-Header plus Feedback-Dialog). Die GUI nennt bei Fehlern den echten
+  Gate-Code (`[MASTER_DB_NOT_FOUND]`, `[SQLCIPHER_UNAVAILABLE]`, …) statt
+  „Track konnte nicht geladen werden“.
+- **Diagnose.** `npm run rekordbox:doctor -- 142225026` druckt je Glied der
+  Kette einen Status (`Database`, `SQLCipher`, `djmdContent`, `Track`,
+  `AnalysisDataPath`, `ANLZ`, `ANLZ structure`, `Waveform`, `PPTH`,
+  `Original audio`, `FINAL`) und verändert niemals eine Datei.
+  `npm run rekordbox:preflight` prüft Electron-Version, Modul, Ladefähigkeit,
+  Cipher-Funktion und read-only geöffnete `master.db`.
+- **Echter Windows-Lauf.** `npm run test:rekordbox:runtime -- 142225026`
+  läuft `locateRekordboxDatabases() → openContentRow() → resolveTrackFromMasterDb()`
+  ohne jede Simulation gegen die installierte Bibliothek, prüft
+  `ok`, `code`, `dbType`, `content.id`, ANLZ-Welleform, PPTH-Konsistenz und
+  Cues – und vergleicht master.db, ANLZ und Original-Audio vor/nach dem Lauf
+  byteweise. Ohne Rekordbox-Installation: `SKIP`, nie ein falsches Grün.
+- **Paketierung kann nicht mehr ohne SQLCipher durchlaufen.**
+  `better-sqlite3-multiple-ciphers` ist Pflichtabhängigkeit, `npmRebuild` ist
+  `true`. `beforePack` baut gezielt nur dieses Modul und **lädt es in der echten
+  Electron-Laufzeit** (`ELECTRON_RUN_AS_NODE`); `afterPack` prüft `app.asar`, das
+  native Binary im `app.asar.unpacked` und lädt das **gepackte** Modul in
+  Electron. Jeder Fehler bricht den Build ab. `npm run desktop` baut das Modul
+  für die Entwicklungs-Electron-Version automatisch; beim Start protokolliert der
+  Hauptprozess den Laufzeitstatus.
+- **Niemand schreibt in Rekordbox-Quellen.** `tests/rekordbox-gate-hardening.test.mjs`
+  prüft für Gate, dbReader, ANLZ-Spiegel, Preflight, Doctor und Runtime-Test das
+  Fehlen jeder Schreib-API sowie das read-only Öffnen (`readonly: true`,
+  `fileMustExist: true`) und den Größen-/mtime-Vergleich der master.db.
+
+### Was noch offen ist (ehrlich)
+
+- Der **vollständige Windows-Lauf gegen eine echte Rekordbox-Installation**
+  (echte `master.db`, echte `SQLCipher`-Entschlüsselung, TrackID `142225026`,
+  echte ANLZ, echtes Original-Audio, GUI bis zur angezeigten Waveform) wurde in
+  dieser Umgebung **nicht** ausgeführt – dort ist weder Windows noch Rekordbox
+  vorhanden, und das native Modul ließ sich ohne Build-Toolchain nicht
+  kompilieren. Die Kette ist vorbereitet, automatisiert (`npm run
+  test:rekordbox:runtime`, `npm run rekordbox:doctor`) und in der CI als
+  eigener Schritt verankert; der Abschlussnachweis erfolgt auf einem
+  Windows-Rechner mit Rekordbox. **Phase 5/6 gilt erst dann als abgeschlossen,
+  wenn dieser Lauf grün ist.**
+- `rekordbox_export2.xml` liegt als App-Ressource bei; die Track-Auswahl lädt
+  nur den gewählten Track, nicht die ganze Bibliothek ins Deck.

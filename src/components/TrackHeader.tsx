@@ -148,6 +148,35 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
         </div>
       </div>
 
+      {/* Provenance strip: only present for tracks that passed the master.db gate.
+          Proves at a glance that waveform, beatgrid and cues come from Rekordbox
+          and that no local analysis was executed. */}
+      {track?.analysisSource?.gateCode === 'OK' && (
+        <div className="flex items-center gap-3 mt-1 text-[9px] font-mono uppercase tracking-wider text-neutral-500">
+          <span className="text-emerald-400/90" title="Datenherkunft der angezeigten Waveform">
+            SOURCE&nbsp;REKORDBOX ANLZ
+          </span>
+          <span title="Read-only geöffnete Rekordbox-Datenbank">
+            DATABASE&nbsp;{track.analysisSource.databaseType || 'MASTER_DB'}
+          </span>
+          <span title="Rekordbox-Analysecontainer (read only, unverändert)">
+            ANALYSIS&nbsp;{track.analysisSource.format || 'ANLZ'}
+          </span>
+          <span title="Dekodierter Rekordbox-Wellenformabschnitt">
+            WAVEFORM&nbsp;
+            {track.analysisSource.waveform
+              ? `${track.analysisSource.waveform.tag} ${track.analysisSource.waveform.buckets}`
+              : 'ANLZ'}
+          </span>
+          <span title="Marker-Quelle: ANLZ PCO2 → ANLZ PCOB → djmdCue → XML">
+            CUES&nbsp;{track.analysisSource.cueSource || 'NONE'}
+          </span>
+          <span className="text-emerald-400/70" title="Original-Audio wird ausschließlich lesend geöffnet">
+            AUDIO&nbsp;READ ONLY
+          </span>
+        </div>
+      )}
+
       {/* Lower row: Thin horizontal Track Overview Waveform */}
       <TrackOverview
         track={track}

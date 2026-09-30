@@ -13,6 +13,12 @@
  *  - PWAV / PWV2 / PWV3 / PWV4 / PWV5 / PWV6 / PWV7 waveform sections
  *  - PSSI  song structure / phrases (Rekordbox 6 exports are XOR-garbled)
  *
+ * The *container envelope* (PMAI header, section walk, PPTH string, waveform
+ * layouts and their decoding) lives in ./anlzStructure — the single module
+ * shared with the Electron master.db gate, so "the gate accepted this file"
+ * and "this parser decodes a waveform from it" describe the same bytes.
+ * This file only adds the section *content* decoders on top of that walk.
+ *
  * The byte layouts follow the independently documented format analysis by
  * the Deep Symmetry project (djl-analysis.deepsymmetry.org) and the Kaitai
  * Struct specification in crate-digger. Every value in ANLZ files is big
@@ -33,6 +39,15 @@ import {
   WaveformAnalysisData,
 } from '../types/rekordbox';
 import { logger } from '../utils/logger';
+import {
+  AnlzSection,
+  AnlzWaveformDescriptor,
+  decodeAnlzWaveformColumns,
+  readAnlzUtf16Be,
+  readAnlzWaveformSpec,
+  scanAnlzSections,
+  WAVEFORM_PRIORITY,
+} from './anlzStructure';
 
 export interface AnlzCueEntry {
   /** 0 = memory point, 1..N = hot cue number (A=1, B=2, ...) */
@@ -80,6 +95,10 @@ export interface AnlzParsedResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  /** Section tag the waveform was decoded from (PWAV / PWV2..PWV7). */
+  waveformTag?: string;
+  /** Highest decoded peak; 0 means the container carried no amplitude data. */
+  waveformPeakMax?: number;
   warnings: string[];
   /** Raw cue entries split by category; set from the highest-priority tag. */
   rawHotCues?: AnlzCueEntry[];
@@ -105,184 +124,17 @@ function fourCC(view: DataView, offset: number): string {
   );
 }
 
-function readUtf16Be(view: DataView, offset: number, byteLength: number): string {
-  if (byteLength < 2) {
-    // Some odd exports use raw ASCII; keep them readable.
-    let out = '';
-    for (let i = 0; i < byteLength; i++) out += String.fromCharCode(view.getUint8(offset + i));
-    return out.replace(/\0+$/, '');
-  }
-  const chars: number[] = [];
-  const end = Math.min(offset + byteLength, view.byteLength - 1);
-  for (let p = offset; p + 1 <= end; p += 2) {
-    const code = (view.getUint8(p) << 8) | view.getUint8(p + 1);
-    if (code === 0) break;
-    chars.push(code);
-  }
-  return String.fromCharCode(...chars);
-}
-
-const WAVEFORM_PRIORITY: Record<string, number> = {
-  PWV7: 7,
-  PWV5: 6,
-  PWV6: 5,
-  PWV4: 4,
-  PWV3: 3,
-  PWV2: 2,
-  PWAV: 1,
-};
-
-interface WaveformSpec {
-  entryBytes: number;
-  entryCount: number;
-  dataOffset: number;
-  style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
-}
-
-function readWaveformSpec(view: DataView, offset: number, tagEnd: number, tag: string): WaveformSpec | null {
-  // Marked fallback: the project's legacy test fixture stores a 3-byte
-  // (low, mid, high) preview directly after a u32 count. Real .EXT files
-  // never use this shape, so it is only reached for regression fixtures.
-  if (tag === 'PWV5') {
-    const legacyCount = view.getUint32(offset + 8, false);
-    if (
-      legacyCount > 0 &&
-      legacyCount <= 20_000 &&
-      offset + 12 + legacyCount * 3 <= tagEnd
-    ) {
-      return {
-        entryBytes: 3,
-        entryCount: legacyCount,
-        dataOffset: offset + 12,
-        style: 'TRIPLE_BYTE',
-      };
-    }
-  }
-
-  const lenHeader = view.getUint32(offset + 4, false);
-
-  if (tag === 'PWAV' || tag === 'PWV2') {
-    // len_header 0x14: u4 len_data, u4 unknown(0x10000), data
-    if (lenHeader < 0x14 || offset + 0x14 > tagEnd) return null;
-    const lenData = view.getUint32(offset + 0x0c, false);
-    if (lenData === 0 || offset + 0x14 + lenData > tagEnd) return null;
-    return {
-      entryBytes: 1,
-      entryCount: lenData,
-      dataOffset: offset + 0x14,
-      style: tag === 'PWAV' ? 'MONO_5BIT' : 'MONO_4BIT',
-    };
-  }
-
-  if (tag === 'PWV6') {
-    // len_header 0x14: u4 len_entry_bytes, u4 len_entries, data
-    if (lenHeader < 0x14 || offset + 0x14 > tagEnd) return null;
-    const entryBytes = view.getUint32(offset + 0x0c, false);
-    const entryCount = view.getUint32(offset + 0x10, false);
-    if (
-      entryBytes !== 3 ||
-      entryCount === 0 ||
-      entryCount > 500_000 ||
-      offset + 0x14 + entryBytes * entryCount > tagEnd
-    ) {
-      return null;
-    }
-    return { entryBytes, entryCount, dataOffset: offset + 0x14, style: 'TRIPLE_BYTE' };
-  }
-
-  // PWV3 / PWV4 / PWV5 / PWV7 share: len_header 0x18,
-  // u4 len_entry_bytes, u4 len_entries, u4 unknown, data
-  if (offset + 0x18 > tagEnd) return null;
-  const entryBytes = view.getUint32(offset + 0x0c, false);
-  const entryCount = view.getUint32(offset + 0x10, false);
-  const dataOffset = offset + 0x18;
-  if (
-    entryBytes === 0 ||
-    entryCount === 0 ||
-    entryCount > 500_000 ||
-    dataOffset + entryBytes * entryCount > tagEnd
-  ) {
-    return null;
-  }
-  if (tag === 'PWV3' && entryBytes === 1) {
-    return { entryBytes, entryCount, dataOffset, style: 'MONO_5BIT' };
-  }
-  if (tag === 'PWV4' && entryBytes === 6) {
-    return { entryBytes, entryCount, dataOffset, style: 'COLOR_6BYTE' };
-  }
-  if (tag === 'PWV5' && entryBytes === 2) {
-    return { entryBytes, entryCount, dataOffset, style: 'RGB_5BIT' };
-  }
-  if (tag === 'PWV7' && entryBytes === 3) {
-    return { entryBytes, entryCount, dataOffset, style: 'TRIPLE_BYTE' };
-  }
-  return null;
-}
-
-function createWaveform(
-  spec: WaveformSpec,
-  view: DataView
-): WaveformAnalysisData {
-  const { entryCount, entryBytes, dataOffset, style } = spec;
-  const peaks = new Float32Array(entryCount);
-  const peaksL = new Float32Array(entryCount);
-  const peaksR = new Float32Array(entryCount);
-  const lowEnergy = new Float32Array(entryCount);
-  const midEnergy = new Float32Array(entryCount);
-  const highEnergy = new Float32Array(entryCount);
-
-  for (let i = 0; i < entryCount; i++) {
-    const p = dataOffset + i * entryBytes;
-    let peak = 0;
-    let low = 0;
-    let mid = 0;
-    let high = 0;
-
-    if (style === 'MONO_5BIT') {
-      const value = view.getUint8(p);
-      peak = (value & 0x1f) / 31;
-      low = mid = high = peak;
-    } else if (style === 'MONO_4BIT') {
-      peak = (view.getUint8(p) & 0x0f) / 15;
-      low = mid = high = peak;
-    } else if (style === 'RGB_5BIT') {
-      const value = view.getUint16(p, false);
-      low = ((value >> 13) & 0x07) / 7;
-      mid = ((value >> 10) & 0x07) / 7;
-      high = ((value >> 7) & 0x07) / 7;
-      peak = ((value >> 2) & 0x1f) / 31;
-    } else if (style === 'TRIPLE_BYTE') {
-      // PWV6 / PWV7 entries are stored as mid, high, low.
-      mid = view.getUint8(p) / 255;
-      high = view.getUint8(p + 1) / 255;
-      low = view.getUint8(p + 2) / 255;
-      peak = Math.max(low, mid, high);
-    } else if (style === 'COLOR_6BYTE') {
-      // PWV4: 6 bytes per column. The exact Rekordbox color mapping is not
-      // fully published; the final three bytes carry the dominant band
-      // energy and are used as a labeled visual approximation.
-      low = view.getUint8(p + 3) / 255;
-      mid = view.getUint8(p + 4) / 255;
-      high = view.getUint8(p + 5) / 255;
-      peak = Math.max(low, mid, high);
-    }
-
-    peaks[i] = peak;
-    peaksL[i] = peak;
-    peaksR[i] = peak;
-    lowEnergy[i] = low;
-    midEnergy[i] = mid;
-    highEnergy[i] = high;
-  }
-
+/** Decoded ANLZ bytes wrapped as the track's native waveform analysis. */
+function createWaveform(spec: AnlzWaveformDescriptor, view: DataView): WaveformAnalysisData {
+  const columns = decodeAnlzWaveformColumns(view, spec);
   return {
-    length: entryCount,
-    peaks,
-    peaksL,
-    peaksR,
-    lowEnergy,
-    midEnergy,
-    highEnergy,
+    length: columns.length,
+    peaks: columns.peaks,
+    peaksL: columns.peaksL,
+    peaksR: columns.peaksR,
+    lowEnergy: columns.lowEnergy,
+    midEnergy: columns.midEnergy,
+    highEnergy: columns.highEnergy,
     origin: DataOrigin.REKORDBOX_ANLZ,
   };
 }
@@ -371,7 +223,7 @@ function decodePcp2Entry(view: DataView, entry: number, tagEnd: number): AnlzCue
   if (lenEntry > 43 && entry + 0x2c <= tagEnd) {
     const lenComment = view.getUint32(entry + 0x28, false);
     if (lenComment > 0 && lenComment <= lenEntry - 0x2c) {
-      parsed.comment = readUtf16Be(view, entry + 0x2c, lenComment);
+      parsed.comment = readAnlzUtf16Be(view, entry + 0x2c, lenComment);
     }
   }
 
@@ -580,59 +432,40 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     warnings: [],
   };
 
-  let offset = 0;
   const len = buffer.byteLength;
-
-  if (len >= 12 && fourCC(view, 0) === 'PMAI') {
-    const headerLength = view.getUint32(4, false);
-    if (headerLength >= 12 && headerLength <= len) {
-      offset = headerLength;
-    } else {
-      result.warnings.push('Ungültige PMAI-Headerlänge; Tag-Suche startet am Dateianfang.');
-    }
+  // The container walk is shared with the Electron master.db gate
+  // (./anlzStructure ↔ electron/generated/anlzStructure.cjs).
+  const scan = scanAnlzSections(buffer);
+  if (!scan.valid) {
+    result.warnings.push(scan.reason || 'Ungültige ANLZ-Struktur.');
+    logger.warn('XML_IMPORT', `ANLZ-Datei nicht lesbar: ${scan.reason || 'unbekannt'}`, {
+      byteLength: len,
+    });
+    return result;
   }
+  if (scan.truncated) {
+    result.warnings.push(
+      'ANLZ-Sektionen wurden vor dem Dateiende gelesen; der Rest der Datei wurde nicht ausgewertet.'
+    );
+  }
+  result.tagsFound = scan.tags;
+  if (scan.ppthPath) result.analysisPath = scan.ppthPath;
 
   // Track the best cue list per category so that PCO2 (if present) takes
   // priority over PCOB, and hot/memory lists are merged.
   let rawMemoryCues: AnlzCueEntry[] = [];
   let rawHotCues: AnlzCueEntry[] = [];
   let beatGrid: BeatGrid | undefined;
-  let waveformPriority = 0;
 
-  while (offset + 12 <= len) {
-    const tag = fourCC(view, offset);
-    // Real ANLZ envelope: u4 len_header at +4, u4 len_tag at +8. The project's
-    // legacy fixtures wrote the section length at +4, so both are accepted.
-    const lenHeader = view.getUint32(offset + 4, false);
-    const lenTag = view.getUint32(offset + 8, false);
-    let chunkSize = lenTag;
-    // Legacy PWV5 fixture: u32 count in the len_tag slot; the real section
-    // length lives in the len_header slot (12 + count * 3).
-    if (
-      tag === 'PWV5' &&
-      lenTag >= 1 &&
-      lenTag <= 20_000 &&
-      lenHeader === 12 + lenTag * 3
-    ) {
-      chunkSize = lenHeader;
-    }
-    if (chunkSize < 12 || offset + chunkSize > len) {
-      chunkSize = lenHeader;
-    }
-    if (chunkSize < 12 || offset + chunkSize > len) {
-      offset += 4;
-      continue;
-    }
-    const tagEnd = offset + chunkSize;
-    result.tagsFound.push(tag);
+  for (const section of scan.sections as AnlzSection[]) {
+    const tag = section.tag;
+    const offset = section.offset;
+    const tagEnd = offset + section.size;
+    const lenHeader = section.headerLength;
+    const lenTag = section.tagLength;
 
     if (tag === 'PPTH') {
-      if (offset + 0x10 <= tagEnd) {
-        const lenPath = view.getUint32(offset + 0x0c, false);
-        if (lenPath > 0 && lenPath <= tagEnd - (offset + 0x10)) {
-          result.analysisPath = readUtf16Be(view, offset + 0x10, lenPath);
-        }
-      }
+      // Already decoded by the shared walk into scan.ppthPath.
     } else if (tag === 'PQTZ' || tag === 'PQT2') {
       beatGrid = parseBeatGrid(view, offset, tagEnd);
       if (beatGrid) {
@@ -651,16 +484,16 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       }
     } else if (tag === 'PCOB') {
       const count = offset + 0x12 + 2 <= tagEnd ? view.getUint16(offset + 0x12, false) : 0;
-      const legacyCountU32 = offset + 12 <= tagEnd ? view.getUint32(offset + 8, false) : 0;
+      const legacyCountU32 = lenTag;
       // The legacy fixture writes the cue count into the len_tag slot and the
       // section length into the len_header slot; real files have len_tag >= 12.
       const legacyShape =
         legacyCountU32 <= 2000 &&
         offset + 12 + legacyCountU32 * 24 <= tagEnd &&
-        (legacyCountU32 < 12 || view.getUint32(offset + 4, false) === 12 + legacyCountU32 * 24);
+        (legacyCountU32 < 12 || lenHeader === 12 + legacyCountU32 * 24);
       const realHeader = !legacyShape && offset + 0x18 <= tagEnd && (
         (offset + 0x18 + 4 <= tagEnd && fourCC(view, offset + 0x18) === 'PCPT') ||
-        (view.getUint32(offset + 4, false) >= 0x18 &&
+        (lenHeader >= 0x18 &&
           count <= 2000 &&
           offset + 0x18 + count * 0x38 <= tagEnd)
       );
@@ -713,7 +546,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
       const isHot = view.getUint32(offset + 0x0c, false) === 1;
       const realLayout =
         (offset + 0x14 + 4 <= tagEnd && fourCC(view, offset + 0x14) === 'PCP2') ||
-        (view.getUint32(offset + 4, false) >= 0x0e && count <= 2000);
+        (lenHeader >= 0x0e && count <= 2000);
       if (realLayout) {
         let cursor = offset + 0x14;
         const decoded: AnlzCueEntry[] = [];
@@ -768,20 +601,33 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
         }
       }
     } else if (WAVEFORM_PRIORITY[tag]) {
-      const spec = readWaveformSpec(view, offset, tagEnd, tag);
-      if (spec && WAVEFORM_PRIORITY[tag] >= waveformPriority) {
-        result.waveform = createWaveform(spec, view);
-        waveformPriority = WAVEFORM_PRIORITY[tag];
-      } else if (!spec) {
+      const spec = readAnlzWaveformSpec(view, offset, tagEnd, tag);
+      if (!spec) {
         result.warnings.push(`${tag}: unbekanntes Waveform-Layout übersprungen.`);
+      } else if (
+        // Decode exactly the section the shared walk selected, so the gate
+        // (electron/masterDbGate.cjs) and this parser agree on one waveform.
+        scan.waveform &&
+        scan.waveform.dataOffset >= offset &&
+        scan.waveform.dataOffset < tagEnd
+      ) {
+        result.waveform = createWaveform(spec, view);
+        result.waveformTag = tag;
       }
     }
-
-    offset += chunkSize;
   }
 
   result.rawHotCues = rawHotCues;
   result.rawMemoryCues = rawMemoryCues;
+
+  if (result.waveform) {
+    let peakMax = 0;
+    for (let i = 0; i < result.waveform.peaks.length; i++) {
+      const value = result.waveform.peaks[i];
+      if (value > peakMax) peakMax = value;
+    }
+    result.waveformPeakMax = peakMax;
+  }
 
   const bpm = result.bpm ?? 128;
   const firstBeat = result.firstBeat ?? 0;
@@ -798,6 +644,7 @@ export function parseAnlzBinary(buffer: ArrayBuffer): AnlzParsedResult {
     phrases: result.phrases.length,
     bpm: result.bpm,
     hasWaveform: Boolean(result.waveform),
+    waveformTag: result.waveformTag,
     waveformBuckets: result.waveform?.length,
     warnings: result.warnings,
   });
