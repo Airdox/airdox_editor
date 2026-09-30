@@ -18,11 +18,15 @@
  *                                 die Datei dabei byteweise unverändert?
  *
  * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 arbeitet
- * ausschließlich auf einer In-Memory-Datenbank; Schritt 5 vergleicht Größe und
- * mtime der master.db vor und nach dem Zugriff.
+ * auf einer frisch angelegten temporären Datei im Systemtemp-Verzeichnis
+ * (SQLCipher verweigert `PRAGMA key` ausdrücklich bei In-Memory-Datenbanken –
+ * „Setting key not supported for in-memory or temporary databases“ – eine
+ * In-Memory-Probe wäre also immer rot, auch wenn das Modul einwandfrei läuft);
+ * Schritt 5 vergleicht Größe und mtime der master.db vor und nach dem Zugriff.
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const dbReader = require('./dbReader.cjs');
 
@@ -38,9 +42,9 @@ const CHECK_IDS = Object.freeze([
 ]);
 
 /** Reads a dependency range from the app manifest without failing if absent. */
-function readDeclaredRange(field) {
+function readDeclaredRange(field, appRoot) {
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
     return manifest[field] || '';
   } catch {
     return '';
@@ -74,32 +78,47 @@ function explainNativeModuleError(error) {
 }
 
 /**
- * In-memory functional proof of the SQLCipher binding. No file is created,
- * nothing on disk is touched.
+ * Functional proof of the SQLCipher binding on a throwaway temp file. No
+ * Rekordbox source is touched; the probe database is deleted afterwards.
+ *
+ * A `:memory:` database cannot be used: SQLCipher refuses `PRAGMA key` on
+ * in-memory/temporary databases, which would make this check fail even when
+ * the module is perfectly healthy.
  */
 function probeCipherFunctionality(Database) {
-  const db = new Database(':memory:');
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-sqlcipher-probe-'));
+  const probePath = path.join(probeDir, 'probe.db');
   try {
-    db.pragma('cipher = sqlcipher');
-    db.pragma("key = 'airdox-runtime-preflight'");
-    db.exec('CREATE TABLE probe (id INTEGER PRIMARY KEY, value TEXT);');
-    db.prepare('INSERT INTO probe (value) VALUES (?)').run('rekordbox');
-    const row = db.prepare('SELECT count(*) AS n FROM probe').get();
-    const stored = db.prepare('SELECT value FROM probe LIMIT 1').get();
-    let cipherVersion = null;
+    const db = new Database(probePath);
     try {
-      const result = db.pragma('cipher_version', { simple: true });
-      cipherVersion = typeof result === 'object' ? result.cipher_version : result;
-    } catch {
-      // older SQLCipher builds do not expose cipher_version
+      db.pragma('cipher = sqlcipher');
+      db.pragma('legacy = 4');
+      db.pragma(`key = 'airdox-runtime-preflight'`);
+      db.exec('CREATE TABLE probe (id INTEGER PRIMARY KEY, value TEXT);');
+      db.prepare('INSERT INTO probe (value) VALUES (?)').run('rekordbox');
+      const row = db.prepare('SELECT count(*) AS n FROM probe').get();
+      const stored = db.prepare('SELECT value FROM probe LIMIT 1').get();
+      let cipherVersion = null;
+      try {
+        const result = db.pragma('cipher_version', { simple: true });
+        cipherVersion = typeof result === 'object' ? result.cipher_version : result;
+      } catch {
+        // older SQLCipher builds do not expose cipher_version
+      }
+      return {
+        ok: Number(row && row.n) === 1 && String(stored && stored.value) === 'rekordbox',
+        cipherVersion: cipherVersion ? String(cipherVersion) : null,
+      };
+    } finally {
+      try {
+        db.close();
+      } catch {
+        // ignore
+      }
     }
-    return {
-      ok: Number(row && row.n) === 1 && String(stored && stored.value) === 'rekordbox',
-      cipherVersion: cipherVersion ? String(cipherVersion) : null,
-    };
   } finally {
     try {
-      db.close();
+      fs.rmSync(probeDir, { recursive: true, force: true });
     } catch {
       // ignore
     }
@@ -125,6 +144,9 @@ function fingerprint(filePath) {
 function checkRekordboxRuntime(options = {}) {
   const requireDatabase = options.requireDatabase === true;
   const trackId = String(options.trackId || '').trim();
+  // `appRoot` ist dokumentiert und erlaubt Tests/Diagnosen, den Preflight
+  // gegen einen isolierten App-Root (ohne node_modules) laufen zu lassen.
+  const appRoot = options.appRoot ? path.resolve(options.appRoot) : APP_ROOT;
   const checks = [];
 
   const add = (id, label, status, detail) => {
@@ -136,7 +158,7 @@ function checkRekordboxRuntime(options = {}) {
   const electronVersion = process.versions.electron || null;
   const nodeVersion = process.versions.node || null;
   const modulesAbi = process.versions.modules || null;
-  const declaredElectron = readDeclaredRange('devDependencies.electron');
+  const declaredElectron = readDeclaredRange('devDependencies.electron', appRoot);
   if (!electronVersion) {
     add(
       'ELECTRON_VERSION',
@@ -165,7 +187,7 @@ function checkRekordboxRuntime(options = {}) {
   // --- 2. Modul vorhanden --------------------------------------------------
   let resolvedPath = null;
   try {
-    resolvedPath = require.resolve(MODULE_NAME, { paths: [APP_ROOT] });
+    resolvedPath = require.resolve(MODULE_NAME, { paths: [appRoot] });
     add('NATIVE_MODULE_RESOLVED', 'Native SQLCipher-Modul vorhanden', 'OK', resolvedPath);
   } catch (error) {
     add('NATIVE_MODULE_RESOLVED', 'Native SQLCipher-Modul vorhanden', 'FAIL', explainNativeModuleError(error));
@@ -178,7 +200,7 @@ function checkRekordboxRuntime(options = {}) {
     try {
       // eslint-disable-next-line import/no-extraneous-dependencies, global-require
       Database = require(MODULE_NAME);
-      moduleVersion = readModuleVersion();
+      moduleVersion = readModuleVersion(appRoot);
       add('NATIVE_MODULE_LOADABLE', 'Native SQLCipher-Modul ladbar', 'OK', `${MODULE_NAME} geladen (${moduleVersion || 'Version unbekannt'})`);
     } catch (error) {
       add('NATIVE_MODULE_LOADABLE', 'Native SQLCipher-Modul ladbar', 'FAIL', explainNativeModuleError(error));
@@ -192,13 +214,13 @@ function checkRekordboxRuntime(options = {}) {
     try {
       const probe = probeCipherFunctionality(Database);
       if (!probe.ok) {
-        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'In-Memory-Datenbank konnte nicht geschrieben und gelesen werden.');
+        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Temporäre Probe-Datenbank konnte nicht verschlüsselt geschrieben und gelesen werden.');
       } else {
         add(
           'SQLCIPHER_FUNCTIONAL',
           'SQLCipher funktionsfähig',
           'OK',
-          `Verschlüsselte In-Memory-Datenbank geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
+          `Verschlüsselte temporäre Probe-Datenbank geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
         );
       }
     } catch (error) {
@@ -277,9 +299,9 @@ function checkRekordboxRuntime(options = {}) {
   };
 }
 
-function readModuleVersion() {
+function readModuleVersion(appRoot) {
   try {
-    const manifestPath = require.resolve(`${MODULE_NAME}/package.json`, { paths: [APP_ROOT] });
+    const manifestPath = require.resolve(`${MODULE_NAME}/package.json`, { paths: [appRoot || APP_ROOT] });
     return JSON.parse(fs.readFileSync(manifestPath, 'utf8')).version || null;
   } catch {
     return null;

@@ -475,6 +475,23 @@ async function main() {
       .join('\n');
     await writeFile(path.join(ROOT, FAILURE_REPORT), `Test-Runner: ${failed.length} von ${results.length} fehlgeschlagen\n${report}`);
     console.log(`\nVollständige Ausgabe der Fehlschläge: ${FAILURE_REPORT}`);
+
+    // GitHub-Annotations: Die Job-Logs der CI hängen an externem Blob-Storage,
+    // das nicht aus jeder Umgebung erreichbar ist (SSL_ERROR_SYSCALL). Die
+    // Annotations-API ist dagegen immer erreichbar – deshalb bekommt jeder
+    // fehlgeschlagene Test zusätzlich eine ::error::-Annotation mit dem
+    // Ausgabeschluss, die über die Checks-API lesbar bleibt.
+    if (process.env.GITHUB_ACTIONS) {
+      const escape = (value) => String(value).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+      for (const result of failed) {
+        const tail = result.output.trim().split('\n').slice(-25).join('\n').slice(0, 4000);
+        console.log(
+          `::error file=${result.file},title=Test fehlgeschlagen::${escape(
+            `${result.file} fehlgeschlagen${result.timedOut ? ' (Zeitüberschreitung)' : ''}:\n${tail || '(keine Ausgabe)'}`
+          )}`
+        );
+      }
+    }
     process.exit(1);
   }
   if (skipped.length && options.failOnSkip) {

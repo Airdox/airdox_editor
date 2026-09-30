@@ -136,7 +136,12 @@ function openRekordboxDb(filePath) {
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
-      return { db, dbType };
+      // `available: true` ist verbindlich: openRekordboxDb ist die innere
+      // Funktion von openContentRow/readRekordboxDatabase, die beide über
+      // `!opened.available` prüfen. Ohne das Flag galt auch ein erfolgreicher
+      // Öffnungsvorgang als Fehlschlag (Grund: undefined) – der Master-DB-Gate
+      // hätte auf jeder echten Installation MASTER_DB_OPEN_FAILED gemeldet.
+      return { available: true, db, dbType };
     } catch (openError) {
       try {
         db.close();

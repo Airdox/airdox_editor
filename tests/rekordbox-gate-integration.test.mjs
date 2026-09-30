@@ -166,13 +166,19 @@ writeFileSync(analysisPath, anlzBytes);
 writeFileSync(originalPath, minimalWav());
 
 // ─── Echte SQLCipher-master.db, falls das native Modul verfügbar ist ────
+// Wichtig: `require()` allein reicht NICHT als Nachweis – die Bindings werden
+// erst beim Konstruktor geladen. Ohne gebautes Binary würde dieser Test sonst
+// bei `new Database(...)` crashen, statt wie dokumentiert sauber zu überspringen.
 let realDatabase = false;
 let Database = null;
 try {
   Database = require('better-sqlite3-multiple-ciphers');
+  const probe = new Database(':memory:');
+  probe.close();
   realDatabase = true;
 } catch {
   realDatabase = false;
+  Database = null;
 }
 
 const DJMD_CUE_ROWS = [
@@ -305,7 +311,13 @@ try {
     () => {}
   );
   gateResult = await gate.resolveTrackFromMasterDb(
-    { trackId: TRACK_ID, mediaPath: `file://localhost${originalPath.replace(/\\/g, '/')}` },
+    {
+      trackId: TRACK_ID,
+      // Rekordbox schreibt Locations als `file://localhost/C:/…` (Slash nach
+      // localhost). Ohne diesen Slash ist die URL ungültig (new URL wirft),
+      // und der XML-Kandidat würde auf Windows gar nicht erst geprüft.
+      mediaPath: `file://localhost/${originalPath.replace(/\\/g, '/').replace(/^\/+/, '')}`,
+    },
     gateDeps
   );
 
