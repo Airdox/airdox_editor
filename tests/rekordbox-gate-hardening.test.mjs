@@ -625,4 +625,4 @@ function makeDeps(overrides = {}) {
 console.log(`rekordbox-gate-hardening: ${checks.length} Gruppen geprüft`);
 for (const line of checks) console.log(`  ✓ ${line}`);
 
-}}
+}
