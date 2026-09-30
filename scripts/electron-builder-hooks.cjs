@@ -73,16 +73,31 @@ function electronBinaryPath(root) {
  * Node, ein für Electron gebautes Binary lässt sich dort aber gar nicht
  * laden. Mit ELECTRON_RUN_AS_NODE=1 interpretiert dieselbe Electron-Binary
  * das Skript – mit exakt der ABI, in der die installierte App läuft.
+ *
+ * Die Cipher-Probe arbeitet auf einer eigenen temporären Datei im Systemtemp:
+ * SQLCipher verweigert `PRAGMA key` ausdrücklich bei In-Memory-Datenbanken
+ * („Setting key not supported for in-memory or temporary databases“), eine
+ * `:memory:`-Probe wäre also selbst auf einwandfreiem Modul immer rot.
  */
 function requireInElectronRuntime(electronPath, modulePath) {
   const script =
-    `const m = require(${JSON.stringify(modulePath)});` +
-    `const d = new m(':memory:');` +
-    `d.pragma("cipher = sqlcipher"); d.pragma("key = 'probe'");` +
-    `d.exec('CREATE TABLE t (a INTEGER)'); d.prepare('INSERT INTO t VALUES (1)').run();` +
-    `const n = d.prepare('SELECT count(*) AS n FROM t').get(); d.close();` +
-    `if (Number(n.n) !== 1) { throw new Error('cipher probe failed'); }` +
-    `process.stdout.write('ok ' + process.versions.electron + ' abi ' + process.versions.modules);`;
+    [
+      `const fs = require('node:fs');`,
+      `const os = require('node:os');`,
+      `const path = require('node:path');`,
+      `const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'airdox-pack-probe-'));`,
+      `try {`,
+      `  const m = require(${JSON.stringify(modulePath)});`,
+      `  const d = new m(path.join(dir, 'probe.db'));`,
+      `  d.pragma("cipher = sqlcipher"); d.pragma("legacy = 4"); d.pragma("key = 'probe'");`,
+      `  d.exec('CREATE TABLE t (a INTEGER)'); d.prepare('INSERT INTO t VALUES (1)').run();`,
+      `  const n = d.prepare('SELECT count(*) AS n FROM t').get(); d.close();`,
+      `  if (Number(n.n) !== 1) { throw new Error('cipher probe failed'); }`,
+      `  process.stdout.write('ok ' + process.versions.electron + ' abi ' + process.versions.modules);`,
+      `} finally {`,
+      `  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* ignore */ }`,
+      `}`,
+    ].join('\n');
   const result = spawnSync(electronPath, ['-e', script], {
     cwd: path.dirname(modulePath),
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
@@ -120,11 +135,21 @@ async function beforePack(context) {
     );
   }
 
+  // electron-builder übergibt `arch` als Arch-Enum (x64 = 1), @electron/rebuild
+  // erwartet aber den Klarnamen ('x64') – eine Zahl würde als `--arch=1`
+  // durchgereicht und der Build würde gegen die falsche Architektur laufen.
+  const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64' };
+  const rawArch = (context && context.arch) || process.arch;
+  const arch = typeof rawArch === 'number' ? ARCH_NAMES[rawArch] || String(process.arch) : String(rawArch);
+  const rawPlatform =
+    (context && context.electronPlatformName) ||
+    (context && context.packager && context.packager.platform && context.packager.platform.node) ||
+    process.platform;
   const context2 = {
     buildPath: dir,
     electronVersion,
-    arch: (context && context.arch) || process.arch,
-    platform: (context && context.platform && context.platform.node) || process.platform,
+    arch,
+    platform: rawPlatform,
     onlyModules: [MODULE_NAME],
     force: true,
   };
@@ -208,7 +233,12 @@ function afterPack(context) {
   let asarList = null;
   try {
     const asar = require('@electron/asar');
-    asarList = new Set(asar.listPackage(asarPath));
+    // listPackage liefert absolute Pfade ('/electron/…'; unter Windows mit
+    // Backslashes) – ohne Normalisierung würde der Vergleich nie greifen und
+    // afterPack jeden validen Packvorgang zu Unrecht abbrechen.
+    asarList = new Set(
+      asar.listPackage(asarPath).map((entry) => String(entry).replace(/^[\\/]+/, '').replace(/\\/g, '/'))
+    );
   } catch {
     asarList = null;
   }

@@ -28,7 +28,7 @@
 
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -166,13 +166,19 @@ writeFileSync(analysisPath, anlzBytes);
 writeFileSync(originalPath, minimalWav());
 
 // ─── Echte SQLCipher-master.db, falls das native Modul verfügbar ist ────
+// Wichtig: `require()` allein reicht NICHT als Nachweis – die Bindings werden
+// erst beim Konstruktor geladen. Ohne gebautes Binary würde dieser Test sonst
+// bei `new Database(...)` crashen, statt wie dokumentiert sauber zu überspringen.
 let realDatabase = false;
 let Database = null;
 try {
   Database = require('better-sqlite3-multiple-ciphers');
+  const probe = new Database(':memory:');
+  probe.close();
   realDatabase = true;
 } catch {
   realDatabase = false;
+  Database = null;
 }
 
 const DJMD_CUE_ROWS = [
@@ -305,7 +311,13 @@ try {
     () => {}
   );
   gateResult = await gate.resolveTrackFromMasterDb(
-    { trackId: TRACK_ID, mediaPath: `file://localhost${originalPath.replace(/\\/g, '/')}` },
+    {
+      trackId: TRACK_ID,
+      // Rekordbox schreibt Locations als `file://localhost/C:/…` (Slash nach
+      // localhost). Ohne diesen Slash ist die URL ungültig (new URL wirft),
+      // und der XML-Kandidat würde auf Windows gar nicht erst geprüft.
+      mediaPath: `file://localhost/${originalPath.replace(/\\/g, '/').replace(/^\/+/, '')}`,
+    },
     gateDeps
   );
 
@@ -412,7 +424,12 @@ function parseWithRendererParser(bytes) {
       '}));',
     ].join('\n')
   );
-  const output = execFileSync('npx', ['tsx', bridgePath, analysisPath], {
+  // Direkt über die lokale tsx-CLI statt `npx`: Auf Windows existiert nur
+  // `npx.cmd`, und execFileSync ohne shell findet diese nicht (ENOENT).
+  const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const command = existsSync(tsxCli) ? process.execPath : process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const args = existsSync(tsxCli) ? [tsxCli, bridgePath, analysisPath] : ['tsx', bridgePath, analysisPath];
+  const output = execFileSync(command, args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

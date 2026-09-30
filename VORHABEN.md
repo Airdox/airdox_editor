@@ -1,6 +1,6 @@
 # Vorhaben: Rekordbox-Desktop-Importpfad
 
-**Stand: 29.09.2026**
+**Stand: 30.09.2026**
 
 Die Anwendung wird schrittweise zu einer Windows-Desktop-App ausgebaut. Rekordbox-XML liefert Bibliothek, Metadaten und Dateipfade. Rekordbox-Datenbank- und ANLZ-Daten haben Vorrang für Waveform, Beatgrid, Cues und Songstruktur. Eigene Berechnungen sind ausschließlich gekennzeichnete Fallbacks.
 
@@ -29,7 +29,7 @@ Die lokale Rekordbox-6/7-Bibliothek (`master.db`) und die OneLibrary-Exportdaten
 
 - `electron/dbReader.cjs`: deobfusciert die dokumentierten Community-Schlüssel (`402fd…` master.db, `r8gd…` OneLibrary), öffnet die Datenbank mit SQLite-`readonly`, liest `djmdContent`/`djmdCue` (+ Artist/Album/Genre/Key/Label/Playlists) bzw. die OneLibrary-Tabellen (`content`, `cue`, `artist`, …) und schließt sie sofort wieder.
 - `src/rekordbox/dbParser.ts`: normalisiert beide Schemata (BPM × 100, Rating 0–255/0–5, ms/µs-Zeitstempel) auf denselben Collection-Vertrag wie der XML-Import; Cues, Hot Cues und Loops werden inkl. Takt/Beat-Alignment übernommen, eigene Audioberechnungen entstehen nicht.
-- Quellen werden wahlweise per Windows-Dateidialog oder über die automatische Ordnersuche (`Pioneer\rekordbox7|rekordbox6|rekordbox` + `rekordboxAgent/storage/options.json`) geladen.
+- Quellen werden wahlweise per Windows-Dateidialog oder über die automatische Ordnersuche (`Pioneer\rekordbox7|rekordbox6|rekordbox` + `rekordboxAgent/storage/options.json`) geladen. Die options.json wird am **kanonischen Geschwister-Ort** `Pioneer\rekordboxAgent\storage\options.json` gelesen (alternativ innerhalb des Version-Ordners), `db-path` akzeptiert Datei- **und** Ordnerangaben – ein benutzerdefinierter Bibliotheksort geht damit nicht mehr verloren. Bei `TRACK_NOT_FOUND_IN_MASTER_DB` nennt der Gate zusätzlich die durchsuchten Datenbankpfade, damit „Track fehlt“ von „falsche Bibliothek gesucht“ unterscheidbar bleibt (Test: `tests/rekordbox-locate-options.test.mjs`).
 - Natives Modul: `better-sqlite3-multiple-ciphers` ist **Pflichtabhängigkeit** (nicht mehr optional) und wird automatisch für die verwendete Electron-Version gebaut – siehe Phase 6.
 
 ## Phase 4 – Desktop-Export- & Projekt-Pfad ✅
@@ -126,7 +126,35 @@ nicht tut.
 - **Niemand schreibt in Rekordbox-Quellen.** `tests/rekordbox-gate-hardening.test.mjs`
   prüft für Gate, dbReader, ANLZ-Spiegel, Preflight, Doctor und Runtime-Test das
   Fehlen jeder Schreib-API sowie das read-only Öffnen (`readonly: true`,
-  `fileMustExist: true`) und den Größen-/mtime-Vergleich der master.db.
+  `fileMustExist: true`) und den Größen-/mtime-Vergleich der master.db. Einzige
+  erlaubte Schreibung: die SQLCipher-Funktionsprobe des Preflights, die ihre
+  eigene temporäre Datei im Systemtemp anlegt und wieder entfernt – der Scan
+  schneidet diese Funktion explizit heraus und begrenzt sie auf `os.tmpdir()`.
+- **Nachweise ehrlich gemacht (CI-Reparatur, 30.09.2026).** Der Push-Build war
+  seit PR #65 rot, weil die neuen Phase-6-Tests drei echte Fehler aufdeckten,
+  die behoben sind:
+  1. `openRekordboxDb` meldete auch den *Erfolgsfall* nicht als
+     `available: true` (Regression aus `2de7327`) – `openContentRow` und
+     `readRekordboxDatabase` hätten auf jeder echten Installation
+     `MASTER_DB_OPEN_FAILED` mit leerem Grund geliefert, obwohl die
+     Datenbank einwandfrei entschlüsselt wurde.
+  2. Die SQLCipher-Funktionsprobe lief auf einer `:memory:`-Datenbank;
+     SQLCipher verweigert `PRAGMA key` dort ausdrücklich („Setting key not
+     supported for in-memory or temporary databases"). Preflight, Doctor und
+     die Packaging-Hooks wären damit **selbst auf gesunden Maschinen rot
+     gewesen**. Alle Proben arbeiten jetzt auf einer eigenen temporären Datei
+     im Systemtemp (read-only-Kontrakt gegenüber Rekordbox bleibt unberührt).
+  3. Die electron-builder-Hooks hätten den Packvorgang zu Unrecht abgebrochen:
+     `context.arch` ist ein Arch-Enum (`x64 = 1`), das `@electron/rebuild`
+     aber den Klarnamen erwartet, und `asar.listPackage` liefert Pfade mit
+     führendem `/` (unter Windows `\`), sodass der ANLZ-Spiegel-Check nie
+     gegriffen hätte. Beides normalisiert; die Cipher-Probe in den Hooks
+     nutzt ebenfalls eine Temp-Datei.
+  Zusätzlich erkennt der Test-Runner fehlgeschlagene Tests jetzt als
+  `::error`-GitHub-Annotations (die Job-Logs hängen an externem
+  Blob-Storage, das nicht aus jeder Umgebung erreichbar ist), und die
+  Preflight-Tests laufen deterministisch gegen einen isolierten App-Root,
+  statt von der Installation auf der Testmaschine abzuhängen.
 
 ### Was noch offen ist (ehrlich)
 
@@ -134,10 +162,11 @@ nicht tut.
   (echte `master.db`, echte `SQLCipher`-Entschlüsselung, TrackID `142225026`,
   echte ANLZ, echtes Original-Audio, GUI bis zur angezeigten Waveform) wurde in
   dieser Umgebung **nicht** ausgeführt – dort ist weder Windows noch Rekordbox
-  vorhanden, und das native Modul ließ sich ohne Build-Toolchain nicht
-  kompilieren. Die Kette ist vorbereitet, automatisiert (`npm run
-  test:rekordbox:runtime`, `npm run rekordbox:doctor`) und in der CI als
-  eigener Schritt verankert; der Abschlussnachweis erfolgt auf einem
+  vorhanden. Das native Modul wurde für die lokale Suite manuell gegen die
+  lokalen Node-Header gebaut; der Electron-Nachweis (`beforePack`/`afterPack`)
+  läuft nur in der Windows-CI. Die Kette ist vorbereitet, automatisiert
+  (`npm run test:rekordbox:runtime`, `npm run rekordbox:doctor`) und in der CI
+  als eigener Schritt verankert; der Abschlussnachweis erfolgt auf einem
   Windows-Rechner mit Rekordbox. **Phase 5/6 gilt erst dann als abgeschlossen,
   wenn dieser Lauf grün ist.**
 - `rekordbox_export2.xml` liegt als App-Ressource bei; die Track-Auswahl lädt
