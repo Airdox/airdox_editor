@@ -125,16 +125,9 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "**/node-bridge.cjs",
-      "**/stem-runtime/**/*",
-      "**/models/**/*",
-      "**/*.node",
-      "**/*.dll",
-      "**/*.so",
-      "**/*.dylib",
-      "python/**/*",
-      "**/better-sqlite3-multiple-ciphers/**",
-      "**/onnxruntime-node/**"
+      "node_modules/better-sqlite3-multiple-ciphers/**/*",
+      "node_modules/onnxruntime-node/**/*",
+      "**/*.node"
     ],
     "directories": {
       "output": "release"
