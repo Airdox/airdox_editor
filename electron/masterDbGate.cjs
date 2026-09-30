@@ -90,6 +90,12 @@ function toLocalPath(location) {
     if (/^[a-z][a-z\d+.-]*:/i.test(value)) {
       const url = new URL(value);
       if (url.protocol !== 'file:') return null;
+      // Geräte-URIs (file://localhost//contents_…) sind auf keinem
+      // Plattform-Pfad; fileURLToPath wirft auf Windows (Pfad beginnt nicht
+      // mit einem Laufwerk) und würde den Kandidaten als „kein lokaler Pfad"
+      // verstecken. Deterministisch wie auf POSIX den URL-Pfad liefern – das
+      // eigentliche Ablehnen übernimmt isDeviceInternalLocation.
+      if (isDeviceInternalLocation(value)) return url.pathname;
       const resolved = fileURLToPath(url);
       return resolved || null;
     }
