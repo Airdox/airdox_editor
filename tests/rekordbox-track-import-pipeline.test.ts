@@ -108,7 +108,12 @@ assert.ok(bundledCollectionSource.includes('rekordbox_export2.xml?raw'), 'dev/br
 // ─── Test C – Master-DB-Gate ist durchgehend verdrahtet ─────────────────────
 const gateModule = require('../electron/masterDbGate.cjs');
 assert.equal(typeof gateModule.resolveTrackFromMasterDb, 'function', 'gate module exports resolveTrackFromMasterDb');
-assert.equal(gateModule.GATE_CODES.length, 11, 'the documented state machine has 11 codes');
+assert.equal(gateModule.GATE_CODES.length, 13, 'the documented state machine has 13 codes');
+assert.ok(
+  gateModule.GATE_CODES.includes('ANLZ_WAVEFORM_UNREADABLE') &&
+    gateModule.GATE_CODES.includes('ANLZ_SOURCE_MISMATCH'),
+  'the gate proves the decoded waveform and refuses an ANLZ/original mismatch'
+);
 
 assert.ok(preloadSource.includes('resolveTrackFromMasterDb:'), 'preload exposes resolveTrackFromMasterDb');
 assert.ok(preloadSource.includes('readBundledRekordboxXml:'), 'preload exposes readBundledRekordboxXml');
@@ -138,7 +143,12 @@ assert.ok(
 assert.ok(selectSlice.includes('[REKORDBOX_WAVEFORM_MISSING]'), 'missing waveform fails with its gate code');
 assert.ok(selectSlice.includes('[ANLZ_NOT_FOUND]'), 'missing ANLZ path fails with its gate code');
 assert.ok(selectSlice.includes('[ANLZ_READ_FAILED]'), 'unreadable ANLZ fails with its gate code');
-assert.ok(selectSlice.includes('[ANLZ_INVALID]'), 'mismatched ANLZ fails with its gate code');
+assert.ok(selectSlice.includes('[ANLZ_SOURCE_MISMATCH]'), 'a mismatched ANLZ source fails with its own gate code');
+assert.ok(selectSlice.includes('[ANLZ_WAVEFORM_UNREADABLE]'), 'a waveform that differs from the gate result fails hard');
+assert.ok(
+  selectSlice.includes('resolvedDef.analysis.length !== gateWaveform.buckets'),
+  'the renderer must deliver exactly the waveform the gate decoded'
+);
 assert.ok(selectSlice.includes('[ORIGINAL_AUDIO_NOT_FOUND]'), 'missing original audio fails with its gate code');
 assert.ok(selectSlice.includes('readOriginalAudio('), 'original audio is opened through the read-only bridge');
 assert.ok(selectSlice.includes('buildCues('), 'djmdCue rows from the gate are used as last-resort markers');

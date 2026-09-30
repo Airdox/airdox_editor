@@ -46,6 +46,17 @@ jobs:
       - name: TypeScript-Prüfung
         run: npm run lint
 
+      # Das generierte CommonJS-Spiegelmodul der ANLZ-Struktur muss exakt dem
+      # TypeScript-Quellmodul entsprechen. Ohne diese Prüfung könnten Gate und
+      # Renderer stillschweigend verschiedene ANLZ-Spezifikationen benutzen.
+      - name: ANLZ-Spiegelmodul ist aktuell
+        run: npm run build:anlz-structure:check
+
+      # Gate- und ANLZ-Härtung: Zustandsmaschine, PPTH-Konsistenz, Gerätepfade,
+      # Renderer-/Gate-Parität und der komplette Lese- und Paketierungsweg.
+      - name: Rekordbox-Gate-Härtung (Unit + Integration + Parität)
+        run: node scripts/run-tests.mjs --filter rekordbox- --filter anlz-structure-parity
+
       # Die Stem-Engine ist reines TypeScript und läuft ohne Python: Registry-,
       # Backend-Vertrags-, Technical-Gate- und Job-Service-Suite fangen
       # Engine-Regressionen ab, bevor gebaut wird. Tests mit requirement-
@@ -74,9 +85,26 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: npm test
 
+      # Echte Windows-Laufzeit: Master-DB-Gate gegen eine installierte
+      # Rekordbox-Bibliothek. Ohne Rekordbox-Installation ist das ein sauberer
+      # SKIP – niemand liest das als "grün". Mit Installation ist es ein
+      # harter Fehler, wenn auch nur ein Glied der Kette nicht trägt.
+      - name: Rekordbox-Runtime-Smoke (echte master.db, echtes SQLCipher)
+        run: npm run test:rekordbox:runtime -- 142225026
+
+      - name: Rekordbox-Gate-Doctor
+        run: npm run rekordbox:doctor -- 142225026
+        continue-on-error: true
+
       # Nur das NSIS-Setup: das Portable-Paket wird vorerst nicht mehr
       # gebraucht. Zum Reaktivieren später einfach wieder
       # `--win nsis --win portable` setzen.
+      #
+      # Wichtig: beforePack baut better-sqlite3-multiple-ciphers gegen genau
+      # die Electron-Version dieses Builds und weist das Ergebnis in der echten
+      # Electron-Laufzeit nach; afterPack prüft zusätzlich, dass das native
+      # Binary im Paket liegt und dort ladbar ist. Ein Build ohne SQLCipher
+      # bricht damit ab, statt "erfolgreich" zu enden.
       - name: Electron Windows-Paket (NSIS-Setup)
         run: npx electron-builder --win nsis --publish never
         env:

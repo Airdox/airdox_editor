@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // AnalysisDataPath → ANLZ → Original-Audio. Liefert hartes OK oder einen
   // Fehlercode aus der Zustandsmaschine – nie eine Ersatzanalyse.
   resolveTrackFromMasterDb: (query) => ipcRenderer.invoke('rekordbox:resolve-track-gate', query),
+  // Laufzeitnachweis: Electron-Version, natives SQLCipher-Modul und read-only
+  // geöffnete master.db. Nur lesend, ohne jeden Schreibzugriff.
+  checkRekordboxRuntime: (options) => ipcRenderer.invoke('rekordbox:runtime-check', options),
   // Eingebettete rekordbox_export2.xml als App-Ressource (kein Dateidialog).
   readBundledRekordboxXml: () => ipcRenderer.invoke('rekordbox:read-bundled-xml'),
   // Small app-owned index of track ↔ ANLZ paths. This never writes to

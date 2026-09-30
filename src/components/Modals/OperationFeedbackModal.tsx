@@ -29,6 +29,7 @@ export interface OperationTelemetry {
     | 'DELETE'
     | 'CLEAR'
     | 'EXPORT'
+    | 'IMPORT'
     | 'CUE'
     | 'COPY'
     | 'CUT'
@@ -71,6 +72,7 @@ export const OperationFeedbackModal: React.FC<OperationFeedbackModalProps> = ({
       case 'OVERDUB': return 'bg-[#8b5cf6]/15 border-[#8b5cf6]/30 text-[#8b5cf6]';
       case 'DELETE': return 'bg-[#ef4444]/15 border-[#ef4444]/30 text-[#ef4444]';
       case 'EXPORT': return 'bg-[#10b981]/15 border-[#10b981]/30 text-[#10b981]';
+      case 'IMPORT': return 'bg-[#00d4b0]/15 border-[#00d4b0]/30 text-[#00d4b0]';
       default: return 'bg-[#0088ff]/15 border-[#0088ff]/30 text-[#0088ff]';
     }
   };
@@ -106,7 +108,7 @@ export const OperationFeedbackModal: React.FC<OperationFeedbackModalProps> = ({
             </span>
           </div>
 
-          <p className="text-[11.5px] text-neutral-300 leading-relaxed">
+          <p className="text-[11.5px] text-neutral-300 leading-relaxed whitespace-pre-line font-mono text-[10.5px]">
             {telemetry.description}
           </p>
 

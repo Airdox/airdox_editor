@@ -10,6 +10,7 @@ const {
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
 const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
+const { checkRekordboxRuntime } = require('./rekordboxRuntimeCheck.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
 const { inspectStemRuntime } = require('./stemRuntime.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
@@ -41,6 +42,33 @@ logger.info('SYSTEM', `${APP_NAME} ${app.getVersion()} Main-Prozess startet`, {
   node: process.version,
   dev: IS_DEV,
 });
+
+// Sofortiger Nachweis des Master-DB-Pfades. Fehlt das native SQLCipher-Modul
+// für genau diese Electron-Version, ist der Track-Import tot – dann soll das
+// beim Start stehen und nicht erst beim Klick auf den ersten Track.
+(function logRekordboxRuntimeAtBoot() {
+  try {
+    const result = checkRekordboxRuntime({ requireDatabase: false });
+    const failures = result.checks.filter((check) => check.status === 'FAIL');
+    if (failures.length > 0) {
+      logger.error(
+        'DATABASE',
+        `Rekordbox-Master-DB nicht verfügbar: ${failures.map((c) => `${c.id} – ${c.detail}`).join(' | ')}`,
+        { checks: result.checks.map((c) => `${c.id}=${c.status}`), electron: result.electronVersion, abi: result.modulesAbi }
+      );
+    } else {
+      logger.info('DATABASE', 'Rekordbox-Runtime bereit (SQLCipher ladbar, master.db read-only geprüft)', {
+        electron: result.electronVersion,
+        abi: result.modulesAbi,
+        module: result.module.path,
+        database: result.database.path,
+        checks: result.checks.map((c) => `${c.id}=${c.status}`),
+      });
+    }
+  } catch (error) {
+    logger.warn('DATABASE', `Rekordbox-Runtime-Check nicht ausführbar: ${error.message || error}`);
+  }
+})();
 
 /**
  * Automatisches Audit-Protokoll für JEDEN ipcMain.handle-Kanal: Aufruf mit
@@ -519,6 +547,25 @@ ipcMain.handle('rekordbox:choose-rekordbox-database', async () => {
 
 ipcMain.handle('rekordbox:locate-rekordbox-databases', async () => {
   return locateRekordboxDatabases();
+});
+
+// Laufzeitnachweis des Master-DB-Pfades aus dem echten Electron-Prozess:
+// Electron-Version, natives SQLCipher-Modul, Funktionsprobe und read-only
+// geöffnete master.db. Rein lesend – die UI nutzt das, um einen fehlenden
+// SQLCipher-Build als solchen zu benennen statt als "Track nicht gefunden".
+ipcMain.handle('rekordbox:runtime-check', async (_event, options) => {
+  const result = checkRekordboxRuntime({
+    requireDatabase: options && options.requireDatabase === true,
+    trackId: (options && options.trackId) || '',
+  });
+  logger.info('DATABASE', `[Rekordbox-Runtime] ${result.ok ? 'OK' : 'FEHLER'}`, {
+    electron: result.electronVersion,
+    modulesAbi: result.modulesAbi,
+    modulePath: result.module.path,
+    database: result.database.path,
+    checks: result.checks.map((check) => `${check.id}=${check.status}`),
+  });
+  return result;
 });
 
 ipcMain.handle('rekordbox:read-library-db', async (_event, dbPath) => {

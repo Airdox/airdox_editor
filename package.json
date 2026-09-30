@@ -8,10 +8,12 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && npm run build:stems-bridge && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node scripts/build-anlz-structure.mjs && vite build && npm run build:stems-bridge && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:stems-bridge": "esbuild src/stems/nodeBridge.ts --bundle --platform=node --format=cjs --outfile=dist/stems/node-bridge.cjs",
+    "build:anlz-structure": "node scripts/build-anlz-structure.mjs",
+    "build:anlz-structure:check": "node scripts/build-anlz-structure.mjs --check",
     "start": "node dist/server.cjs",
-    "desktop": "npm run build && electron .",
+    "desktop": "npm run build && npm run rekordbox:native:ensure && electron .",
     "package:win": "npm run build && electron-builder --win",
     "package:win:nsis": "npm run build && electron-builder --win nsis",
     "package:win:portable": "npm run build && electron-builder --win portable",
@@ -41,6 +43,12 @@
     "stems:setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup-stem-model.ps1",
     "test:stems:real": "node scripts/run-tests.mjs --filter stem-real-audio --fail-on-skip",
     "test:package": "node -e \"JSON.parse(require('node:fs').readFileSync('package.json','utf8')); console.log('package.json: gültiges JSON')\"",
+    "rekordbox:doctor": "node scripts/rekordbox-gate-doctor.mjs",
+    "rekordbox:preflight": "node scripts/rekordbox-preflight.mjs",
+    "rekordbox:native:rebuild": "node scripts/rebuild-native-sqlcipher.mjs --force",
+    "rekordbox:native:ensure": "node scripts/rebuild-native-sqlcipher.mjs",
+    "rekordbox:native:check": "node scripts/rebuild-native-sqlcipher.mjs --check",
+    "test:rekordbox:runtime": "node tests/rekordbox-runtime-smoke.mjs",
     "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
@@ -50,6 +58,7 @@
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
@@ -76,7 +85,6 @@
     "vite": "^6.2.3"
   },
   "optionalDependencies": {
-    "better-sqlite3-multiple-ciphers": "^12.11.1",
     "onnxruntime-node": "^1.30.0"
   },
   "build": {
@@ -128,7 +136,7 @@
     "directories": {
       "output": "release"
     },
-    "npmRebuild": false,
+    "npmRebuild": true,
     "win": {
       "target": [
         "nsis",
@@ -146,6 +154,9 @@
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
     },
-    "artifactName": "${productName}-${version}-setup.${ext}"
+    "artifactName": "${productName}-${version}-setup.${ext}",
+    "buildDependenciesFromSource": false,
+    "beforePack": "scripts/electron-builder-hooks.cjs",
+    "afterPack": "scripts/electron-builder-hooks.cjs"
   }
 }

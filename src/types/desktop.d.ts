@@ -42,6 +42,14 @@ declare global {
        */
       resolveTrackFromMasterDb(query: RekordboxTrackGateQuery): Promise<RekordboxTrackGateResult>;
       /**
+       * Beweist aus dem laufenden Electron-Prozess heraus, dass das native
+       * SQLCipher-Modul für genau diese Electron-Version geladen werden kann
+       * und eine master.db read-only lesbar ist. Rein lesend.
+       */
+      checkRekordboxRuntime(
+        options?: { requireDatabase?: boolean; trackId?: string }
+      ): Promise<RekordboxRuntimeCheckResult>;
+      /**
        * Liefert die app-eigene `rekordbox_export2.xml` (kein Benutzerdatei-
        * dialog): im Paket als Ressource, im Entwicklungsmodus aus dem Repo.
        */
@@ -197,6 +205,8 @@ declare global {
     | 'ANLZ_READ_FAILED'
     | 'ANLZ_INVALID'
     | 'REKORDBOX_WAVEFORM_MISSING'
+    | 'ANLZ_WAVEFORM_UNREADABLE'
+    | 'ANLZ_SOURCE_MISMATCH'
     | 'ORIGINAL_AUDIO_NOT_FOUND';
 
   interface RekordboxTrackGateQuery {
@@ -230,6 +240,19 @@ declare global {
       tags: string[];
       hasWaveform: boolean;
       truncated?: boolean;
+      /**
+       * Die vom Gate tatsächlich dekodierte Rekordbox-Waveform. Der Renderer
+       * muss exakt diese Bucket-Anzahl aus derselben Datei lesen.
+       */
+      waveform?: {
+        tag: string;
+        buckets: number;
+        entryBytes: number;
+        style: 'MONO_5BIT' | 'MONO_4BIT' | 'RGB_5BIT' | 'TRIPLE_BYTE' | 'COLOR_6BYTE';
+        peakMax: number;
+      };
+      /** Quell-Audiopfad aus dem PPTH-Abschnitt. */
+      ppthPath?: string;
     };
     original?: {
       path: string;
@@ -237,11 +260,18 @@ declare global {
       source: 'XML_LOCATION' | 'MASTER_DB' | 'ANLZ_PPTH';
       xmlLocation?: string;
       databasePath?: string;
+      ppthPath?: string;
       size: number;
       modifiedAt: number;
     };
     /** djmdCue-/cue-Rows des Datensatzes (best effort, max. 512). */
     cues?: RekordboxDatabaseReadRow[];
+    /** djmdCue ist immer die *letzte* Marker-Quelle (ANLZ PCO2/PCOB gewinnen). */
+    cueSource?: 'DJMD_CUE';
+    /** Kandidaten, die der Gate bewusst verworfen hat (Gerätepfad, falsche Quelle). */
+    rejected?: Array<{ path: string; source: string; reason: string }>;
+    /** Nur bei ANLZ_SOURCE_MISMATCH: der PPTH-Pfad, für den die ANLZ erzeugt wurde. */
+    ppthPath?: string;
   }
 
   interface RekordboxBundledXmlResult {
@@ -252,5 +282,34 @@ declare global {
     modifiedAt?: number;
     reason?: string;
     accessMode: 'READ_ONLY';
+  }
+
+  /** Laufzeitnachweis des Master-DB-Pfades (electron/rekordboxRuntimeCheck.cjs). */
+  interface RekordboxRuntimeCheckResult {
+    ok: boolean;
+    platform: string;
+    arch: string;
+    electronVersion: string | null;
+    nodeVersion: string | null;
+    modulesAbi: string | null;
+    module: { name: string; version: string | null; path: string | null };
+    database: {
+      path: string | null;
+      dbType: string | null;
+      openedReadonly: boolean;
+      unchanged: boolean | null;
+      trackId: string | null;
+    };
+    checks: Array<{
+      id:
+        | 'ELECTRON_VERSION'
+        | 'NATIVE_MODULE_RESOLVED'
+        | 'NATIVE_MODULE_LOADABLE'
+        | 'SQLCIPHER_FUNCTIONAL'
+        | 'MASTER_DB_READONLY';
+      label: string;
+      status: 'OK' | 'WARN' | 'FAIL' | 'SKIP';
+      detail: string;
+    }>;
   }
 }

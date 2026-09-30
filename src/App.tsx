@@ -16,6 +16,7 @@ import {
   EditHistoryEntry,
   CuePoint,
   AnalysisFileReference,
+  RekordboxCueSource,
 } from './types/rekordbox';
 import { buildCues, mapRekordboxDatabaseRows } from './rekordbox/dbParser';
 import { analyzeAudioBuffer, extractMiniPeaks, estimateBpm } from './waveform/analyzer';
@@ -3172,13 +3173,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!gate.ok || gate.code !== 'OK') {
         throw new Error(`[${gate.code}] ${gate.reason || 'Der Master-DB-Gate hat den Track abgelehnt.'}`);
       }
+      // Der Gate behauptet nicht nur "die Datei sieht gut aus", sondern liefert
+      // die konkret dekodierte Welleform. Ohne diesen Nachweis darf die Datei
+      // gar nicht erst gelesen werden.
+      const gateWaveform = gate.analysis?.waveform;
+      if (!gateWaveform || gateWaveform.buckets <= 0 || gateWaveform.peakMax <= 0) {
+        throw new Error('[REKORDBOX_WAVEFORM_MISSING] Der Master-DB-Gate hat keine dekodierbare Rekordbox-Waveform bestätigt.');
+      }
       logger.info('DATABASE', `Master-DB-Gate OK für TrackID ${gate.content?.id}`, {
         trackId: selectedDef.id,
         dbType: gate.dbType,
         dbPath: gate.dbPath,
         analysisPath: gate.analysis?.path,
         anlzTags: gate.analysis?.tags,
+        anlzPpth: gate.analysis?.ppthPath,
+        waveform: gateWaveform,
         originalPath: gate.original?.path,
+        originalSource: gate.original?.source,
+        rejectedCandidates: gate.rejected?.length ?? 0,
         gateCues: gate.cues?.length ?? 0,
       });
 
@@ -3217,7 +3229,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         const sourcePath = resolvedDef.analysisSource.sourceMediaPath;
         const referencePath = gate.original?.path || mediaLocation;
         if (sourcePath && !areSameMediaPath(referencePath, sourcePath)) {
-          throw new Error('[ANLZ_INVALID] Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
+          throw new Error('[ANLZ_SOURCE_MISMATCH] Die interne ANLZ-PPTH-Quelle stimmt nicht mit dem ausgewählten Original-Audio überein.');
         }
         throw new Error('[ANLZ_READ_FAILED] Die passende Rekordbox-ANLZ-Datei konnte nicht read-only geöffnet werden.');
       }
@@ -3230,9 +3242,27 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       if (!resolvedDef.analysisSource?.path) {
         throw new Error('[ANLZ_NOT_FOUND] Die native Waveform hat keinen verifizierbaren Rekordbox-ANLZ-Quellpfad.');
       }
+      // Schließt die letzte Lücke zwischen Gate und Parser: der Gate hat eine
+      // konkrete Welleform dekodiert, der Renderer muss aus derselben Datei
+      // exakt so viele Buckets lesen. Jede Abweichung hieße, dass nicht die
+      // geprüfte Waveform angezeigt würde.
+      if (resolvedDef.analysis.length !== gateWaveform.buckets) {
+        throw new Error(
+          `[ANLZ_WAVEFORM_UNREADABLE] Gate und Parser liefern unterschiedliche Wellenformen: ` +
+          `${gateWaveform.buckets} (${gateWaveform.tag}) laut Master-DB-Gate, ${resolvedDef.analysis.length} aus dem Renderer-Parser.`
+        );
+      }
+      if (resolvedDef.analysis.length <= 0) {
+        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die ANLZ-Waveform enthält keine verwertbaren Buckets.');
+      }
 
       // Fallback-Cues aus djmdCue: nur, wenn weder XML noch ANLZ Positionsmarker
       // geliefert haben. Die Spalten kommen direkt aus dem Master-DB-Gate.
+      let cueSource: RekordboxCueSource = 'NONE';
+      const anlzCueTags = (gate.analysis?.tags || []).filter((tag) => tag === 'PCO2' || tag === 'PCOB');
+      if (resolvedDef.cues && resolvedDef.cues.length > 0) {
+        cueSource = anlzCueTags.includes('PCO2') ? 'ANLZ_PCO2' : anlzCueTags.includes('PCOB') ? 'ANLZ_PCOB' : 'REKORDBOX_XML';
+      }
       if (gate.cues && gate.cues.length > 0 && (!resolvedDef.cues || resolvedDef.cues.length === 0)) {
         const mappedCues = buildCues(
           gate.content?.id || String(selectedDef.id),
@@ -3240,6 +3270,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           resolvedDef.bpm || 130,
           resolvedDef.beatGrid?.firstBeat || 0
         );
+        if (mappedCues.cues.length > 0) cueSource = 'DJMD_CUE';
         resolvedDef = {
           ...resolvedDef,
           cues: mappedCues.cues,
@@ -3264,7 +3295,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         resolvedDef.analysisSource.sourceMediaPath &&
         !areSameMediaPath(source.path, resolvedDef.analysisSource.sourceMediaPath)
       ) {
-        throw new Error('[ANLZ_INVALID] ANLZ-PPTH und Original-Audio verweisen nicht auf dieselbe Datei.');
+        throw new Error('[ANLZ_SOURCE_MISMATCH] ANLZ-PPTH und Original-Audio verweisen nicht auf dieselbe Datei.');
       }
 
       const audioCtx = audioEngine.getContext();
@@ -3290,6 +3321,39 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       };
       const bpm = resolvedDef.bpm || 130.0;
       const firstBeat = resolvedDef.beatGrid?.firstBeat || 0.0;
+      // Das Gate-Ernis ist keine temporäre IPC-Antwort: TrackID, Datenbank,
+      // ANLZ-Pfad, PPTH, Originalpfad, Waveform-Herkunft und Cue-Quelle landen
+      // in der bestehenden analysisSource / databaseRecord-Struktur.
+      const gateProvenance = {
+        rekordboxTrackId: String(selectedDef.id),
+        contentId: gate.content?.id || String(selectedDef.id),
+        databasePath: gate.dbPath,
+        databaseType: gate.dbType,
+        ppthPath: gate.analysis?.ppthPath,
+        originalPath: gate.original?.path,
+        waveform: {
+          tag: gateWaveform.tag,
+          buckets: gateWaveform.buckets,
+          entryBytes: gateWaveform.entryBytes,
+          style: gateWaveform.style,
+          peakMax: gateWaveform.peakMax,
+        },
+        cueSource,
+        gateCode: 'OK' as const,
+        gateVerifiedAt: Date.now(),
+      };
+      // Dieselbe Herkunft, reduziert auf die Felder des Extraktionsprotokolls.
+      const gateRecord = {
+        rekordboxTrackId: gateProvenance.rekordboxTrackId,
+        contentId: gateProvenance.contentId,
+        databasePath: gateProvenance.databasePath,
+        databaseType: gateProvenance.databaseType,
+        ppthPath: gateProvenance.ppthPath,
+        originalPath: gateProvenance.originalPath,
+        waveformTag: gateWaveform.tag,
+        cueSource: gateProvenance.cueSource,
+        gateCode: 'OK' as const,
+      };
       const loadedTrack: TrackModel = {
         ...resolvedDef,
         id: resolvedDef.id || `track-${Date.now()}`,
@@ -3327,6 +3391,23 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           sourceDuration: duration,
           status: 'AVAILABLE',
           accessMode: 'READ_ONLY',
+          ...gateProvenance,
+        },
+        databaseRecord: {
+          trackId: resolvedDef.id || String(selectedDef.id),
+          databaseSource: 'REKORDBOX_ANLZ',
+          anlzTagsFound: gate.analysis?.tags || resolvedDef.databaseRecord?.anlzTagsFound || [],
+          anlzWarnings: resolvedDef.databaseRecord?.anlzWarnings,
+          memoryCuesCount: (resolvedDef.cues || []).filter((cue) => cue.type === 'MEMORY').length,
+          hotCuesCount: (resolvedDef.cues || []).filter((cue) => cue.type === 'HOT_CUE').length,
+          loopsCount: (resolvedDef.loops || []).length,
+          waveformBuckets: nativeAnalysis.length,
+          waveformModeSupported: ['BLUE', 'RGB', '3BAND'],
+          sampleRate: originalAudio.sampleRate,
+          checksum: audioEngine.computeBufferChecksum(originalAudio),
+          extractedAt: Date.now(),
+          filePath: gate.analysis?.path,
+          ...gateRecord,
         },
         origin: DataOrigin.REKORDBOX_XML,
         workingSegments: [
@@ -3369,6 +3450,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         waveformOrigin: nativeAnalysis.origin,
         mediaPathMatched: true,
         anlzPathMatched: true,
+      });
+
+      // Sichtbarer Herkunftsnachweis: SOURCE / DATABASE / ANALYSIS / WAVEFORM /
+      // AUDIO. Klein und unaufdringlich, aber technisch eindeutig – es ist
+      // erkennbar, dass keine eigene Analyse verwendet wurde.
+      showOperationFeedback({
+        title: 'Rekordbox-Quelle geladen',
+        operationType: 'IMPORT',
+        description: [
+          'SOURCE    REKORDBOX ANLZ',
+          `DATABASE  ${gate.dbType || 'MASTER_DB'} – ${(gate.dbPath || '').split(/[\\/]/).pop() || 'master.db'}`,
+          `ANALYSIS  ${(gate.analysis?.path || '').split('.').pop()?.toUpperCase() || 'ANLZ'} (read only)`,
+          `WAVEFORM  ${gateWaveform.tag} · ${gateWaveform.buckets} Buckets`,
+          `CUES      ${cueSource}`,
+          'AUDIO     READ ONLY',
+        ].join('\n'),
+        originalSha256: loadedTrack.originalSha256,
+        timestamp: Date.now(),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

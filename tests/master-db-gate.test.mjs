@@ -37,6 +37,9 @@ const {
 } = gateModule;
 
 // ─── Zustandsmaschine selbst prüfen ─────────────────────────────────────────
+// Erweitert um ANLZ_WAVEFORM_UNREADABLE (Waveform-Sektion vorhanden, aber nicht
+// dekodierbar) und ANLZ_SOURCE_MISMATCH (PPTH und gewählter Originalpfad sind
+// nicht dieselbe Datei).
 const EXPECTED_CODES = [
   'OK',
   'MASTER_DB_NOT_FOUND',
@@ -48,6 +51,8 @@ const EXPECTED_CODES = [
   'ANLZ_READ_FAILED',
   'ANLZ_INVALID',
   'REKORDBOX_WAVEFORM_MISSING',
+  'ANLZ_WAVEFORM_UNREADABLE',
+  'ANLZ_SOURCE_MISMATCH',
   'ORIGINAL_AUDIO_NOT_FOUND',
 ];
 assert.deepEqual([...GATE_CODES].sort(), [...EXPECTED_CODES].sort(), 'GATE_CODES must match the documented state machine');
@@ -95,7 +100,18 @@ function anlzWithPpth(pathValue) {
   ]);
 }
 
-const WAVEFORM_BODY = Buffer.alloc(48, 0x80);
+/**
+ * Real PWV5 payload: len_header 0x18, u4 len_entry_bytes @+0x0c, u4
+ * len_entries @+0x10, u4 unknown @+0x14, data @+0x18. The body starts at
+ * section offset +12, so the fields sit at body[0], body[4] and body[8].
+ * Der Gate dekodiert daraus eine echte Waveform – deshalb muss das Fixture
+ * das reale Layout haben und nicht nur ein PWV5-Tag mit Füllbytes.
+ */
+const WAVEFORM_ENTRY_COUNT = 12;
+const WAVEFORM_BODY = Buffer.alloc(48, 0xff);
+WAVEFORM_BODY.writeUInt32BE(2, 0); // len_entry_bytes
+WAVEFORM_BODY.writeUInt32BE(WAVEFORM_ENTRY_COUNT, 4); // len_entries
+WAVEFORM_BODY.writeUInt32BE(0, 8); // unknown
 const validAnlz = Buffer.concat([
   pmaiHeader(32),
   section('PPTH', Buffer.alloc(40, 0x00), 0x10),
@@ -467,4 +483,4 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.ok(device && device.includes('contents_4136090260'), `device location resolved: ${device}`);
 }
 
-console.log('master-db-gate: all 11 gate codes, ANLZ section walk and read-only contract verified');
+console.log('master-db-gate: all 13 gate codes, ANLZ section walk and read-only contract verified');
