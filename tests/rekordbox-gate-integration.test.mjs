@@ -28,7 +28,7 @@
 
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -424,7 +424,12 @@ function parseWithRendererParser(bytes) {
       '}));',
     ].join('\n')
   );
-  const output = execFileSync('npx', ['tsx', bridgePath, analysisPath], {
+  // Direkt über die lokale tsx-CLI statt `npx`: Auf Windows existiert nur
+  // `npx.cmd`, und execFileSync ohne shell findet diese nicht (ENOENT).
+  const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const command = existsSync(tsxCli) ? process.execPath : process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const args = existsSync(tsxCli) ? [tsxCli, bridgePath, analysisPath] : ['tsx', bridgePath, analysisPath];
+  const output = execFileSync(command, args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
