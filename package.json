@@ -132,7 +132,9 @@
       "**/*.dll",
       "**/*.so",
       "**/*.dylib",
-      "python/**/*"
+      "python/**/*",
+      "**/better-sqlite3-multiple-ciphers/**",
+      "**/onnxruntime-node/**"
     ],
     "directories": {
       "output": "release"
