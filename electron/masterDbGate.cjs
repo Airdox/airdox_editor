@@ -3,18 +3,17 @@ function resolveAnlzPath(analysisPath) {
   if (!analysisPath) return null;
   if (fs.existsSync(resolveAnlzPath(analysisPath))) return analysisPath;
 
+  // Typische Rekordbox-Analysepfade aufl�sen (AppData, User Profile, Laufwerks-Roots)
+  const appData = process.env.APPDATA || '';
+  const userProfile = process.env.USERPROFILE || '';
   const cleanPath = analysisPath.replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
-  const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
 
   const candidates = [
-    // Laufwerk D: Priorit�t
-    path.join('D:', 'PIONEER', relativePioneer),
-    path.join('D:', cleanPath),
-    path.join('D:', 'PIONEER', cleanPath),
-    
-    // Fallback auf C: und AppData
-    path.join('C:', 'PIONEER', relativePioneer),
-    path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
+    path.join(appData, 'Pioneer', 'rekordbox', 'share', cleanPath),
+    path.join(appData, 'Pioneer', 'rekordbox', cleanPath),
+    path.join(userProfile, 'AppData', 'Roaming', 'Pioneer', 'rekordbox', 'share', cleanPath),
+    path.join('C:', cleanPath),
+    path.join('C:', 'PIONEER', cleanPath.replace(/^PIONEER[\\/]/i, ''))
   ];
 
   for (const cand of candidates) {
