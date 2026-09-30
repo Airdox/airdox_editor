@@ -1,19 +1,18 @@
 
+// Auto-generated Pfadaufl�sung f�r D:\PIONEER
 function resolveAnlzPath(analysisPath) {
   if (!analysisPath) return null;
   if (fs.existsSync(resolveAnlzPath(analysisPath))) return analysisPath;
 
-  // Typische Rekordbox-Analysepfade aufl�sen (AppData, User Profile, Laufwerks-Roots)
-  const appData = process.env.APPDATA || '';
-  const userProfile = process.env.USERPROFILE || '';
-  const cleanPath = analysisPath.replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
+  const cleanPath = String(analysisPath).replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
+  const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
 
   const candidates = [
-    path.join(appData, 'Pioneer', 'rekordbox', 'share', cleanPath),
-    path.join(appData, 'Pioneer', 'rekordbox', cleanPath),
-    path.join(userProfile, 'AppData', 'Roaming', 'Pioneer', 'rekordbox', 'share', cleanPath),
-    path.join('C:', cleanPath),
-    path.join('C:', 'PIONEER', cleanPath.replace(/^PIONEER[\\/]/i, ''))
+    path.join('D:', 'PIONEER', relativePioneer),
+    path.join('D:', cleanPath),
+    path.join('D:', 'PIONEER', cleanPath),
+    path.join('C:', 'PIONEER', relativePioneer),
+    path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
   ];
 
   for (const cand of candidates) {
@@ -320,8 +319,7 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     analysisStat = await stat(analysisPath);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      console.warn('[ANLZ_NOT_FOUND] Externe DAT-Datei fehlt auf Pfad. Fallback auf In-Memory Waveform aktiviert.');
-return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memory Waveform', content: null, dbContext };
+      return fail('ANLZ_NOT_FOUND', `ANLZ-Datei nicht gefunden: ${analysisPath}`, { ...dbContext, content });
     }
     return fail(
       'ANLZ_READ_FAILED',
@@ -330,7 +328,7 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     );
   }
   if (!analysisStat || !analysisStat.isFile()) {
-    console.warn('[ANLZ_NOT_FOUND] Externe DAT-Datei fehlt auf Pfad. Fallback auf In-Memory Waveform aktiviert.'); return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memory Waveform', content: null, dbContext };
+    return fail('ANLZ_NOT_FOUND', `ANLZ-Pfad verweist nicht auf eine Datei: ${analysisPath}`, {
       ...dbContext,
       content,
     });
