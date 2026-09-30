@@ -21,7 +21,10 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -325,11 +328,47 @@ function makeDeps(overrides = {}) {
     'scripts/rekordbox-preflight.mjs',
     'tests/rekordbox-runtime-smoke.mjs',
   ];
+
+  // Einzige erlaubte Schreibung im gesamten Ladepfad: die SQLCipher-
+  // Funktionsprobe des Preflights. SQLCipher verweigert `PRAGMA key` bei
+  // In-Memory-Datenbanken, deshalb legt die Probe eine eigene temporäre
+  // Datei im Systemtemp an und räumt sie wieder auf – Rekordbox-Quellen
+  // werden dabei nie berührt. Der Scan schneidet genau diese Funktion
+  // heraus; alles andere in derselben Datei bleibt strikt schreibfrei.
+  const exciseProbe = (source) => {
+    const marker = 'function probeCipherFunctionality';
+    const start = source.indexOf(marker);
+    if (start === -1) return { rest: source, probe: '' };
+    let depth = 0;
+    let i = source.indexOf('{', start);
+    const open = i;
+    for (; i < source.length; i++) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    return { rest: source.slice(0, start) + source.slice(i + 1), probe: source.slice(open, i + 1) };
+  };
+
   for (const file of files) {
     const source = await read(file);
+    if (file.endsWith('rekordboxRuntimeCheck.cjs')) {
+      const { rest, probe } = exciseProbe(source);
+      assert.ok(probe.length > 0, 'die SQLCipher-Funktionsprobe ist auffindbar');
+      assert.ok(!FORBIDDEN.test(rest), `${file} darf außerhalb der Funktionsprobe keine Schreib-API enthalten`);
+      assert.ok(FORBIDDEN.test(probe), 'die Funktionsprobe legt ihre temporäre Datei selbst an');
+      assert.ok(
+        probe.includes('os.tmpdir()'),
+        'die Probe-Datenbank liegt ausschließlich im Systemtemp, nie in einer Rekordbox-Quelle'
+      );
+      assert.ok(!probe.includes('Pioneer'), 'die Probe kennt keine Rekordbox-Ordner');
+      continue;
+    }
     assert.ok(!FORBIDDEN.test(source), `${file} darf keine Schreib-API enthalten`);
   }
-  ok(`Schreibschutz geprüft (${files.length} Module des Ladepfads)`);
+  ok(`Schreibschutz geprüft (${files.length} Module des Ladepfads, Funktionsprobe auf Systemtemp begrenzt)`);
 }
 
 // Die isolierte SQLCipher-Probestube: nur OS-Temp, keine Nutzerpfade,
@@ -377,6 +416,54 @@ function makeDeps(overrides = {}) {
     assert.equal(byId.NATIVE_MODULE_LOADABLE, 'OK', `NATIVE_MODULE_LOADABLE: FAILs=${failed}`);
     assert.equal(byId.SQLCIPHER_FUNCTIONAL, 'OK', `SQLCIPHER_FUNCTIONAL: FAILs=${failed}`);
     ok('Runtime-Preflight bestätigt vorhandenes natives SQLCipher-Modul (Scratch-Temp-Probe)');
+
+  // "Modul fehlt"-Route deterministisch: ein isolierter App-Root ohne
+  // node_modules. Diese Assertion darf nie von der Maschine abhängen, auf der
+  // die Suite läuft – in der CI ist das native Modul nach `npm ci` nämlich
+  // korrekt vorhanden, und ein Preflight-Test, der das als Fehler wertet,
+  // wäre dort grundlos rot.
+  const isolatedRoot = mkdtempSync(path.join(os.tmpdir(), 'airdox-preflight-root-'));
+  try {
+    writeFileSync(path.join(isolatedRoot, 'package.json'), '{"name":"airdox-preflight-probe","version":"0.0.0"}');
+    const result = runtimeCheck.checkRekordboxRuntime({ appRoot: isolatedRoot });
+    assert.equal(result.ok, false, 'ohne natives Modul ist der Preflight nicht positiv');
+    const failed = result.checks.filter((check) => check.status === 'FAIL').map((check) => check.id);
+    assert.ok(failed.includes('NATIVE_MODULE_RESOLVED'), `erwartete NATIVE_MODULE_RESOLVED, war ${failed}`);
+    assert.ok(failed.includes('SQLCIPHER_FUNCTIONAL'), 'ohne Modul ist die Funktionsprobe nicht bestanden');
+    assert.ok(runtimeCheck.hasUnprovenChecks(result), 'der Preflight meldet den Zustand als unvollständig');
+    const text = runtimeCheck.formatRekordboxRuntimeReport(result);
+    assert.ok(text.includes('FEHLER'), 'der Bericht nennt den Fehlerstatus');
+    ok(`Runtime-Preflight erkennt fehlendes natives Modul (${failed.join(', ')})`);
+  } finally {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+  }
+
+  // Gegenprobe: IST das natives Modul auf dieser Maschine tatsächlich ladbar
+  // (CI-Fall nach `npm ci`), dann muss die SQLCipher-Funktionsprobe bestehen –
+  // sonst wäre der Preflight auf jeder gesunden Windows-Installation rot,
+  // obwohl das Modul einwandfrei läuft. Eine Probe, die z. B. `PRAGMA key`
+  // auf einer In-Memory-Datenbank ausführt (von SQLCipher abgelehnt), würde
+  // hier genau gefasst.
+  let moduleConstructible = false;
+  try {
+    const probe = new (require('better-sqlite3-multiple-ciphers'))(':memory:');
+    probe.close();
+    moduleConstructible = true;
+  } catch {
+    moduleConstructible = false;
+  }
+  if (moduleConstructible) {
+    const live = runtimeCheck.checkRekordboxRuntime({});
+    const functional = live.checks.find((check) => check.id === 'SQLCIPHER_FUNCTIONAL');
+    assert.ok(functional, 'SQLCIPHER_FUNCTIONAL ist Teil des Preflights');
+    assert.equal(
+      functional.status,
+      'OK',
+      `natives Modul ladbar, aber SQLCipher-Funktionsprobe fehlgeschlagen: ${functional.detail}`
+    );
+    ok('Runtime-Preflight bestätigt SQLCipher bei vorhandenem Modul (Funktionsprobe OK)');
+  } else {
+    ok('Runtime-Preflight: natives Modul nicht ladbar – Funktionsprobe zutreffend übersprungen');
   }
 }
 

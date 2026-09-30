@@ -28,7 +28,11 @@ async function run() {
   assert.equal(probe.usable, false); assert.match(probe.reason, /ENOENT/); passed++;
 
   // 3. Python exists but Demucs is not installed (the screenshot failure).
-  probe = await probePython('C:\\Python314\\python.exe', async () => result({
+  //    Der Kandidatenname ist bewusst NICHT absolut: probePython prüft
+  //    absolute Pfade zuerst auf Existenz (auf Windows wäre
+  //    C:\Python314\python.exe nicht vorhanden → „Datei nicht gefunden"),
+  //    und dieser Fall testet die Versionsablehnung, nicht die Existenzprüfung.
+  probe = await probePython('python-314', async () => result({
     version: [3, 14, 0], executable: 'C:\\Python314\\python.exe', demucs: false,
     importError: "No module named 'demucs'",
   }));

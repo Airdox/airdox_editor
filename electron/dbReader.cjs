@@ -140,6 +140,11 @@ function openRekordboxDb(filePath) {
       // (readRekordboxDatabase, openContentRow) brechen bei fehlendem Flag ab.
       // Ohne natives Modul trat dieser Fall nie auf – die kleine Datenbank-
       // umgebung (tests/support/rekordboxDbEnv.mjs) hat ihn sichtbar gemacht.
+      // `available: true` ist verbindlich: openRekordboxDb ist die innere
+      // Funktion von openContentRow/readRekordboxDatabase, die beide über
+      // `!opened.available` prüfen. Ohne das Flag galt auch ein erfolgreicher
+      // Öffnungsvorgang als Fehlschlag (Grund: undefined) – der Master-DB-Gate
+      // hätte auf jeder echten Installation MASTER_DB_OPEN_FAILED gemeldet.
       return { available: true, db, dbType };
     } catch (openError) {
       try {
@@ -437,35 +442,81 @@ function readJsonIfExists(filePath) {
 }
 
 function candidateFromOptions(appDir) {
-  const optionsPath = path.join(appDir, 'rekordboxAgent', 'storage', 'options.json');
-  const options = readJsonIfExists(optionsPath);
-  if (!options || !Array.isArray(options.options)) return null;
-  for (const entry of options.options) {
-    if (Array.isArray(entry) && entry[0] === 'db-path' && typeof entry[1] === 'string' && entry[1].trim()) {
-      return entry[1];
+  const pioneerRoot = path.dirname(appDir);
+  // Rekordbox speichert den tatsächlichen Datenbankort in der options.json
+  // des rekordboxAgent. Kanonisch liegt sie als Geschwister der Version-Ordner:
+  //   %APPDATA%\Pioneer\rekordboxAgent\storage\options.json (Windows)
+  //   ~/Library/Application Support/Pioneer/rekordboxAgent/storage/options.json (macOS)
+  // Die alte Suche nur innerhalb des Version-Ordners
+  // (rekordbox7\rekordboxAgent\…) hat diesen Ort übersehen – ein
+  // benutzerdefinierter db-path wurde nie gefunden, der Gate suchte dann nur
+  // in (oft alten/leeren) Standard-Ordnern.
+  const optionsPaths = [
+    path.join(pioneerRoot, 'rekordboxAgent', 'storage', 'options.json'),
+    path.join(appDir, 'rekordboxAgent', 'storage', 'options.json'),
+  ];
+  for (const optionsPath of optionsPaths) {
+    const options = readJsonIfExists(optionsPath);
+    if (!options || !Array.isArray(options.options)) continue;
+    for (const entry of options.options) {
+      if (Array.isArray(entry) && entry[0] === 'db-path' && typeof entry[1] === 'string' && entry[1].trim()) {
+        return entry[1];
+      }
     }
   }
   return null;
 }
 
+/**
+ * Resolves the `db-path` value to a concrete database file. rekordbox writes
+ * the full file path on macOS, but configs have also been seen that point at
+ * the containing folder – accept both (always read-only).
+ */
+function resolveDbPathValue(rawValue) {
+  let p = String(rawValue).trim().replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1');
+  try {
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+      const master = path.join(p, 'master.db');
+      const oneLibrary = path.join(p, 'exportLibrary.db');
+      p = fs.existsSync(master) && fs.statSync(master).isFile()
+        ? master
+        : fs.existsSync(oneLibrary) && fs.statSync(oneLibrary).isFile()
+          ? oneLibrary
+          : p;
+    }
+  } catch {
+    // existence is re-checked by the caller
+  }
+  return p;
+}
+
 function findDatabaseFiles(appDir) {
   const results = [];
-  if (!appDir || !fs.existsSync(appDir)) return results;
+  if (!appDir) return results;
+
+  // Rekordbox 6/7 keep the real database location in options.json (sibling
+  // of the version folders). Checked first so a custom db-path ranks ahead
+  // of stale default files; works even when the version folder itself does
+  // not exist.
+  const fromOptions = candidateFromOptions(appDir);
+  if (fromOptions) {
+    const p = resolveDbPathValue(fromOptions);
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        const base = path.basename(p).toLowerCase();
+        const kind = base === 'exportlibrary.db' ? 'ONE_LIBRARY' : base === 'master.db' ? 'MASTER_DB' : null;
+        if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)` });
+      }
+    } catch {
+      // ignore unreadable candidates
+    }
+  }
+
+  if (!fs.existsSync(appDir)) return results;
 
   const master = path.join(appDir, 'master.db');
   if (fs.existsSync(master) && fs.statSync(master).isFile()) {
     results.push({ path: master, kind: 'MASTER_DB', label: `master.db (${appDir})` });
-  }
-
-  // Rekordbox 6/7 keep the real database location in options.json.
-  const fromOptions = candidateFromOptions(appDir);
-  if (fromOptions) {
-    const p = fromOptions.replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1');
-    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-      const base = path.basename(p).toLowerCase();
-      const kind = base === 'exportlibrary.db' ? 'ONE_LIBRARY' : base === 'master.db' ? 'MASTER_DB' : null;
-      if (kind) results.push({ path: p, kind, label: `${base} (aus rekordboxAgent/options.json)` });
-    }
   }
 
   // OneLibrary exports live on prepared media; scan common subfolders lightly.
@@ -477,6 +528,20 @@ function findDatabaseFiles(appDir) {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
       results.push({ path: candidate, kind: 'ONE_LIBRARY', label: `exportLibrary.db (${candidate})` });
     }
+  }
+  return results;
+}
+
+/**
+ * Scans one Pioneer root folder (the parent of rekordbox7/rekordbox6/
+ * rekordbox) for database candidates – version folders plus the sibling
+ * rekordboxAgent options.json. Exported for tests; pure read-only fs reads.
+ */
+function collectPioneerRootCandidates(pioneerRoot) {
+  const results = [];
+  if (!pioneerRoot) return results;
+  for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
+    results.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
   }
   return results;
 }
@@ -506,14 +571,9 @@ function locateRekordboxDatabases() {
 
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(appData, 'Pioneer', dirName)));
-    }
+    candidates.push(...collectPioneerRootCandidates(path.join(appData, 'Pioneer')));
   } else if (process.platform === 'darwin') {
-    const base = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer');
-    for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-      candidates.push(...findDatabaseFiles(path.join(base, dirName)));
-    }
+    candidates.push(...collectPioneerRootCandidates(path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer')));
   }
 
   // Deduplicate by resolved path; options.json entries rank first.
@@ -535,5 +595,6 @@ module.exports = {
   readRekordboxDatabase,
   openContentRow,
   locateRekordboxDatabases,
+  collectPioneerRootCandidates,
   isCipherAvailable: () => getCipherModule() !== null,
 };
