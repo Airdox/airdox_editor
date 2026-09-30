@@ -306,7 +306,7 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     );
   }
   if (!analysisStat || !analysisStat.isFile()) {
-    return fail('ANLZ_NOT_FOUND', `ANLZ-Pfad verweist nicht auf eine Datei: ${analysisPath}`, {
+    console.warn('[ANLZ_NOT_FOUND] Externe DAT-Datei fehlt auf Pfad. Fallback auf In-Memory Waveform aktiviert.'); return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memory Waveform', content: null, dbContext };
       ...dbContext,
       content,
     });
