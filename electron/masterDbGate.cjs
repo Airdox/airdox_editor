@@ -299,7 +299,7 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
   const content = {
     id: String(row.ID ?? row.content_id ?? trackId),
     title: String(row.Title ?? row.title ?? '').trim() || undefined,
-      path: track.path || track.location || (track.FolderPath ? track.FolderPath + track.FileName : null),
+      path: row.path || row.location || (row.FolderPath ? row.FolderPath + row.FileName : null),
     folderPath: folderPath || undefined,
     fileName: fileName || undefined,
     analysisDataPath: rawAnalysisPath || undefined,
