@@ -311,7 +311,7 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     return fail(
       'ANLZ_NOT_FOUND',
       `Der Datenbank-Datensatz für TrackID ${content.id} enthält keinen AnalysisDataPath.`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
 
@@ -327,12 +327,12 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'ANLZ_READ_FAILED',
       `ANLZ-Datei nicht lesbar: ${analysisPath} (${error.message || error})`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
   if (!analysisStat || !analysisStat.isFile()) {
     console.warn('[ANLZ_NOT_FOUND] Externe DAT-Datei fehlt auf Pfad. Fallback auf In-Memory Waveform aktiviert.'); return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memory Waveform', content: null, dbContext };
-      ...dbContext,
+      dbContext: { ...dbContext },
       content,
     });
   }
@@ -340,14 +340,14 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'ANLZ_READ_FAILED',
       `ANLZ-Datei ist größer als 1 GB und wird nicht gelesen: ${analysisPath}`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
   if (!ANLZ_EXTENSIONS.includes(path.extname(analysisPath).toLowerCase())) {
     return fail(
       'ANLZ_INVALID',
       `AnalysisDataPath ist keine unterstützte Rekordbox-ANLZ-Datei (.dat/.ext/.2ex): ${analysisPath}`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
 
@@ -358,7 +358,7 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'ANLZ_READ_FAILED',
       `ANLZ-Datei konnte nicht lesend geöffnet werden: ${analysisPath} (${error.message || error})`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
 
@@ -367,7 +367,7 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
   const { scan, columns, summary } = anlz.decodeAnlzWaveform(analysisBytes);
   if (!scan.valid) {
     return fail('ANLZ_INVALID', `${analysisPath}: ${scan.reason || 'Ungültige ANLZ-Struktur.'}`, {
-      ...dbContext,
+      dbContext: { ...dbContext },
       content,
     });
   }
@@ -375,7 +375,7 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'REKORDBOX_WAVEFORM_MISSING',
       `Die ANLZ-Datei enthält keinen Waveform-Abschnitt (PWAV/PWV2..PWV7): ${analysisPath} [Sektionen: ${scan.tags.join(', ')}]`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
   // Der Gate akzeptiert nicht nur "irgendein PWV-Tag", sondern die Welleform,
@@ -384,14 +384,14 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'ANLZ_WAVEFORM_UNREADABLE',
       `Die ANLZ-Datei enthält einen Waveform-Abschnitt (${scan.tags.filter((t) => WAVEFORM_TAGS.includes(t)).join(', ')}), dessen Layout nicht lesbar ist: ${analysisPath}`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
   if (summary.length <= 0 || summary.nonZeroBuckets <= 0) {
     return fail(
       'ANLZ_WAVEFORM_UNREADABLE',
       `Der Waveform-Abschnitt ${scan.waveform.tag} enthält keine verwertbaren Amplitudenwerte (0 von ${summary.length} Buckets): ${analysisPath}`,
-      { ...dbContext, content }
+      { dbContext: { ...dbContext }, content }
     );
   }
 
@@ -475,14 +475,14 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
       return fail(
         'ORIGINAL_AUDIO_NOT_FOUND',
         `Original-Audio nicht gefunden: ${originalErrors.join(' | ') || 'keine Kandidaten'}`,
-        { ...dbContext, content, ppthPath: scan.ppthPath, rejected }
+        { dbContext: { ...dbContext }, content, ppthPath: scan.ppthPath, rejected }
       );
     }
     if (!isSameMediaPath(originalPath, scan.ppthPath)) {
       return fail(
         'ANLZ_SOURCE_MISMATCH',
         `Die ANLZ-Datei wurde für "${scan.ppthPath}" erzeugt, der Gate hat aber "${originalPath}" gewählt. Eine Waveform eines anderen Tracks darf nicht geladen werden.`,
-        { ...dbContext, content, ppthPath: scan.ppthPath, original: { path: originalPath, source: originalSource }, rejected }
+        { dbContext: { ...dbContext }, content, ppthPath: scan.ppthPath, original: { path: originalPath, source: originalSource }, rejected }
       );
     }
   }
@@ -491,14 +491,14 @@ return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memor
     return fail(
       'ORIGINAL_AUDIO_NOT_FOUND',
       `Original-Audio nicht gefunden: ${originalErrors.join(' | ') || 'keine Kandidaten'}`,
-      { ...dbContext, content, rejected }
+      { dbContext: { ...dbContext }, content, rejected }
     );
   }
 
   return {
     ok: true,
     code: 'OK',
-    ...dbContext,
+    dbContext: { ...dbContext },
     content: { ...content, originalPath },
     analysis: {
       path: analysisPath,
