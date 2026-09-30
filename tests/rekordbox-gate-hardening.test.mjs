@@ -371,6 +371,19 @@ function makeDeps(overrides = {}) {
   ok(`Schreibschutz geprüft (${files.length} Module des Ladepfads, Funktionsprobe auf Systemtemp begrenzt)`);
 }
 
+// Die isolierte SQLCipher-Probestube: nur OS-Temp, keine Nutzerpfade,
+// vollständige Aufräumung. Sie darf als einziger Ort auf dem Ladepfad Dateien
+// erzeugen – aber ausschließlich in mkdtemp-Verzeichnissen.
+{
+  const source = await read('electron/rekordboxCipherProbe.cjs');
+  assert.ok(source.includes('os.tmpdir()'), 'Probestube arbeitet nur im OS-Temp-Verzeichnis');
+  assert.ok(source.includes('mkdtempSync'), 'Probestube erzeugt ein frisches Temp-Verzeichnis');
+  assert.ok(source.includes('rmSync'), 'Probestube räumt ihre Scratch-Datei vollständig ab');
+  assert.equal(/Pioneer|AppData|rekordboxAgent|Application Support|Library[/\\]/i.test(source), false,
+    'Probestube darf keine Rekordbox-Nutzerpfade kennen');
+  ok('SQLCipher-Probestube ist auf OS-Temp beschränkt und räumt auf');
+}
+
 // dbReader öffnet ausschließlich read-only.
 {
   const source = await read('electron/dbReader.cjs');
@@ -383,6 +396,26 @@ function makeDeps(overrides = {}) {
 {
   const source = await read('electron/rekordboxRuntimeCheck.cjs');
   assert.ok(source.includes('mtimeMs'), 'der Preflight prüft die Unveränderlichkeit der master.db');
+  const result = runtimeCheck.checkRekordboxRuntime({});
+  const failed = result.checks.filter((check) => check.status === 'FAIL').map((check) => check.id);
+  const text = runtimeCheck.formatRekordboxRuntimeReport(result);
+  // Der Preflight soll BEIDE Realitäten korrekt beschreiben: fehlendes natives
+  // Modul als Fehler UND ein vorhandenes, funktionsfähiges Modul als Nachweis.
+  // (Vor der kleinen Datenbankumgebung testete dieser Block nur den ersten
+  // Fall und fiel überall dort aus, wo better-sqlite3-multiple-ciphers steht.)
+  if (!dbReader.isCipherAvailable()) {
+    assert.equal(result.ok, false, 'ohne natives Modul ist der Preflight nicht positiv');
+    assert.ok(failed.includes('NATIVE_MODULE_RESOLVED'), `erwartete NATIVE_MODULE_RESOLVED, war ${failed}`);
+    assert.ok(failed.includes('SQLCIPHER_FUNCTIONAL'), 'ohne Modul ist die Funktionsprobe nicht bestanden');
+    assert.ok(runtimeCheck.hasUnprovenChecks(result), 'der Preflight meldet den Zustand als unvollständig');
+    assert.ok(text.includes('FEHLER'), 'der Bericht nennt den Fehlerstatus');
+    ok(`Runtime-Preflight erkennt fehlendes natives Modul (${failed.join(', ')})`);
+  } else {
+    const byId = Object.fromEntries(result.checks.map((check) => [check.id, check.status]));
+    assert.equal(byId.NATIVE_MODULE_RESOLVED, 'OK', `NATIVE_MODULE_RESOLVED: FAILs=${failed}`);
+    assert.equal(byId.NATIVE_MODULE_LOADABLE, 'OK', `NATIVE_MODULE_LOADABLE: FAILs=${failed}`);
+    assert.equal(byId.SQLCIPHER_FUNCTIONAL, 'OK', `SQLCIPHER_FUNCTIONAL: FAILs=${failed}`);
+    ok('Runtime-Preflight bestätigt vorhandenes natives SQLCipher-Modul (Scratch-Temp-Probe)');
 
   // "Modul fehlt"-Route deterministisch: ein isolierter App-Root ohne
   // node_modules. Diese Assertion darf nie von der Maschine abhängen, auf der

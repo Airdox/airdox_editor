@@ -320,6 +320,7 @@ async function run() {
     assert.equal(gpuFinished.cpuFallback, true, 'der Rückfall ist als solcher gekennzeichnet');
     assert.match(
       String(gpuFinished.fallbackReason ?? ''),
+      /dml|directml|Provider|Session|CPU/i,
       // Englische Reasons aus der Session- und Provider-Kette ("Session …",
       // "Provider …", "dml") ebenso wie die deutsche Direktnachricht des
       // Separator ('Gerät "directml" ist auf diesem System nicht nutzbar …'),

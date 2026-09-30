@@ -136,6 +136,10 @@ function openRekordboxDb(filePath) {
       db.pragma(`key = '${key}'`);
       // Force decryption by touching the schema.
       db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+      // `available: true` ist vertraglich erforderlich: beide Aufrufer
+      // (readRekordboxDatabase, openContentRow) brechen bei fehlendem Flag ab.
+      // Ohne natives Modul trat dieser Fall nie auf – die kleine Datenbank-
+      // umgebung (tests/support/rekordboxDbEnv.mjs) hat ihn sichtbar gemacht.
       // `available: true` ist verbindlich: openRekordboxDb ist die innere
       // Funktion von openContentRow/readRekordboxDatabase, die beide über
       // `!opened.available` prüfen. Ohne das Flag galt auch ein erfolgreicher
@@ -189,14 +193,37 @@ function fetchRows(db, table, columns = '*', orderBy = '') {
   }
 }
 
+/**
+ * master.db markiert lokal gelöschte Einträge über `rb_local_deleted` (eine der
+ * dokumentierten Default-Spalten der djmd*-Tabellen). Rekordbox selbst zeigt
+ * solche Zeilen nicht mehr; real belegte Bibliotheken enthalten sie weiterhin.
+ * Wir filtern sie deshalb aus den Ergebnissen. Die Spalte existiert erst in
+ * neueren Datenbanken – ein Fehlschlag der Abfrage wird stillschweigend
+ * ignoriert (dann bleibt das alte Verhalten erhalten).
+ */
+function fetchDeletedContentIds(db) {
+  try {
+    const rows = db
+      .prepare('SELECT ID FROM djmdContent WHERE rb_local_deleted = 1')
+      .all();
+    return new Set(rows.map((row) => String(row.ID)));
+  } catch {
+    return new Set();
+  }
+}
+
 function readMasterDb(db) {
-  const content = fetchRows(db, 'djmdContent', [
+  const contentRaw = fetchRows(db, 'djmdContent', [
     'ID', 'FolderPath', 'FileNameL', 'Title', 'ArtistID', 'AlbumID', 'GenreID', 'BPM',
     'Length', 'TrackNo', 'BitRate', 'BitDepth', 'Commnt', 'FileType', 'Rating',
     'ReleaseYear', 'RemixerID', 'LabelID', 'KeyID', 'StockDate', 'ColorID',
     'DJPlayCount', 'AnalysisDataPath', 'FileSize', 'SampleRate', 'DateCreated',
     'ReleaseDate', 'ISRC', 'Subtitle', 'ComposerID',
   ].join(', '), 'ID');
+  const deletedIds = fetchDeletedContentIds(db);
+  const content = Array.isArray(contentRaw)
+    ? contentRaw.filter((row) => !deletedIds.has(String(row.ID)))
+    : contentRaw;
   const cues = fetchRows(db, 'djmdCue', ['ID', 'ContentID', 'InMsec', 'InFrame', 'OutMsec', 'OutFrame', 'Kind', 'Color', 'ColorTableIndex', 'ActiveLoop', 'Comment', 'BeatLoopSize'], 'ID');
   const artists = fetchRows(db, 'djmdArtist', 'ID, Name', 'Name');
   const albums = fetchRows(db, 'djmdAlbum', 'ID, Name', 'Name');
@@ -217,7 +244,10 @@ function readOneLibraryDb(db) {
   const keys = fetchRows(db, 'key', 'key_id, name');
   const labels = fetchRows(db, 'label', 'label_id, name');
   const playlists = fetchRows(db, 'playlist', 'playlist_id, name, playlist_id_parent, attribute');
-  const songPlaylists = fetchRows(db, 'playlist_content', 'playlist_content_id, playlist_id, content_id, sequenceNo');
+  // Dokumentierter Aufbau der playlist_content-Einträge (Device Library Plus):
+  // zusammengesetzter Schlüssel (playlist_id, content_id) + sequenceNo – es gibt
+  // KEINE eigene playlist_content_id-Spalte (pyrekordbox devicelib_plus.md).
+  const songPlaylists = fetchRows(db, 'playlist_content', 'playlist_id, content_id, sequenceNo');
   return { content, cues, artists, albums, genres, keys, labels, playlists, songPlaylists };
 }
 
@@ -347,6 +377,12 @@ function openContentRow(filePath, trackId) {
       }
     } catch (error) {
       return { available: false, dbType, reason: `Abfrage von ${table} fehlgeschlagen: ${error.message || error}` };
+    }
+
+    // Lokal gelöschte Einträge (master.db: rb_local_deleted = 1) sind für den
+    // Lade-Pfad nicht vorhanden – genau wie in rekordbox selbst.
+    if (row && Number(row.rb_local_deleted) === 1) {
+      row = null;
     }
 
     // Cue rows are optional context for the gate (best effort; missing cue

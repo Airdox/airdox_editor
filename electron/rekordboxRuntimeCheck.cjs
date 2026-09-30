@@ -17,6 +17,11 @@
  *   5. MASTER_DB_READONLY      – öffnet eine echte master.db lesend, und bleibt
  *                                 die Datei dabei byteweise unverändert?
  *
+ * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 beweist
+ * den Verschlüsselungsweg über eine isolierte Scratch-Datei im OS-Temp-
+ * Verzeichnis (siehe ./rekordboxCipherProbe.cjs – ":memory:" unterstützt
+ * PRAGMA key nicht); Schritt 5 vergleicht Größe und mtime der master.db vor
+ * und nach dem Zugriff.
  * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 arbeitet
  * auf einer frisch angelegten temporären Datei im Systemtemp-Verzeichnis
  * (SQLCipher verweigert `PRAGMA key` ausdrücklich bei In-Memory-Datenbanken –
@@ -29,6 +34,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const dbReader = require('./dbReader.cjs');
+const cipherProbe = require('./rekordboxCipherProbe.cjs');
 
 const MODULE_NAME = 'better-sqlite3-multiple-ciphers';
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -212,14 +218,16 @@ function checkRekordboxRuntime(options = {}) {
   // --- 4. SQLCipher funktionsfähig -----------------------------------------
   if (Database) {
     try {
-      const probe = probeCipherFunctionality(Database);
+      const probe = cipherProbe.probeCipherFunctionality(Database);
       if (!probe.ok) {
+        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Verschlüsselte Scratch-Datenbank konnte nicht geschrieben und wieder gelesen werden.');
         add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Temporäre Probe-Datenbank konnte nicht verschlüsselt geschrieben und gelesen werden.');
       } else {
         add(
           'SQLCIPHER_FUNCTIONAL',
           'SQLCipher funktionsfähig',
           'OK',
+          `Verschlüsselte Scratch-Datenbank im OS-Temp-Verzeichnis geschrieben und wieder entschlüsselt${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
           `Verschlüsselte temporäre Probe-Datenbank geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
         );
       }

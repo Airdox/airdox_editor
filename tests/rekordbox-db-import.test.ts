@@ -59,6 +59,10 @@ console.log('  REKORDBOX 6/7 DATABASE IMPORT MAPPING TEST SUITE              ');
 console.log('═══════════════════════════════════════════════════════════════════\n');
 
 // ─── FIXTURES (documented master.db column names) ───────────────────────────
+// Einheiten wie in der Rekordbox-Doku (docs/REKORDBOX_DATABASE_FORMAT.md):
+// BPM = BPM × 100, Length = GANZE SEKUNDEN (nicht ms), Rating = 0..255,
+// djmdCue: InMsec/OutMsec in Millisekunden, OutMsec = -1 wenn kein Loop,
+// Kind = 0 (Memory Cue) bzw. 1..8 (Hot Cue A..H).
 const masterRows = {
   content: [
     {
@@ -68,7 +72,7 @@ const masterRows = {
       AlbumID: '2',
       GenreID: '3',
       BPM: 12800, // BPM * 100
-      Length: 240000,
+      Length: 240, // Sekunden (dokumentierte Einheit)
       Rating: 255,
       DJPlayCount: '18',
       ReleaseYear: 2025,
@@ -86,7 +90,7 @@ const masterRows = {
       AlbumID: '6',
       GenreID: '7',
       BPM: 12500,
-      Length: 210000,
+      Length: 210, // Sekunden
       Rating: 4,
       KeyID: '8',
       FolderPath: null,
@@ -131,7 +135,7 @@ const oneLibraryRows = {
       album_id: 8,
       genre_id: 9,
       bpmx100: 17400,
-      length: 190000,
+      length: 190, // Sekunden (dokumentierte Einheit; reale Exporte: 195/390/297)
       rating: 5,
       releaseYear: 2025,
       key_id: 10,
@@ -153,7 +157,9 @@ const oneLibraryRows = {
   keys: [{ key_id: 10, name: '4A' }],
   labels: [],
   playlists: [{ playlist_id: 1, name: 'USB Set', playlist_id_parent: null, attribute: 0 }],
-  songPlaylists: [{ playlist_content_id: 1, playlist_id: 1, content_id: 55, sequenceNo: 1 }],
+  // playlist_content hat KEINE eigene ID-Spalte: zusammengesetzter Schlüssel
+  // (playlist_id, content_id) + sequenceNo (pyrekordbox devicelib_plus.md).
+  songPlaylists: [{ playlist_id: 1, content_id: 55, sequenceNo: 1 }],
 };
 
 // ─── SUITE 1: master.db mapping ─────────────────────────────────────────────
@@ -168,7 +174,7 @@ runTest('master.db mapping', 'Normalizes BPM, rating, joins and metadata', () =>
   assertEqual(track.genre, 'Techno', 'Genre join');
   assertEqual(track.key, '6A', 'Key join');
   assertEqual(track.bpm, 128, 'BPM /100');
-  assertEqual(Math.round(track.duration! * 1000), 240000, 'Duration from ms');
+  assertEqual(track.duration, 240, 'Duration in seconds (documented unit)');
   assertEqual(track.rating, 5, 'Rating 255 -> 5');
   assertEqual(track.playCount, 18, 'Play count');
   assert(track.originalMedia?.location === 'C:\\Music\\Obsidian Voltage.wav', 'File location');

@@ -45,6 +45,7 @@
     "test:package": "node -e \"JSON.parse(require('node:fs').readFileSync('package.json','utf8')); console.log('package.json: gültiges JSON')\"",
     "rekordbox:doctor": "node scripts/rekordbox-gate-doctor.mjs",
     "rekordbox:preflight": "node scripts/rekordbox-preflight.mjs",
+    "rekordbox:dbenv": "node scripts/build-rekordbox-db-env.mjs",
     "rekordbox:native:rebuild": "node scripts/rebuild-native-sqlcipher.mjs --force",
     "rekordbox:native:ensure": "node scripts/rebuild-native-sqlcipher.mjs",
     "rekordbox:native:check": "node scripts/rebuild-native-sqlcipher.mjs --check",

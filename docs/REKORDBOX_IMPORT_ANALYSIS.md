@@ -3,6 +3,11 @@
 **Stand:** 30.09.2026  
 **Repository/Branch:** `Airdox/airdox_editor` · `arena/01a0ef2d-airdox-editor`
 
+> **Ergänzung:** Der formatgenaue Abgleich von Datenbank-Aufbau (Byteblöcke/Seiten),
+> Tabellen-Einträgen und unseren SQL-Abfragen samt kleiner Test-Datenbankumgebung
+> steht in [`docs/REKORDBOX_DATABASE_FORMAT.md`](./REKORDBOX_DATABASE_FORMAT.md)
+> (u. a. Korrektur der Einheit `Length` = ganze Sekunden).
+
 ## Kurzbefund
 
 Die im Repository-Root vorhandene Originaldatei `rekordbox_export2.xml` ist jetzt als Ressource in die App eingebettet. Der Button **Track-Import** öffnet nach dem einmaligen Parsen die bestehende Such-, Sortier- und Cue-Auswahl. Ein ausgewählter Track wird nur dann ins Deck geladen, wenn sowohl die passende Original-Audiodatei als auch eine echte Rekordbox-ANLZ-Waveform read-only erreichbar und die Quellenzuordnung plausibel sind.
