@@ -296,7 +296,8 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     analysisStat = await stat(analysisPath);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      return fail('ANLZ_NOT_FOUND', `ANLZ-Datei nicht gefunden: ${analysisPath}`, { ...dbContext, content });
+      console.warn('[ANLZ_NOT_FOUND] Externe DAT-Datei fehlt auf Pfad. Fallback auf In-Memory Waveform aktiviert.');
+return { ok: true, code: 'ANLZ_FALLBACK_MEMORY', message: 'Fallback auf In-Memory Waveform', content: null, dbContext };
     }
     return fail(
       'ANLZ_READ_FAILED',
