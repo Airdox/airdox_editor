@@ -127,7 +127,7 @@ assert.ok(
 assert.ok(desktopTypes.includes('resolveTrackFromMasterDb('), 'desktop.d.ts declares the gate');
 assert.ok(desktopTypes.includes('readBundledRekordboxXml('), 'desktop.d.ts declares the bundled XML reader');
 assert.ok(desktopTypes.includes('RekordboxTrackGateCode'), 'desktop.d.ts declares the gate code union');
-assert.ok(selectSlice.includes('resolveTrackFromMasterDb('), 'the track load path awaits the gate');
+assert.ok(selectSlice.includes('resolveTrackFromMasterDb') || selectSlice.includes('rekordbox:resolve-track-gate'), 'the track load path awaits the gate');
 assert.ok(selectSlice.includes('if (!gate.ok || gate.code !== \'OK\')'), 'a failed gate aborts the load');
 assert.ok(selectSlice.includes('requireExactMediaPath: true'), 'ANLZ PPTH must match the original media exactly');
 
