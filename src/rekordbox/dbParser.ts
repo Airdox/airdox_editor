@@ -229,8 +229,12 @@ export function mapRekordboxDatabaseRows(
     const labelId = asString(row.LabelID ?? row.label_id);
 
     const bpm = normalizeBpm(row.BPM ?? row.bpmx100);
-    const lengthMs = asNumber(row.Length ?? row.length) ?? 0;
-    const duration = lengthMs > 0 ? lengthMs / 1000 : 0;
+    // Einheit dokumentiert und real belegt: djmdContent.Length (master.db) und
+    // content.length (OneLibrary) sind GANZE SEKUNDEN – wie die DeviceSQL/PDB-
+    // Spieldauer, NICHT Millisekunden (pyrekordbox db6-Doku: „Unit: seconds“;
+    // bestätigt an realen Bibliotheken, vgl. docs/REKORDBOX_DATABASE_FORMAT.md).
+    const lengthSeconds = asNumber(row.Length ?? row.length) ?? 0;
+    const duration = lengthSeconds > 0 ? lengthSeconds : 0;
     const folderPath = asString(row.FolderPath ?? row.path);
     const fileName = asString(row.FileNameL ?? row.fileName);
     const mediaPath = joinWindowsPath(folderPath, fileName);

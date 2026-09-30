@@ -212,8 +212,8 @@ if (realDatabase) {
     musicDir,
     'Skirmish (Original Mix).mp3',
     'Andreas Henneberg - Skirmish (Original Mix)',
-    128,
-    0.01,
+    12800, // BPM * 100 (dokumentierte Einheit)
+    240, // Length in GANZEN SEKUNDEN (dokumentierte Einheit)
     analysisPath
   );
   const insertCue = db.prepare(

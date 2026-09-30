@@ -43,9 +43,9 @@ Pioneer Rekordbox speichert bei der Track-Analyse vorberechnete Wellenform-Bucke
   * In Rekordbox 6/7 durch `PSSI_MASK_BASE` XOR-verschleiert, wird in `src/rekordbox/anlzParser.ts` mathematisch bitgenau demaskiert.
 
 ### 1.2 Rekordbox SQLite-Datenbank (`master.db` & `exportLibrary.db`)
-* Liest über `src/rekordbox/dbReader.ts` direkt die Pioneer-Datenbankstrukturen:
-  * `djmdSong`, `djmdContent`: Bitrate, Samplingrate, Tonart (z.B. Camelot 8A / OpenKey 4d), BPM.
-  * `djmdCue`: Memory-Cues und Hot-Cues mit exakten Microsekunden-Offsets.
+* Liest über `electron/dbReader.cjs` (read-only, SQLCipher) direkt die Pioneer-Datenbankstrukturen (Aufbau/Einheiten dokumentiert in `docs/REKORDBOX_DATABASE_FORMAT.md`):
+  * `djmdSong`, `djmdContent`: Bitrate, Samplingrate, Tonart (z.B. Camelot 8A / OpenKey 4d), BPM (×100), Spieldauer (`Length` in ganzen Sekunden).
+  * `djmdCue`: Memory-Cues und Hot-Cues mit exakten Millisekunden-Offsets.
 * Ist ein ANLZ-Verzeichnis verknüpft, wird die Wellenform mit dem Status `DataOrigin.REKORDBOX_ANLZ` markiert.
 
 ### 1.3 Eingebettete Rekordbox XML-Kollektion (`rekordbox_export2.xml`)

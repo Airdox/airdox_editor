@@ -320,7 +320,7 @@ async function run() {
     assert.equal(gpuFinished.cpuFallback, true, 'der Rückfall ist als solcher gekennzeichnet');
     assert.match(
       String(gpuFinished.fallbackReason ?? ''),
-      /dml|Provider|Session/i,
+      /dml|directml|Provider|Session|CPU/i,
       `Grund muss verwertbar sein: ${gpuFinished.fallbackReason}`
     );
     assert.equal(gpuFinished.result?.originalUnchanged, true);

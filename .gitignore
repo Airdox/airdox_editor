@@ -7,6 +7,10 @@ __pycache__/
 .DS_Store
 *.log
 stem-test-output/
+
+# Generierte Test-Datenbankumgebung (echte SQLCipher-Byteblöcke, npm run
+# rekordbox:dbenv) – nie ins Repository, nur der Builder bleibt versioniert.
+artifacts/rekordbox-db-env/
 .env*
 !.env.example
 logs/

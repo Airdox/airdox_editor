@@ -17,14 +17,17 @@
  *   5. MASTER_DB_READONLY      – öffnet eine echte master.db lesend, und bleibt
  *                                 die Datei dabei byteweise unverändert?
  *
- * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 arbeitet
- * ausschließlich auf einer In-Memory-Datenbank; Schritt 5 vergleicht Größe und
- * mtime der master.db vor und nach dem Zugriff.
+ * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 beweist
+ * den Verschlüsselungsweg über eine isolierte Scratch-Datei im OS-Temp-
+ * Verzeichnis (siehe ./rekordboxCipherProbe.cjs – ":memory:" unterstützt
+ * PRAGMA key nicht); Schritt 5 vergleicht Größe und mtime der master.db vor
+ * und nach dem Zugriff.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const dbReader = require('./dbReader.cjs');
+const cipherProbe = require('./rekordboxCipherProbe.cjs');
 
 const MODULE_NAME = 'better-sqlite3-multiple-ciphers';
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -73,38 +76,6 @@ function explainNativeModuleError(error) {
   return message;
 }
 
-/**
- * In-memory functional proof of the SQLCipher binding. No file is created,
- * nothing on disk is touched.
- */
-function probeCipherFunctionality(Database) {
-  const db = new Database(':memory:');
-  try {
-    db.pragma('cipher = sqlcipher');
-    db.pragma("key = 'airdox-runtime-preflight'");
-    db.exec('CREATE TABLE probe (id INTEGER PRIMARY KEY, value TEXT);');
-    db.prepare('INSERT INTO probe (value) VALUES (?)').run('rekordbox');
-    const row = db.prepare('SELECT count(*) AS n FROM probe').get();
-    const stored = db.prepare('SELECT value FROM probe LIMIT 1').get();
-    let cipherVersion = null;
-    try {
-      const result = db.pragma('cipher_version', { simple: true });
-      cipherVersion = typeof result === 'object' ? result.cipher_version : result;
-    } catch {
-      // older SQLCipher builds do not expose cipher_version
-    }
-    return {
-      ok: Number(row && row.n) === 1 && String(stored && stored.value) === 'rekordbox',
-      cipherVersion: cipherVersion ? String(cipherVersion) : null,
-    };
-  } finally {
-    try {
-      db.close();
-    } catch {
-      // ignore
-    }
-  }
-}
 
 function fingerprint(filePath) {
   try {
@@ -190,15 +161,15 @@ function checkRekordboxRuntime(options = {}) {
   // --- 4. SQLCipher funktionsfähig -----------------------------------------
   if (Database) {
     try {
-      const probe = probeCipherFunctionality(Database);
+      const probe = cipherProbe.probeCipherFunctionality(Database);
       if (!probe.ok) {
-        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'In-Memory-Datenbank konnte nicht geschrieben und gelesen werden.');
+        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Verschlüsselte Scratch-Datenbank konnte nicht geschrieben und wieder gelesen werden.');
       } else {
         add(
           'SQLCIPHER_FUNCTIONAL',
           'SQLCipher funktionsfähig',
           'OK',
-          `Verschlüsselte In-Memory-Datenbank geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
+          `Verschlüsselte Scratch-Datenbank im OS-Temp-Verzeichnis geschrieben und wieder entschlüsselt${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
         );
       }
     } catch (error) {
