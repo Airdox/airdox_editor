@@ -250,9 +250,18 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
         dbContext
       );
     }
+    // Ehrliche Diagnose: Der Banner muss nennen, WELCHE Datenbanken
+    // durchsucht wurden – sonst ist „Track nicht gefunden“ nicht von
+    // „falsche/veraltete Bibliothek gesucht“ zu unterscheiden.
+    const searched = ordered
+      .filter((candidate) => candidate && candidate.path)
+      .map((candidate) => `${candidate.path} (${candidate.kind || 'unbekannt'})`)
+      .join(' | ');
     return fail(
       'TRACK_NOT_FOUND_IN_MASTER_DB',
-      `TrackID ${trackId} ist in keiner lokalen Rekordbox-Datenbank enthalten.`,
+      `TrackID ${trackId} ist in keiner lokalen Rekordbox-Datenbank enthalten. ` +
+        `Durchsucht: ${searched}. ` +
+        'Ein benutzerdefinierter Datenbankort wird über Pioneer/rekordboxAgent/storage/options.json (db-path) aufgelöst.',
       dbContext
     );
   }
