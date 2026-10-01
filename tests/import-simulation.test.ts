@@ -216,7 +216,12 @@ runTest('ANLZ Parser', 'Prioritizes extracted Rekordbox analysis without losing 
   assertEqual(merged.title, track.title, 'XML title is retained');
   assertEqual(merged.artist, track.artist, 'XML artist is retained');
   assertEqual(merged.databaseRecord!.databaseSource, 'REKORDBOX_ANLZ', 'ANLZ source is recorded');
-  assertEqual(merged.beatGrid.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ beatgrid has priority');
+  assertEqual(merged.bpm, 128.0, 'ANLZ BPM metadata takes priority');
+  assertEqual(
+    merged.beatGrid.origin,
+    track.beatGrid.origin,
+    'BPM/first-beat metadata without decoded grid entries must not synthesize or relabel a beatgrid'
+  );
   assertEqual(merged.analysis!.origin, DataOrigin.REKORDBOX_ANLZ, 'ANLZ waveform has priority');
   assert(merged.cues.every((cue) => cue.origin === DataOrigin.REKORDBOX_ANLZ), 'ANLZ cues have priority');
 });

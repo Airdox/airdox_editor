@@ -14,20 +14,14 @@
  *   2. NATIVE_MODULE_RESOLVED  – liegt better-sqlite3-multiple-ciphers vor?
  *   3. NATIVE_MODULE_LOADABLE  – ist das .node-Binary für diese ABI ladbar?
  *   4. SQLCIPHER_FUNCTIONAL     – funktioniert Verschlüsselung/Entschlüsselung?
- *   5. MASTER_DB_READONLY      – öffnet eine echte master.db lesend, und bleibt
- *                                 die Datei dabei byteweise unverändert?
+ *   5. MASTER_DB_READONLY      – öffnet eine echte master.db oder
+ *                                 exportLibrary.db lesend und prüft ihre
+ *                                 Größe/mtime vor und nach dem Zugriff.
  *
- * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 beweist
- * den Verschlüsselungsweg über eine isolierte Scratch-Datei im OS-Temp-
- * Verzeichnis (siehe ./rekordboxCipherProbe.cjs – ":memory:" unterstützt
- * PRAGMA key nicht); Schritt 5 vergleicht Größe und mtime der master.db vor
- * und nach dem Zugriff.
- * Das Modul schreibt niemals in eine Rekordbox-Quelldatei. Schritt 4 arbeitet
- * auf einer frisch angelegten temporären Datei im Systemtemp-Verzeichnis
- * (SQLCipher verweigert `PRAGMA key` ausdrücklich bei In-Memory-Datenbanken –
- * „Setting key not supported for in-memory or temporary databases“ – eine
- * In-Memory-Probe wäre also immer rot, auch wenn das Modul einwandfrei läuft);
- * Schritt 5 vergleicht Größe und mtime der master.db vor und nach dem Zugriff.
+ * Keine Rekordbox-Quelldatei wird beschrieben. Schritt 4 verwendet eine
+ * kurzlebige verschlüsselte Probe-Datei im OS-Temp-Verzeichnis (SQLCipher
+ * unterstützt PRAGMA key nicht auf :memory:). Die Probe wird danach entfernt;
+ * Schritt 5 liest eine gefundene Bibliotheksdatenbank read-only.
  */
 
 const fs = require('node:fs');
@@ -143,7 +137,7 @@ function fingerprint(filePath) {
 /**
  * @param {object} [options]
  * @param {string} [options.appRoot]        Repo-/App-Root für das Manifest.
- * @param {boolean} [options.requireDatabase]  Fehlende master.db als FAIL statt SKIP.
+ * @param {boolean} [options.requireDatabase]  Fehlende Rekordbox-Datenbank als FAIL statt SKIP.
  * @param {string} [options.trackId]        TrackID für den read-only Probelauf.
  * @returns {{ok: boolean, checks: Array, electron: object, module: object, database: object}}
  */
@@ -205,10 +199,17 @@ function checkRekordboxRuntime(options = {}) {
   if (resolvedPath) {
     try {
       // eslint-disable-next-line import/no-extraneous-dependencies, global-require
-      Database = require(MODULE_NAME);
+      const NativeDatabase = require(MODULE_NAME);
+      // Requiring the JS wrapper alone does not prove that its ABI-specific
+      // .node binding exists. Open a disposable in-memory DB to test loading;
+      // SQLCipher functionality is separately probed on an OS-temp file below.
+      const nativeProbe = new NativeDatabase(':memory:');
+      nativeProbe.close();
+      Database = NativeDatabase;
       moduleVersion = readModuleVersion(appRoot);
       add('NATIVE_MODULE_LOADABLE', 'Native SQLCipher-Modul ladbar', 'OK', `${MODULE_NAME} geladen (${moduleVersion || 'Version unbekannt'})`);
     } catch (error) {
+      Database = null;
       add('NATIVE_MODULE_LOADABLE', 'Native SQLCipher-Modul ladbar', 'FAIL', explainNativeModuleError(error));
     }
   } else {
@@ -220,15 +221,18 @@ function checkRekordboxRuntime(options = {}) {
     try {
       const probe = cipherProbe.probeCipherFunctionality(Database);
       if (!probe.ok) {
-        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Verschlüsselte Scratch-Datenbank konnte nicht geschrieben und wieder gelesen werden.');
-        add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Temporäre Probe-Datenbank konnte nicht verschlüsselt geschrieben und gelesen werden.');
+        add(
+          'SQLCIPHER_FUNCTIONAL',
+          'SQLCipher funktionsfähig',
+          'FAIL',
+          'Verschlüsselte temporäre Probe-Datenbank konnte nicht geschrieben und anschließend wieder lesend geöffnet werden.'
+        );
       } else {
         add(
           'SQLCIPHER_FUNCTIONAL',
           'SQLCipher funktionsfähig',
           'OK',
-          `Verschlüsselte Scratch-Datenbank im OS-Temp-Verzeichnis geschrieben und wieder entschlüsselt${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
-          `Verschlüsselte temporäre Probe-Datenbank geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
+          `Verschlüsselte temporäre Probe-Datenbank im OS-Temp-Verzeichnis geschrieben und wieder lesend geöffnet${probe.cipherVersion ? ` (cipher_version ${probe.cipherVersion})` : ''}.`
         );
       }
     } catch (error) {
@@ -238,22 +242,22 @@ function checkRekordboxRuntime(options = {}) {
     add('SQLCIPHER_FUNCTIONAL', 'SQLCipher funktionsfähig', 'FAIL', 'Kein ladbares natives Modul – der Cipher wurde nicht ausgeführt.');
   }
 
-  // --- 5. Echte master.db read-only öffnen ---------------------------------
+  // --- 5. Echte Rekordbox-Datenbank read-only öffnen -----------------------
   const database = { path: null, dbType: null, openedReadonly: false, unchanged: null, trackId: trackId || null };
   if (!Database) {
-    add('MASTER_DB_READONLY', 'master.db read-only öffnen', 'FAIL', 'Ohne SQLCipher kann keine Rekordbox-Datenbank geöffnet werden.');
+    add('MASTER_DB_READONLY', 'Rekordbox-Datenbank read-only öffnen', 'FAIL', 'Ohne SQLCipher kann keine Rekordbox-Datenbank geöffnet werden.');
   } else {
     let found = [];
     try {
       found = dbReader.locateRekordboxDatabases() || [];
     } catch (error) {
-      add('MASTER_DB_READONLY', 'master.db read-only öffnen', 'FAIL', `Datenbanksuche fehlgeschlagen: ${error.message || error}`);
+      add('MASTER_DB_READONLY', 'Rekordbox-Datenbank read-only öffnen', 'FAIL', `Datenbanksuche fehlgeschlagen: ${error.message || error}`);
     }
     if (!found.length) {
       const status = requireDatabase ? 'FAIL' : 'SKIP';
       add(
         'MASTER_DB_READONLY',
-        'master.db read-only öffnen',
+        'Rekordbox-Datenbank read-only öffnen',
         status,
         'Keine lokale Rekordbox-Datenbank gefunden. Auf einem Rechner ohne Rekordbox-Installation ist dieser Nachweis nicht erbringbar.'
       );
@@ -271,22 +275,22 @@ function checkRekordboxRuntime(options = {}) {
         if (!opened || opened.available !== true) {
           add(
             'MASTER_DB_READONLY',
-            'master.db read-only öffnen',
+            'Rekordbox-Datenbank read-only öffnen',
             'FAIL',
             `${target.path}: ${(opened && opened.reason) || 'nicht lesbar'}`
           );
         } else if (!database.unchanged) {
-          add('MASTER_DB_READONLY', 'master.db read-only öffnen', 'FAIL', `${target.path}: Datei wurde verändert! (Größe/mtime weichen ab)`);
+          add('MASTER_DB_READONLY', 'Rekordbox-Datenbank read-only öffnen', 'FAIL', `${target.path}: Datei wurde verändert! (Größe/mtime weichen ab)`);
         } else {
           add(
             'MASTER_DB_READONLY',
-            'master.db read-only öffnen',
+            'Rekordbox-Datenbank read-only öffnen',
             'OK',
             `${target.path} read-only geöffnet, djmdContent-Abfrage möglich, Datei unverändert (${before.size} Bytes).`
           );
         }
       } catch (error) {
-        add('MASTER_DB_READONLY', 'master.db read-only öffnen', 'FAIL', explainNativeModuleError(error));
+        add('MASTER_DB_READONLY', 'Rekordbox-Datenbank read-only öffnen', 'FAIL', explainNativeModuleError(error));
       }
     }
   }

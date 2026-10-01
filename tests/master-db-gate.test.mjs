@@ -313,14 +313,49 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.equal(result.code, 'ANLZ_READ_FAILED');
 }
 
+// ─── ANLZ_READ_FAILED (Quelle ändert mtime zwischen Stat und Read-Ende) ────
+{
+  let analysisStatCalls = 0;
+  const { deps } = makeDeps({
+    stat: async (target) => {
+      const value = String(target);
+      if (/\.dat$/i.test(value)) {
+        analysisStatCalls += 1;
+        return { isFile: () => true, size: validAnlz.length, mtimeMs: analysisStatCalls === 1 ? 111 : 112 };
+      }
+      if (/skirmish/i.test(value)) return { isFile: () => true, size: 10_223_409, mtimeMs: 222 };
+      throw enoent(value);
+    },
+    readFile: async () => validAnlz,
+  });
+  const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
+  assert.equal(result.code, 'ANLZ_READ_FAILED', 'source fingerprint is rechecked after the read');
+}
+
 // ─── ANLZ_INVALID (Rückgabewert zu klein / unlesbare Bytes) ─────────────────
 {
-  const { deps } = makeDeps({ readFile: async () => Buffer.alloc(4) });
+  const malformed = Buffer.alloc(4);
+  const { deps } = makeDeps({
+    stat: async (target) => /\.dat$/i.test(String(target))
+      ? { isFile: () => true, size: malformed.length, mtimeMs: 111 }
+      : /skirmish/i.test(String(target))
+        ? { isFile: () => true, size: 10_223_409, mtimeMs: 222 }
+        : Promise.reject(enoent(String(target))),
+    readFile: async () => malformed,
+  });
   const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
   assert.equal(result.code, 'ANLZ_INVALID');
 }
 {
-  const { deps } = makeDeps({ readFile: async () => Buffer.alloc(32) });
+  const malformed = Buffer.alloc(32);
+  const { deps } = makeDeps({
+    stat: async (target) => /\.dat$/i.test(String(target))
+      ? { isFile: () => true, size: malformed.length, mtimeMs: 111 }
+      : /skirmish/i.test(String(target))
+        ? { isFile: () => true, size: 10_223_409, mtimeMs: 222 }
+        : Promise.reject(enoent(String(target))),
+    readFile: async () => malformed,
+  });
   const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
   assert.equal(result.code, 'ANLZ_INVALID', 'zero bytes are not a printable section tag');
 }
@@ -349,7 +384,14 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
 
 // ─── REKORDBOX_WAVEFORM_MISSING ─────────────────────────────────────────────
 {
-  const { deps } = makeDeps({ readFile: async () => noWaveformAnlz });
+  const { deps } = makeDeps({
+    stat: async (target) => /\.dat$/i.test(String(target))
+      ? { isFile: () => true, size: noWaveformAnlz.length, mtimeMs: 111 }
+      : /skirmish/i.test(String(target))
+        ? { isFile: () => true, size: 10_223_409, mtimeMs: 222 }
+        : Promise.reject(enoent(String(target))),
+    readFile: async () => noWaveformAnlz,
+  });
   const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
   assert.equal(result.code, 'REKORDBOX_WAVEFORM_MISSING');
   assert.ok(result.reason.includes('PQTZ'), 'reason lists the sections that were present');
@@ -384,7 +426,14 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
 
 // ─── Reihenfolge: ANLZ-Fehler haben Vorrang vor Original-Audio ──────────────
 {
-  const { deps } = makeDeps({ readFile: async () => noWaveformAnlz });
+  const { deps } = makeDeps({
+    stat: async (target) => /\.dat$/i.test(String(target))
+      ? { isFile: () => true, size: noWaveformAnlz.length, mtimeMs: 111 }
+      : /skirmish/i.test(String(target))
+        ? { isFile: () => true, size: 10_223_409, mtimeMs: 222 }
+        : Promise.reject(enoent(String(target))),
+    readFile: async () => noWaveformAnlz,
+  });
   const result = await resolveTrackFromMasterDb({ trackId: '142225026' }, deps);
   assert.equal(result.code, 'REKORDBOX_WAVEFORM_MISSING', 'the documented pipeline order is deterministic');
 }
@@ -392,7 +441,15 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
 // ─── PPTH-Präferenz: veraltete XML-Location → master.db-Pfad gewinnt ────────
 {
   const dbPath = 'C:\\Music\\Andreas Henneberg\\Skirmish (Original Mix).mp3';
-  const { deps } = makeDeps({ readFile: async () => anlzWithPpth(dbPath) });
+  const anlzBytes = anlzWithPpth(dbPath);
+  const { deps } = makeDeps({
+    stat: async (target) => /\.dat$/i.test(String(target))
+      ? { isFile: () => true, size: anlzBytes.length, mtimeMs: 111 }
+      : /skirmish/i.test(String(target))
+        ? { isFile: () => true, size: 10_223_409, mtimeMs: 222 }
+        : Promise.reject(enoent(String(target))),
+    readFile: async () => anlzBytes,
+  });
   const result = await resolveTrackFromMasterDb(
     { trackId: '142225026', mediaPath: DRIVE_LOCATION },
     deps
@@ -409,6 +466,7 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
 // ─── PPTH als einziger realistischer Originalpfad ───────────────────────────
 {
   const ppthPath = 'C:\\Moved\\Library\\Skirmish (Original Mix).mp3';
+  const anlzBytes = anlzWithPpth(ppthPath);
   const { deps } = makeDeps({
     openContentRow: async () => ({
       available: true,
@@ -416,10 +474,10 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
       row: makeRow({ FolderPath: '', FileNameL: '' }),
       cues: [],
     }),
-    readFile: async () => anlzWithPpth(ppthPath),
+    readFile: async () => anlzBytes,
     stat: async (target) => {
       const value = String(target);
-      if (/\.dat$/i.test(value)) return { isFile: () => true, size: validAnlz.length, mtimeMs: 1 };
+      if (/\.dat$/i.test(value)) return { isFile: () => true, size: anlzBytes.length, mtimeMs: 1 };
       if (/moved/i.test(value)) return { isFile: () => true, size: 100, mtimeMs: 1 };
       throw enoent(value);
     },
@@ -428,6 +486,47 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.equal(result.ok, true, `expected OK, got ${result.code}: ${result.reason}`);
   assert.equal(result.original.source, 'ANLZ_PPTH');
   assert.equal(result.original.path, ppthPath);
+}
+
+// ─── Relative ANLZ-Pfade unter D:\PIONEER werden deterministisch aufgelöst ──
+{
+  const databasePath = 'D:\\PIONEER\\rekordbox\\exportLibrary.db';
+  const analysisDataPath = '/PIONEER/USBANLZ/PQT000055.DAT';
+  const resolvedAnalysisPath = 'D:\\PIONEER\\USBANLZ\\PQT000055.DAT';
+  const originalPath = 'C:\\Music\\Andreas Henneberg\\Skirmish (Original Mix).mp3';
+  const anlzBytes = anlzWithPpth(originalPath);
+  const normalize = (value) => String(value).replace(/\\/g, '/').replace(/\/+?/g, '/').toLowerCase();
+  const { deps } = makeDeps({
+    locateRekordboxDatabases: async () => [
+      { path: databasePath, kind: 'ONE_LIBRARY', label: 'exportLibrary.db (D:\\PIONEER)' },
+    ],
+    openContentRow: async () => ({
+      available: true,
+      dbType: 'ONE_LIBRARY',
+      row: makeRow({
+        FolderPath: 'C:\\Music\\Andreas Henneberg',
+        FileNameL: 'Skirmish (Original Mix).mp3',
+        AnalysisDataPath: analysisDataPath,
+      }),
+      cues: [],
+    }),
+    stat: async (target) => {
+      const key = normalize(target);
+      if (key === normalize(resolvedAnalysisPath)) {
+        return { isFile: () => true, size: anlzBytes.length, mtimeMs: 111 };
+      }
+      if (key === normalize(originalPath)) return { isFile: () => true, size: 10_223_409, mtimeMs: 222 };
+      throw enoent(String(target));
+    },
+    readFile: async (target) => {
+      assert.equal(normalize(target), normalize(resolvedAnalysisPath));
+      return anlzBytes;
+    },
+  });
+  const result = await resolveTrackFromMasterDb({ trackId: '142225026' }, deps);
+  assert.equal(result.ok, true, `expected relocated PIONEER ANLZ to load, got ${result.code}: ${result.reason}`);
+  assert.equal(result.analysis.path, resolvedAnalysisPath);
+  assert.equal(result.original.path, originalPath);
 }
 
 // ─── scanAnlzSections: gespiegelt an anlzParser.ts ──────────────────────────

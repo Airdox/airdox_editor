@@ -65,15 +65,21 @@ anschließend fehlt.
 ```powershell
 npm run rekordbox:native:rebuild   # Modul für Electron neu bauen (--force)
 npm run rekordbox:native:check     # nur melden, ob ein Rebuild nötig ist
-npm run rekordbox:preflight        # Laufzeitnachweis in Node (Preflight)
-npm run rekordbox:doctor -- 142225026   # vollständige Gate-Diagnose
-npm run test:rekordbox:runtime -- 142225026   # echter Windows-Lauf
+npm run rekordbox:preflight -- --require-db # Electron-ABI + Datenbank read-only
+npm run rekordbox:doctor -- 142225026       # vollständige Gate-Diagnose
+npm run test:rekordbox:runtime -- 142225026 # echter Windows-Lauf
 ```
 
-`npm run rekordbox:doctor` druckt je Glied der Kette einen Status und ändert
-niemals eine Datei. `npm run test:rekordbox:runtime` läuft ausschließlich unter
-Windows; ohne installiertes Rekordbox ist das ein klarer `SKIP`, mit
-Rekordbox ein harter Fehler.
+Die Diagnose-Skripte starten über `scripts/run-electron-node.mjs` mit der
+Electron-Node-ABI, für die das native Modul gebaut wurde. `npm run
+rekordbox:doctor` druckt je Glied der Kette einen Status und ändert niemals
+Rekordbox-Quelldateien. `npm run test:rekordbox:runtime` läuft ausschließlich
+unter Windows; ohne Datenbank meldet es `SKIP`, mit Rekordbox-Daten prüft es
+die echte Kette. Ein `SKIP` ist kein erfolgreicher Echtlauf.
+
+Die ausführliche PowerShell-Schrittfolge für einen echten Test mit
+`D:\PIONEER`, Compiler-/ABI-Hinweisen und Fehlercodes steht in
+[`docs/REKORDBOX_WINDOWS_LOCAL_TEST.md`](docs/REKORDBOX_WINDOWS_LOCAL_TEST.md).
 
 ### Bibliothek an einem ungewöhnlichen Ort
 

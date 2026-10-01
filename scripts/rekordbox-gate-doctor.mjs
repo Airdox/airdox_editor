@@ -16,14 +16,15 @@
  *     → Original-Audio
  *     → FINAL
  *
- * Der Doctor ist ausschließlich lesend: er öffnet master.db read-only, liest
- * genau eine djmdContent-Zeile und liest die ANLZ-Datei. Es wird nichts
+ * Der Doctor ist ausschließlich lesend: er öffnet master.db oder
+ * exportLibrary.db read-only, liest genau eine Content-Zeile und liest die
+ * ANLZ-Datei. Es wird nichts
  * geschrieben, angelegt, umbenannt oder gelöscht – weder in Rekordbox-
  * Datenbanken noch in der Bibliothek.
  *
- * Aufruf:
+ * Aufruf (startet mit Electron-Node-ABI):
  *   npm run rekordbox:doctor -- 142225026
- *   node scripts/rekordbox-gate-doctor.mjs --trackid 142225026 --json
+ *   npm run rekordbox:doctor -- --trackid 142225026 --json
  */
 
 import { createRequire } from 'node:module';

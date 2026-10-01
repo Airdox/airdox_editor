@@ -13,10 +13,9 @@
  * analysis); they are not license or machine dependent. The files are
  * opened with SQLite's readonly mode, so not a single byte is modified.
  *
- * The SQLCipher binding (better-sqlite3-multiple-ciphers) is an optional
- * native dependency. When it is not installed (e.g. during development
- * without a matching ABI), this module reports `available: false` and the
- * application keeps using the officially supported Rekordbox XML export.
+ * The SQLCipher binding (better-sqlite3-multiple-ciphers) is a required
+ * native dependency. If its ABI binding cannot be loaded, this module reports
+ * `available: false`; it never silently substitutes a writable SQLite reader.
  */
 
 const zlib = require('node:zlib');
@@ -84,11 +83,12 @@ function getOneLibraryKey() {
 }
 
 // ---------------------------------------------------------------------------
-// SQLCipher binding (optional native dependency)
+// SQLCipher binding (required native dependency)
 // ---------------------------------------------------------------------------
 
 let cipherModule = undefined;
 let cipherLoadError = null;
+let cipherRuntimeAvailable = undefined;
 
 function getCipherModule() {
   if (cipherModule !== undefined) return cipherModule;
@@ -101,6 +101,32 @@ function getCipherModule() {
     cipherLoadError = error.message || String(error);
   }
   return cipherModule;
+}
+
+/** Confirms the native binding is loadable without touching a Rekordbox file. */
+function isCipherAvailable() {
+  if (cipherRuntimeAvailable !== undefined) return cipherRuntimeAvailable;
+  const Database = getCipherModule();
+  if (!Database) {
+    cipherRuntimeAvailable = false;
+    return false;
+  }
+
+  let probe = null;
+  try {
+    // `:memory:` probes only native ABI loading. SQLCipher functionality itself
+    // is verified by the dedicated runtime preflight on its own temp file.
+    probe = new Database(':memory:');
+    probe.close();
+    probe = null;
+    cipherRuntimeAvailable = true;
+  } catch (error) {
+    cipherRuntimeAvailable = false;
+    cipherLoadError = error.message || String(error);
+  } finally {
+    try { probe?.close(); } catch { /* best-effort close of the scratch DB */ }
+  }
+  return cipherRuntimeAvailable;
 }
 
 function detectDbType(filePath) {
@@ -167,6 +193,16 @@ function openRekordboxDb(filePath) {
 // ---------------------------------------------------------------------------
 // Read-only queries
 // ---------------------------------------------------------------------------
+
+function fileFingerprint(filePath) {
+  const details = fs.statSync(filePath);
+  if (!details.isFile()) throw new Error('Die Rekordbox-Datenbank verweist nicht auf eine Datei.');
+  return { size: details.size, mtimeMs: details.mtimeMs };
+}
+
+function sameFingerprint(before, after) {
+  return Boolean(before && after && before.size === after.size && before.mtimeMs === after.mtimeMs);
+}
 
 function normalizeRow(row) {
   const out = {};
@@ -257,6 +293,12 @@ function readOneLibraryDb(db) {
  *   stats?:object, rows?:object, warnings?:string[]}}
  */
 function readRekordboxDatabase(filePath) {
+  let before;
+  try {
+    before = fileFingerprint(filePath);
+  } catch (error) {
+    return { available: false, reason: `Datenbank-Fingerprint vor dem Read-only-Lesen fehlgeschlagen: ${error.message || error}` };
+  }
   const opened = openRekordboxDb(filePath);
   if (!opened.available) return opened;
 
@@ -271,6 +313,15 @@ function readRekordboxDatabase(filePath) {
     // Safety bound so that a pathological library cannot blow up IPC.
     if (contentRows.length > 100_000) {
       warnings.push(`Die Bibliothek enthält ${contentRows.length} Tracks; nur die ersten 100.000 werden geladen.`);
+    }
+
+    const after = fileFingerprint(filePath);
+    if (!sameFingerprint(before, after)) {
+      return {
+        available: false,
+        dbType,
+        reason: 'Größe oder mtime der Rekordbox-Datenbank änderte sich während des Read-only-Lesevorgangs.',
+      };
     }
 
     return {
@@ -319,6 +370,12 @@ function readRekordboxDatabase(filePath) {
  *   reason?:string, row?:object|null, cues?:object[]}}
  */
 function openContentRow(filePath, trackId) {
+  let before;
+  try {
+    before = fileFingerprint(filePath);
+  } catch (error) {
+    return { available: false, reason: `Datenbank-Fingerprint vor dem Read-only-Lesen fehlgeschlagen: ${error.message || error}` };
+  }
   const opened = openRekordboxDb(filePath);
   if (!opened.available) return { available: false, reason: opened.reason };
 
@@ -414,6 +471,20 @@ function openContentRow(filePath, trackId) {
       }
     }
 
+    let after;
+    try {
+      after = fileFingerprint(filePath);
+    } catch (error) {
+      return { available: false, dbType, reason: `Datenbank-Fingerprint nach dem Read-only-Lesen fehlgeschlagen: ${error.message || error}` };
+    }
+    if (!sameFingerprint(before, after)) {
+      return {
+        available: false,
+        dbType,
+        reason: 'Größe oder mtime der Rekordbox-Datenbank änderte sich während des Read-only-Lesevorgangs.',
+      };
+    }
+
     return {
       available: true,
       dbType,
@@ -490,7 +561,7 @@ function resolveDbPathValue(rawValue) {
   return p;
 }
 
-function findDatabaseFiles(appDir) {
+function findDatabaseFiles(appDir, { includeOptions = true } = {}) {
   const results = [];
   if (!appDir) return results;
 
@@ -498,7 +569,7 @@ function findDatabaseFiles(appDir) {
   // of the version folders). Checked first so a custom db-path ranks ahead
   // of stale default files; works even when the version folder itself does
   // not exist.
-  const fromOptions = candidateFromOptions(appDir);
+  const fromOptions = includeOptions ? candidateFromOptions(appDir) : null;
   if (fromOptions) {
     const p = resolveDbPathValue(fromOptions);
     try {
@@ -533,13 +604,18 @@ function findDatabaseFiles(appDir) {
 }
 
 /**
- * Scans one Pioneer root folder (the parent of rekordbox7/rekordbox6/
- * rekordbox) for database candidates – version folders plus the sibling
- * rekordboxAgent options.json. Exported for tests; pure read-only fs reads.
+ * Scans one Pioneer root folder for known database files in the root,
+ * rekordbox7/rekordbox6/rekordbox subfolders, plus the sibling rekordboxAgent
+ * options.json. Exported for tests; pure read-only fs reads.
  */
 function collectPioneerRootCandidates(pioneerRoot) {
   const results = [];
   if (!pioneerRoot) return results;
+  // Accept both a standard Rekordbox application-data root and an exported
+  // PIONEER media root supplied by the user (for example D:\\PIONEER).
+  // Only known database filenames are considered; all filesystem access stays
+  // read-only.
+  results.push(...findDatabaseFiles(pioneerRoot, { includeOptions: false }));
   for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
     results.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
   }
@@ -569,14 +645,20 @@ function locateRekordboxDatabases() {
     if (kind) candidates.push({ path: cleaned, kind, label: `${base} (AIRODOX_REKORDBOX_DB)` });
   }
 
-  if (process.platform === 'win32') {
+  // An explicit path list is an exact selection, not merely an extra search
+  // hint. This prevents an unrelated stale AppData master.db from silently
+  // winning when the user intentionally points diagnostics at another library.
+  if (override.length === 0 && process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    // Check the user-supplied export/database root before standard locations,
+    // but still prefer MASTER_DB over OneLibrary in the gate's type ordering.
+    candidates.push(...collectPioneerRootCandidates(path.win32.join('D:\\', 'PIONEER')));
     candidates.push(...collectPioneerRootCandidates(path.join(appData, 'Pioneer')));
-  } else if (process.platform === 'darwin') {
+  } else if (override.length === 0 && process.platform === 'darwin') {
     candidates.push(...collectPioneerRootCandidates(path.join(process.env.HOME || '', 'Library', 'Application Support', 'Pioneer')));
   }
 
-  // Deduplicate by resolved path; options.json entries rank first.
+  // Deduplicate by resolved path while preserving explicit-root search order.
   const seen = new Set();
   const unique = [];
   for (const candidate of candidates) {
@@ -596,5 +678,5 @@ module.exports = {
   openContentRow,
   locateRekordboxDatabases,
   collectPioneerRootCandidates,
-  isCipherAvailable: () => getCipherModule() !== null,
+  isCipherAvailable,
 };

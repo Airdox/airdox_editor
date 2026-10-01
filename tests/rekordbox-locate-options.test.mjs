@@ -12,7 +12,8 @@
  *   2. db-path über die Geschwister-options.json wird gefunden (MASTER_DB),
  *   3. db-path als ORDNERANGABE löst sich zu master.db/exportLibrary.db auf,
  *   4. exportLibrary.db-Ordner ergibt ONE_LIBRARY,
- *   5. die alte Ablage innerhalb des Version-Ordners bleibt unterstützt.
+ *   5. die alte Ablage innerhalb des Version-Ordners bleibt unterstützt,
+ *   6. der bereitgestellte D:\\PIONEER-Root wird nur nach bekannten DB-Namen geprüft.
  *
  * Run with: node tests/rekordbox-locate-options.test.mjs
  */
@@ -109,6 +110,48 @@ try {
     'options.json innerhalb des Version-Ordners wird weiterhin gelesen'
   );
   checks.push('Legacy-Ablage rekordbox7/rekordboxAgent/storage');
+
+  // 6. The explicitly supplied D:\\PIONEER-style media root may contain a
+  // database directly or in its Rekordbox subfolder; only those known names
+  // are inspected (the production Windows locator uses D:\\PIONEER).
+  const externalRoot = path.join(work, 'External', 'PIONEER');
+  mkdirSync(externalRoot, { recursive: true });
+  const rootMaster = path.join(externalRoot, 'master.db');
+  writeFileSync(rootMaster, 'x');
+  const externalRekordbox = path.join(externalRoot, 'rekordbox');
+  mkdirSync(externalRekordbox, { recursive: true });
+  const externalOneLibrary = path.join(externalRekordbox, 'exportLibrary.db');
+  writeFileSync(externalOneLibrary, 'x');
+  const externalFound = dbReader.collectPioneerRootCandidates(externalRoot);
+  assert.ok(
+    externalFound.some((entry) => path.resolve(entry.path) === path.resolve(rootMaster)),
+    'master.db im PIONEER-Wurzelordner wird gefunden'
+  );
+  assert.ok(
+    externalFound.some((entry) => path.resolve(entry.path) === path.resolve(externalOneLibrary)),
+    'exportLibrary.db im PIONEER/rekordbox-Unterordner wird gefunden'
+  );
+  checks.push('PIONEER-Medienroot (master.db und rekordbox/exportLibrary.db)');
+
+  // 7. An explicit path list is an exact override and must not silently add
+  // an unrelated D:\\PIONEER or AppData database on Windows.
+  const previousOverride = process.env.AIRODOX_REKORDBOX_DB;
+  try {
+    process.env.AIRODOX_REKORDBOX_DB = `${customDb};${oneDb}`;
+    const explicit = dbReader.locateRekordboxDatabases();
+    assert.deepEqual(
+      explicit.map((entry) => path.resolve(entry.path)),
+      [path.resolve(customDb), path.resolve(oneDb)],
+      'explicit paths alone are returned in the requested order'
+    );
+
+    process.env.AIRODOX_REKORDBOX_DB = path.join(work, 'missing', 'master.db');
+    assert.deepEqual(dbReader.locateRekordboxDatabases(), [], 'a missing explicit path fails closed instead of falling back');
+  } finally {
+    if (previousOverride === undefined) delete process.env.AIRODOX_REKORDBOX_DB;
+    else process.env.AIRODOX_REKORDBOX_DB = previousOverride;
+  }
+  checks.push('AIRODOX_REKORDBOX_DB ist ein exakter, fail-closed Override');
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

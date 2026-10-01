@@ -121,6 +121,15 @@ assert.ok(mainSource.includes("'rekordbox:resolve-track-gate'"), 'main registers
 assert.ok(mainSource.includes("'rekordbox:read-bundled-xml'"), 'main registers the bundled-XML channel');
 assert.ok(mainSource.includes("require('./masterDbGate.cjs')"), 'main requires the gate module');
 assert.ok(
+  mainSource.includes('const afterRead = await stat(localPath)') &&
+    mainSource.includes('afterRead.mtimeMs !== details.mtimeMs'),
+  'ANLZ and original-audio reads recheck size/mtime after reading the source'
+);
+assert.ok(
+  mainSource.includes("Buffer.byteLength(data, 'utf8') !== details.size"),
+  'the embedded XML read also verifies its byte size after reading'
+);
+assert.ok(
   mainSource.includes("path.join(process.resourcesPath, 'rekordbox', 'rekordbox_export2.xml')"),
   'packaged builds read resources/rekordbox/rekordbox_export2.xml'
 );
@@ -129,7 +138,14 @@ assert.ok(desktopTypes.includes('readBundledRekordboxXml('), 'desktop.d.ts decla
 assert.ok(desktopTypes.includes('RekordboxTrackGateCode'), 'desktop.d.ts declares the gate code union');
 assert.ok(selectSlice.includes('resolveTrackFromMasterDb') || selectSlice.includes('rekordbox:resolve-track-gate'), 'the track load path awaits the gate');
 assert.ok(selectSlice.includes('if (!gate.ok || gate.code !== \'OK\')'), 'a failed gate aborts the load');
-assert.ok(selectSlice.includes('requireExactMediaPath: true'), 'ANLZ PPTH must match the original media exactly');
+assert.ok(
+  selectSlice.includes('areSameMediaPath(gate.original.path, ppthPath)'),
+  'the selected original must match the gate/ANLZ PPTH path exactly'
+);
+assert.ok(
+  !importSlice.includes('readRekordboxDatabase') && !importSlice.includes('ensureNativeAnalysisIndex'),
+  'opening the collection must not scan or copy the full database before track selection'
+);
 
 const dbReaderModule = require('../electron/dbReader.cjs');
 assert.equal(typeof dbReaderModule.openContentRow, 'function', 'dbReader provides the targeted djmdContent reader');
@@ -151,7 +167,13 @@ assert.ok(
 );
 assert.ok(selectSlice.includes('[ORIGINAL_AUDIO_NOT_FOUND]'), 'missing original audio fails with its gate code');
 assert.ok(selectSlice.includes('readOriginalAudio('), 'original audio is opened through the read-only bridge');
+assert.ok(
+  selectSlice.includes('originalSource.size !== gate.original.size') &&
+    selectSlice.includes('originalSource.modifiedAt !== gate.original.modifiedAt'),
+  'the original audio size and mtime must still match the gate snapshot'
+);
 assert.ok(selectSlice.includes('buildCues('), 'djmdCue rows from the gate are used as last-resort markers');
+assert.ok(!selectSlice.includes('fetch(audioUrl)') && !selectSlice.includes('DataTransfer'), 'the selected track is not routed through a synthetic web-audio import');
 
 // ─── Test G – kein lokaler Analyse-Fallback im XML-Ladepfad ─────────────────
 // Kommentare werden ignoriert: geprüft wird ausschließlich der ausführbare Code.
