@@ -1,4 +1,4 @@
-[Setup]
+﻿[Setup]
 AppName=DJ Airdox Editor
 AppVersion=1.0
 DefaultDirName={autopf}\DJ Airdox Editor
@@ -9,7 +9,7 @@ Compression=lzma
 SolidCompression=yes
 
 [Files]
-Source: "dist\DJ_Airdox_Editor\*''; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\DJ_Airdox_Editor\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\DJ Airdox Editor"; Filename: "{app}\DJ_Airdox_Editor.exe"
