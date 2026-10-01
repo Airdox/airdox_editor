@@ -207,7 +207,8 @@ export function generateRekordboxPhrases(
 export function extractTrackFromRekordboxXml(
   xmlContent: string,
   targetTrackIndex: number = 0,
-  audioBuffer?: AudioBuffer
+  audioBuffer?: AudioBuffer,
+  anlzExtraction?: AnlzExtractionResult
 ): { track: TrackModel; record: ExtractedDatabaseRecord } {
   const { tracks } = parseRekordboxXml(xmlContent);
   if (tracks.length === 0) {
@@ -237,30 +238,50 @@ export function extractTrackFromRekordboxXml(
     };
   });
 
-  // Extract Waveform. ANLZ/database data always takes priority; analysis
-  // computed from a decoded audio buffer is LOCAL_ANALYSIS. Only when neither
-  // exists is a clearly labeled GENERATED_FALLBACK produced.
+  // Extract Waveform – 1:1-Regel, ohne jede Ersatz-Zuordnung:
+  //   * eine echte, dekodierte ANLZ-Datei  -> REKORDBOX_ANLZ
+  //   * ein dekodierter Audio-Buffer       -> LOCAL_ANALYSIS
+  //   * sonst eine eigene Berechnung       -> GENERATED_FALLBACK
+  // Eine Wellenform wird NIE als Rekordbox-Daten ausgegeben, wenn sie nicht
+  // aus der zum Track gehörenden ANLZ-Datei stammt (keine Nachbar-Datei, kein
+  // „ähnlicher Titel“, keine Synthese als Ersatz für fehlende Analyse).
+  const anlzWaveform = anlzExtraction?.waveform;
   let analysis: WaveformAnalysisData | null = null;
-  if (audioBuffer) {
+  let waveformOrigin: DataOrigin;
+  if (anlzWaveform) {
+    analysis = anlzWaveform;
+    waveformOrigin = anlzWaveform.origin ?? DataOrigin.REKORDBOX_ANLZ;
+  } else if (audioBuffer) {
     analysis = analyzeAudioBuffer(audioBuffer, DataOrigin.LOCAL_ANALYSIS);
+    waveformOrigin = DataOrigin.LOCAL_ANALYSIS;
   } else {
     analysis = generateAnalysisFromMetadata(duration, bpm, memoryCues, bg.firstBeat);
+    waveformOrigin = DataOrigin.GENERATED_FALLBACK;
   }
+  const hasAnlz = waveformOrigin === DataOrigin.REKORDBOX_ANLZ;
 
   const phrases = generateRekordboxPhrases(bpm, duration, bg.firstBeat);
 
   const dbRecord: ExtractedDatabaseRecord = {
     trackId: rawTrack.id || '1',
-    databaseSource: 'REKORDBOX_XML',
-    anlzTagsFound: ['PQTZ', 'PWV3', 'PWV5', 'PCOB', 'PSSI'],
+    // Ohne echte ANLZ-Quelle bleibt die Herkunft bei der XML-Metadatenquelle;
+    // 'REKORDBOX_ANLZ' wird ausschließlich bei dekodierten ANLZ-Buckets gesetzt.
+    databaseSource: hasAnlz ? 'REKORDBOX_ANLZ' : 'REKORDBOX_XML',
+    // Nur real gelesene Sektionen dürfen hier stehen – eine fest einkodierte
+    // Tag-Liste würde ANLZ-Daten behaupten, die nie gelesen wurden.
+    anlzTagsFound: anlzExtraction ? [...anlzExtraction.tagsFound] : [],
+    anlzWarnings: anlzExtraction?.warnings ? [...anlzExtraction.warnings] : undefined,
     memoryCuesCount: memoryCues.filter((c) => c.type === 'MEMORY').length,
     hotCuesCount: memoryCues.filter((c) => c.type === 'HOT_CUE').length,
     loopsCount: (rawTrack.loops || []).length,
     waveformBuckets: analysis.length,
-    waveformModeSupported: ['BLUE', 'RGB', '3BAND'],
+    waveformOrigin,
+    waveformModeSupported: hasAnlz ? ['BLUE', 'RGB', '3BAND'] : [],
     sampleRate: audioBuffer ? audioBuffer.sampleRate : 44100,
-    checksum: 'REKORDBOX-XML-VALIDATED',
+    // Kein erfundener Validierungsvermerk: ohne ANLZ-Quelle ist nichts geprüft.
+    checksum: hasAnlz ? 'ANLZ_DECODED_NO_SHA256' : 'NO_ANLZ_SOURCE_NOT_VERIFIED',
     extractedAt: Date.now(),
+    analysisPath: anlzExtraction?.analysisPath,
   };
 
   const track: TrackModel = {

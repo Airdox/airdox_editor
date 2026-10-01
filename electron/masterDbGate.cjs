@@ -282,6 +282,7 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
   let hit = null;
   const openErrors = [];
   const schemaErrors = [];
+  const identityMismatches = [];
 
   for (const candidate of ordered) {
     if (!candidate || !candidate.path) continue;
@@ -298,10 +299,21 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       continue;
     }
     openedAny = true;
-    if (result.row) {
-      hit = { result, candidate };
-      break;
+    if (!result.row) continue;
+    // 1:1-Identität (kein Ersatz, keine Ähnlichkeitssuche): die gelieferte
+    // Zeile muss exakt zur angefragten Rekordbox-TrackID gehören. Stimmt die
+    // ID nicht überein, ist das ein anderer Track – seine ANLZ, seine Cues
+    // und sein Audio werden niemals unter einen fremden XML-Eintrag gehängt,
+    // auch nicht bei identischem Titel, Künstler oder Dateinamen.
+    const rowId = String(result.row.ID ?? result.row.content_id ?? '').trim();
+    if (rowId && rowId !== String(trackId)) {
+      identityMismatches.push(
+        `${candidate.path}: gelieferte Zeile ${rowId} gehört nicht zur TrackID ${trackId}`
+      );
+      continue;
     }
+    hit = { result, candidate };
+    break;
   }
 
   const dbContext = hit
@@ -316,6 +328,17 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       return fail(
         'MASTER_DB_OPEN_FAILED',
         openErrors.join(' | ') || 'Die Rekordbox-Datenbank konnte nicht lesend geöffnet werden.',
+        dbContext
+      );
+    }
+    // Eine fremde Zeile (gleicher Titel, andere ID) ist kein Treffer: hier
+    // wird keine Ersatz-Zuordnung vorgenommen, sondern sauber abgelehnt.
+    if (identityMismatches.length > 0) {
+      return fail(
+        'TRACK_NOT_FOUND_IN_MASTER_DB',
+        `TrackID ${trackId} wurde in keiner Datenbank als eigene Zeile gefunden – ` +
+          `abgelehnte Fremdzeilen: ${identityMismatches.join(' | ')}. ` +
+          'Es wird keine Zeile eines anderen Tracks (gleicher Titel/Dateiname) als Ersatz verwendet.',
         dbContext
       );
     }

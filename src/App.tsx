@@ -3626,12 +3626,65 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       // Check if the currently active deck track needs its audio file (or has matching name)
       const currentActive = tracks.find((t) => t.id === activeTrackId);
       const isMissingAudioOnActive = currentActive && !currentActive.audioBuffer;
+      const nameWithoutExtension = file.name.toLowerCase().replace(/\.[^/.]+$/, '');
       const isMatchingName =
         currentActive &&
-        (currentActive.title.toLowerCase().includes(file.name.toLowerCase().replace(/\.[^/.]+$/, '')) ||
+        (currentActive.title.toLowerCase().includes(nameWithoutExtension) ||
           file.name.toLowerCase().includes(currentActive.title.toLowerCase().replace(/\.[^/.]+$/, '')));
 
-      if (currentActive && (isMissingAudioOnActive || isMatchingName)) {
+      // 1:1-Regel (kein Ersatz, keine Zuordnung nach Ähnlichkeit):
+      // Ein Track mit Rekordbox-Herkunft (Master-DB-Gate bzw. dekodierte ANLZ)
+      // darf ausschließlich mit exakt derselben Originaldatei verknüpft
+      // werden, auf die ANLZ-PPTH/Gate zeigen – dieselbe Datei, nicht eine
+      // „ähnlich benannte“ und nicht „irgendeine, die gerade fehlt“.
+      // Sonst würde ANLZ-Waveform und Audio von zwei verschiedenen Tracks
+      // kombiniert.
+      const rekordboxProvenance = Boolean(
+        currentActive &&
+          (currentActive.analysisSource?.gateCode === 'OK' ||
+            currentActive.analysisSource?.databasePath ||
+            currentActive.analysisSource?.ppthPath ||
+            currentActive.databaseRecord?.databaseType ||
+            currentActive.origin === DataOrigin.REKORDBOX_ANLZ)
+      );
+      const expectedOriginalName = (() => {
+        const candidate =
+          currentActive?.analysisSource?.originalPath ||
+          currentActive?.analysisSource?.ppthPath ||
+          currentActive?.originalMedia?.resolvedPath ||
+          currentActive?.originalMedia?.location ||
+          '';
+        const normalized = String(candidate).replace(/\\/g, '/');
+        return normalized.split('/').pop() || '';
+      })();
+      const isExactOriginalFile =
+        Boolean(expectedOriginalName) && expectedOriginalName.toLowerCase() === file.name.toLowerCase();
+      const durationMatchesOriginal =
+        typeof currentActive?.duration === 'number' && Math.abs(decoded.duration - currentActive.duration) <= 0.5;
+
+      const linkAllowed = rekordboxProvenance
+        ? isExactOriginalFile && durationMatchesOriginal
+        : Boolean(isMissingAudioOnActive || isMatchingName);
+
+      if (rekordboxProvenance && currentActive && !linkAllowed) {
+        // Keine Ersatzdatei annehmen: der Rekordbox-Track bleibt unverändert.
+        logger.warn(
+          'AUDIO_ENGINE',
+          `Datei "${file.name}" wurde NICHT mit dem Rekordbox-Track "${currentActive.title}" verknüpft (erwartet: ${expectedOriginalName || 'unbekannt'}) – keine Ersatz-Zuordnung.`,
+          { fileName: file.name, expectedOriginalName, decodedDuration: decoded.duration }
+        );
+        showOperationFeedback({
+          title: 'Keine Ersatzdatei übernommen',
+          operationType: 'CUE',
+          description:
+            `Der aktive Track stammt aus der Rekordbox-Datenbank. Verknüpfen ist nur mit exakt derselben Originaldatei erlaubt ` +
+            `(erwartet: ${expectedOriginalName || 'unbekannter Originalname'}). ` +
+            `"${file.name}" wurde stattdessen als eigener, lokaler Import angelegt – es wird keine fremde Audiodatei unter einen Rekordbox-Eintrag gehängt.`,
+          timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
+          originalSha256: sha256,
+          timestamp: Date.now(),
+        });
+      } else if (currentActive && linkAllowed) {
         // Link this decoded audio to the active track
         const updatedTrack: TrackModel = {
           ...currentActive,
@@ -3670,6 +3723,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             },
           ],
         };
+
+        // Rekordbox-Analyse bleibt maßgeblich: wird die exakte Originaldatei
+        // nachgeladen, dürfen eigene Berechnungen (LOCAL_ANALYSIS) die
+        // dekodierte ANLZ-Waveform, das ANLZ-Beatgrid und die ANLZ-Marker
+        // nicht ersetzen – sonst stammt die Anzeige nicht mehr 1:1 aus
+        // Rekordbox.
+        const hasProvenAnlzAnalysis =
+          currentActive.analysisSource?.gateCode === 'OK' ||
+          currentActive.origin === DataOrigin.REKORDBOX_ANLZ ||
+          currentActive.databaseRecord?.waveformOrigin === DataOrigin.REKORDBOX_ANLZ;
+        if (hasProvenAnlzAnalysis) {
+          updatedTrack.analysis = currentActive.analysis;
+          updatedTrack.beatGrid = currentActive.beatGrid;
+          updatedTrack.cues = currentActive.cues;
+          updatedTrack.phrases = currentActive.phrases;
+          updatedTrack.origin = currentActive.origin;
+          updatedTrack.analysisSource = currentActive.analysisSource;
+          updatedTrack.databaseRecord = currentActive.databaseRecord;
+        }
 
         setTracks((prev) => prev.map((t) => (t.id === updatedTrack.id ? updatedTrack : t)));
         setWorkingAudioBuffer(decoded);

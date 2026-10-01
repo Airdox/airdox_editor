@@ -166,6 +166,13 @@ export interface ExtractedDatabaseRecord {
   checksum: string;
   extractedAt: number;
   filePath?: string;
+  /**
+   * Where the displayed buckets actually come from. `REKORDBOX_ANLZ` is only
+   * ever set when the buckets were decoded from a real ANLZ file; anything
+   * else stays visibly LOCAL_ANALYSIS / GENERATED_FALLBACK so a self-computed
+   * waveform can never be presented as Rekordbox data.
+   */
+  waveformOrigin?: DataOrigin;
   // --- Master-DB-Gate provenance (electron/masterDbGate.cjs) ---------------
   /** Rekordbox TrackID (djmdContent.ID) the gate resolved. */
   rekordboxTrackId?: string;
