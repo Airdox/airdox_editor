@@ -1,4 +1,4 @@
-
+﻿
 
 /**
  * Master-DB-Gate (Phase 5) – verbindliche Track-Lade-Kette.
@@ -163,7 +163,7 @@ function makeAnalysisPathCandidates(rawAnalysisPath, databasePath) {
     return candidates;
   }
 
-  const roots = [path.win32.join('D:\\', 'PIONEER')];
+  const roots = [path.win32.join('D:\\', 'PIONEER'), path.win32.join('D:\\', 'PIONEER', 'Master', 'share', 'PIONEER')];
   const databaseRoot = pioneerRootFromPath(databasePath);
   if (databaseRoot) roots.push(databaseRoot);
   if (process.env.APPDATA) {
@@ -613,3 +613,4 @@ module.exports = {
   isDeviceInternalLocation,
   joinWindowsPath,
 };
+
