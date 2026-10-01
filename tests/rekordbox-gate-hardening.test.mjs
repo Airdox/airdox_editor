@@ -112,17 +112,24 @@ function enoent(target) {
  * `stat` liefert für existierende Pfade eine Datei. `existing` steuert, welche
  * Pfade es gibt; alles andere ist ENOENT.
  */
-function fakeStat(existing) {
+function fakeStat(existing, anlzSize = GOOD_ANLZ.length) {
   const norm = (value) => String(value).replace(/\\/g, '/').toLowerCase();
   const list = existing.map(norm);
   return async (target) => {
     const value = String(target);
-    if (list.includes(norm(value))) return { isFile: () => true, size: 10_223_409, mtimeMs: 7 };
+    if (list.includes(norm(value))) {
+      return {
+        isFile: () => true,
+        size: /\.dat$/i.test(value) ? anlzSize : 10_223_409,
+        mtimeMs: 7,
+      };
+    }
     throw enoent(value);
   };
 }
 
 function makeDeps(overrides = {}) {
+  const { anlzSize = GOOD_ANLZ.length, ...dependencyOverrides } = overrides;
   return {
     locateRekordboxDatabases: async () => [
       { path: 'C:\\Pioneer\\rekordbox7\\master.db', kind: 'MASTER_DB', label: 'master.db' },
@@ -137,9 +144,9 @@ function makeDeps(overrides = {}) {
     stat: fakeStat([
       'C:/Pioneer/rekordbox7/analysis/PQT000000.DAT',
       'C:/Music/Andreas Henneberg/Skirmish (Original Mix).mp3',
-    ]),
+    ], anlzSize),
     readFile: async () => GOOD_ANLZ,
-    ...overrides,
+    ...dependencyOverrides,
   };
 }
 
@@ -169,7 +176,7 @@ function makeDeps(overrides = {}) {
   const noWaveform = Buffer.concat([pmaiHeader(), section('PQTZ', Buffer.alloc(64, 1), 0x18)]);
   const result = await resolveTrackFromMasterDb(
     { trackId: TRACK_ID },
-    makeDeps({ readFile: async () => noWaveform })
+    makeDeps({ readFile: async () => noWaveform, anlzSize: noWaveform.length })
   );
   assert.equal(result.code, 'REKORDBOX_WAVEFORM_MISSING');
   ok('REKORDBOX_WAVEFORM_MISSING (kein PWV-Abschnitt)');
@@ -180,7 +187,7 @@ function makeDeps(overrides = {}) {
   const broken = Buffer.concat([pmaiHeader(), section('PWV5', Buffer.alloc(48, 0x80), 0x18)]);
   const result = await resolveTrackFromMasterDb(
     { trackId: TRACK_ID },
-    makeDeps({ readFile: async () => broken })
+    makeDeps({ readFile: async () => broken, anlzSize: broken.length })
   );
   assert.equal(result.code, 'ANLZ_WAVEFORM_UNREADABLE', 'PWV5-Tag mit unlesbarem Layout wird abgelehnt');
   ok('ANLZ_WAVEFORM_UNREADABLE (Layout unlesbar)');
@@ -191,7 +198,7 @@ function makeDeps(overrides = {}) {
   const silent = Buffer.concat([pmaiHeader(), pwv5Section(64, 0x00)]);
   const result = await resolveTrackFromMasterDb(
     { trackId: TRACK_ID },
-    makeDeps({ readFile: async () => silent })
+    makeDeps({ readFile: async () => silent, anlzSize: silent.length })
   );
   assert.equal(result.code, 'ANLZ_WAVEFORM_UNREADABLE', 'eine Welleform aus lauter Nullen ist keine Waveform');
   ok('ANLZ_WAVEFORM_UNREADABLE (0 Amplituden-Buckets)');
@@ -206,7 +213,7 @@ function makeDeps(overrides = {}) {
   ]);
   const result = await resolveTrackFromMasterDb(
     { trackId: TRACK_ID },
-    makeDeps({ readFile: async () => other })
+    makeDeps({ readFile: async () => other, anlzSize: other.length })
   );
   assert.equal(result.code, 'ANLZ_SOURCE_MISMATCH', 'fremde PPTH-Quelle wird nicht stillschweigend ersetzt');
   assert.ok(String(result.reason).includes('Anderer Track.mp3'), 'der Grund nennt die PPTH-Quelle');
@@ -221,6 +228,7 @@ function makeDeps(overrides = {}) {
     { trackId: TRACK_ID },
     makeDeps({
       readFile: async () => missing,
+      anlzSize: missing.length,
       openContentRow: async () => ({
         available: true,
         dbType: 'MASTER_DB',
@@ -249,7 +257,7 @@ function makeDeps(overrides = {}) {
         'C:/Music/Andreas Henneberg/Skirmish (Original Mix).mp3',
         'C:/Music/Alt/Skirmish.mp3',
         'C:/Moved/Library/Skirmish (Original Mix).mp3',
-      ]),
+      ], moved.length),
     })
   );
   assert.equal(result.ok, true, `erwartet OK, bekam ${result.code}: ${result.reason}`);
@@ -405,8 +413,11 @@ function makeDeps(overrides = {}) {
   // Fall und fiel überall dort aus, wo better-sqlite3-multiple-ciphers steht.)
   if (!dbReader.isCipherAvailable()) {
     assert.equal(result.ok, false, 'ohne natives Modul ist der Preflight nicht positiv');
-    assert.ok(failed.includes('NATIVE_MODULE_RESOLVED'), `erwartete NATIVE_MODULE_RESOLVED, war ${failed}`);
-    assert.ok(failed.includes('SQLCIPHER_FUNCTIONAL'), 'ohne Modul ist die Funktionsprobe nicht bestanden');
+    assert.ok(
+      failed.includes('NATIVE_MODULE_RESOLVED') || failed.includes('NATIVE_MODULE_LOADABLE'),
+      `fehlendes oder nicht ladbares natives Modul wurde nicht erkannt: ${failed}`
+    );
+    assert.ok(failed.includes('SQLCIPHER_FUNCTIONAL'), 'ohne natives Modul ist die Funktionsprobe nicht bestanden');
     assert.ok(runtimeCheck.hasUnprovenChecks(result), 'der Preflight meldet den Zustand als unvollständig');
     assert.ok(text.includes('FEHLER'), 'der Bericht nennt den Fehlerstatus');
     ok(`Runtime-Preflight erkennt fehlendes natives Modul (${failed.join(', ')})`);
@@ -585,7 +596,10 @@ function makeDeps(overrides = {}) {
   }
   assert.ok(/cueSource/.test(select), 'Cue-Quelle wird am Track vermerkt');
   assert.ok(/gateProvenance/.test(select), 'Gate-Nachweis landet im TrackModel');
-  assert.ok(/databaseRecord:/.test(select), 'Gate-Nachweis landet auch im databaseRecord');
+  assert.ok(
+    select.includes('const databaseRecord =') && select.includes('databaseRecord,'),
+    'Gate-Nachweis landet auch im databaseRecord'
+  );
   assert.ok(/SOURCE {4}REKORDBOX ANLZ/.test(select), 'Erfolgsstatus nennt die Quelle sichtbar');
   assert.ok(/READ ONLY/.test(select), 'Erfolgsstatus nennt den read-only Zugriff');
   ok('Renderer erzwingt Gate-Waveform, verbietet Fallback und schreibt den Nachweis');

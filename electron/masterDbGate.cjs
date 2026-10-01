@@ -1,25 +1,4 @@
 
-// Auto-generated Pfadaufl�sung f�r D:\PIONEER
-function resolveAnlzPath(analysisPath) {
-  if (!analysisPath) return null;
-  if (fs.existsSync(resolveAnlzPath(analysisPath))) return analysisPath;
-
-  const cleanPath = String(analysisPath).replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
-  const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
-
-  const candidates = [
-    path.join('D:', 'PIONEER', relativePioneer),
-    path.join('D:', cleanPath),
-    path.join('D:', 'PIONEER', cleanPath),
-    path.join('C:', 'PIONEER', relativePioneer),
-    path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
-  ];
-
-  for (const cand of candidates) {
-    if (fs.existsSync(cand)) return cand;
-  }
-  return analysisPath;
-}
 
 /**
  * Master-DB-Gate (Phase 5) – verbindliche Track-Lade-Kette.
@@ -126,6 +105,73 @@ function toLocalPath(location) {
   } catch {
     return null;
   }
+}
+
+/** Finds the nearest PIONEER directory root in a database or analysis path. */
+function pioneerRootFromPath(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalized = value.trim().replace(/\\/g, '/');
+  const match = normalized.match(/^(.*?)(?:^|\/)PIONEER(?:\/|$)/i);
+  if (!match) return null;
+  const prefix = match[1].replace(/\/$/, '');
+  return `${prefix}${prefix ? (prefix.includes('\\') ? '\\' : '/') : ''}PIONEER`;
+}
+
+function joinPioneerRoot(root, relativePath) {
+  return /^[a-z]:[\\/]/i.test(root) || root.includes('\\')
+    ? path.win32.join(root, relativePath)
+    : path.join(root, relativePath);
+}
+
+/**
+ * Build only deterministic ANLZ path candidates: the recorded path itself,
+ * then the same path relative to a known PIONEER root. This supports Rekordbox
+ * paths stored as /PIONEER/USBANLZ/... or relative to a mounted D:\\PIONEER
+ * export without scanning the drive or guessing by filename.
+ */
+function makeAnalysisPathCandidates(rawAnalysisPath, databasePath) {
+  const raw = String(rawAnalysisPath || '').trim();
+  if (!raw) return [];
+  const candidates = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return;
+    const key = candidate.replace(/\\/g, '/').toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const directPath = toLocalPath(raw) || raw;
+  const normalized = raw.replace(/^file:\/\//i, '').replace(/\\/g, '/');
+  const pioneerMatch = normalized.match(/(?:^|\/)PIONEER\/(.+)$/i);
+  let relativePath = pioneerMatch?.[1] || null;
+  const driveAbsolute = /^[a-z]:\//i.test(normalized);
+  const pioneerRootRelative = Boolean(pioneerMatch) && !driveAbsolute;
+  if (!relativePath && !driveAbsolute && !normalized.startsWith('/')) {
+    relativePath = normalized.replace(/^\/+/, '');
+  }
+  if (!relativePath && /^\/(?:USBANLZ|ANLZ)\//i.test(normalized)) {
+    relativePath = normalized.replace(/^\/+/, '');
+  }
+  // Root-relative /PIONEER/... values must be tried under the explicitly
+  // supplied D:\\PIONEER root before path.resolve() binds them to the process
+  // drive. Full drive-letter paths keep their exact recorded path first.
+  if (!pioneerRootRelative) add(directPath);
+  if (!relativePath) {
+    if (pioneerRootRelative) add(directPath);
+    return candidates;
+  }
+
+  const roots = [path.win32.join('D:\\', 'PIONEER')];
+  const databaseRoot = pioneerRootFromPath(databasePath);
+  if (databaseRoot) roots.push(databaseRoot);
+  if (process.env.APPDATA) {
+    roots.push(path.win32.join(process.env.APPDATA, 'Pioneer', 'rekordbox', 'share', 'PIONEER'));
+  }
+  for (const root of roots) add(joinPioneerRoot(root, relativePath));
+  if (pioneerRootRelative) add(directPath);
+  return candidates;
 }
 
 /**
@@ -314,25 +360,46 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  const analysisPath = toLocalPath(rawAnalysisPath) || rawAnalysisPath;
-  let analysisStat;
-  try {
-    analysisStat = await stat(analysisPath);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      return fail('ANLZ_NOT_FOUND', `ANLZ-Datei nicht gefunden: ${analysisPath}`, { ...dbContext, content });
-    }
+  const analysisPathCandidates = makeAnalysisPathCandidates(rawAnalysisPath, candidate.path);
+  const analysisExtension = path.extname(rawAnalysisPath).toLowerCase();
+  if (!ANLZ_EXTENSIONS.includes(analysisExtension)) {
     return fail(
-      'ANLZ_READ_FAILED',
-      `ANLZ-Datei nicht lesbar: ${analysisPath} (${error.message || error})`,
+      'ANLZ_INVALID',
+      `AnalysisDataPath ist keine unterstützte Rekordbox-ANLZ-Datei (.dat/.ext/.2ex): ${rawAnalysisPath}`,
       { ...dbContext, content }
     );
   }
-  if (!analysisStat || !analysisStat.isFile()) {
-    return fail('ANLZ_NOT_FOUND', `ANLZ-Pfad verweist nicht auf eine Datei: ${analysisPath}`, {
-      ...dbContext,
-      content,
-    });
+
+  let analysisPath = analysisPathCandidates[0] || rawAnalysisPath;
+  let analysisStat = null;
+  let notFoundError = null;
+  let readError = null;
+  for (const pathCandidate of analysisPathCandidates) {
+    try {
+      const details = await stat(pathCandidate);
+      if (details && details.isFile()) {
+        analysisPath = pathCandidate;
+        analysisStat = details;
+        break;
+      }
+    } catch (error) {
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) notFoundError ||= error;
+      else readError ||= error;
+    }
+  }
+  if (!analysisStat) {
+    if (readError) {
+      return fail(
+        'ANLZ_READ_FAILED',
+        `ANLZ-Datei nicht lesbar: ${rawAnalysisPath} (${readError.message || readError})`,
+        { ...dbContext, content }
+      );
+    }
+    return fail(
+      'ANLZ_NOT_FOUND',
+      `ANLZ-Datei nicht gefunden: ${rawAnalysisPath} (geprüft: ${analysisPathCandidates.join(' | ')})${notFoundError ? ` (${notFoundError.message || notFoundError})` : ''}`,
+      { ...dbContext, content }
+    );
   }
   if (analysisStat.size > MAX_ANALYSIS_BYTES) {
     return fail(
@@ -341,17 +408,22 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       { ...dbContext, content }
     );
   }
-  if (!ANLZ_EXTENSIONS.includes(path.extname(analysisPath).toLowerCase())) {
-    return fail(
-      'ANLZ_INVALID',
-      `AnalysisDataPath ist keine unterstützte Rekordbox-ANLZ-Datei (.dat/.ext/.2ex): ${analysisPath}`,
-      { ...dbContext, content }
-    );
-  }
 
   let analysisBytes;
   try {
     analysisBytes = await readFile(analysisPath);
+    const afterRead = await stat(analysisPath);
+    if (
+      analysisBytes.length !== analysisStat.size ||
+      afterRead.size !== analysisStat.size ||
+      afterRead.mtimeMs !== analysisStat.mtimeMs
+    ) {
+      return fail(
+        'ANLZ_READ_FAILED',
+        `Größe oder mtime der ANLZ-Datei änderte sich während des Read-only-Lesevorgangs: ${analysisPath}`,
+        { ...dbContext, content }
+      );
+    }
   } catch (error) {
     return fail(
       'ANLZ_READ_FAILED',

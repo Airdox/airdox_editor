@@ -86,7 +86,6 @@ export function applyAnlzExtractionToTrack(
 ): TrackModel {
   const bpm = extraction.bpm ?? track.bpm;
   const firstBeat = extraction.firstBeat ?? track.beatGrid.firstBeat;
-  const hasAnlzBeatgrid = extraction.bpm !== undefined || extraction.firstBeat !== undefined;
   const hasAnlzCues = extraction.cues.length > 0;
   const hasAnlzLoops = extraction.loops.length > 0;
   const hasAnlzPhrases = extraction.phrases.length > 0;
@@ -135,8 +134,10 @@ export function applyAnlzExtractionToTrack(
   return {
     ...track,
     bpm,
-    beatGrid: hasAnlzBeatgrid
-      ? buildBeatGridFromTempo(firstBeat, bpm, track.duration, track.beatGrid.meter, DataOrigin.REKORDBOX_ANLZ)
+    // Only a decoded PQTZ beatgrid is tagged as ANLZ. BPM/firstBeat alone are
+    // not enough to fabricate a regular grid or claim Rekordbox provenance.
+    beatGrid: extraction.beatGrid
+      ? { ...extraction.beatGrid, origin: DataOrigin.REKORDBOX_ANLZ }
       : track.beatGrid,
     cues,
     loops: hasAnlzLoops ? extraction.loops : track.loops,

@@ -7,10 +7,10 @@
  * Er läuft die *echte* Kette auf dem Rechner, auf dem eine Rekordbox-
  * Installation liegt.
  *
- *     locateRekordboxDatabases()   (echte AppData-Pfade)
- *        → openContentRow()        (echtes SQLCipher, master.db read-only)
+ *     locateRekordboxDatabases()   (D:\\PIONEER und echte AppData-Pfade)
+ *        → openContentRow()        (echtes SQLCipher, master.db oder exportLibrary.db read-only)
  *        → resolveTrackFromMasterDb()
- *        → echte djmdContent-Zeile
+ *        → echte djmdContent/content-Zeile
  *        → echter AnalysisDataPath / echte ANLZ-Datei
  *        → dekodierte Rekordbox-Waveform
  *        → ANLZ-PPATH + Original-Audio
@@ -21,11 +21,10 @@
  *   * Rekordbox vorhanden, aber SQLCipher-Modul fehlt → FAIL mit dem exakten
  *     Gate-Code SQLCIPHER_UNAVAILABLE. Ein stilles "grün" ist ausgeschlossen.
  *   * Alles vorhanden → alle Zusicherungen werden geprüft und der Original-
- *     Bestand vor/nach dem Lauf byteweise verglichen.
+ *     Bestand vor/nach dem Lauf auf gleiche Dateigröße und mtime geprüft.
  *
- * Aufruf:
- *   node tests/rekordbox-runtime-smoke.mjs            (Standard-TrackID 142225026)
- *   node tests/rekordbox-runtime-smoke.mjs 142225026
+ * Aufruf (startet automatisch mit der Electron-Laufzeit):
+ *   npm run test:rekordbox:runtime
  *   npm run test:rekordbox:runtime -- 142225026
  */
 
@@ -85,7 +84,10 @@ async function main() {
     .slice()
     .sort((a, b) => (a.kind === 'MASTER_DB' ? 0 : 1) - (b.kind === 'MASTER_DB' ? 0 : 1));
   const target = ordered[0];
-  assert.equal(target.kind, 'MASTER_DB', 'master.db hat Vorrang vor exportLibrary.db');
+  assert.ok(
+    target.kind === 'MASTER_DB' || target.kind === 'ONE_LIBRARY',
+    'ein unterstützter Rekordbox-Datenbanktyp wurde gefunden'
+  );
 
   // ── 2. SQLCipher muss echt laufen ──────────────────────────────────────
   section('2. SQLCipher-Laufzeit');
@@ -103,23 +105,24 @@ async function main() {
     process.exit(1);
   }
   const after = fingerprint(target.path);
-  assert.equal(before.size, after.size, 'master.db-Größe darf sich nicht ändern');
-  assert.equal(before.mtimeMs, after.mtimeMs, 'master.db-mtime darf sich nicht ändern');
-  ok('master.db read-only', 'unverändert nach dem Zugriff');
+  assert.equal(before.size, after.size, 'Datenbank-Größe darf sich nicht ändern');
+  assert.equal(before.mtimeMs, after.mtimeMs, 'Datenbank-mtime darf sich nicht ändern');
+  ok(`${target.kind} read-only`, 'Größe und mtime nach dem Zugriff unverändert');
 
   if (!row.row) {
     console.error(`  [FAIL] Track ${trackId} existiert nicht in ${target.path}. Bitte eine ID aus dieser Bibliothek angeben.`);
     process.exit(1);
   }
-  ok('djmdContent', `ID ${row.row.ID}, djmdCue: ${(row.cues || []).length}`);
+  const dbTrackId = String(row.row.ID ?? row.row.content_id ?? trackId);
+  ok('djmdContent/content', `ID ${dbTrackId}, Cues: ${(row.cues || []).length}`);
 
   // ── 3. Die echte Kette über den Gate ──────────────────────────────────
   section('3. resolveTrackFromMasterDb()');
   const result = await gate.resolveTrackFromMasterDb({ trackId });
   assert.equal(result.ok, true, `Gate muss OK liefern, bekam ${result.code}: ${result.reason}`);
   assert.equal(result.code, 'OK', 'Gate-Code ist OK');
-  assert.equal(result.dbType, 'MASTER_DB', 'Gate liest die master.db');
-  assert.equal(result.content.id, String(row.row.ID), 'content.id entspricht der TrackID');
+  assert.equal(result.dbType, target.kind, 'Gate verwendet denselben gefundenen Datenbanktyp');
+  assert.equal(result.content.id, dbTrackId, 'content.id entspricht der Datenbank-TrackID');
 
   // ── 4. Echte AnalysisDataPath und echte ANLZ ─────────────────────────
   section('4. AnalysisDataPath / ANLZ');
@@ -161,7 +164,7 @@ async function main() {
   const originalAfter = fingerprint(result.original.path);
   assert.equal(originalBefore.size, originalAfter.size, 'Original-Audio-Größe darf sich nicht ändern');
   assert.equal(originalBefore.mtimeMs, originalAfter.mtimeMs, 'Original-Audio-mtime darf sich nicht ändern');
-  ok('Quelldateien unverändert', 'master.db, ANLZ und Original-Audio sind byteweise gleich');
+  ok('Quelldateien unverändert', 'Größe und mtime von Datenbank, ANLZ und Original-Audio stimmen vor/nach dem Lesen überein');
 
   // ── 6. Runtime-Preflight im selben Prozess ────────────────────────────
   section('6. checkRekordboxRuntime()');

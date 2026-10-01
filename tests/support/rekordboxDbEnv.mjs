@@ -30,13 +30,19 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
-/** true, wenn das native SQLCipher-Modul geladen werden kann. */
+/** true, wenn JS-Wrapper und ABI-spezifisches natives Binding ladbar sind. */
 export function isSqlCipherAvailable() {
+  let db = null;
   try {
-    require('better-sqlite3-multiple-ciphers');
+    const Database = require('better-sqlite3-multiple-ciphers');
+    db = new Database(':memory:');
+    db.close();
+    db = null;
     return true;
   } catch {
     return false;
+  } finally {
+    try { db?.close(); } catch { /* dispose the scratch database */ }
   }
 }
 

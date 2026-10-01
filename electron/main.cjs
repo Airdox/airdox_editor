@@ -620,6 +620,14 @@ ipcMain.handle('rekordbox:read-bundled-xml', async () => {
     const details = await stat(target);
     if (!details.isFile()) throw new Error('Die gebündelte XML-Ressource ist keine Datei.');
     const data = await readFile(target, 'utf-8');
+    const afterRead = await stat(target);
+    if (
+      Buffer.byteLength(data, 'utf8') !== details.size ||
+      afterRead.size !== details.size ||
+      afterRead.mtimeMs !== details.mtimeMs
+    ) {
+      throw new Error('Die eingebettete rekordbox.xml änderte Größe oder mtime während des Read-only-Lesevorgangs.');
+    }
     originalSourceRegistry.register(target);
     return {
       available: true,
@@ -674,6 +682,14 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
     throw new Error('Die ANLZ-Datei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  const afterRead = await stat(localPath);
+  if (
+    data.byteLength !== details.size ||
+    afterRead.size !== details.size ||
+    afterRead.mtimeMs !== details.mtimeMs
+  ) {
+    throw new Error('Die ANLZ-Quelldatei änderte Größe oder mtime während des Read-only-Lesevorgangs.');
+  }
   originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
@@ -751,6 +767,14 @@ ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
     throw new Error('Die Originaldatei ist größer als 1 GB und wird nicht in den Arbeitsspeicher geladen.');
   }
   const data = await readFile(localPath);
+  const afterRead = await stat(localPath);
+  if (
+    data.byteLength !== details.size ||
+    afterRead.size !== details.size ||
+    afterRead.mtimeMs !== details.mtimeMs
+  ) {
+    throw new Error('Die Original-Audiodatei änderte Größe oder mtime während des Read-only-Lesevorgangs.');
+  }
   originalSourceRegistry.register(localPath);
   return {
     data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),

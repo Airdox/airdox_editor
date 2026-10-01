@@ -186,6 +186,16 @@ runTest('Real ANLZ merge', 'ANLZ data takes priority but XML metadata is retaine
   assert(merged.cues.some((cue) => cue.comment === 'Einsatz A'), 'ANLZ cue comments merged');
 });
 
+runTest('Real ANLZ merge', 'BPM/first-beat metadata alone does not generate a synthetic beatgrid', () => {
+  const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0);
+  const extraction = parseAnlzBinary(generateRealAnlzExtFixture(DAT_BPM));
+  extraction.beatGrid = undefined;
+  const merged = applyAnlzExtractionToTrack(track, extraction);
+
+  assertEqual(merged.beatGrid.origin, track.beatGrid.origin, 'the existing XML grid is preserved, not relabeled as ANLZ');
+  assert(merged.beatGrid.origin !== DataOrigin.REKORDBOX_ANLZ, 'no ANLZ grid is claimed without parsed grid entries');
+});
+
 runTest('Real ANLZ merge', 'PSSI phrases are clamped to the real track duration', () => {
   const { track } = extractTrackFromRekordboxXml(SCENARIO_TECHNO_XML, 0); // 240s
   const extraction = parseAnlzBinary(generateRealAnlzExtFixture(DAT_BPM));

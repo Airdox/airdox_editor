@@ -9,11 +9,11 @@
  * endet mit Exit-Code 1, sobald ein Nachweis fehlschlägt – ein Build darf
  * nicht erfolgreich durchlaufen, obwohl SQLCipher anschließend fehlt.
  *
- * Aufruf:
- *   node scripts/rekordbox-preflight.mjs                  # Modul + (falls vorhanden) master.db
- *   node scripts/rekordbox-preflight.mjs --require-module # nur natives Modul erzwingen
- *   node scripts/rekordbox-preflight.mjs --require-db     # auch eine master.db erzwingen
- *   node scripts/rekordbox-preflight.mjs --json
+ * Aufruf (npm-Skript startet dieses CLI mit Electron's Node-ABI):
+ *   npm run rekordbox:preflight
+ *   npm run rekordbox:preflight -- --require-module
+ *   npm run rekordbox:preflight -- --require-db     # master.db oder exportLibrary.db erzwingen
+ *   npm run rekordbox:preflight -- --json
  */
 
 import { createRequire } from 'node:module';
@@ -66,7 +66,7 @@ if (requireModule && result.checks.some((check) => check.id === 'ELECTRON_VERSIO
 if (requireDb) {
   const dbCheck = result.checks.find((check) => check.id === 'MASTER_DB_READONLY');
   if (!dbCheck || dbCheck.status !== 'OK') {
-    console.error(`\nmaster.db read-only nicht nachgewiesen: ${dbCheck ? dbCheck.detail : 'Prüfung fehlt'}`);
+    console.error(`\nRekordbox-Datenbank read-only nicht nachgewiesen: ${dbCheck ? dbCheck.detail : 'Prüfung fehlt'}`);
     process.exit(1);
   }
 }
