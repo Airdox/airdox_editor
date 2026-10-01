@@ -63,25 +63,39 @@ haben; der Doctor meldet, welche Datei er gefunden hat.
 ## 2. Das richtige Repository und Werkzeuge öffnen
 
 Verwende ein Repository, das die aktuelle Änderung enthält. Wenn das Projekt
-noch nicht auf dem PC liegt, klone den Arbeitsbranch (sobald er auf GitHub
-veröffentlicht wurde):
+noch nicht auf dem PC liegt, klone den Arbeitsbranch:
 
 ```powershell
 git clone --branch arena/01a0f573-airdox-editor --single-branch `
   https://github.com/Airdox/airdox_editor.git "$HOME\airdox_editor"
-Set-Location -LiteralPath "$HOME\airdox_editor"
 ```
 
-Wenn du bereits einen Clone hast, wechsle darin auf diesen Branch und hole die
-aktuelle Fassung. Im Repository muss die Datei
-`scripts\run-electron-node.mjs` existieren; sie startet die Diagnoseprogramme
-mit **Electron's Node-ABI**, zu der das native SQLCipher-Modul gebaut wird.
-Eine normale Node-Shell kann dieses Electron-Binary nicht zuverlässig laden.
-
-Passe den Beispielpfad an den tatsächlichen Speicherort deines Repositorys an:
+Wenn du bereits einen Clone hast und den lokalen Branch noch nicht angelegt
+hast, hole ihn so:
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\DEINNAME\source\airdox_editor'
+git fetch origin arena/01a0f573-airdox-editor
+git switch --track -c arena/01a0f573-airdox-editor origin/arena/01a0f573-airdox-editor
+```
+
+Falls der lokale Branch bereits existiert:
+
+```powershell
+git fetch origin
+git switch arena/01a0f573-airdox-editor
+git pull --ff-only origin arena/01a0f573-airdox-editor
+```
+
+Wenn Git wegen eigener, ungesicherter Änderungen nicht wechseln oder
+aktualisieren kann, **nicht** `git reset` ausführen: Änderungen zuerst sichern
+oder eine frische Kopie in einen neuen Ordner klonen.
+
+Wechsle danach in den Repository-Ordner. Bei einem neuen Clone ist das der
+folgende Pfad; bei einem bestehenden Clone musst du ihn gegebenenfalls
+anpassen:
+
+```powershell
+Set-Location -LiteralPath "$HOME\airdox_editor"
 Test-Path .\scripts\run-electron-node.mjs
 node --version
 npm --version
