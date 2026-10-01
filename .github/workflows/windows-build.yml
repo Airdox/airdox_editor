@@ -8,32 +8,32 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller librosa soundfile numpy
-          
-      - name: Build with PyInstaller
-        run: |
-          pyinstaller build.spec --clean
-          
-      - name: Install Inno Setup and Compile Installer
-        run: |
-          choco install innosetup -y
-          iscc setup.iss
-          
-      - name: Upload Installer Artifact
+          node-version: '22'
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Native Module für Electron neu bauen
+        run: npm run rekordbox:native:ensure
+
+      - name: Vite-Frontend bauen
+        run: npm run build
+
+      - name: Electron-Installer bauen (NSIS)
+        run: npm run package:win:nsis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup-EXE als Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: DJ_Airdox_Editor_Setup
-          path: dist_installer\DJ_Airdox_Editor_Setup.exe
-
+          name: airdox_SMART_Editor_Windows_Setup
+          path: release/*-setup.exe
+          if-no-files-found: error
