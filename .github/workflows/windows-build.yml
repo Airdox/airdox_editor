@@ -1,4 +1,4 @@
-﻿name: Windows-Build
+name: Windows-Build
 
 on:
   push:
@@ -36,5 +36,4 @@ jobs:
         with:
           name: DJ_Airdox_Editor_Setup
           path: dist_installer\DJ_Airdox_Editor_Setup.exe
-          path: DJ_Airdox_Editor_Setup.exe
 
