@@ -604,9 +604,46 @@ function findDatabaseFiles(appDir, { includeOptions = true } = {}) {
 }
 
 /**
+ * Subfolders of a Pioneer root that can hold a Rekordbox database.
+ *
+ * `Master` is the layout Rekordbox writes for a relocated/external library
+ * (`PIONEER\Master\master.db`, e.g. on a dedicated library drive). It was
+ * missing from the scan, so an external library was never auto-detected and
+ * the gate silently fell through to an unrelated (often stale or empty)
+ * AppData `master.db` – surfacing as MASTER_DB_NOT_FOUND or, worse,
+ * TRACK_NOT_FOUND_IN_MASTER_DB against the wrong library.
+ * `rekordbox7`/`rekordbox6`/`rekordbox` cover the versioned local libraries
+ * and the OneLibrary/Device Library exports.
+ */
+const PIONEER_DB_SUBFOLDERS = ['Master', 'rekordbox7', 'rekordbox6', 'rekordbox'];
+
+/**
+ * Resolves a known subfolder name against the real directory listing. Windows
+ * and ExFAT/FAT media are case-insensitive, but the recorded name may differ
+ * in case (`master`, `MASTER`); read-only, never creates anything.
+ */
+function resolvePioneerSubfolder(pioneerRoot, dirName) {
+  const direct = path.join(pioneerRoot, dirName);
+  try {
+    if (fs.existsSync(direct) && fs.statSync(direct).isDirectory()) return direct;
+    if (!fs.existsSync(pioneerRoot)) return direct;
+    const wanted = dirName.toLowerCase();
+    for (const entry of fs.readdirSync(pioneerRoot, { withFileTypes: true })) {
+      if (entry.name.toLowerCase() !== wanted) continue;
+      const candidate = path.join(pioneerRoot, entry.name);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+    }
+  } catch {
+    // Unreadable root/entry: fall back to the plain join, existence is
+    // re-checked by findDatabaseFiles.
+  }
+  return direct;
+}
+
+/**
  * Scans one Pioneer root folder for known database files in the root,
- * rekordbox7/rekordbox6/rekordbox subfolders, plus the sibling rekordboxAgent
- * options.json. Exported for tests; pure read-only fs reads.
+ * Master/rekordbox7/rekordbox6/rekordbox subfolders, plus the sibling
+ * rekordboxAgent options.json. Exported for tests; pure read-only fs reads.
  */
 function collectPioneerRootCandidates(pioneerRoot) {
   const results = [];
@@ -616,8 +653,8 @@ function collectPioneerRootCandidates(pioneerRoot) {
   // Only known database filenames are considered; all filesystem access stays
   // read-only.
   results.push(...findDatabaseFiles(pioneerRoot, { includeOptions: false }));
-  for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
-    results.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
+  for (const dirName of PIONEER_DB_SUBFOLDERS) {
+    results.push(...findDatabaseFiles(resolvePioneerSubfolder(pioneerRoot, dirName)));
   }
   return results;
 }
@@ -678,5 +715,6 @@ module.exports = {
   openContentRow,
   locateRekordboxDatabases,
   collectPioneerRootCandidates,
+  resolvePioneerSubfolder,
   isCipherAvailable,
 };

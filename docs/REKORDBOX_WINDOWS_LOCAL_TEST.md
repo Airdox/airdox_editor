@@ -47,10 +47,13 @@ Laufwerk etwas dauern.
 
 - `master.db` ist die normale lokale Rekordbox-Bibliothek.
 - `exportLibrary.db` ist eine OneLibrary-/Device-Library-Datenbank.
-- Der automatische Suchweg kennt `D:\PIONEER` sowie die Unterordner
-  `rekordbox7`, `rekordbox6` und `rekordbox`. Er durchsucht nicht beliebig das
-  ganze Laufwerk. Ein explizit gesetzter Pfad (Schritt 4) ist für eine
-  anderswo abgelegte Datei gedacht.
+- `D:\PIONEER\Master\master.db` ist die typische Ablage einer **extern
+  geführten** Bibliothek (Rekordbox-Bibliothek auf einem eigenen Laufwerk).
+  Dieser Unterordner `Master` wird mit durchsucht.
+- Der automatische Suchweg kennt `D:\PIONEER` sowie die Unterordner `Master`,
+  `rekordbox7`, `rekordbox6` und `rekordbox` (Groß-/Kleinschreibung egal). Er
+  durchsucht nicht beliebig das ganze Laufwerk. Ein explizit gesetzter Pfad
+  (Schritt 4) ist für eine anderswo abgelegte Datei gedacht.
 - Existieren beide Datenbanktypen, hat `master.db` innerhalb der gefundenen
   Kandidaten Vorrang. Der Doctor zeigt später den tatsächlich gewählten Pfad.
   **Dateien nicht umbenennen oder verschieben**, um die Suche zu beeinflussen.
@@ -66,7 +69,7 @@ Verwende ein Repository, das die aktuelle Änderung enthält. Wenn das Projekt
 noch nicht auf dem PC liegt, klone den Arbeitsbranch:
 
 ```powershell
-git clone --branch arena/01a0f573-airdox-editor --single-branch `
+git clone --branch arena/01a0f5aa-airdox-editor --single-branch `
   https://github.com/Airdox/airdox_editor.git "$HOME\airdox_editor"
 ```
 
@@ -74,16 +77,16 @@ Wenn du bereits einen Clone hast und den lokalen Branch noch nicht angelegt
 hast, hole ihn so:
 
 ```powershell
-git fetch origin arena/01a0f573-airdox-editor
-git switch --track -c arena/01a0f573-airdox-editor origin/arena/01a0f573-airdox-editor
+git fetch origin arena/01a0f5aa-airdox-editor
+git switch --track -c arena/01a0f5aa-airdox-editor origin/arena/01a0f5aa-airdox-editor
 ```
 
 Falls der lokale Branch bereits existiert:
 
 ```powershell
 git fetch origin
-git switch arena/01a0f573-airdox-editor
-git pull --ff-only origin arena/01a0f573-airdox-editor
+git switch arena/01a0f5aa-airdox-editor
+git pull --ff-only origin arena/01a0f5aa-airdox-editor
 ```
 
 Wenn Git wegen eigener, ungesicherter Änderungen nicht wechseln oder
@@ -173,7 +176,7 @@ AppData-Datenbank. Verwende nur eine vorhandene Datei namens `master.db` oder
 `exportLibrary.db`:
 
 ```powershell
-$env:AIRODOX_REKORDBOX_DB = 'D:\PIONEER\rekordbox7\master.db'
+$env:AIRODOX_REKORDBOX_DB = 'D:\PIONEER\Master\master.db'
 npm run rekordbox:preflight -- --require-db
 ```
 
@@ -181,7 +184,7 @@ Wenn du zwei bekannte Bibliotheken ausdrücklich zulassen möchtest, trenne die
 Dateipfade mit einem Semikolon:
 
 ```powershell
-$env:AIRODOX_REKORDBOX_DB = 'D:\PIONEER\rekordbox7\master.db;D:\PIONEER\rekordbox\exportLibrary.db'
+$env:AIRODOX_REKORDBOX_DB = 'D:\PIONEER\Master\master.db;D:\PIONEER\rekordbox\exportLibrary.db'
 ```
 
 Ist dieser Override gesetzt, sucht die App **nur** die angegebenen Pfade; ein

@@ -133,6 +133,41 @@ try {
   );
   checks.push('PIONEER-Medienroot (master.db und rekordbox/exportLibrary.db)');
 
+  // 6b. Extern geführte Rekordbox-Bibliothek: Rekordbox legt sie als
+  // PIONEER\Master\master.db ab. Fehlte dieser Unterordner in der Suche, wurde
+  // die externe Bibliothek nie gefunden und der Gate fiel auf eine fremde
+  // (meist veraltete/leere) AppData-master.db zurück – sichtbar als
+  // MASTER_DB_NOT_FOUND oder TRACK_NOT_FOUND_IN_MASTER_DB.
+  const externalMasterRoot = path.join(work, 'ExternalMaster', 'PIONEER');
+  const externalMasterDir = path.join(externalMasterRoot, 'Master');
+  mkdirSync(externalMasterDir, { recursive: true });
+  const externalMasterDb = path.join(externalMasterDir, 'master.db');
+  writeFileSync(externalMasterDb, 'x');
+  const externalMasterFound = dbReader.collectPioneerRootCandidates(externalMasterRoot);
+  const externalMasterEntry = externalMasterFound.find(
+    (entry) => path.resolve(entry.path) === path.resolve(externalMasterDb)
+  );
+  assert.ok(
+    externalMasterEntry,
+    `PIONEER\\Master\\master.db wird gefunden (gefunden: ${externalMasterFound.map((entry) => entry.path).join(', ')})`
+  );
+  assert.equal(externalMasterEntry.kind, 'MASTER_DB');
+  checks.push('Externe Bibliothek PIONEER\\Master\\master.db');
+
+  // 6c. Die Schreibweise des Unterordners ist auf Windows-/FAT-Medien nicht
+  // garantiert ('master' statt 'Master') – case-insensitive Auflösung.
+  const lowerMasterRoot = path.join(work, 'ExternalMasterLower', 'PIONEER');
+  const lowerMasterDir = path.join(lowerMasterRoot, 'master');
+  mkdirSync(lowerMasterDir, { recursive: true });
+  const lowerMasterDb = path.join(lowerMasterDir, 'master.db');
+  writeFileSync(lowerMasterDb, 'x');
+  const lowerFound = dbReader.collectPioneerRootCandidates(lowerMasterRoot);
+  assert.ok(
+    lowerFound.some((entry) => path.resolve(entry.path) === path.resolve(lowerMasterDb)),
+    `Unterordner wird unabhängig von der Groß-/Kleinschreibung gefunden (gefunden: ${lowerFound.map((entry) => entry.path).join(', ')})`
+  );
+  checks.push('Unterordner-Suche case-insensitive (PIONEER\\master)');
+
   // 7. An explicit path list is an exact override and must not silently add
   // an unrelated D:\\PIONEER or AppData database on Windows.
   const previousOverride = process.env.AIRODOX_REKORDBOX_DB;
