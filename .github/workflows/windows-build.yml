@@ -35,5 +35,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: DJ_Airdox_Editor_Setup
+          path: dist_installer\DJ_Airdox_Editor_Setup.exe
           path: DJ_Airdox_Editor_Setup.exe
 
