@@ -8,6 +8,7 @@ function resolveAnlzPath(analysisPath) {
   const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
 
   const candidates = [
+    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', relativePioneer),
     path.join('D:', 'PIONEER', relativePioneer),
     path.join('D:', cleanPath),
     path.join('D:', 'PIONEER', cleanPath),
