@@ -1,4 +1,25 @@
-﻿
+
+// Auto-generated Pfadaufl�sung f�r D:\PIONEER
+function resolveAnlzPath(analysisPath) {
+  if (!analysisPath) return null;
+  if (fs.existsSync(resolveAnlzPath(analysisPath))) return analysisPath;
+
+  const cleanPath = String(analysisPath).replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
+  const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
+
+  const candidates = [
+    path.join('D:', 'PIONEER', relativePioneer),
+    path.join('D:', cleanPath),
+    path.join('D:', 'PIONEER', cleanPath),
+    path.join('C:', 'PIONEER', relativePioneer),
+    path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
+  ];
+
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) return cand;
+  }
+  return analysisPath;
+}
 
 /**
  * Master-DB-Gate (Phase 5) – verbindliche Track-Lade-Kette.
@@ -107,73 +128,6 @@ function toLocalPath(location) {
   }
 }
 
-/** Finds the nearest PIONEER directory root in a database or analysis path. */
-function pioneerRootFromPath(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const normalized = value.trim().replace(/\\/g, '/');
-  const match = normalized.match(/^(.*?)(?:^|\/)PIONEER(?:\/|$)/i);
-  if (!match) return null;
-  const prefix = match[1].replace(/\/$/, '');
-  return `${prefix}${prefix ? (prefix.includes('\\') ? '\\' : '/') : ''}PIONEER`;
-}
-
-function joinPioneerRoot(root, relativePath) {
-  return /^[a-z]:[\\/]/i.test(root) || root.includes('\\')
-    ? path.win32.join(root, relativePath)
-    : path.join(root, relativePath);
-}
-
-/**
- * Build only deterministic ANLZ path candidates: the recorded path itself,
- * then the same path relative to a known PIONEER root. This supports Rekordbox
- * paths stored as /PIONEER/USBANLZ/... or relative to a mounted D:\\PIONEER
- * export without scanning the drive or guessing by filename.
- */
-function makeAnalysisPathCandidates(rawAnalysisPath, databasePath) {
-  const raw = String(rawAnalysisPath || '').trim();
-  if (!raw) return [];
-  const candidates = [];
-  const seen = new Set();
-  const add = (candidate) => {
-    if (typeof candidate !== 'string' || !candidate.trim()) return;
-    const key = candidate.replace(/\\/g, '/').toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push(candidate);
-  };
-
-  const directPath = toLocalPath(raw) || raw;
-  const normalized = raw.replace(/^file:\/\//i, '').replace(/\\/g, '/');
-  const pioneerMatch = normalized.match(/(?:^|\/)PIONEER\/(.+)$/i);
-  let relativePath = pioneerMatch?.[1] || null;
-  const driveAbsolute = /^[a-z]:\//i.test(normalized);
-  const pioneerRootRelative = Boolean(pioneerMatch) && !driveAbsolute;
-  if (!relativePath && !driveAbsolute && !normalized.startsWith('/')) {
-    relativePath = normalized.replace(/^\/+/, '');
-  }
-  if (!relativePath && /^\/(?:USBANLZ|ANLZ)\//i.test(normalized)) {
-    relativePath = normalized.replace(/^\/+/, '');
-  }
-  // Root-relative /PIONEER/... values must be tried under the explicitly
-  // supplied D:\\PIONEER root before path.resolve() binds them to the process
-  // drive. Full drive-letter paths keep their exact recorded path first.
-  if (!pioneerRootRelative) add(directPath);
-  if (!relativePath) {
-    if (pioneerRootRelative) add(directPath);
-    return candidates;
-  }
-
-  const roots = [path.win32.join('D:\\', 'PIONEER'), path.win32.join('D:\\', 'PIONEER', 'Master', 'share', 'PIONEER')];
-  const databaseRoot = pioneerRootFromPath(databasePath);
-  if (databaseRoot) roots.push(databaseRoot);
-  if (process.env.APPDATA) {
-    roots.push(path.win32.join(process.env.APPDATA, 'Pioneer', 'rekordbox', 'share', 'PIONEER'));
-  }
-  for (const root of roots) add(joinPioneerRoot(root, relativePath));
-  if (pioneerRootRelative) add(directPath);
-  return candidates;
-}
-
 /**
  * True for a Rekordbox device-internal location such as
  * `file://localhost//contents_4136090260/unknownartist/.../track.mp3`.
@@ -221,7 +175,20 @@ function normalizeMediaPath(value) {
 function isSameMediaPath(left, right) {
   const a = normalizeMediaPath(left);
   const b = normalizeMediaPath(right);
-  return Boolean(a && b && a === b);
+  if (a && b && a === b) return true;
+  // Rekordbox schreibt in ANLZ-PPTH manchmal "?/Dateiname.mp3" wenn das
+  // Laufwerk zum Analysezeitpunkt keinen Buchstaben hatte. In diesem Fall
+  // reicht der Dateiname als Identitätsbeweis – der Pfad-Prefix ist nicht
+  // vertrauenswürdig und darf den Load nicht blockieren.
+  const leftIsUnknownDrive = typeof left === 'string' && /^\?[/\\]/.test(left.trim());
+  const rightIsUnknownDrive = typeof right === 'string' && /^\?[/\\]/.test(right.trim());
+  if (leftIsUnknownDrive || rightIsUnknownDrive) {
+    const nameOf = (p) => p ? p.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
+    const la = nameOf(left);
+    const ra = nameOf(right);
+    return Boolean(la && ra && la === ra);
+  }
+  return false;
 }
 
 function fail(code, reason, extra = {}) {
@@ -360,46 +327,25 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  const analysisPathCandidates = makeAnalysisPathCandidates(rawAnalysisPath, candidate.path);
-  const analysisExtension = path.extname(rawAnalysisPath).toLowerCase();
-  if (!ANLZ_EXTENSIONS.includes(analysisExtension)) {
+  const analysisPath = toLocalPath(rawAnalysisPath) || rawAnalysisPath;
+  let analysisStat;
+  try {
+    analysisStat = await stat(analysisPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return fail('ANLZ_NOT_FOUND', `ANLZ-Datei nicht gefunden: ${analysisPath}`, { ...dbContext, content });
+    }
     return fail(
-      'ANLZ_INVALID',
-      `AnalysisDataPath ist keine unterstützte Rekordbox-ANLZ-Datei (.dat/.ext/.2ex): ${rawAnalysisPath}`,
+      'ANLZ_READ_FAILED',
+      `ANLZ-Datei nicht lesbar: ${analysisPath} (${error.message || error})`,
       { ...dbContext, content }
     );
   }
-
-  let analysisPath = analysisPathCandidates[0] || rawAnalysisPath;
-  let analysisStat = null;
-  let notFoundError = null;
-  let readError = null;
-  for (const pathCandidate of analysisPathCandidates) {
-    try {
-      const details = await stat(pathCandidate);
-      if (details && details.isFile()) {
-        analysisPath = pathCandidate;
-        analysisStat = details;
-        break;
-      }
-    } catch (error) {
-      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) notFoundError ||= error;
-      else readError ||= error;
-    }
-  }
-  if (!analysisStat) {
-    if (readError) {
-      return fail(
-        'ANLZ_READ_FAILED',
-        `ANLZ-Datei nicht lesbar: ${rawAnalysisPath} (${readError.message || readError})`,
-        { ...dbContext, content }
-      );
-    }
-    return fail(
-      'ANLZ_NOT_FOUND',
-      `ANLZ-Datei nicht gefunden: ${rawAnalysisPath} (geprüft: ${analysisPathCandidates.join(' | ')})${notFoundError ? ` (${notFoundError.message || notFoundError})` : ''}`,
-      { ...dbContext, content }
-    );
+  if (!analysisStat || !analysisStat.isFile()) {
+    return fail('ANLZ_NOT_FOUND', `ANLZ-Pfad verweist nicht auf eine Datei: ${analysisPath}`, {
+      ...dbContext,
+      content,
+    });
   }
   if (analysisStat.size > MAX_ANALYSIS_BYTES) {
     return fail(
@@ -408,22 +354,17 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
       { ...dbContext, content }
     );
   }
+  if (!ANLZ_EXTENSIONS.includes(path.extname(analysisPath).toLowerCase())) {
+    return fail(
+      'ANLZ_INVALID',
+      `AnalysisDataPath ist keine unterstützte Rekordbox-ANLZ-Datei (.dat/.ext/.2ex): ${analysisPath}`,
+      { ...dbContext, content }
+    );
+  }
 
   let analysisBytes;
   try {
     analysisBytes = await readFile(analysisPath);
-    const afterRead = await stat(analysisPath);
-    if (
-      analysisBytes.length !== analysisStat.size ||
-      afterRead.size !== analysisStat.size ||
-      afterRead.mtimeMs !== analysisStat.mtimeMs
-    ) {
-      return fail(
-        'ANLZ_READ_FAILED',
-        `Größe oder mtime der ANLZ-Datei änderte sich während des Read-only-Lesevorgangs: ${analysisPath}`,
-        { ...dbContext, content }
-      );
-    }
   } catch (error) {
     return fail(
       'ANLZ_READ_FAILED',
@@ -613,4 +554,3 @@ module.exports = {
   isDeviceInternalLocation,
   joinWindowsPath,
 };
-
