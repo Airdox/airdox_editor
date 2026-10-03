@@ -41,6 +41,8 @@ export interface AnlzExtractionResult {
   loops: LoopPoint[];
   phrases: PhraseSection[];
   waveform?: WaveformAnalysisData;
+  /** Section tag the waveform was decoded from (PWAV / PWV2..PWV7). */
+  waveformTag?: string;
   beatGrid?: BeatGrid;
   bpm?: number;
   firstBeat?: number;
@@ -59,6 +61,7 @@ function toExtractionResult(parsed: ReturnType<typeof parseAnlzFile>): AnlzExtra
     loops: parsed.loops,
     phrases: parsed.phrases,
     waveform: parsed.waveform,
+    waveformTag: parsed.waveformTag,
     beatGrid: parsed.beatGrid,
     bpm: parsed.bpm,
     firstBeat: parsed.firstBeat,
