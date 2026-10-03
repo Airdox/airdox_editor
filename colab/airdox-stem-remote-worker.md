@@ -51,7 +51,7 @@ BUNDLE_SHA256 = "__AIRDOX_BUNDLE_SHA256__"
 assert not BUNDLE_B64.startswith("__"), "Dies ist die Entwicklervorlage. Bitte das Notebook aus dem Windows-Paket verwenden."
 payload = base64.b64decode(BUNDLE_B64, validate=True)
 assert hashlib.sha256(payload).hexdigest() == BUNDLE_SHA256, "Notebook-Paket beschädigt"
-REPO_DIR = CONTENT_ROOT / "airdox-colab-v2"
+REPO_DIR = (CONTENT_ROOT / "airdox-colab-v2").resolve()
 REPO_DIR.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
     assert len(archive.namelist()) == len(set(archive.namelist())), "Doppelte Archivpfade"
