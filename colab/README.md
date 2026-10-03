@@ -1,3 +1,17 @@
+# Colab: Produktionsworker und Qualitätsmessung
+
+## Produktionsworker (Windows 0.4.3)
+
+`airdox-stem-remote-worker.md` ist die Quelle, `.ipynb` wird mit
+`npm run stems:remote:notebook` erzeugt. Die Windows-EXE enthält das passende
+Worker-ZIP und Notebook (Button **Colab-Paket öffnen**). Nicht mit dem separaten
+Qualitäts-Gate-Archiv unten verwechseln: dieses enthält nicht den Fernworker.
+
+Einrichtung: [COLAB_ABNAHME.md](../docs/COLAB_ABNAHME.md).
+Technischer Vertrag und Prüfungen: [STEM_REMOTE_HQ.md](../docs/STEM_REMOTE_HQ.md).
+
+---
+
 # `colab/` · Fremde Ausführungsumgebung für das Qualitäts-Gate
 
 `airdox-stem-gate.ipynb` ist das Notebook für die **eine** Messung, die in der

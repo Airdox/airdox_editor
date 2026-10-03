@@ -89,12 +89,14 @@ def preflight(model_dir, adapter, device):
     if not re.fullmatch(r"[a-f0-9]{64}", expected) or not checkpoint.is_file() or sha256_file(str(checkpoint)) != expected:
         raise ProtocolError("MODEL_CORRUPT", "Modell fehlt oder Hash falsch. Setup-Zelle erneut ausführen.")
     config_file = Path(model_dir) / descriptor["config"]["file"]
-    config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
-    if config.get("training", {}).get("instruments") != descriptor["stemOrder"]:
-        raise ProtocolError("MODEL_INCOMPATIBLE", "Konfiguration hat eine andere Stem-Reihenfolge")
     spec = importlib.util.spec_from_file_location("airdox_adapter", adapter)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Release YAML contains !!python/tuple. Use the production adapter's
+    # restricted SafeLoader extension, never yaml.UnsafeLoader/FullLoader.
+    config = module.load_config_dict(str(config_file))
+    if list(config.training.instruments) != descriptor["stemOrder"]:
+        raise ProtocolError("MODEL_INCOMPATIBLE", "Konfiguration hat eine andere Stem-Reihenfolge")
     module.import_model_class(descriptor["family"], "")
     if device == "cuda" and not torch.cuda.is_available():
         raise ProtocolError("GPU_UNAVAILABLE", "CUDA angefordert, aber keine GPU vorhanden. Colab-Laufzeit T4 wählen oder GERAET=auto.")
@@ -105,7 +107,7 @@ def preflight(model_dir, adapter, device):
                 torch=torch.__version__, gpu=torch.cuda.get_device_name(0) if actual == "cuda" else None)
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--model-dir", default="/content/models")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -116,3 +118,13 @@ if __name__ == "__main__":
         download(item["url"], Path(args.model_dir) / item["file"], item.get("sha256"))
     result = preflight(args.model_dir, str(ROOT / "python/bsroformer_inference.py"), args.device)
     print(json.dumps(dict(preflight="PASS", **result), indent=2))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        if os.environ.get("GITHUB_ACTIONS"):
+            message = f"{type(error).__name__}: {error}".replace("%", "%25").replace("\n", "%0A").replace("\r", "%0D")
+            print(f"::error title=Colab preflight::{message}", flush=True)
+        raise

@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.1-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.1-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.3-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.3-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -38,11 +38,26 @@ Das fertige Setup bzw. die portable `.exe` liegt danach in `release/`.
 
 ## Automatischer Build (GitHub Actions)
 
-Der Workflow `.github/workflows/windows-build.yml` baut auf jedem Push auf
-`main`, auf Tags `v*` und einmal täglich um 03:00 UTC (05:00 DE) automatisch
-beide Windows-Artefakte und lädt sie als Artifact (30 Tage) hoch. Bei einem
-Tag (z. B. `git tag v0.4.1 && git push --tags`) wird automatisch ein GitHub
-Release mit den `.exe`-Dateien erzeugt.
+Der Workflow `.github/workflows/windows-build.yml` baut auf Pushes nach `main`
+und auf dem aktuellen Arena-Arbeitsbranch sowie bei manuellem Start. Es gibt
+keinen automatischen Tag-Release und keinen täglichen Zeitplan.
+
+- Windows: Typprüfung, Notebook-Konsistenz, Test-Suite, NSIS + portable EXE,
+  gepackten Renderer starten und Fernjob-IPC prüfen, Colab-Ressourcen prüfen.
+- Linux: trainiertes BS-RoFormer-Modell hashprüfen; echte Python-Worker-Läufe
+  bei 44,1/48 kHz einschließlich Editor-Rückimport. Separates Nachweisartefakt.
+- Downloadartefakt: `airdox_SMART_Editor_Windows_0.4.3` mit EXEs, SHA256SUMS,
+  Windows-Smoke-Bericht und passendem Colab-Notebook/Worker-ZIP.
+
+Die Colab-Paketdateien werden durch `npm run stems:remote:bundle` aus demselben
+Checkout gebaut und als `resources/colab` mitgeliefert. Die Windows-Packskripte
+führen diesen Schritt automatisch aus (Python 3 erforderlich **beim Bauen**,
+nicht für den Fernpfad auf dem Nutzer-PC). `afterPack` verweigert ein Paket mit
+fehlenden Colab-Dateien.
+
+**Wichtig:** Grüne Build-Tests sind kein Nachweis einer realen Google-Sitzung.
+Siehe [Colab-Abnahme](docs/COLAB_ABNAHME.md). Setup/portable sind unsigniert,
+sofern kein separates Code-Signing-Zertifikat bereitgestellt wurde.
 
 ## Rekordbox-Datenbank-Import (master.db / exportLibrary.db)
 

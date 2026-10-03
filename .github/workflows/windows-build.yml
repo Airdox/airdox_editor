@@ -18,9 +18,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: colab/requirements-worker.txt
       - run: npm ci --ignore-scripts
       - name: Modellruntime installieren
         run: |
@@ -53,9 +56,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: colab/requirements-worker.txt
       - name: Abhängigkeiten installieren
         run: npm ci
       - name: Native Module für Electron neu bauen

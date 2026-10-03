@@ -204,6 +204,9 @@ export function parseManifest(raw: string | Uint8Array, expectedJobId?: string):
     requireString(stem.id, 'output.stems[].id', manifest.jobId);
     requireString(stem.fileName, 'output.stems[].fileName', manifest.jobId);
     assertSafeRelative(stem.relativePath);
+    if (stem.relativePath !== `jobs/${manifest.jobId}/output/${stem.fileName}` || stem.fileName.includes('/') || stem.fileName.includes('\\')) {
+      throw new RemoteProtocolError('REMOTE_MANIFEST_INVALID', 'Stem-Pfad gehört nicht zu diesem Job.');
+    }
     requireString(stem.sha256, `output.stems[${stem.id}].sha256`, manifest.jobId);
   }
   return { ...manifest, output, attempts: manifest.attempts ?? 0 };
@@ -220,6 +223,9 @@ export function verifyCompletedManifest(manifest: RemoteJobManifest): { ok: true
   const expected = manifest.engine.stems ?? [];
   const delivered = manifest.output?.stems ?? [];
   const deliveredIds = delivered.map((stem) => stem.id);
+  if (new Set(deliveredIds).size !== deliveredIds.length || deliveredIds.some((id) => !expected.includes(id))) {
+    return { ok: false, code: 'REMOTE_OUTPUT_INCOMPLETE', message: 'Doppelte oder unerwartete Stems im Ergebnis.' };
+  }
   const missing = expected.filter((stem) => !deliveredIds.includes(stem));
   if (missing.length > 0) {
     return {

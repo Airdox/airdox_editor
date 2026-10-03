@@ -80,3 +80,26 @@ await scenario('cancelled jobs never import late results', async h => {
   await h.remote.cancel(job.jobId, 'test cancellation before import');
   assert.equal((await h.remote.poll()).jobs[0].status, 'CANCELLED');
 });
+
+await scenario('already imported results remain playable after a fresh process, even offline', async h => {
+  const job = await h.start();
+  await h.worker();
+  await h.verify(job.jobId);
+  await rm(h.drive, { recursive: true });
+  await h.restart();
+  assert.ok((await h.local.stemBytes(job.jobId, 'vocals')).length > 44);
+  assert.equal(h.remote.get(job.jobId)?.status, 'COMPLETED');
+});
+await scenario('cancellation during result download cannot be overwritten by completed import', async h => {
+  const job = await h.start();
+  await h.worker();
+  const read = h.transport.readBytes.bind(h.transport);
+  h.transport.readBytes = async (file) => {
+    const bytes = await read(file);
+    if (file.endsWith('/vocals.wav')) await h.remote.cancel(job.jobId, 'cancel during import');
+    return bytes;
+  };
+  await h.remote.poll();
+  assert.equal(h.remote.get(job.jobId)?.status, 'CANCELLED');
+  await assert.rejects(h.local.stemBytes(job.jobId, 'vocals'));
+});

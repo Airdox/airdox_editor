@@ -127,6 +127,8 @@ export class RemoteStemJobService {
   private timer?: NodeJS.Timeout;
   private polling?: Promise<RemoteServiceStatus>;
   private loaded = false;
+  private loading?: Promise<void>;
+  private persistWrites = new Map<string, Promise<void>>();
 
   constructor(options: RemoteStemJobServiceOptions) {
     this.options = options;
@@ -194,8 +196,13 @@ export class RemoteStemJobService {
    * --------------------------------------------------------------------- */
 
   private async ensureLoaded(): Promise<void> {
+    if (this.loading) return this.loading;
     if (this.loaded) return;
-    this.loaded = true;
+    this.loading = this.loadRecords().then(() => { this.loaded = true; }).finally(() => { this.loading = undefined; });
+    return this.loading;
+  }
+
+  private async loadRecords(): Promise<void> {
     await mkdir(this.recordsDir, { recursive: true });
     let entries: string[] = [];
     try {
@@ -212,6 +219,16 @@ export class RemoteStemJobService {
         const record = JSON.parse(raw) as RemoteJobRecord;
         if (record?.jobId !== jobId) continue;
         this.records.set(jobId, record);
+        if (record.status === 'COMPLETED' && record.localJobId) {
+          try { await this.restoreLocalResult(record); }
+          catch (error) {
+            record.status = 'FAILED';
+            record.error = { code: 'REMOTE_LOCAL_OUTPUT_INVALID', message: `Gespeicherte Stems nicht wiederherstellbar: ${String(error)}` };
+            record.phase = record.error.message;
+            record.localJobId = undefined;
+            await this.persist(record);
+          }
+        }
       } catch (error) {
         this.options.logger?.warn?.('STEM-REMOTE', `Fern-Job-Datensatz ${entry} ist unlesbar und wird ignoriert`, {
           error: error instanceof Error ? error.message : String(error),
@@ -226,13 +243,38 @@ export class RemoteStemJobService {
     }
   }
 
+  private async restoreLocalResult(record: RemoteJobRecord): Promise<void> {
+    if (!record.importedStems?.length) throw new Error('Keine gespeicherten Stems');
+    const stems = [];
+    for (const stem of record.importedStems) {
+      const bytes = await readFile(stem.filePath);
+      if (sha256Bytes(bytes) !== stem.sha256) throw new Error(`Hash falsch: ${stem.id}`);
+      const audio = decodeWav(bytes);
+      const stats = analyzeAudio(audio.data, audio.channels, audio.frames);
+      if (!stats.finite || stats.peak <= 0) throw new Error(`Ungültige Audiodaten: ${stem.id}`);
+      stems.push({ ...stem, frames: audio.frames, sampleRate: audio.sampleRate, channels: audio.channels, peak: stats.peak });
+    }
+    const metadata = JSON.parse(await readFile(path.join(path.dirname(stems[0].filePath), 'job.json'), 'utf8'));
+    await this.local.registerCompletedJob({ jobId: record.jobId, trackName: record.trackName, profile: record.profile,
+      modelId: record.modelId, family: record.family, stems, metadata, device: record.device, logTag: 'STEM-REMOTE' });
+  }
+
   private async persist(record: RemoteJobRecord): Promise<void> {
-    record.updatedAt = this.now();
-    await mkdir(this.recordsDir, { recursive: true });
-    const file = path.join(this.recordsDir, `${record.jobId}.json`);
-    const tmp = `${file}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
-    await rename(tmp, file);
+    // Poll and cancellation can persist concurrently. Serialize writes so an
+    // old progress snapshot cannot overwrite the terminal cancellation.
+    const previous = this.persistWrites.get(record.jobId) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      record.updatedAt = this.now();
+      await mkdir(this.recordsDir, { recursive: true });
+      const file = path.join(this.recordsDir, `${record.jobId}.json`);
+      const tmp = `${file}.${randomUUID()}.tmp`;
+      await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+      await rename(tmp, file);
+    });
+    this.persistWrites.set(record.jobId, write);
+    try { await write; } finally {
+      if (this.persistWrites.get(record.jobId) === write) this.persistWrites.delete(record.jobId);
+    }
   }
 
   private now(): number {
@@ -547,6 +589,7 @@ export class RemoteStemJobService {
       try {
         await this.syncRecord(record, transport);
       } catch (error) {
+        if (record.cancelRequestedAt) continue;
         if (error instanceof RemoteUnreachableError) {
           record.transportDegraded = true;
           record.transportErrors += 1;
@@ -622,7 +665,7 @@ export class RemoteStemJobService {
     }
 
     if (manifest.input.sha256 !== record.workingCopySha256 || manifest.idempotencyKey !== record.idempotencyKey ||
-        manifest.engine.modelId !== record.modelId || JSON.stringify(manifest.engine.stems) !== JSON.stringify(record.stems)) {
+        manifest.engine.modelId !== record.modelId || manifest.engine.profile !== record.profile || manifest.engine.family !== record.family || JSON.stringify(manifest.engine.stems) !== JSON.stringify(record.stems)) {
       throw new RemoteProtocolError('REMOTE_MANIFEST_INVALID', 'Worker-Ergebnis gehört nicht zum angelegten Auftrag.');
     }
     record.lastPollAt = this.now();
@@ -811,7 +854,9 @@ export class RemoteStemJobService {
     const descriptors: { id: StemId; displayName?: string; filePath: string; sha256: string; frames: number; sampleRate: number; channels: number; peak: number }[] = [];
 
     for (const stem of manifest.output.stems) {
+      if (record.cancelRequestedAt) return;
       const bytes = await transport.readBytes(stem.relativePath);
+      if (record.cancelRequestedAt) return;
       if (!bytes || bytes.byteLength < stem.bytes) {
         throw new RemoteProtocolError('REMOTE_OUTPUT_SYNC_PENDING', `Ergebnis ${stem.id} fehlt in der Jobablage (${stem.relativePath}).`);
       }
@@ -928,7 +973,7 @@ export class RemoteStemJobService {
         chunkSizeSamples: manifest.engine.chunkSizeSamples ?? 0,
         chunkOverlap: 0,
         numOverlap: manifest.engine.numOverlap ?? 0,
-        ensemblePasses: 1,
+        ensemblePasses: manifest.engine.ensemblePasses ?? 1,
         clipMode: 'none',
         dcRemoval: false,
         stems: record.stems,
@@ -969,6 +1014,7 @@ export class RemoteStemJobService {
     await writeFile(`${metadataPath}.tmp`, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
     await rename(`${metadataPath}.tmp`, metadataPath);
 
+    if (record.cancelRequestedAt) return;
     // Der bestehende Importpfad übernimmt: derselbe Job-Id-Raum, dieselben
     // Kanäle wie bei einem lokalen Lauf (§42).
     await this.local.registerCompletedJob({
@@ -983,8 +1029,10 @@ export class RemoteStemJobService {
       fallbackReason: record.fallbackReason,
       metadata,
       logTag: 'STEM-REMOTE',
+      isCancelled: () => Boolean(record.cancelRequestedAt),
     });
 
+    if (record.cancelRequestedAt) return;
     record.localJobId = record.jobId;
     record.importedStems = imported;
     record.status = 'COMPLETED';
@@ -994,7 +1042,7 @@ export class RemoteStemJobService {
     record.error = undefined;
     await this.persist(record);
     await transport
-      .writeText(`jobs/${record.jobId}/output/${'result.json'}`, buildResultDocument(manifest, { importedAtIso: new Date(this.now()).toISOString() }))
+      .writeText(`jobs/${record.jobId}/output/import-receipt.json`, buildResultDocument(manifest, { importedAtIso: new Date(this.now()).toISOString() }))
       .catch(() => undefined);
     this.options.logger?.info?.('STEM-REMOTE', `jobId=${record.jobId} status=COMPLETED stems=${imported.map((stem) => stem.id).join(',')}`, {
       jobId: record.jobId,
@@ -1044,7 +1092,6 @@ export class RemoteStemJobService {
    * Nutzer muss dafür nichts erneut anklicken.
    */
   async resume(): Promise<RemoteServiceStatus> {
-    this.loaded = false;
     await this.ensureLoaded();
     const reopened: string[] = [];
     for (const record of this.records.values()) {

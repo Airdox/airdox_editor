@@ -41,17 +41,18 @@ export async function makeHarness(rate = 44100, realAudio = false) {
   const bytes = encodeWavFloat32(rate, 2, data, frames);
   await writeFile(original, bytes);
   const before = sha256Bytes(bytes);
-  const local = new StemJobService({ root });
+  let local = new StemJobService({ root });
   const transport = new FolderTransport({ root: drive });
   let now = Date.now();
   const settings = { outputSyncWaitMs: 1000, workerWaitMs: 10000, workerLeaseMs: 3000, jobTimeoutMs: 1200000 };
   const create = () => new RemoteStemJobService({ root, localService: local, transport, settings, disableBackgroundPolling: true, now: () => now });
   let remote = create();
   return {
-    base, root, drive, original, before, transport, local, settings,
+    base, root, drive, original, before, transport, settings,
+    get local() { return local; },
     get remote() { return remote; },
     advance(ms: number) { now += ms; },
-    async restart() { remote.dispose(); remote = create(); await remote.resume(); },
+    async restart() { remote.dispose(); local = new StemJobService({ root }); remote = create(); await remote.resume(); },
     async start() { return remote.start({ inputPath: original, modelId: MODEL, profile: 'HIGH_QUALITY', trackName: 'protocol-test' }); },
     async worker() { return runPython(['tests/fixtures/remote/run_worker.py', drive, path.join(base, 'worker')]); },
     async verify(jobId: string) {

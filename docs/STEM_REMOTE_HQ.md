@@ -1,170 +1,115 @@
-# High Quality extern – BS-RoFormer auf einem fremden Rechner
+# High Quality extern – Colab-Worker v2 (AirDox 0.4.3)
 
-Der HQ-Pfad (BS-RoFormer) rechnet lokal in 60–90 Minuten pro Track. Das bleibt
-der Qualitätspfad, ist aber für den Alltag zu langsam. „High Quality extern“
-gibt genau diesen Lauf an einen **externen Rechner** (Google Colab) ab, ohne
-dass der Nutzer Colab bedienen muss: der Editor legt eine Arbeitskopie und einen
-Job-Steckbrief in einer **Jobablage** ab, ein Worker beansprucht den Job,
-rechnet und schreibt die Stems zurück. Der Editor prüft die Ergebnisse und
-importiert sie über **denselben** Pfad wie einen lokalen Lauf.
+## Aufbau
 
 ```
-Editor ──Arbeitskopie + manifest.json──▶ Ablage (Google Drive) ──▶ Worker (Colab)
-Editor ◀─Stems + result.json + Status─── Ablage ◀─────────────── Worker
+Editor → WAV-Arbeitskopie + Manifest → Drive-Jobordner → Python-Worker
+Editor ← geprüfter lokaler Import ← vier WAV-Stems + Ergebnis ← BS-RoFormer
 ```
 
-Google Drive ist dabei reiner **Transport** (§16) – keine Audiodatenbank, keine
-zweite Quelle der Wahrheit. Der Editor bleibt die zentrale Anwendung.
+Der Fernpfad benutzt das Modell `bsroformer-musdb18hq-4stem-zfturbo` aus dem
+Modellkatalog. Original-Audio, XML, ANLZ und Rekordbox-Datenbanken werden nicht
+verändert. Die App braucht für diesen Pfad keine lokale Python-Installation
+oder Modellgewichte. Google Drive für Desktop (oder konfiguriertes rclone)
+ist weiterhin erforderlich.
 
-## 1. Was der Nutzer sieht
+**Einrichtung und Windows/Colab-Abnahme:** [COLAB_ABNAHME.md](COLAB_ABNAHME.md).
+Die EXE enthält unter `resources/colab` das zur App gehörende Worker-ZIP und
+Notebook, erreichbar über „Colab-Paket öffnen“. Das Notebook klont nicht mehr
+ungeprüft den aktuellen main-Branch. Der Paketinhalt wird durch SHA256-Dateihashes
+und einen Quellstand dokumentiert; das ist ein Integritätsnachweis, keine digitale
+Signatur. Nur Pakete aus vertrauenswürdiger Quelle ausführen.
 
-In der Deck-Stem-Leiste steht nur noch:
+## Tatsächliche Bereitschaft
 
-| Element | Bedeutung |
-| --- | --- |
-| **Schnell** | lokaler In-Process-Pfad (ONNX, GPU wenn vorhanden, sonst CPU) |
-| **High Quality** | höchste Trennung – lokal oder extern |
-| **Externe Zerlegung (Google Colab)** | der eindeutige Workflow-Button, immer sichtbar: nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → startet die Zerlegung sofort; grün markiert = extern gewählt, erneut klicken stellt „lokal“ wieder ein |
-| Statuszeile | „Arbeitskopie wird hochgeladen“, „Wartet auf den externen Rechner“, „Verarbeitung läuft – GPU/CPU“, „Stem-Separation abgeschlossen“ |
-| **Abbrechen** | setzt `cancel.flag`; der Worker hört auf, ein späteres Ergebnis wird verworfen |
+- `reachable`: Ablage erreichbar. Ein lokaler Ordner ist noch kein Cloud-Nachweis.
+- `workerReady`: kompatibles `colab-worker/2`-Lebenszeichen jünger als drei Minuten.
+- Übernahme des konkreten Jobs: `manifest.worker.id` und `claim.json`.
+- Fertig: erst nach vollständiger lokaler Prüfung und Registrierung der Stems.
 
-Es gibt keine Python-, Colab- oder Checkpoint-Bedienung in der UI und keine
-Tracebacks: technische Details stehen im Log (`STEM-REMOTE`), der Nutzer sieht
-eine Ursache in einem Satz („Google Drive ist gerade nicht erreichbar …“).
-Die übrigen Qualitätsprofile (`Vorschau`, `High`, `Max`) bleiben unter
-„Weitere Profile“ erhalten – nichts wurde entfernt.
+Colab muss vom Nutzer angemeldet und pro Sitzung gestartet werden. Laufzeitende,
+GPU-Verfügbarkeit und Google-Drive-Synchronisierung bleiben externe Abhängigkeiten.
+Nur **ein Worker und ein Editor pro Jobordner** sind unterstützt: atomare lokale
+Dateiumbenennungen garantieren keine verteilten Sperren über mehrere Drive-Clients.
 
-## 2. Ablage einrichten
-
-**Im Editor (empfohlen):** Button **„Externe Zerlegung (Google Colab)"** in der
-Deck-Stem-Leiste → Einrichtungs-Dialog:
-
-1. **Jobablage wählen** – Drive-Sync-Ordner (Empfehlung:
-   `My Drive → airdox-stem-jobs`, per Systemdialog wählbar) oder rclone-Remote
-   (`gdrive:airdox-stem-jobs`). „Speichern & Verbindung prüfen" schreibt die
-   Einstellung nach `RemoteJobs/settings.json` und zeigt sofort, ob die Ablage
-   erreichbar ist.
-2. **Colab-Worker (einmalig):** Notebook `colab/airdox-stem-remote-worker.ipynb`
-   (Bau: `npm run stems:remote:notebook`) nach Google Drive hochladen, in Colab
-   öffnen, Laufzeit T4/CPU wählen, „Alles ausführen". `JOB_ORDNER` in der
-   ersten Code-Zelle muss den gewählten Drive-Ordner benennen.
-
-Danach genügt ein Klick auf den Button – Upload, Warten, Rückimport,
-Speicherung und Verknüpfung mit dem Original-Track laufen ohne Bedienung.
-
-Für Entwickler bleiben Umgebungsvariablen (oder `RemoteJobs/settings.json` im
-Engine-Datenordner) als Programmierpfad; die Datei, die der Dialog schreibt,
-hat gegenüber Umgebungsvariablen Vorrang:
-
-| Variable | Default | Bedeutung |
-| --- | --- | --- |
-| `AIRODOX_STEM_REMOTE_DIR` | – | Pfad des Sync-Ordners (Mount) |
-| `AIRODOX_STEM_REMOTE_KIND` | `folder` | `folder` oder `rclone` |
-| `AIRODOX_STEM_REMOTE_RCLONE` | – | rclone-Ziel, z. B. `gdrive:airdox-stem-jobs` |
-| `AIRODOX_STEM_REMOTE_POLL_MS` | `15000` | Poll-Takt des Editors (2 s … 10 min) |
-| `AIRODOX_STEM_REMOTE_LEASE_MS` | `1800000` | Kulanz, bevor ein Job ohne Lebenszeichen als verwaist gilt |
-| `AIRODOX_STEM_REMOTE_TIMEOUT_MS` | `21600000` | harte Obergrenze eines Fern-Jobs |
-
-**Keine Tokens, keine Zugangsdaten** in Git, Quellcode, Logs oder Manifesten
-(§23). Die Ablage enthält nur Pfade, Hashes, Status und Audio.
-
-## 3. Ablage-Layout
+## Dateien
 
 ```
-jobs/<jobId>/manifest.json     Steckbrief: Status, Phase, Input-Hash, Modell, Stems, Worker
-jobs/<jobId>/claim.json        Worker-Lease (Claim + Lebenszeichen)
-jobs/<jobId>/cancel.flag       Abbruchwunsch des Editors
-jobs/<jobId>/error.json        Fehlergrund, falls der Worker scheitert
-jobs/<jobId>/input/<track>.wav Arbeitskopie (niemals das Original)
-jobs/<jobId>/output/<stem>.wav Stems + result.json
-logs/worker.log                Worker-Protokoll (ohne Geheimnisse)
+worker.json                        Bereitschaft, Gerät, Modellhash, Lebenszeichen
+jobs/<jobId>/manifest.json          Jobbeschreibung und Worker-Status
+jobs/<jobId>/input/<track>.wav      Arbeitskopie
+jobs/<jobId>/claim.json             Besitzanspruch und unabhängiges Lebenszeichen
+jobs/<jobId>/cancel.flag            Abbruchanforderung
+jobs/<jobId>/error.json             Fehler mit Code und Klartext
+jobs/<jobId>/logs/worker.log        Worker-Protokoll
+jobs/<jobId>/output/<stem>.wav      drums, bass, other, vocals (FLOAT-WAV)
+jobs/<jobId>/output/result.json     Worker-Ergebnis und Adapterbericht
+jobs/<jobId>/output/import-receipt.json  Importbestätigung des Editors
 ```
 
-`jobId` ist eine UUID (§18). Status sind die **vorhandenen** `JobStatus`-Werte
-(`PENDING`…`COMPLETED`/`FAILED`/`CANCELLED`); der Fernpfad hat zusätzlich
-Phasen („Wartet auf den externen Rechner“) und Felder (`device`,
-`cpuFallback`, `fallbackReason`, `worker`) – kein zweites Statussystem (§14).
+Lokal liegen Zustand und Einstellungen unter `<Engine-Ordner>/RemoteJobs/`.
+Fertige Ergebnisse liegen unter `Separation/`. Sie werden nach einem App-Neustart
+hashgeprüft erneut im lokalen Stem-Service registriert, auch ohne Drive-Verbindung.
 
-## 4. Idempotenz und Doppelarbeit
+## Überarbeitete Fehlerbehandlung
 
-* Jeder Job trägt einen **Idempotenzschlüssel** = SHA-256 aus Input-Hash,
-  Modell, Profil und Stem-Liste. Ein zweiter Start mit demselben Input findet
-  den vorhandenen Job wieder – auch nach einem Editor-Neustart (§19, §32, §33).
-* Der Worker beansprucht einen Job über `claim.json` mit Lebenszeichen; solange
-  eine fremde Lease frisch ist, überspringt er ihn. Zwei Colab-Instanzen können
-  denselben Track also nicht parallel rechnen.
-* `terminal`-Jobs (`COMPLETED`/`FAILED`/`CANCELLED`) werden nie erneut gerechnet.
+- Keine mehrdeutigen CLI-Abkürzungen; Modell und Profil stammen aus dem Manifest.
+- Vor Jobannahme: Runtime-Imports, Katalog/Checkpoint-Hash, Konfiguration,
+  Modellarchitektur und CUDA-Verfügbarkeit prüfen. Nur der kataloggebundene
+  4-Stem-Worker ist im Notebook freigegeben; andere Modelle werden klar abgelehnt.
+- Inferenz lokal statt direkt auf dem Drive-Mount. Fehlende/teilweise Eingaben
+  werden während einer begrenzten Synchronisierungsfrist erneut geprüft.
+- 48-kHz-Eingaben werden für das 44,1-kHz-Modell resampelt. Outputs erhalten wieder
+  die ursprüngliche Samplerate und Framezahl. Der Editor prüft Dauer/Kanäle/Hashes.
+- stdout/stderr werden gleichzeitig gelesen; Timeout/Abbruch beenden den Adapter.
+- Lease-Lebenszeichen läuft auch ohne Fortschrittsmeldung. GPU-OOM/GPU-Ausfall
+  kann zu einem sichtbaren CPU-Rückfall führen; Modellfehler nicht.
+- Dateinamen kommen aus dem `done.stems`-Vertrag des Adapters; FLOAT-WAV wird
+  unterstützt. Ergebnisse werden vor der Fertigmeldung veröffentlicht.
+- Fehlende/zu kleine Ergebnisse werden bis zum Synchronisierungslimit erneut
+  geladen; Hashfehler vollständig gelieferter Dateien bleiben harte Fehler.
+- Abbruch gewinnt auch beim Ergebnisdownload. Fehlgeschlagene/abgebrochene Jobs
+  werden nicht durch verspätete Worker-Meldungen wiederbelebt.
+- Gesamtzeitlimit wird auch bei nicht erreichbarer Ablage geprüft.
 
-## 5. Fehlerfälle
+## Zeitgrenzen
 
-| Fall | Verhalten |
-| --- | --- |
-| A · Editor neu gestartet | offene Jobs werden geladen und weiterverfolgt; fertige Ergebnisse automatisch importiert |
-| B · Upload abgebrochen | Job bleibt aktiv; der nächste Poll veröffentlicht Arbeitskopie und Steckbrief erneut (gleiche Job-Id) |
-| C · Ablage nicht erreichbar | nur `transportDegraded` – kein Job-Fehler; sobald die Ablage zurück ist, läuft es weiter |
-| D · Manifest unlesbar | nach drei Polls `REMOTE_MANIFEST_INVALID` (FAILED) mit Klartext |
-| E · kein Worker | nach `AIRODOX_STEM_REMOTE_TIMEOUT_MS` FAILED `REMOTE_TIMEOUT` + `error.json` in der Ablage |
-| F/G · GPU-Ausfall beim Worker | Worker rechnet auf CPU weiter (`cpuFallback` + Grund im Manifest), der Job bleibt aktiv |
-| H · Worker-Neustart | Lease läuft ab, ein anderer Worker darf übernehmen; `attempts` zählt die Versuche |
-| I · Stem fehlt | FAILED `REMOTE_OUTPUT_INCOMPLETE` – nichts wird importiert |
-| J · Stem leer/kaputt/zu kurz | FAILED `REMOTE_OUTPUT_EMPTY`/`REMOTE_OUTPUT_INVALID` (Hash, Header, Kanäle, Dauer, Stille) |
-| K · „COMPLETED“, aber Stems fehlen | Editor prüft die Vollständigkeit gegen den Modell-Deskriptor – kein `COMPLETED` ohne alle Stems |
-| L · Abbruch | `cancel.flag` + lokaler Status `CANCELLED`; ein danach eintreffendes Ergebnis wird verworfen und **nie** als `COMPLETED` angezeigt |
+| Einstellung / Umgebungsvariable | Standard |
+|---|---|
+| `pollIntervalMs` / `AIRODOX_STEM_REMOTE_POLL_MS` | 15 Sekunden |
+| `workerWaitMs` / `AIRODOX_STEM_REMOTE_WAIT_MS` | 10 Minuten bis Übernahme |
+| `workerLeaseMs` / `AIRODOX_STEM_REMOTE_LEASE_MS` | 3 Minuten ohne Lebenszeichen |
+| `outputSyncWaitMs` / `AIRODOX_STEM_REMOTE_SYNC_MS` | 10 Minuten Ergebnis-Sync |
+| `jobTimeoutMs` / `AIRODOX_STEM_REMOTE_TIMEOUT_MS` | 6 Stunden |
 
-## 6. Original-Schutz
+Einrichtungsdatei hat Vorrang vor Umgebungsvariablen. Transport bleibt `folder`
+(`AIRODOX_STEM_REMOTE_DIR`) oder `rclone` (`AIRODOX_STEM_REMOTE_RCLONE`).
+Keine Zugangsdaten werden in Manifesten, Quelltext oder App-Einstellungen benötigt.
 
-Es wird ausschließlich die **Arbeitskopie** hochgeladen. Vom Original liest der
-Editor nur SHA-256, Größe und mtime – vor und nach dem Lauf. Ändert der Nutzer
-die Datei parallel, wird das vermerkt (`originalUnchanged`), der Lauf aber nicht
-verworfen. Jeder Job-Datensatz liegt unter `<Engine-Ordner>/RemoteJobs/<jobId>.json`.
+## Prüfungen
 
-## 7. Worker betreiben
-
-**Auf einem Studio-/Büro-Rechner (Node, ohne Colab):**
-
-```bash
-npm run stems:remote:worker -- --root "~/Google Drive/airdox-stem-jobs" --once
-# dauerhaft:
-npm run stems:remote:worker -- --root "gdrive:airdox-stem-jobs" --kind rclone --poll 15000
+```sh
+npm run test:stems:remote
+python colab/remote_worker.py --self-test
+npm run stems:remote:notebook -- --check
+npm run stems:remote:bundle
 ```
 
-Optionen: `--root --kind --workdir --worker --once --poll --model --profile
---device --model-dir --max-jobs --allow-pipeline-double --corrupt-output --quiet`.
+`stem-remote-python-worker.test.mjs`: Python-Regressionen mit explizitem Testadapter
+(keine trainierte Separation). `stem-remote-python-integration.test.ts`: echter
+Editor-Service → Python-Worker → Rückimport, einschließlich Wiederaufnahme,
+Abbruch, Sync-Verzögerung, Zeitgrenzen und Originalschutz.
 
-**In Google Colab:** `colab/airdox-stem-remote-worker.md` (bzw. das daraus
-erzeugte `.ipynb`) öffnet Drive, installiert `torch` und ruft denselben
-Adapter, den der Editor lokal für HQ nutzt (`python/bsroformer_inference.py`) –
-die Modell-/Neustartlogik wird also nicht doppelt gebaut (§42).
+**Echter Modelltest (kein stiller Fallback, kein Skip erlaubt):**
 
-```bash
-npm run stems:remote:notebook      # .md → .ipynb
-npm run stems:remote:selftest      # Protokoll-Selbsttest des Python-Workers
+```sh
+python colab/remote_setup.py --model-dir stem-gate-run/models --device cpu
+AIRODOX_STEM_MODEL_DIR="$PWD/stem-gate-run/models" AIRODOX_STEM_PYTHON=python \
+  node scripts/run-tests.mjs --only stem-remote-real-model-live --fail-on-skip --timeout 1200000
 ```
 
-## 8. Tests
-
-| Test | Was er belegt |
-| --- | --- |
-| `tests/stem-remote-manifest.test.ts` | Manifest-Vertrag: Schema, Id-Abgleich, Pfad-Ausbruch, Idempotenzschlüssel, Vollständigkeit |
-| `tests/stem-remote-job-service.test.ts` | echter Weg Editor → Ablage → **echter Worker** → Import; Neustart, Transportausfall, Timeout, Abbruch, kaputte Ergebnisse |
-| `tests/onnx-fast-separation-live.test.ts` | schneller Pfad in-process: Stems, Pegel, Cache, Original unverändert, DirectML→CPU-Fallback |
-| `tests/onnx-fixture-python-ort.test.ts` | Testgraph mit echter ORT-Session (Signatur, Werte, Determinismus) |
-
-```bash
-npm run test:stems:remote      # nur der Fernpfad
-npm run test:stems             # komplette Stem-Suite (inkl. Fernpfad)
-```
-
-Ein Lauf mit echten Gewichten (BS-RoFormer + PyTorch) ist zusätzlich über
-`npm run stems:setup:bsroformer` und `npm run test:stems:live` erreichbar – auf
-Maschinen ohne Checkpoint überspringt die Suite diese Tests sauber.
-
-## 9. Bewusste Grenzen
-
-* Polling statt WebSockets (§20) – bei 15 s Takt und stundenlangen HQ-Läufen
-  völlig ausreichend und deutlich robuster gegen Netzwechsel.
-* Ein Transport zur Zeit; Jobs werden sequenziell importiert.
-* Kein Docker, kein Redis, kein eigener Server (§24): die Ablage ist ein
-  Ordner, der Worker ein Skript.
-* Der Fernpfad braucht keinen lokal installierten HQ-Checkpoint – der Worker
-  lädt genau das Modell aus dem Katalog, das im Steckbrief steht.
+Dieser Test verarbeitet echtes Audiomaterial mit trainierten Gewichten bei
+44,1 und 48 kHz über den produktiven Python-Worker und prüft den Editorimport.
+Nachweis: `stem-gate-run/remote-real-model-evidence.json`. Er beweist nicht die
+reale Google-Verbindung, die Windows-GPU oder die musikalische Qualität auf
+beliebigem Audiomaterial. Dafür ist die dokumentierte Vor-Ort-Abnahme erforderlich.

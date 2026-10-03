@@ -871,6 +871,7 @@ export class StemJobService {
     fallbackReason?: string;
     metadata?: unknown;
     logTag?: string;
+    isCancelled?: () => boolean;
   }): Promise<StemJobView> {
     if (this.jobs.has(input.jobId)) {
       const existing = this.jobs.get(input.jobId)!;
@@ -911,6 +912,7 @@ export class StemJobService {
       throw new StemSeparationError('VALIDATION_FAILED', `Unvollständiges Ergebnis für ${input.jobId}: es fehlen ${missing.join(', ')}`);
     }
 
+    if (input.isCancelled?.()) throw new StemSeparationError('INFERENCE_CANCELLED', 'Fernimport abgebrochen.');
     const now = Date.now();
     const record: JobRecord = {
       view: {
