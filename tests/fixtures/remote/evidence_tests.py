@@ -48,6 +48,67 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify_inventory(root, 'proof.json')
 
+    def test_complete_delivery_under_windows_default_encoding(self):
+        # Synthetic packaging fixture only. Never used as inference/Windows evidence.
+        import os
+        import shutil
+        from unittest.mock import patch
+        import release_evidence as module
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            evidence = root / 'evidence'
+            evidence.mkdir()
+            revision = 'a' * 40
+            original_read_text = Path.read_text
+            def windows_default_read_text(file, *args, **kwargs):
+                kwargs.setdefault('encoding', 'cp1252')
+                return original_read_text(file, *args, **kwargs)
+            for stage in module.REQUIRED_RELEASE:
+                (evidence / f'{stage}.log').write_bytes(b'unit fixture output')
+                module.write_json(evidence / f'{stage}.json', dict(stage=stage, result='PASS', exitCode=0,
+                    sourceCommit=revision, workflowRun=os.environ.get('GITHUB_RUN_ID'),
+                    log=dict(file=f'{stage}.log', sha256=module.digest(evidence / f'{stage}.log'))))
+            module.write_json(evidence / 'remote-real-model-evidence.json', dict(result='PASS', sourceCommit=revision))
+            module.write_json(evidence / 'notebook-preauth-report.json', dict(result='PASS', state='AUTH_REQUIRED', sourceCommit=revision))
+            module.write_json(evidence / 'windows-tests-tests.json', dict(passed=1, failed=0, skipped=0, output='Unicode regression: ←'))
+            module.write_json(evidence / 'model-live-tests.json', dict(passed=1, failed=0, skipped=0))
+            kit = root / 'resources/colab'
+            kit.mkdir(parents=True)
+            (kit / 'airdox-stem-remote-worker.ipynb').write_bytes(b'unit notebook fixture')
+            module.write_json(evidence / 'notebook-execution.json', dict(result='PASS', notebookSha256=module.digest(kit / 'airdox-stem-remote-worker.ipynb')))
+            module.write_json(kit / 'PREAUTH_NACHWEIS.json', dict(schemaVersion=1, files=module.inventory(kit)))
+            module.write_json(root / 'package.json', dict(version='unit'))
+            (root / 'release').mkdir()
+            for variant in ('setup', 'portable'):
+                (root / f'release/airdox_SMART_Editor-unit-{variant}.exe').write_bytes(b'0' * 1000001)
+            module.write_json(root / 'release/windows-smoke.json', dict(result='PASS', sourceCommit=revision))
+            for name in ('windows-smoke.png', 'SHA256SUMS.txt'):
+                (root / 'release' / name).write_bytes(b'unit fixture')
+            (root / 'scripts').mkdir()
+            shutil.copyfile(ROOT / 'scripts/verify-release.ps1', root / 'scripts/verify-release.ps1')
+            (root / 'docs').mkdir()
+            for name in ('COLAB_START_HIER.md', 'COLAB_AUTH_RECHERCHE.md', 'COLAB_ABNAHME.md'):
+                (root / 'docs' / name).write_text('fixture', encoding='utf-8')
+            with patch.object(module, 'ROOT', root), patch.object(module, 'source_revision', return_value=revision), \
+                 patch.object(module, 'source_ledger', return_value=dict(sourceCommit=revision)), \
+                 patch.object(Path, 'read_text', windows_default_read_text):
+                module.finalize(root / 'delivery', evidence)
+                report = module.verify_inventory(root / 'delivery', 'NACHWEISKETTE.json')
+                self.assertEqual(report['googleAuthentication'], 'NOT_ATTEMPTED')
+                self.assertIn('PRUEFEN.ps1', report['files'])
+                with self.assertRaises(ValueError):
+                    module.finalize(root, evidence)
+            if sys.platform == 'win32':
+                for shell in ('pwsh', 'powershell.exe'):
+                    result = subprocess.run([shell, '-NoProfile', '-File', str(root / 'delivery/PRUEFEN.ps1')], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    # Verification must fail after changing an executable, not just at build time.
+                    binary = root / 'delivery/airdox_SMART_Editor-unit-setup.exe'
+                    binary.write_bytes(b'tampered')
+                    failed = subprocess.run([shell, '-NoProfile', '-File', str(root / 'delivery/PRUEFEN.ps1')], capture_output=True, text=True)
+                    self.assertNotEqual(failed.returncode, 0)
+                    binary.write_bytes(b'0' * 1000001)
+
     def test_notebook_boundary_and_self_contained_payload(self):
         # Source template must fail safely instead of silently fetching arbitrary code.
         source = json.loads((ROOT / 'colab/airdox-stem-remote-worker.ipynb').read_text(encoding='utf-8'))

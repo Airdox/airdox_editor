@@ -31,8 +31,15 @@ try {
     Write-Host "Version: $($manifest.appVersion) | Source: $($manifest.sourceCommit)"
     Write-Host 'Google-Konto / Drive / Colab-GPU: NICHT getestet, persoenliche Freigabe erforderlich.'
     Write-Host 'Hash-Integritaet ist keine Herausgeber-Signatur. EXEs sind nicht code-signiert.'
+    if ($env:GITHUB_ACTIONS) {
+        Write-Output "::notice title=Release evidence verified::Version=$($manifest.appVersion); Source=$($manifest.sourceCommit); Files=$count; RequiredStages=$($required.Count); Google=NOT_ATTEMPTED"
+    }
     exit 0
 } catch {
+    if ($env:GITHUB_ACTIONS) {
+        $message = $_.Exception.Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Output "::error title=Package verifier::$message"
+    }
     Write-Error "FAIL: $($_.Exception.Message)"
     exit 1
 }

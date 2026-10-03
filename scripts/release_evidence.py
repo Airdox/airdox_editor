@@ -131,22 +131,24 @@ def verify_inventory(root, manifest_name):
 
 
 def finalize(destination, evidence_dir):
-    destination = Path(destination)
+    destination = Path(destination).resolve()
+    if destination == ROOT.resolve() or destination in ROOT.resolve().parents or destination == Path(evidence_dir).resolve():
+        raise ValueError('Output directory must not replace source repository or evidence inputs')
     revision = source_revision()
-    version = json.loads((ROOT / 'package.json').read_text())['version']
+    version = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))['version']
     stages = validate_stages(evidence_dir, REQUIRED_RELEASE, revision, os.environ.get('GITHUB_RUN_ID'))
-    model = json.loads((Path(evidence_dir) / 'remote-real-model-evidence.json').read_text())
-    exported = json.loads((Path(evidence_dir) / 'notebook-preauth-report.json').read_text())
-    tests = json.loads((Path(evidence_dir) / 'windows-tests-tests.json').read_text())
-    smoke = json.loads((ROOT / 'release/windows-smoke.json').read_text())
+    model = json.loads((Path(evidence_dir) / 'remote-real-model-evidence.json').read_text(encoding='utf-8'))
+    exported = json.loads((Path(evidence_dir) / 'notebook-preauth-report.json').read_text(encoding='utf-8'))
+    tests = json.loads((Path(evidence_dir) / 'windows-tests-tests.json').read_text(encoding='utf-8'))
+    smoke = json.loads((ROOT / 'release/windows-smoke.json').read_text(encoding='utf-8'))
     if model['result'] != 'PASS' or exported['result'] != 'PASS' or exported['state'] != 'AUTH_REQUIRED' or tests['failed'] or smoke['result'] != 'PASS':
         raise ValueError('Raw test evidence not passing')
     if exported['sourceCommit'] != revision or smoke['sourceCommit'] != revision or model['sourceCommit'] != revision:
         raise ValueError('Raw model/Windows evidence belongs to a different build')
-    live_tests = json.loads((Path(evidence_dir) / 'model-live-tests.json').read_text())
+    live_tests = json.loads((Path(evidence_dir) / 'model-live-tests.json').read_text(encoding='utf-8'))
     if live_tests['failed'] or live_tests['skipped'] or not live_tests['passed']:
         raise ValueError('Essential real model test failed or skipped')
-    execution = json.loads((Path(evidence_dir) / 'notebook-execution.json').read_text())
+    execution = json.loads((Path(evidence_dir) / 'notebook-execution.json').read_text(encoding='utf-8'))
     if execution['result'] != 'PASS' or execution['notebookSha256'] != digest(ROOT / 'resources/colab/airdox-stem-remote-worker.ipynb'):
         raise ValueError('Notebook execution not bound to shipped notebook')
     verify_inventory(ROOT / 'resources/colab', 'PREAUTH_NACHWEIS.json')
@@ -185,9 +187,15 @@ if __name__ == '__main__':
     parser.add_argument('--directory', default='delivery')
     parser.add_argument('--evidence', default='evidence')
     args = parser.parse_args()
-    if args.command == 'finalize':
-        finalize(args.directory, args.evidence)
-    else:
-        report = verify_inventory(args.directory, 'NACHWEISKETTE.json')
-        validate_stages(Path(args.directory) / 'NACHWEISE', REQUIRED_RELEASE, report['sourceCommit'])
-        print('PASS: package files and command/log evidence match. Google authentication is still pending.')
+    try:
+        if args.command == 'finalize':
+            finalize(args.directory, args.evidence)
+        else:
+            report = verify_inventory(args.directory, 'NACHWEISKETTE.json')
+            validate_stages(Path(args.directory) / 'NACHWEISE', REQUIRED_RELEASE, report['sourceCommit'])
+            print('PASS: package files and command/log evidence match. Google authentication is still pending.')
+    except Exception as error:
+        if os.environ.get('GITHUB_ACTIONS'):
+            message = f'{type(error).__name__}: {error}'.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D')
+            print(f'::error title=Release evidence::{message}', flush=True)
+        raise
