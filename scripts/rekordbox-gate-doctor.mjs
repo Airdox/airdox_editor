@@ -34,6 +34,7 @@ const require = createRequire(import.meta.url);
 const dbReader = require('../electron/dbReader.cjs');
 const gate = require('../electron/masterDbGate.cjs');
 const runtimeCheck = require('../electron/rekordboxRuntimeCheck.cjs');
+const analysisPathResolver = require('../editor_patch/analysisPath.cjs');
 
 const DEFAULT_TRACK_ID = '142225026';
 
@@ -172,6 +173,17 @@ async function main() {
   summary.code = result.code;
 
   report.add('AnalysisDataPath', String(row.row.AnalysisDataPath || '-'));
+  // Relativer /PIONEER/...-Pfade werden über den Analysis-Data-Root gelöst
+  // (analysis-data-root-path aus rekordboxAgent/options.json).
+  try {
+    const analysisRoots = analysisPathResolver.analysisRootCandidates({ databasePath: target.path });
+    report.add(
+      'Analysis-Data-Root',
+      analysisRoots.map((root) => `${root.path} [${root.source}]`).join(' | ') || '-'
+    );
+  } catch (error) {
+    report.add('Analysis-Data-Root', `Prüfung fehlgeschlagen: ${error.message || error}`);
+  }
   if (result.ok) {
     report.add('ANLZ', 'FOUND');
     report.add('ANLZ structure', `OK [${result.analysis.tags.join(', ')}]`);

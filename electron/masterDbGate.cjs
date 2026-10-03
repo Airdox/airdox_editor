@@ -51,6 +51,10 @@ const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 const dbReader = require('./dbReader.cjs');
 const anlz = require('./generated/anlzStructure.cjs');
+// Analysis-Pfade werden relativ zum Rekordbox-Analysis-Data-Root
+// (`analysis-data-root-path` aus rekordboxAgent/options.json) aufgelöst, nicht
+// relativ zum PIONEER-Root D:\PIONEER.
+const analysisPath = require('../editor_patch/analysisPath.cjs');
 
 const GATE_CODES = Object.freeze([
   'OK',
@@ -129,7 +133,7 @@ function joinPioneerRoot(root, relativePath) {
  * paths stored as /PIONEER/USBANLZ/... or relative to a mounted D:\\PIONEER
  * export without scanning the drive or guessing by filename.
  */
-function makeAnalysisPathCandidates(rawAnalysisPath, databasePath) {
+function makeAnalysisPathCandidates(rawAnalysisPath, databasePath, options = {}) {
   const raw = String(rawAnalysisPath || '').trim();
   if (!raw) return [];
   const candidates = [];
@@ -163,13 +167,15 @@ function makeAnalysisPathCandidates(rawAnalysisPath, databasePath) {
     return candidates;
   }
 
-  const roots = [path.win32.join('D:\\', 'PIONEER')];
-  const databaseRoot = pioneerRootFromPath(databasePath);
-  if (databaseRoot) roots.push(databaseRoot);
-  if (process.env.APPDATA) {
-    roots.push(path.win32.join(process.env.APPDATA, 'Pioneer', 'rekordbox', 'share', 'PIONEER'));
+  // Relative /PIONEER/...-Pfade löst der Gate über editor_patch/analysisPath.cjs
+  // auf: maßgeblich ist `analysis-data-root-path` aus der options.json des
+  // rekordboxAgent (z. B. D:\PIONEER\Master\share) – NICHT der PIONEER-Root
+  // D:\PIONEER. Reihenfolge, Quellen und Leseschutz stehen in jenem Modul.
+  const roots = options.roots || analysisPath.analysisRootCandidates({ databasePath });
+  for (const root of roots) {
+    if (!root || !root.path) continue;
+    add(joinPioneerRoot(root.path, relativePath));
   }
-  for (const root of roots) add(joinPioneerRoot(root, relativePath));
   if (pioneerRootRelative) add(directPath);
   return candidates;
 }
@@ -383,7 +389,9 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  const analysisPathCandidates = makeAnalysisPathCandidates(rawAnalysisPath, candidate.path);
+  const analysisPathCandidates = makeAnalysisPathCandidates(rawAnalysisPath, candidate.path, {
+    roots: deps.analysisRoots,
+  });
   const analysisExtension = path.extname(rawAnalysisPath).toLowerCase();
   if (!ANLZ_EXTENSIONS.includes(analysisExtension)) {
     return fail(

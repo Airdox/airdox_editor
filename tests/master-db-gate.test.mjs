@@ -23,7 +23,10 @@
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -488,22 +491,45 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.equal(result.original.path, ppthPath);
 }
 
-// ─── Relative ANLZ-Pfade unter D:\PIONEER werden deterministisch aufgelöst ──
+// ─── Relative ANLZ-Pfade werden relativ zum analysis-data-root-path gelöst ──
+// Maßgeblich ist `analysis-data-root-path` aus rekordboxAgent/options.json
+// (hier D:\\PIONEER\\Master\\share), nicht der PIONEER-Root D:\\PIONEER.
+// editor_patch/analysisPath.cjs baut die Kandidaten; der Track wird wie immer
+// über djmdContent.ID = XML-TrackID gesucht.
 {
-  const databasePath = 'D:\\PIONEER\\rekordbox\\exportLibrary.db';
+  const databasePath = 'D:\\PIONEER\\Master\\master.db';
   const analysisDataPath = '/PIONEER/USBANLZ/PQT000055.DAT';
-  const resolvedAnalysisPath = 'D:\\PIONEER\\USBANLZ\\PQT000055.DAT';
+  const resolvedAnalysisPath = 'D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\PQT000055.DAT';
   const originalPath = 'C:\\Music\\Andreas Henneberg\\Skirmish (Original Mix).mp3';
   const anlzBytes = anlzWithPpth(originalPath);
   const normalize = (value) => String(value).replace(/\\/g, '/').replace(/\/+?/g, '/').toLowerCase();
-  const { deps } = makeDeps({
+  const legacyPath = 'D:\\PIONEER\\USBANLZ\\PQT000055.DAT';
+
+  // options.json des rekordboxAgent am kanonischen Ort (%APPDATA%\Pioneer\…):
+  // analysis-data-root-path zeigt auf D:\\PIONEER\\Master\\share.
+  const appDataRoot = mkdtempSync(path.join(os.tmpdir(), 'airdox-gate-options-'));
+  const storageDir = path.join(appDataRoot, 'Pioneer', 'rekordboxAgent', 'storage');
+  mkdirSync(storageDir, { recursive: true });
+  writeFileSync(
+    path.join(storageDir, 'options.json'),
+    JSON.stringify({
+      options: [
+        ['db-path', 'D:\\PIONEER\\Master'],
+        ['analysis-data-root-path', 'D:\\PIONEER\\Master\\share'],
+      ],
+    })
+  );
+  const previousAppData = process.env.APPDATA;
+  process.env.APPDATA = appDataRoot;
+  const { deps, stats } = makeDeps({
     locateRekordboxDatabases: async () => [
-      { path: databasePath, kind: 'ONE_LIBRARY', label: 'exportLibrary.db (D:\\PIONEER)' },
+      { path: databasePath, kind: 'MASTER_DB', label: 'master.db (D:\\PIONEER\\Master)' },
     ],
-    openContentRow: async () => ({
+    openContentRow: async (dbPath, trackId) => ({
       available: true,
-      dbType: 'ONE_LIBRARY',
+      dbType: 'MASTER_DB',
       row: makeRow({
+        ID: trackId,
         FolderPath: 'C:\\Music\\Andreas Henneberg',
         FileNameL: 'Skirmish (Original Mix).mp3',
         AnalysisDataPath: analysisDataPath,
@@ -523,10 +549,27 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
       return anlzBytes;
     },
   });
-  const result = await resolveTrackFromMasterDb({ trackId: '142225026' }, deps);
-  assert.equal(result.ok, true, `expected relocated PIONEER ANLZ to load, got ${result.code}: ${result.reason}`);
-  assert.equal(result.analysis.path, resolvedAnalysisPath);
-  assert.equal(result.original.path, originalPath);
+  let result;
+  try {
+    result = await resolveTrackFromMasterDb({ trackId: '142225026' }, deps);
+  } finally {
+    if (previousAppData === undefined) delete process.env.APPDATA;
+    else process.env.APPDATA = previousAppData;
+    rmSync(appDataRoot, { recursive: true, force: true });
+  }
+  assert.equal(
+    result.ok,
+    true,
+    `expected ANLZ under analysis-data-root-path to load, got ${result.code}: ${result.reason}`
+  );
+  assert.equal(result.analysis.path, resolvedAnalysisPath, 'ANLZ wird unter analysis-data-root-path gefunden');
+  assert.equal(result.original.path, originalPath, 'Original stammt aus dem PPTH-Eintrag derselben ANLZ');
+  assert.equal(result.content.id, '142225026', 'Zeile wurde über djmdContent.ID = XML-TrackID gefunden');
+  // Der Analysis-Root hat Vorrang: der alte PIONEER-Root-Pfad wird nicht mehr genommen.
+  assert.ok(
+    !stats.some((entry) => normalize(entry) === normalize(legacyPath)),
+    `D:\\PIONEER\\USBANLZ wird nicht mehr als primärer Kandidat benutzt (geprüft: ${stats.join(' | ')})`
+  );
 }
 
 // ─── scanAnlzSections: gespiegelt an anlzParser.ts ──────────────────────────

@@ -58,9 +58,40 @@ Laufwerk etwas dauern.
   Kandidaten Vorrang. Der Doctor zeigt später den tatsächlich gewählten Pfad.
   **Dateien nicht umbenennen oder verschieben**, um die Suche zu beeinflussen.
 
-Falls die Suche keine Ausgabe liefert, prüfe, ob das richtige Laufwerk
-angeschlossen ist und ob sich die Datenbank tatsächlich in diesem Ordnerbaum
-befindet. Rekordbox kann zusätzlich eine Datenbank in seinem AppData-Ordner
+### Analysis-Data-Root (wo die ANLZ-Dateien liegen)
+
+Rekordbox speichert in `djmdContent.AnalysisDataPath` keine vollständigen
+Pfade, sondern Pfade relativ zum **Analysis-Data-Root**
+(`/PIONEER/USBANLZ/…`). Der Root steht in derselben `options.json` wie der
+Datenbankpfad, unter dem Schlüssel `analysis-data-root-path`. Bei einer
+extern geführten Bibliothek ist das z. B. `D:\\PIONEER\\Master\\share` – die
+Datei liegt dann unter
+`D:\\PIONEER\\Master\\share\\PIONEER\\USBANLZ\\…`. **Nicht** unter
+`D:\\PIONEER\\USBANLZ\\…`.
+
+Diese reine Leseabfrage zeigt beide Einträge an:
+
+```powershell
+$optionsPath = Join-Path $env:APPDATA 'Pioneer\rekordboxAgent\storage\options.json'
+if (Test-Path -LiteralPath $optionsPath) {
+  $options = Get-Content -LiteralPath $optionsPath -Raw | ConvertFrom-Json
+  $options.options | Where-Object { $_[0] -in @('db-path', 'analysis-data-root-path') } |
+    ForEach-Object { [pscustomobject]@{ Key = $_[0]; Value = $_[1] } } | Format-Table -AutoSize
+} else {
+  "options.json nicht gefunden: $optionsPath"
+}
+```
+
+Der Gate löst relative `/PIONEER/...`-Pfade genau gegen diesen Root auf
+(`editor_patch/analysisPath.cjs`); erster Kandidat ist immer
+`analysis-data-root-path`. Steht dort ein anderer oder veralteter Pfad,
+meldet der Doctor `ANLZ_NOT_FOUND` und nennt die geprüften Kandidaten. Die
+`options.json` darf dafür nicht umbenannt oder bearbeitet werden – sie ist
+eine Rekordbox-Datei.
+
+Falls die Datenbanksuche keine Ausgabe liefert, prüfe, ob das richtige
+Laufwerk angeschlossen ist und ob sich die Datenbank tatsächlich in diesem
+Ordnerbaum befindet. Rekordbox kann zusätzlich eine Datenbank in seinem AppData-Ordner
 haben; der Doctor meldet, welche Datei er gefunden hat.
 
 ## 2. Das richtige Repository und Werkzeuge öffnen
@@ -195,6 +226,25 @@ zurück. Um danach zur automatischen Suche zurückzukehren:
 Remove-Item Env:AIRODOX_REKORDBOX_DB -ErrorAction SilentlyContinue
 ```
 
+### Den Analysis-Data-Root ausdrücklich festlegen (nur zur Diagnose)
+
+Normalerweise kommt der Root aus der `options.json` (siehe Schritt 1). Nur
+wenn diese Datei nicht gelesen werden kann oder eine Bibliothek von einem
+Fremdrechner geprüft wird, kann er für dieses PowerShell-Fenster gesetzt
+werden:
+
+```powershell
+$env:AIRODOX_REKORDBOX_ANALYSIS_ROOT = 'D:\PIONEER\Master\share'
+```
+
+Mehrere Wurzeln werden mit Semikolon getrennt. Der Override ist exakt: es
+werden dann ausschließlich diese Wurzeln geprüft. Zurück zur automatischen
+Auflösung:
+
+```powershell
+Remove-Item Env:AIRODOX_REKORDBOX_ANALYSIS_ROOT -ErrorAction SilentlyContinue
+```
+
 ## 5. Einen Track durch die echte Importkette prüfen
 
 Die mitgelieferte XML-Sammlung enthält den Track mit der TrackID `142225026`;
@@ -306,7 +356,7 @@ Das sind wichtige Softwaretests, aber kein Ersatz für
 | `MASTER_DB_NOT_FOUND` | Keine unterstützte Datenbank am Suchort. | In Schritt 1 nach den bekannten Dateinamen suchen; den exakten Pfad mit `AIRODOX_REKORDBOX_DB` setzen. |
 | `MASTER_DB_OPEN_FAILED` / `MASTER_DB_SCHEMA_INVALID` | Datei lässt sich nicht mit erwartetem Schema lesen. | Rekordbox schließen, den tatsächlichen Datenbankpfad prüfen und Doctor erneut ausführen. Quelldatei nicht bearbeiten. |
 | `TRACK_NOT_FOUND_IN_MASTER_DB` | XML-TrackID ist in der gewählten Bibliothek nicht vorhanden. | Prüfen, ob XML und Datenbank zur selben Bibliothek gehören; keinen ähnlichen Track als Ersatz laden. |
-| `ANLZ_NOT_FOUND` | Der in der Datenbank referenzierte ANLZ-Pfad ist nicht erreichbar. | Das Laufwerk mit den Rekordbox-Analysedateien anschließen und erneut prüfen; Dateien nicht umbenennen. |
+| `ANLZ_NOT_FOUND` | Der in der Datenbank referenzierte ANLZ-Pfad ist an keinem Kandidaten erreichbar. Der Doctor nennt die geprüften Pfade. | Prüfen, ob `analysis-data-root-path` (Schritt 1) auf den Ordner zeigt, unter dem `PIONEER\USBANLZ` liegt, und ob dieses Laufwerk angeschlossen ist; Dateien nicht umbenennen. Der Gate sucht keine gleichnamige Datei an anderer Stelle und rechnet nichts selbst. |
 | `ANLZ_INVALID`, `REKORDBOX_WAVEFORM_MISSING`, `ANLZ_WAVEFORM_UNREADABLE` | ANLZ ist ungültig oder enthält keine lesbare Rekordbox-Waveform. | Import stoppen; keine lokale Ersatzanalyse starten. |
 | `ANLZ_SOURCE_MISMATCH` | Der PPTH-Pfad in der ANLZ passt nicht zum ausgewählten Original. | Import stoppen; nicht eine andere Datei mit gleichem Titel auswählen. |
 | `ORIGINAL_AUDIO_NOT_FOUND` | Das Original-Audio am exakten lokalen Pfad ist nicht erreichbar. | Ursprüngliches Laufwerk/Verzeichnis verbinden und erneut prüfen. |
