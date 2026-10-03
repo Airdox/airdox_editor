@@ -1,4 +1,4 @@
-import os
+﻿import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -17,7 +17,6 @@ def step_1_dependencies():
 def step_2_create_core_modules():
     log(2, "Erstelle / Aktualisiere die Kernmodule (Rekordbox, RGB-Waveforms, Stems)...")
     
-    # Rekordbox & Beatgrid Parser Modul
     rekordbox_code = '''"""
 Automatisch generierter Rekordbox-Parser für taktgenaues Schneiden und Cues.
 """
@@ -59,7 +58,6 @@ def load_rekordbox_xml(xml_path):
     with open("rekordbox_parser.py", "w", encoding="utf-8") as f:
         f.write(rekordbox_code)
 
-    # 3-Band RGB Wellenform Modul
     waveform_code = '''"""
 Generierung der 3-Band-RGB-Wellenform (Low, Mid, High) für DJ Airdox Editor.
 """
@@ -97,12 +95,10 @@ def generate_3band_rgb_waveform(audio_path, target_width=800):
 def step_3_build_executable():
     log(3, "Erstelle die ausführbare Windows-EXE mit PyInstaller...")
     
-    # Prüfen ob eine Hauptdatei existiert (main.py oder app.py)
     entry_point = "main.py"
     if not os.path.exists(entry_point):
-        # Falls main.py nicht existiert, erstellen wir einen Fallback
         with open("main.py", "w", encoding="utf-8") as f:
-            f.write('''import sys\nfrom rekordbox_parser import load_rekordbox_xml\nprint("DJ Airdox Editor gestartet.")\n''')
+            f.write('import sys\nfrom rekordbox_parser import load_rekordbox_xml\nprint("DJ Airdox Editor gestartet.")\n')
 
     spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
 
@@ -115,7 +111,7 @@ a = Analysis(
     datas=[('rekordbox_parser.py', '.'), ('waveform_renderer.py', '.')],
     hiddenimports=['librosa', 'soundfile', 'numpy', 'xml.etree.ElementTree'],
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={{}},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
