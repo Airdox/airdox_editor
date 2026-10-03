@@ -197,6 +197,8 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.ok(result.original.path.includes('Skirmish'), 'db original path returned');
   assert.equal(result.original.xmlLocation, DEVICE_LOCATION, 'XML location kept for diagnostics');
   assert.equal(result.cues.length, 1, 'djmdCue rows for the content row are returned');
+  assert.equal(result.analysis.size, validAnlz.length, 'reported size is the verified read state');
+  assert.equal(result.analysis.modifiedAt, 111, 'reported mtime is the verified read state');
 }
 
 // ─── Erfolgspfad: reguläre XML-Location gewinnt ─────────────────────────────
@@ -330,6 +332,57 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   });
   const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
   assert.equal(result.code, 'ANLZ_READ_FAILED', 'source fingerprint is rechecked after the read');
+  assert.ok(/verändert/.test(result.reason), 'reason names the changed fingerprint (size/mtime)');
+}
+
+// ─── ANLZ_READ_FAILED (Quelle verschwindet zwischen Stat und Leseende) ──────
+{
+  let analysisStatCalls = 0;
+  const { deps } = makeDeps({
+    stat: async (target) => {
+      const value = String(target);
+      if (/\.dat$/i.test(value)) {
+        analysisStatCalls += 1;
+        if (analysisStatCalls > 1) throw enoent(value);
+        return { isFile: () => true, size: validAnlz.length, mtimeMs: 111 };
+      }
+      if (/skirmish/i.test(value)) return { isFile: () => true, size: 10_223_409, mtimeMs: 222 };
+      throw enoent(value);
+    },
+    readFile: async () => validAnlz,
+  });
+  const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
+  assert.equal(result.code, 'ANLZ_READ_FAILED', 'a source that vanishes mid-read fails closed');
+  assert.ok(/nicht mehr prüfbar/.test(result.reason));
+}
+
+// ─── ANLZ_READ_FAILED (Quelle ist nach dem Lesen keine reguläre Datei) ──────
+{
+  let analysisStatCalls = 0;
+  const { deps } = makeDeps({
+    stat: async (target) => {
+      const value = String(target);
+      if (/\.dat$/i.test(value)) {
+        analysisStatCalls += 1;
+        return { isFile: () => analysisStatCalls === 1, size: validAnlz.length, mtimeMs: 111 };
+      }
+      if (/skirmish/i.test(value)) return { isFile: () => true, size: 10_223_409, mtimeMs: 222 };
+      throw enoent(value);
+    },
+    readFile: async () => validAnlz,
+  });
+  const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
+  assert.equal(result.code, 'ANLZ_READ_FAILED', 'a non-file source is not a proven ANLZ read');
+}
+
+// ─── ANLZ_READ_FAILED (unvollständiger Lesevorgang) ─────────────────────────
+{
+  const { deps } = makeDeps({
+    readFile: async () => validAnlz.subarray(0, validAnlz.length - 4),
+  });
+  const result = await resolveTrackFromMasterDb(DEVICE_QUERY, deps);
+  assert.equal(result.code, 'ANLZ_READ_FAILED', 'a short read never reaches the decoder');
+  assert.ok(/unvollständig/.test(result.reason), 'reason reports the byte count that was read');
 }
 
 // ─── ANLZ_INVALID (Rückgabewert zu klein / unlesbare Bytes) ─────────────────
