@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useThrottledMeters } from '../state/transportStore';
 import {
   ChevronDown,
   RotateCcw,
@@ -31,8 +32,6 @@ interface EditModeBarProps {
   onOpenSettings?: () => void;
   masterVolume: number;
   onMasterVolumeChange: (vol: number) => void;
-  meterL: number;
-  meterR: number;
   paletteViewMode?: 'SIDEBAR' | 'FULL_DECK';
   onTogglePaletteViewMode?: () => void;
   bottomControlOpen?: boolean;
@@ -61,8 +60,6 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onOpenSettings,
   masterVolume,
   onMasterVolumeChange,
-  meterL,
-  meterR,
   paletteViewMode = 'SIDEBAR',
   onTogglePaletteViewMode,
   bottomControlOpen = true,
@@ -74,6 +71,12 @@ export const EditModeBar: React.FC<EditModeBarProps> = ({
   onOpenRecorder,
   recorderActive = false,
 }) => {
+  /*
+   * Die VU-Pegel liegen im Transport-Store (der Playhead-Treiber schreibt sie
+   * mit 20 Hz). Die Leiste hängt sich dort selbst an – vorher kamen die Pegel
+   * als Props aus der App und erzwangen 60 Re-Renders pro Sekunde.
+   */
+  const { left: meterL, right: meterR } = useThrottledMeters(50);
   const [timeStr, setTimeStr] = useState<string>('15:21');
 
   useEffect(() => {

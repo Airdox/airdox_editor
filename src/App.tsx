@@ -4,7 +4,7 @@
  * Authoritative Visual Lock implementation matching screenshots 01, 02, and 03.
  */
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   TrackModel,
   PartialTrackModel,
@@ -48,26 +48,31 @@ import { TrackHeader } from './components/TrackHeader';
 import { DeckStemsControl } from './components/DeckStemsControl';
 import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
 import { StemModelInstallModal } from './components/Modals/StemModelInstallModal';
+import {
+  LazyClearHistoryModal,
+  LazyDatabaseExtractionModal,
+  LazyDeleteModeModal,
+  LazyEditAssistantModal,
+  LazyExportModal,
+  LazyMidiControllerModal,
+  LazyRecorderModal,
+  LazyRekordboxXmlImportModal,
+  LazyRemoteFlowModal,
+  LazyRemoteSetupModal,
+  LazyStemModelInstallModal,
+  LazyStemQualityWarningModal,
+  LazySystemLogModal,
+  LazyWorkspaceSettingsModal,
+} from './components/Modals/lazyModals';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
-import { ExportModal } from './components/Modals/ExportModal';
-import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
-import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
-import { SystemLogModal } from './components/Modals/SystemLogModal';
-import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { InitialSetupModal } from './components/Modals/InitialSetupModal';
-import { RemoteSetupModal } from './components/Modals/RemoteSetupModal';
-import { RemoteFlowModal } from './components/Modals/RemoteFlowModal';
-import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
-import { EditAssistantModal } from './components/Modals/EditAssistantModal';
-import { DeleteModeModal } from './components/Modals/DeleteModeModal';
-import { MidiControllerModal } from './components/Modals/MidiControllerModal';
-import { RecorderModal, RecorderSource, RecorderFormat, RecorderStage } from './components/Modals/RecorderModal';
+import { RecorderSource, RecorderFormat, RecorderStage } from './components/Modals/RecorderModal';
 import {
   stemEngine,
   StemType,
@@ -99,6 +104,14 @@ import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
+import {
+  getPositionSec,
+  getTransport,
+  setPosition,
+  setTransport,
+  subscribeTransport,
+} from './state/transportStore';
+import { startPlayheadDriver, type PlayheadDriverHandle } from './features/transport/playheadDriver';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
@@ -400,14 +413,24 @@ async function rebuildTrackFromSerialized(
   };
 }
 
-export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
+export default function App() {
+  /*
+   * Viewport & Timeline
+   *
+   * Die Wiedergabeposition liegt NICHT mehr im React-State: sie wird vom
+   * Playhead-Treiber pro Frame in den Transport-Store geschrieben
+   * (`src/state/transportStore.ts`). Wer sie braucht, holt sie dort ab –
+   * per `getPositionSec()` im Moment der Aktion (exakt) oder über einen
+   * gedrosselten Hook (Anzeige). Nur so kostet eine laufende Wiedergabe
+   * keinen einzigen Re-Render der Anwendung.
+   */
+  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
   const [projectName, setProjectName] = useState<string>('New Project');
   const [tracks, setTracks] = useState<TrackModel[]>([]);
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
 
   // Viewport & Timeline state
-  const [currentTime, setCurrentTime] = useState<number>(0);
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
   const [waveformMode, setWaveformMode] = useState<WaveformMode>('RGB');
@@ -415,8 +438,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loopActive, setLoopActive] = useState<boolean>(false);
   const [masterVolume, setMasterVolume] = useState<number>(0.9);
-  const [meterL, setMeterL] = useState<number>(0);
-  const [meterR, setMeterR] = useState<number>(0);
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -1020,31 +1041,41 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [cacheAnalysisMapping]);
 
   // Real-time animation loop for playhead progress and VU stereo meters
+  /*
+   * Playhead & Pegel: Der Treiber liest die Engine und schreibt in den
+   * Transport-Store. Dieses useEffect hält nur noch die *diskreten* Zustände
+   * der Anwendung synchron – es läuft einmal beim Start, nicht pro Frame.
+   *
+   * Die Ansicht (viewOffset) wird über `viewportRef` gelesen statt über die
+   * Effekt-Dependencies: vorher stand `viewOffset` in der Dependency-Liste des
+   * Loops, sodass sich der Loop beim Auto-Scroll jeden Frame neu registrierte.
+   */
+  const viewportRef = useRef({ offset: viewOffset, duration: viewDuration, trackDuration: 0 });
+  viewportRef.current = {
+    offset: viewOffset,
+    duration: viewDuration,
+    trackDuration: activeTrack?.duration ?? 0,
+  };
+
   useEffect(() => {
-    let animId: number;
-    const updateLoop = () => {
-      if (audioEngine.getIsPlaying()) {
-        const time = audioEngine.getCurrentTime();
-        setCurrentTime(time);
+    const driver: PlayheadDriverHandle = startPlayheadDriver({
+      port: audioEngine,
+      getViewport: () => viewportRef.current,
+      onFollowOffset: (offset) => setViewOffset(offset),
+    });
+    return () => driver.stop();
+  }, []);
 
-        // Keep detail view centered or following playhead if near boundary
-        if (time > viewOffset + viewDuration * 0.9) {
-          setViewOffset(Math.max(0, time - viewDuration * 0.2));
-        }
-
-        const meter = audioEngine.getMasterMeter();
-        setMeterL(meter.left);
-        setMeterR(meter.right);
-      } else {
-        setMeterL((prev) => Math.max(0, prev * 0.85));
-        setMeterR((prev) => Math.max(0, prev * 0.85));
-      }
-      animId = requestAnimationFrame(updateLoop);
-    };
-
-    animId = requestAnimationFrame(updateLoop);
-    return () => cancelAnimationFrame(animId);
-  }, [viewOffset, viewDuration]);
+  // „Läuft/läuft nicht" ist ein diskreter Zustand: nur ein echter Wechsel
+  // erzeugt einen React-Render (z. B. wenn die Wiedergabe natürlich endet).
+  useEffect(
+    () =>
+      subscribeTransport(() => {
+        const playing = getTransport().isPlaying;
+        setIsPlaying((previous) => (previous === playing ? previous : playing));
+      }),
+    []
+  );
 
   // Master volume control
   const handleMasterVolumeChange = useCallback((vol: number) => {
@@ -1628,24 +1659,24 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         loopEnd = selection.end;
       }
       if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.playWithStems(activeTrackStems, stemsMixerState, getPositionSec(), loopActive, loopStart, loopEnd);
       } else {
-        audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.play(workingAudioBuffer, getPositionSec(), loopActive, loopStart, loopEnd);
       }
       setIsPlaying(true);
     }
-  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom, currentTime]);
+  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom]);
 
   const handleReturnToStart = useCallback(() => {
     audioEngine.stop();
     setIsPlaying(false);
-    setCurrentTime(0);
+    setPosition(0);
     setViewOffset(0);
   }, []);
 
   const handleSeek = useCallback((targetTime: number) => {
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
-    setCurrentTime(clamped);
+    setPosition(clamped);
     if (isPlaying && workingAudioBuffer) {
       if (activeTrackStems && stemsMixIsCustom) {
         audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
@@ -1687,7 +1718,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           break;
         case 'SEEK':
           if (action.value !== undefined) {
-            handleSeek(currentTime + action.value * 0.15);
+            handleSeek(getPositionSec() + action.value * 0.15);
           }
           break;
         case 'MASTER_VOLUME':
@@ -1705,7 +1736,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       unsubState();
       unsubActions();
     };
-  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, currentTime, handleMasterVolumeChange]);
+  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, handleMasterVolumeChange]);
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -1746,14 +1777,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
 
       const half = targetDuration / 2;
-      let newOffset = Math.max(0, currentTime - half);
+      let newOffset = Math.max(0, getPositionSec() - half);
       if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
         newOffset = Math.max(0, activeTrack.duration - targetDuration);
       }
       setViewDuration(targetDuration);
       setViewOffset(newOffset);
     },
-    [activeTrack, currentTime]
+    [activeTrack]
   );
   const handlePanView = (newOffset: number) => {
     const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
@@ -1769,10 +1800,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately before current time (with small buffer)
-    const prevCues = memCues.filter((c) => c.position < currentTime - 0.08);
+    const prevCues = memCues.filter((c) => c.position < getPositionSec() - 0.08);
     const target = prevCues.length > 0 ? prevCues[prevCues.length - 1] : memCues[memCues.length - 1];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   const handleNextMemoryCue = useCallback(() => {
     if (!activeTrack) return;
@@ -1782,10 +1813,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately after current time
-    const nextCues = memCues.filter((c) => c.position > currentTime + 0.08);
+    const nextCues = memCues.filter((c) => c.position > getPositionSec() + 0.08);
     const target = nextCues.length > 0 ? nextCues[0] : memCues[0];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Set new Memory Cue with precise database millisecond timestamp and bar/beat calculation
   const handleAddMemoryCue = useCallback(() => {
@@ -1793,14 +1824,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const existingMems = activeTrack.cues.filter((c) => c.type === 'MEMORY');
     const nextIndex = existingMems.length + 1;
     const spb = 60.0 / activeTrack.bpm;
-    const beatIndex = Math.max(0, Math.round((currentTime - (activeTrack.beatGrid.firstBeat || 0)) / spb));
+    const cuePosition = getPositionSec();
+    const beatIndex = Math.max(0, Math.round((cuePosition - (activeTrack.beatGrid.firstBeat || 0)) / spb));
     const barNumber = Math.floor(beatIndex / 4) + 1;
     const beatNumber = (beatIndex % 4) + 1;
 
     const newCue: CuePoint = {
       id: `mem-${Date.now()}`,
-      position: currentTime,
-      inMsec: Math.round(currentTime * 1000),
+      position: cuePosition,
+      inMsec: Math.round(cuePosition * 1000),
       type: 'MEMORY',
       name: `MEM ${nextIndex}`,
       color: '#ff2222',
@@ -1822,12 +1854,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Set Beat 1.1 at current playhead position (Pioneer Rekordbox "Set 1.1 Here")
   const handleSetFirstBeatHere = useCallback(() => {
     if (!activeTrack) return;
-    const newFirstBeat = Math.max(0, currentTime);
+    const newFirstBeat = Math.max(0, getPositionSec());
     const spb = 60.0 / activeTrack.bpm;
 
     setTracks((prev) =>
@@ -1856,7 +1888,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Fine-tune Beatgrid offset (Pioneer Rekordbox Grid Shift: +/- 1ms or 10ms)
   const handleShiftBeatgrid = useCallback((deltaSeconds: number) => {
@@ -1900,7 +1932,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!analysis || analysis.peaks.length === 0) return;
 
     const secPerBucket = analysis.secPerBucket || (activeTrack.duration / analysis.length);
-    const searchCenterBucket = Math.round(currentTime / secPerBucket);
+    const searchCenterBucket = Math.round(getPositionSec() / secPerBucket);
     const searchRadius = Math.round(0.1 / secPerBucket); // search within +/- 100ms
     const minBucket = Math.max(0, searchCenterBucket - searchRadius);
     const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
@@ -1921,7 +1953,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const beatDistance = (alignedTime - currentFirst) % spb;
     const shift = beatDistance > spb / 2 ? beatDistance - spb : beatDistance;
     handleShiftBeatgrid(shift);
-  }, [activeTrack, currentTime, handleShiftBeatgrid]);
+  }, [activeTrack, handleShiftBeatgrid]);
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
@@ -2139,7 +2171,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const spb = 60.0 / bg.bpm;
 
     // Start from either current playhead or snapped bar start
-    let startSec = currentTime;
+    let startSec = getPositionSec();
     if (quantize) {
       const beatIndex = Math.round((startSec - bg.firstBeat) / spb);
       startSec = Math.max(0, bg.firstBeat + beatIndex * spb);
@@ -2326,7 +2358,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Paste at playhead (validated by Edit Assistant)
   const handlePaste = () => {
-    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, currentTime);
+    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, getPositionSec());
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2334,7 +2366,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Paste');
 
-    const insertTime = validation.sanitizedInsertionTime ?? currentTime;
+    const insertTime = validation.sanitizedInsertionTime ?? getPositionSec();
     const result = executePaste(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2370,7 +2402,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Insert (shifts timeline and subsequent markers, validated by Edit Assistant)
   const handleInsert = () => {
-    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, currentTime);
+    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, getPositionSec());
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2378,7 +2410,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Insert');
 
-    const insertPos = validation.sanitizedInsertionTime ?? currentTime;
+    const insertPos = validation.sanitizedInsertionTime ?? getPositionSec();
     const result = executeInsert(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2413,7 +2445,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime = currentTime) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime: number = getPositionSec()) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -2507,7 +2539,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       return;
     }
     setSelectedClipId(clip.id);
-    setCurrentTime(dropTime);
+    setPosition(dropTime);
     handleInsertClipToDeckA(clip, dropTime);
   };
 
@@ -3382,7 +3414,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       });
       setActiveTrackId(resolvedDef.id);
       setWorkingAudioBuffer(originalAudio);
-      setCurrentTime(0);
+      setPosition(0);
       setViewOffset(0);
       setIsPlaying(false);
       setSelection(null);
@@ -3635,7 +3667,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setTracks(rebuiltTracks);
       setActiveTrackId(persistedActiveId || rebuiltTracks[0]?.id || '');
       setWorkingAudioBuffer(activeWorkingAudio);
-      setCurrentTime(0);
+      setPosition(0);
       setViewOffset(0);
       setIsPlaying(false);
       audioEngine.stop();
@@ -3741,7 +3773,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
         setTracks((prev) => prev.map((t) => (t.id === updatedTrack.id ? updatedTrack : t)));
         setWorkingAudioBuffer(decoded);
-        setCurrentTime(0);
+        setPosition(0);
         setViewOffset(0);
         setIsPlaying(false);
         audioEngine.stop();
@@ -3821,7 +3853,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         });
         setActiveTrackId(newTrack.id);
         setWorkingAudioBuffer(decoded);
-        setCurrentTime(0);
+        setPosition(0);
         setViewOffset(0);
         setIsPlaying(false);
         audioEngine.stop();
@@ -3886,8 +3918,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+  /*
+   * Tastaturbindung: Der Listener wird genau EINMAL registriert.
+   *
+   * Vorher stand dieser Effekt ohne Dependency-Array da – `addEventListener`
+   * und `removeEventListener` liefen also bei jedem Render, und das bei ~60
+   * Renders pro Sekunde während der Wiedergabe. Der Ref hält trotzdem immer
+   * den neuesten Handler (kein veralteter Abschluss).
+   */
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    {
       if (deleteModeModalOpen) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
@@ -3946,9 +3988,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+  };
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandlerRef.current(event);
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, []);
 
   // Action: Open a completely clean, empty project
   const handleNewProject = useCallback(() => {
@@ -3958,7 +4004,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setWorkingAudioBuffer(null);
     setPaletteClips([]);
     setSelection(null);
-    setCurrentTime(0);
+    setPosition(0);
     setViewOffset(0);
     setViewDuration(16.0);
     setUndoStack([]);
@@ -3971,8 +4017,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const chatbotTrackContext: TrackEditorContext = useMemo(() => {
     const secPerBeat = activeTrack?.bpm ? 60 / activeTrack.bpm : 0.5;
     const secPerBar = secPerBeat * 4;
-    const currentBar = Math.floor(currentTime / secPerBar) + 1;
-    const currentBeat = Math.floor(currentTime / secPerBeat) + 1;
+    const currentPosition = getPositionSec();
+    const currentBar = Math.floor(currentPosition / secPerBar) + 1;
+    const currentBeat = Math.floor(currentPosition / secPerBeat) + 1;
 
     // Automated Rekordbox-compatible Mix-In & phrase energy analysis
     const mixInAnalysis = activeTrack ? analyzeTrackForMixIn(activeTrack) : undefined;
@@ -3983,7 +4030,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       bpm: activeTrack?.bpm,
       key: activeTrack?.key,
       duration: activeTrack?.duration,
-      currentTime,
+      currentTime: currentPosition,
       currentBar,
       hasSelection: selection !== null && selection.duration > 0,
       selectionStart: selection?.start,
@@ -4000,7 +4047,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     };
   }, [
     activeTrack,
-    currentTime,
     selection,
     clipboardBuffer,
     quantize,
@@ -4009,6 +4055,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     undoStack.length,
     redoStack.length,
   ]);
+
+  /*
+   * Der Chatbot braucht die *aktuelle* Position im Moment des Absendens. Der
+   * gemerkte Kontext enthält die teure Mix-In-Analyse und wird nur bei
+   * Inhaltsänderungen neu gebaut; die Position wird erst hier eingesetzt.
+   */
+  const resolveChatbotTrackContext = useCallback((): TrackEditorContext => {
+    const position = getPositionSec();
+    const secPerBar = activeTrack?.bpm ? (60 / activeTrack.bpm) * 4 : 2;
+    return {
+      ...chatbotTrackContext,
+      currentTime: position,
+      currentBar: Math.floor(position / secPerBar) + 1,
+    };
+  }, [chatbotTrackContext, activeTrack]);
 
   // Execute AI Copilot proposed actions
   const handleExecuteChatbotAction = useCallback(
@@ -4029,7 +4090,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           } else if (typeof mixTime === 'number' && typeof mixBar !== 'number') {
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           } else if (typeof mixTime !== 'number' && typeof mixBar !== 'number') {
-            mixTime = currentTime;
+            mixTime = getPositionSec();
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           }
 
@@ -4123,7 +4184,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             const secPerBeat = 60 / activeTrack.bpm;
             const beats = action.params.beats || 16;
             const dur = beats * secPerBeat;
-            const start = action.params.start ?? currentTime;
+            const start = action.params.start ?? getPositionSec();
             const end = Math.min(activeTrack.duration, start + dur);
             setSelection({
               start,
@@ -4137,7 +4198,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
           break;
         case 'ADD_CUE':
-          handleAddCue(action.params.time ?? currentTime);
+          handleAddCue(action.params.time ?? getPositionSec());
           break;
         case 'ADD_MEMORY_CUE':
           handleAddMemoryCue();
@@ -4176,7 +4237,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     },
     [
       activeTrack,
-      currentTime,
       selection,
       tracks,
       handleSelectZoomPreset,
@@ -4273,8 +4333,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenSettings={() => setSettingsModalOpen(true)}
         masterVolume={masterVolume}
         onMasterVolumeChange={handleMasterVolumeChange}
-        meterL={meterL}
-        meterR={meterR}
         paletteViewMode={paletteViewMode}
         onTogglePaletteViewMode={() =>
           setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
@@ -4292,7 +4350,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
       <TrackHeader
         track={activeTrack}
-        currentTime={currentTime}
         viewOffset={viewOffset}
         viewDuration={viewDuration}
         onSeek={handleSeek}
@@ -4353,7 +4410,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
           track={activeTrack}
-          currentTime={currentTime}
+          getPositionSec={getPositionSec}
           viewOffset={viewOffset}
           viewDuration={viewDuration}
           waveformMode={waveformMode}
@@ -4418,6 +4475,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           isOpen={chatbotOpen}
           onClose={() => setChatbotOpen(false)}
           trackContext={chatbotTrackContext}
+          getTrackContext={resolveChatbotTrackContext}
           onExecuteAction={handleExecuteChatbotAction}
           onSelectZoomPreset={handleSelectZoomPreset}
         />
@@ -4489,7 +4547,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           const t = tracks.find((tr) => tr.id === id);
           if (t && t.audioBuffer) {
             setWorkingAudioBuffer(t.audioBuffer);
-            setCurrentTime(0);
+            setPosition(0);
             setViewOffset(0);
             setIsPlaying(false);
             audioEngine.stop();
@@ -4501,7 +4559,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
-      <RecorderModal
+      {/*
+        Nur Dialoge, die der Nutzer aktiv öffnet, liegen hinter React.lazy
+        (siehe src/components/Modals/lazyModals.ts). Der Fallback ist bewusst
+        `null`: die Chunks sind klein und nach dem ersten Öffnen im Cache.
+      */}
+      <Suspense fallback={null}>
+      <LazyRecorderModal
         isOpen={recorderOpen}
         onClose={() => setRecorderOpen(false)}
         stage={recorderStage}
@@ -4539,7 +4603,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           {remoteFlowRunning ? '↗ Externer Job · Status ansehen' : '✓ Externer Job · Ergebnis ansehen'}
         </button>
       )}
-      <RemoteFlowModal
+      <LazyRemoteFlowModal
         open={remoteFlowOpen}
         onClose={() => setRemoteFlowOpen(false)}
         onCancel={() => { if (remoteFlowJobId) cancelRemoteFlowJob(remoteFlowJobId); }}
@@ -4551,13 +4615,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         error={remoteFlowError}
         phaseText={separationProgress?.phaseText}
       />
-      <RemoteSetupModal
+      <LazyRemoteSetupModal
         isOpen={remoteSetupOpen}
         onClose={() => setRemoteSetupOpen(false)}
         remoteStatus={stemRemoteStatus}
         onStatus={(status) => setStemRemoteStatus(status)}
       />
-      <WorkspaceSettingsModal
+      <LazyWorkspaceSettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
         onShowInfo={() => setInfoModalOpen(true)}
@@ -4618,7 +4682,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onClose={() => setInfoModalOpen(false)}
             track={activeTrack}
           />
-          <ExportModal
+          <LazyExportModal
             isOpen={exportModalOpen}
             onClose={() => setExportModalOpen(false)}
             track={activeTrack}
@@ -4627,7 +4691,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             protectedPaths={protectedPaths}
             onExportComplete={showOperationFeedback}
           />
-          <DatabaseExtractionModal
+          <LazyDatabaseExtractionModal
             isOpen={dbExtractionModalOpen}
             onClose={() => setDbExtractionModalOpen(false)}
             activeTrack={activeTrack}
@@ -4643,7 +4707,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       )}
 
       {/* Rekordbox XML Track-Auswahl Modal with Search Bar */}
-      <RekordboxXmlImportModal
+      <LazyRekordboxXmlImportModal
         isOpen={xmlCollectionModalOpen}
         onClose={() => setXmlCollectionModalOpen(false)}
         xmlTracks={xmlImportedTracks}
@@ -4661,14 +4725,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* System-Protokoll Modal (Hilfe → System-Protokoll...) */}
-      <SystemLogModal
+      <LazySystemLogModal
         isOpen={systemLogModalOpen}
         onClose={() => setSystemLogModalOpen(false)}
       />
 
       {/* Explicit Normal Delete / Ripple Delete choice */}
       {deleteModeModalOpen && selection && (
-        <DeleteModeModal
+        <LazyDeleteModeModal
           selection={selection}
           onNormalDelete={handleNormalDelete}
           onRippleDelete={handleRippleDelete}
@@ -4677,7 +4741,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       )}
 
       {/* Clear History Confirmation Modal (Data Loss Prevention) */}
-      <ClearHistoryModal
+      <LazyClearHistoryModal
         isOpen={clearHistoryModalOpen}
         onClose={() => setClearHistoryModalOpen(false)}
         onConfirm={handleClearHistoryConfirm}
@@ -4687,7 +4751,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* STEM AI UNAVAILABLE – no fake stems, clear status per §25 */}
-      <StemQualityWarningModal
+      <LazyStemQualityWarningModal
         isOpen={stemQualityWarning !== null}
         reason={stemQualityWarning || stemEngineUnavailableReason || 'STEM AI UNAVAILABLE'}
         installModel={missingStemModel}
@@ -4746,7 +4810,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Installiert exakt das im Einstellungsmenü gewählte, noch fehlende Modell. */}
-      <StemModelInstallModal
+      <LazyStemModelInstallModal
         isOpen={stemInstallOpen}
         model={missingStemModel}
         onClose={() => setStemInstallOpen(false)}
@@ -4771,7 +4835,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}
-      <EditAssistantModal
+      <LazyEditAssistantModal
         isOpen={editAssistantModalOpen}
         onClose={() => setEditAssistantModalOpen(false)}
         lastValidation={editAssistantState.lastValidation}
@@ -4781,13 +4845,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Pioneer Hardware Controller & MIDI Mapping Modal */}
-      <MidiControllerModal
+      <LazyMidiControllerModal
         isOpen={midiModalOpen}
         onClose={() => setMidiModalOpen(false)}
         stemsMixerState={stemsMixerState}
         onToggleStemMute={handleToggleStemMute}
         onToggleStemSolo={handleToggleStemSolo}
       />
+      </Suspense>
     </div>
   );
 }

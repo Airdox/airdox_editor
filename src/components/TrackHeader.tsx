@@ -9,10 +9,16 @@ import { FileAudio, Check, Info } from 'lucide-react';
 import { TrackModel } from '../types/rekordbox';
 import { TrackOverview } from './TrackOverview';
 import { Tooltip } from './Tooltip';
+import { useThrottledPosition } from '../state/transportStore';
 
 interface TrackHeaderProps {
   track: TrackModel | null;
-  currentTime: number;
+  /**
+   * Optionaler Startwert. Die laufende Position kommt aus dem Transport-Store
+   * und wird auf 10 Hz gedrosselt gelesen – ein Zeitzähler braucht keine 60 fps
+   * und darf die App nicht pro Frame neu rendern.
+   */
+  currentTime?: number;
   viewOffset: number; // start of detail window in seconds
   viewDuration: number; // duration of detail window in seconds
   onSeek: (time: number) => void;
@@ -29,6 +35,8 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
   onPanView,
   onLoadAudioClick,
 }) => {
+  const liveTime = useThrottledPosition(100);
+  const displayTime = Number.isFinite(liveTime) ? liveTime : currentTime ?? 0;
   // Format 05:26.3
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -180,7 +188,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
       {/* Lower row: Thin horizontal Track Overview Waveform */}
       <TrackOverview
         track={track}
-        currentTime={currentTime}
+        currentTime={displayTime}
         viewOffset={viewOffset}
         viewDuration={viewDuration}
         onSeek={onSeek}
