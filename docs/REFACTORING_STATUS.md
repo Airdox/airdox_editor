@@ -28,6 +28,8 @@ Die drei großen Wirkungen:
 
 ## 2. Verifikationsstand (04.10.2026)
 
+Auf GitHub (Linux-Runner, ohne native Module) zusätzlich bestätigt: PR #76, Job „Qualität (Linux)" grün.
+
 ```
 npm run verify
   > npm run lint      →  tsc --noEmit, keine Fehler
@@ -67,8 +69,11 @@ npm run bench:budget →  keine Budgetverletzung
   plus seine statischen Importe – Lazy-Chunks zählen nicht, sonst würde das Budget die Code-Splitting-
   Arbeit bestrafen.
 - `budgets.json` mit begründeten Obergrenzen (Bundle, vier Benchmark-Fälle).
-- `.github/workflows/quality-linux.yml`: der Job, der auf Linux läuft (bisher gab es nur Windows-CI).
-- Baseline-Tag `perf-baseline-2026-10-03` gesetzt.
+- `.github/workflows/quality-linux.yml`: der Job, der auf Linux läuft (bisher gab es nur Windows-CI) –
+  Typprüfung, Tests, Build, Bundle-Budget, Benchmark-Budget in **1 m 6 s** (grün auf PR #76,
+  <https://github.com/Airdox/airdox_editor/actions/runs/37163055339>).
+- Baseline-Tag `perf-baseline-2026-10-03` gesetzt (zeigt auf `main` @ `eea1a94`, also den Stand **vor**
+  der Refaktorisierung; noch nicht gepusht – `git push origin perf-baseline-2026-10-03`).
 
 **Nebenbefund (Beleg, dass WP-01 seinen Zweck erfüllt):** Der neue Logger-Test hat einen echten,
 seit Langem bestehenden Fehler gefunden – siehe Abschnitt 4.

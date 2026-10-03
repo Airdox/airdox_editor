@@ -7,7 +7,11 @@ name: Qualität (Linux)
 #   native Module (SQLCipher/ONNX werden dafür nicht gebraucht, deshalb
 #   `npm ci --ignore-scripts`).
 on:
+  # Auf main, damit jeder Merge geprüft ist; Pull Requests aus allen Branches,
+  # damit die Arena-/Feature-Branches schnelle Rückmeldung bekommen, ohne dass
+  # jeder Zwischen-Push den Job mehrfach auslöst.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
