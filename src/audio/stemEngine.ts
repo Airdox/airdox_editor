@@ -152,6 +152,8 @@ export interface EngineSeparationOptions {
   /** Validierungstiefe: live (fast_dj) oder Studio (volle Grenzanalyse). */
   mode?: StemValidationMode;
   onProgress?: StemProgressCallback;
+  /** Status eines Fern-Jobs einschließlich Transport- und Worker-Meldungen. */
+  onRemoteJob?: (job: RemoteStemJobView) => void;
   signal?: { aborted: boolean };
   chunkSizeSamples?: number;
 }
@@ -967,6 +969,7 @@ class StemEngine {
         }
         job = payload.data;
       }
+      options.onRemoteJob?.(job);
       logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} angelegt (${job.modelId}, ${profile}, ${job.trackName})`, {
         jobId: job.jobId,
         model: job.modelId,
@@ -983,6 +986,7 @@ class StemEngine {
         const status = await this.pollRemoteJobs();
         const current = status?.jobs.find((entry) => entry.jobId === job.jobId) ?? job;
         job = current;
+        options.onRemoteJob?.(current);
         options.onProgress?.({
           percent: Math.max(2, Math.round(current.percent || 0)),
           phaseText: current.phase || 'Stem-Separation läuft (extern)…',
@@ -1060,6 +1064,7 @@ class StemEngine {
         processedSeconds: duration,
         totalSeconds: duration,
       });
+      options.onRemoteJob?.(job);
       logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} importiert (${Date.now() - startedAt} ms)`, {
         jobId: job.jobId,
         model: job.modelId,

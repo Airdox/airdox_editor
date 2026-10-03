@@ -27,7 +27,7 @@
  *    hochgeladen; vom Original werden nur Hash/Größe/mtime *gelesen* (§3, §31).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ModelRegistry } from '../modelRegistry';
@@ -307,6 +307,9 @@ export class RemoteStemJobService {
         idempotencyKey,
         status: existing.status,
       });
+      // Die Arbeitskopie wurde bereits vor der Idempotenzprüfung erzeugt.
+      // Bei Wiederaufnahme nicht als unreferenzierten WAV-Ordner liegen lassen.
+      await rm(path.dirname(workingPath), { recursive: true, force: true });
       return this.toView(existing);
     }
 
@@ -525,7 +528,9 @@ export class RemoteStemJobService {
     }
 
     for (const record of [...this.records.values()]) {
-      if (isTerminalStatus(record.status) && record.localJobId) continue;
+      // Abbruch/Fehler sind endgültig. Nur ein fertiger Job ohne lokalen
+      // Import darf nach einem Neustart noch einmal synchronisiert werden.
+      if (isTerminalStatus(record.status) && (record.status !== 'COMPLETED' || record.localJobId)) continue;
       try {
         await this.syncRecord(record, transport);
       } catch (error) {

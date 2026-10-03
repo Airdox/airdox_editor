@@ -1,5 +1,7 @@
 # High Quality extern – BS-RoFormer auf einem fremden Rechner
 
+**Nachweis/Google-Einrichtung:** siehe [Schritt-für-Schritt-Nachweiskette](STEM_REMOTE_NACHWEISKETTE.md). Lokale Simulation ist keine Google- oder Qualitätsfreigabe.
+
 Der HQ-Pfad (BS-RoFormer) rechnet lokal in 60–90 Minuten pro Track. Das bleibt
 der Qualitätspfad, ist aber für den Alltag zu langsam. „High Quality extern“
 gibt genau diesen Lauf an einen **externen Rechner** (Google Colab) ab, ohne
@@ -15,6 +17,26 @@ Editor ◀─Stems + result.json + Status─── Ablage ◀──────�
 
 Google Drive ist dabei reiner **Transport** (§16) – keine Audiodatenbank, keine
 zweite Quelle der Wahrheit. Der Editor bleibt die zentrale Anwendung.
+
+## Live-Statusfenster
+
+Beim Start eines externen Jobs öffnet sich ein kompaktes Statusfenster. Es zeigt
+Arbeitskopie, Übergabe an den Drive-Sync-Ordner, Wartezeit auf den Worker,
+Verarbeitung und geprüften Rückimport. Job-ID, Modell-Phase, vom Worker
+**gemeldeter** Fortschritt, Rechenort und Transportzustand bleiben sichtbar.
+Wenn mehr als zwei Minuten kein neuer Jobstatus bzw. 90 Sekunden kein
+Worker-Lebenszeichen ankommt, erscheint ein Hinweis mit konkreten Prüfschritten;
+ein temporärer Transportausfall wird nicht fälschlich als gescheiterter Job
+bezeichnet. Das Fenster lässt sich schließen, während der Job weiterläuft, und
+über die schwebende Status-Schaltfläche erneut öffnen. „Jetzt prüfen“ löst einen
+neuen Poll aus; „Job abbrechen“ fordert den Abbruch an. Fehler bleiben bis zum
+Schließen lesbar.
+
+**Grenze:** Drive für Desktop bestätigt dem Editor keinen Cloud-Upload. „An
+Drive-Ordner übergeben“ bedeutet nur, dass die lokale Arbeitskopie/Jobablage
+geschrieben wurde; die tatsächliche Cloud-Synchronisierung wird nicht als
+bestätigt dargestellt. Das Fenster visualisiert den Fern-Stem-Workflow, nicht
+eine allgemeine Dateireparatur.
 
 ## 1. Was der Nutzer sieht
 
