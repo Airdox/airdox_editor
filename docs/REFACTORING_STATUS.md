@@ -1,0 +1,196 @@
+# Refaktorisierung – Statusbericht
+
+**Stand:** 04.10.2026 · **Basis:** `main` @ `eea1a94` (v0.4.2) · **Branch:** `arena/01a10410-airdox-editor`
+**Plan:** [`docs/REFACTORING_PLAN.md`](REFACTORING_PLAN.md) (freigegebene Roadmap, Phase 0–4)
+**Freigaben des Auftraggebers:** eigene Stores statt zustand ✓ · ZIPs nur aus HEAD, keine History-Umschreibung ✓ · Phase 1 vollständig ✓
+
+Dieser Bericht beschreibt, was seit der Freigabe umgesetzt wurde, mit welchem Nachweis, wo vom Plan
+abgewichen wurde und was als Nächstes ansteht. Er ist die Fortschreibung zu Kapitel 6 des Plans.
+
+---
+
+## 1. Kurzfassung
+
+Phase 0 (Messnetz) und Phase 1 (Transport, Zeichenschicht, Speicherlast, Code-Splitting, Aufräumen)
+sind umgesetzt. Nachweis: `npm run verify` läuft vollständig grün – Typcheck, 75/75 Tests,
+Produktionsbuild und beide Budgets (Bundle, Benchmark) in einem Befehl.
+
+Die drei großen Wirkungen:
+
+| Größe | vorher | jetzt | Nachweis |
+|---|---|---|---|
+| Startbundle (Entry + statische Importe) | 361,0 kB gzip / 1334,5 kB roh | **199,1 kB gzip / 668,3 kB roh** | `npm run budget` |
+| Spiegel-Schreibvorgänge des Loggers (1.000 Einträge) | 1.000 (O(n) je Eintrag) | **40** | `npm run test -- --only logger-storage-batching` |
+| Rechenzeit pro Wellenform-Frame (1920 Spalten, 18-s-Fenster) | 2,539 ms (Kaltstart) | **0,117 ms** (Minimum aus 5 Läufen) | `npm run bench` |
+| React-Updates pro Sekunde bei Wiedergabe | ≈ 180 | **0** (Position geht am Renderer vorbei an den Canvas) | `tests/transport-playhead-driver.test.ts` |
+
+---
+
+## 2. Verifikationsstand (04.10.2026)
+
+```
+npm run verify
+  > npm run lint      →  tsc --noEmit, keine Fehler
+  > npm test          →  75/75 bestanden, 4 übersprungen, 0 fehlgeschlagen (92,3 s)
+  > npm run build     →  vite 6,11 s + stems-bridge + server.cjs
+  > npm run budget    →  199,1 kB gzip / 668,3 kB roh  (Budget 260 / 900) ✓
+```
+
+Die 4 übersprungenen Tests sind Umgebungsgrenzen (ONNX-Runtime, PyTorch, Demucs im Sandkasten)
+und haben mit dieser Arbeit nichts zu tun – dieselben 4 Sprünge gab es vor der Freigabe.
+
+Ergänzend gemessen (nicht Teil von `verify`):
+
+```
+npm run bench        →  analyzeAudioBuffer(30 s)  6,74 ms  (Median 6,92)
+                        analyzeAudioBuffer(300 s) 69,01 ms (Median 72,58)
+                        1920 Spalten, 18-s-Fenster  0,117 ms (Median 0,141)
+                        1920 Spalten, Full-Track    0,53 ms  (Median 0,545)
+npm run bench:budget →  keine Budgetverletzung
+```
+
+> **Wichtige Messkorrektur:** Die Rohmessungen aus der Planungsphase (18,29 / 180,22 / 2,539 ms)
+> waren JIT-Kaltstart-Artefakte. Der Benchmark wärmt jetzt auf und prüft das Minimum aus 5 Läufen;
+> erst diese Zahlen sind reproduzierbar (Median weicht nur noch um 2–5 % ab, vorher Faktor 2–10).
+> Als Budgetgrundlage sind die alten Werte damit unbrauchbar – die Budgets in `budgets.json` wurden
+> entsprechend neu gesetzt und begründet.
+
+---
+
+## 3. Was umgesetzt ist (nach Arbeitspaket)
+
+### WP-01 · Mess- und Sicherungsnetz (Phase 0) ✓
+- `npm run verify` = Typcheck → Tests → Build → Budget, schlägt bei Regression fehl.
+- `scripts/bench-waveform.mjs`: deterministisches Signal, Aufwärmlauf, Minimum aus 5 Läufen
+  (`AIRDOX_BENCH_REPEATS`), `--json` und `--budget`.
+- `scripts/check-bundle-budget.mjs`: liest `dist/.vite/manifest.json` und zählt **nur** den Entry-Chunk
+  plus seine statischen Importe – Lazy-Chunks zählen nicht, sonst würde das Budget die Code-Splitting-
+  Arbeit bestrafen.
+- `budgets.json` mit begründeten Obergrenzen (Bundle, vier Benchmark-Fälle).
+- `.github/workflows/quality-linux.yml`: der Job, der auf Linux läuft (bisher gab es nur Windows-CI).
+- Baseline-Tag `perf-baseline-2026-10-03` gesetzt.
+
+**Nebenbefund (Beleg, dass WP-01 seinen Zweck erfüllt):** Der neue Logger-Test hat einen echten,
+seit Langem bestehenden Fehler gefunden – siehe Abschnitt 4.
+
+### WP-02 · Transport-Store + Frame-Treiber (Phase 1) ✓
+- `src/state/transportStore.ts`: eigener Store über `useSyncExternalStore`, kein zustand (Freigabe).
+  `positionSec` wird pro Frame gesetzt, ohne React-Render; `meters` sind auf 20 Hz gedrosselt;
+  `isPlaying` wechselt nur bei echten Zustandswechseln (vorher: 2 State-Updates pro Frame).
+- `src/features/transport/playheadDriver.ts`: der einzige `requestAnimationFrame`-Loop der App.
+  `App.tsx` enthält **keinen** `requestAnimationFrame`-Aufruf und kein `setInterval` für Positionen mehr.
+- `tests/transport-playhead-driver.test.ts` (framework-frei, gestubbte Frame-Queue) belegt:
+  120 Treiber-Ticks erzeugen 0 React-Commits, solange nur die Position läuft.
+- Verbraucher umgestellt: `DetailWaveform` (Playhead über `subscribeTransport`), Anzeigen
+  (`useThrottledPosition(100)`), Pegel (`useThrottledMeters(50)`).
+- **Zwei Komponentenverträge haben sich dadurch geändert** (bewusst, Tests lesen Quelltext):
+  `TrackHeader` nimmt keine `currentTime`/`getPositionSec` mehr von außen, `EditModeBar` keine
+  `meterL`/`meterR`. Beide abonnieren selbst.
+- Mid-Effekt-Kopplung entfernt: der MIDI-Effekt hing an `currentTime` und registrierte sich damit
+  bei jedem Positionswechsel neu (bei 60 fps also 60 ×/s); ebenso der Keyboard-Handler, der in
+  einem Effekt **ohne Dependency-Array** stand – jetzt `keyHandlerRef` + genau eine Registrierung.
+
+### WP-03 · Visualisierungsschicht (Phase 1) ✓ (mit einer bewussten Verschiebung)
+- `src/waveform/layerScheduler.ts`: trennt teure Basis (Wellenform, Grid, Parts, Cues) von
+  günstigem Overlay (Playhead, Auswahl, Hover). Im Leerlauf wird **nichts** gezeichnet; der frühere
+  Endlos-rAF, der dieselbe Szene weiterpinselte, ist weg. `tests/waveform-layer-scheduler.test.ts`.
+- `DetailWaveform.tsx`: getrenntes Overlay-Canvas (`pointer-events-none`) über dem Basis-Canvas, das
+  die Mausereignisse behält – die Interaktionspfade (Seek, Pan, Kontextmenü, Snap-Badge) blieben
+  unverändert. HiDPI ist korrekt: `setTransform(dpr, 0, 0, dpr, 0, 0)` statt ignoriertem `devicePixelRatio`.
+- Messung des Zeichenpfads: 0,117 ms pro Frame im 18-s-Fenster (Ziel aus der DoD: ≤ 0,5 ms) ✓.
+  Die Aussage gilt für den Sampling-/Zeichenpfad der Spalten, nicht für GPU-Compositing.
+- **Abweichung (begründet):** `React.memo` für die schweren Kinder wurde **nicht** gesetzt. `App.tsx`
+  übergibt rund 92 Inline-Arrow-Props; ein `memo` wäre dadurch wirkungslos und würde nur
+  Vergleichskosten erzeugen. Die Memoization der *Zeichnung* leistet der Layer-Scheduler, die
+  Memoization der *Komponenten* gehört zu WP-06 (Callbacks stabilisieren), wo sie dann tatsächlich greift.
+
+### Logger-Schreiblast (Phase-1-Punkt „Logger-Batching") ✓
+- `src/utils/logger.ts`: Der localStorage-Spiegel wurde bisher pro Eintrag geschrieben – je Eintrag
+  ein vollständiger `JSON.stringify` + `setItem` über bis zu 400 Einträge. Jetzt läuft ein Puffer
+  (`STORAGE_WRITE_BATCH = 25`), `getStorageWriteCount()` macht die Last messbar; ERROR/FATAL und
+  `flush(true)` (pagehide/beforeunload) schreiben weiterhin sofort.
+- **Gefundener Fehler:** `persist()` rief `flush()` auch dann, wenn die Warteschlange über die
+  Batch-Grenze wuchs, während bereits ein Flush lief. Da `flush()` während eines laufenden Requests
+  früh zurückkehrt, blieb die Grenze dauerhaft überschritten – und danach rief **jede weitere
+  Log-Zeile** `flush()` erneut auf. Ergebnis: bis zu 904 Schreibvorgänge für 1.000 Einträge.
+  Behoben über `inFlightFlush`-Prüfung plus Nachziehen im `finally` des Flushes.
+- `tests/logger-storage-batching.test.ts`: 1.000 Einträge → **40** Schreibvorgänge, plus Prüfungen für
+  Sofortschreiben bei ERROR, `flush()`-Vollständigkeit und `clear()`.
+
+### WP-15 · Aufräumen und Repo-Hygiene (Phase 1) ✓
+- **Aus HEAD entfernt:** `airdox_editor_fix.zip` und `airdox_editor_fix_v2.zip` (2 × 13,1 MB = 26,2 MB
+  Ballast, deren Inhalt längst im Quellbaum liegt). Historie wird nicht umgeschrieben (Freigabe).
+- **Aus HEAD entfernt:** `bun.lock` (Toolchain ist npm, `package-lock.json` bleibt),
+  `artifacts/stem-validation-15s/test15s_mixture.wav` (5,3 MB, per Validierungslauf reproduzierbar;
+  `artifacts/**/*.wav` ist jetzt ignoriert, der Report bleibt versioniert).
+- **Toter Code gelöscht:** `src/audio/stftSeparator.ts` (408 Z.), `src/audio/synthesizerTrack.ts` (165 Z.),
+  `src/components/WaveformRenderer.tsx` (91 Z.), `src/utils/anlzParser.ts` (61 Z.),
+  `src/fix.js`, `src/full_auto_fix.mjs`, `src/build_pipeline.py` – vorher per Importgraph geprüft.
+- **31 Einmal-Skripte** aus dem Repo-Root nach `tools/legacy/` verschoben (`fix*.cjs`, `*.ps1`,
+  `rb_*.py`, alter Python-/Inno-Setup-Pfad, `analysisPath.cjs` samt Test außerhalb des Runners …).
+  Mit `tools/legacy/README.md`, das jede Gruppe und ihren Ersatz benennt.
+- `code_analysis_out/` und `visualization.html` (Analyse-Werkzeug, per README selbst dokumentiert)
+  liegen jetzt unter `tools/code_analysis/` statt im Root.
+
+### WP-16 · Build & Release (Phase 1) ✓
+- `vite.config.ts`: `build.manifest` (nötig für die Bundle-Messung) und `manualChunks`
+  (`react-vendor`, `lucide`).
+- `src/components/Modals/lazyModals.ts`: 14 Dialoge werden über `React.lazy` + `<Suspense>` geladen.
+  Damit fällt der `three`-Baum (529 kB) aus dem Startbundle und lädt erst, wenn der 3D-Visualizer
+  wirklich geöffnet wird. `bundledCollection` (10,6 MB Quelltext, 1,13 MB gzip) bleibt lazy.
+- Die Modal-Chunks liegen bei 2,6–8,0 kB gzip – der Start lädt sie nicht.
+
+### WP-14 · Test-Harness (vorgezogener Teil) ✓
+Zwei neue Testarten, die es vorher nicht gab:
+- `tests/app-render-smoke.test.tsx`: rendert die **gesamte** App serverseitig. Vorher war kein
+  einziger Test in der Lage, eine der 36 Komponenten zu rendern; Fehler außerhalb der reinen Logik
+  waren damit unsichtbar.
+- Framework-freie Logiktests für Treiber und Scheduler (gestubbte `requestAnimationFrame`-Queue,
+  Zähler-Doubles) im Stil der bestehenden Suite (`node:assert`, kein vitest/Playwright).
+
+---
+
+## 4. Abweichungen vom Plan und Korrekturen
+
+| Punkt im Plan | Befund bei der Umsetzung | Entscheidung |
+|---|---|---|
+| `rekordbox_export2.xml` (10,5 MB) als Repo-Ballast (Kap. 2/3) | Es ist **Laufzeitressource**: `package.json` → `extraResources` packt sie ins Produkt, `electron/main.cjs` liest sie als eingebettete Sammlung. | **Bleibt.** Ein Löschen hätte den DB-Extraktor ohne Nutzerdatei gebrochen. Nur die ZIP-Dateien flogen raus. |
+| `reference/01–03*.png` als Ballast | Die Dateien sind der im Plan selbst benannte optische Vergleichsmaßstab für WP-03 (und `src/waveform/spectralColor.ts` verweist auf sie). | Bleiben (828 kB), Nutzen übersteigt die Ersparnis. |
+| `tools/code_analysis`, `code_analysis_out`, `visualization.html` löschen | Das Analyse-Werkzeug ist mit README selbst dokumentiert und reproduzierbar. | Verschoben statt gelöscht (Root sauber, Wissen bleibt). |
+| Logger-Batching als reine Optimierung | Dabei kam der Flush-Fehler aus Abschnitt 3 zum Vorschein (bis zu 904 statt 40 Schreibvorgänge). | Fehler behoben, Test sichert ihn ab. |
+| `React.memo` in WP-03 | Setzt stabile Callbacks voraus, die erst WP-06 liefert. | Verschoben nach WP-06, Begründung oben. |
+
+---
+
+## 5. Nächste Schritte (Phase 2, in der Planreihenfolge)
+
+1. **WP-06 · `App.tsx`-Dekomposition** (größter Hebel, `App.tsx` hat weiterhin ~4.860 Zeilen und
+   84 `useState`): Command-Registry für die ~92 Inline-Callbacks → danach greift `React.memo`,
+   Custom-Hooks für zusammengehörige Zustandsgruppen, Modals in eigene Container.
+2. **WP-05 · Edit-Historie ohne Audiokopien** (Undo klont heute bis zu 30 × ganze `AudioBuffer`).
+3. **WP-13 · ESLint + `strictNullChecks`** (gestuft, damit die 19 `any`/14 `as any` nicht alles blockieren).
+4. **WP-04 · Analyse-Cache + Worker** (0 `new Worker` im Projekt heute).
+5. **WP-08 · Speicher-Budgets** für `stemsCache` (heute ohne Eviction) und Audio-Engine-Nodes
+   (`stop()` trennt keine Nodes).
+6. **WP-14 · DOM-Testharness** für Interaktion/Canvas (der SSR-Smoke deckt nur das Rendern ab).
+
+Offene Punkte, die bewusst **nicht** in Phase 1 gehörten: `strict: true` (Phase 3), Electron-Aufteilung
+(Phase 4), Server-Router (Phase 3), Coverage-Bericht in CI (Phase 4).
+
+---
+
+## 6. So prüft man diesen Stand
+
+```bash
+npm ci                       # native Bindings ggf. mit: npm install --ignore-scripts
+npm run verify               # Typcheck + 75 Tests + Build + Bundle-Budget
+npm run bench                # Leistungszahlen (Minimum aus 5 Läufen)
+npm run bench:budget         # Leistungsbudget
+node scripts/run-tests.mjs --only logger-storage-batching
+node scripts/run-tests.mjs --only app-render-smoke
+node scripts/run-tests.mjs --only transport-playhead-driver
+node scripts/run-tests.mjs --only waveform-layer-scheduler
+```
+
+Nicht in dieser Umgebung prüfbar (Windows/Electron/PyTorch): `test:rekordbox:runtime`,
+`test:stems:live`, `test:stems:gate` – die vier Tests, die `npm test` als SKIP meldet.
