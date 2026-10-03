@@ -35,3 +35,6 @@ resources/stem-runtime/*
 # Generated release packages and bundled Colab sources
 release/
 resources/colab/
+
+evidence/
+delivery/

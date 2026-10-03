@@ -1,10 +1,14 @@
 # Colab: Produktionsworker und Qualitätsmessung
 
-## Produktionsworker (Windows 0.4.3)
+## Produktionsworker (Windows 0.4.4)
 
 `airdox-stem-remote-worker.md` ist die Quelle, `.ipynb` wird mit
 `npm run stems:remote:notebook` erzeugt. Die Windows-EXE enthält das passende
-Worker-ZIP und Notebook (Button **Colab-Paket öffnen**). Nicht mit dem separaten
+Worker-ZIP, Vorbereitungsnachweise und ein **selbstenthaltendes** Notebook
+(Button **Notebook speichern & Colab öffnen**). Das Repository-Notebook ist
+nur eine Vorlage; das im Paket erzeugte Notebook enthält das verifizierte ZIP.
+Vor Drive-Zugriff laufen Installation und echte Modell-Testtrennung automatisch.
+Google kann bereits beim Öffnen/Starten von Colab die Anmeldung verlangen. Nicht mit dem separaten
 Qualitäts-Gate-Archiv unten verwechseln: dieses enthält nicht den Fernworker.
 
 Einrichtung: [COLAB_ABNAHME.md](../docs/COLAB_ABNAHME.md).

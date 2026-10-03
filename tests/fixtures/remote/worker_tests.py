@@ -14,7 +14,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'colab'))
 from remote_worker import (JobStore, LocalAdapterRunner, ProtocolError, _wav_geometry,
-                           parse_args, run_job, safe_path, sha256_file, validate_manifest)
+                           parse_args, run_job, safe_path, sha256_file, validate_manifest, answer_connection_probe, write_json_atomic)
 from remote_setup import model, validate_engine
 
 
@@ -51,6 +51,27 @@ class WorkerTests(unittest.TestCase):
                        model_dir=str(self.root), device='cpu', adapter=str(Path(__file__).with_name('adapter.py')),
                        work_dir=str(self.root / 'work'), sync_timeout=kw.pop('sync_timeout', .1),
                        timeout=10, idle_timeout=kw.pop('idle_timeout', 3), heartbeat_interval=.01, **kw)
+
+    def test_connection_nonce_and_expiry(self):
+        request = Path(self.store.root) / 'connection/request.json'
+        response = request.with_name('response.json')
+        status = dict(id='test-worker', device='cpu', sourceCommit='revision')
+        nonce = str(uuid.uuid4())
+        payload = dict(schemaVersion=1, nonce=nonce, requestedAt=int(time.time() * 1000))
+        write_json_atomic(str(request), payload)
+        answer_connection_probe(self.store.root, status)
+        result = json.loads(response.read_text())
+        self.assertEqual(result['nonce'], nonce)
+        self.assertEqual(result['sourceCommit'], 'revision')
+        self.assertIn('does not independently', result['scope'])
+        response.unlink()
+        payload['requestedAt'] -= 700000
+        write_json_atomic(str(request), payload)
+        answer_connection_probe(self.store.root, status)
+        self.assertFalse(response.exists())
+        request.write_text('{partial')
+        answer_connection_probe(self.store.root, status)
+        self.assertFalse(response.exists())
 
     def test_cli_no_abbreviations(self):
         for args in (['--model', 'bad'], ['--profile', 'HIGH_QUALITY']):

@@ -14,7 +14,7 @@
  * geschrieben – vom Original werden nur SHA-256, Größe und mtime gelesen.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Cloud, CloudUpload, Cpu, FolderDown, ShieldCheck, CheckCircle2, AlertTriangle, FolderOpen, Play } from 'lucide-react';
 import { stemEngine, type RemoteServiceStatus } from '../../audio/stemEngine';
 
@@ -42,6 +42,24 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
   const [probe, setProbe] = useState<ProbeState>({ state: 'idle' });
   const [folderBusy, setFolderBusy] = useState(false);
   const [packageMessage, setPackageMessage] = useState('');
+
+  const statusCallback = useRef(onStatus);
+  statusCallback.current = onStatus;
+  useEffect(() => {
+    if (!isOpen) return;
+    let stopped = false;
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const status = await stemEngine.remoteStatus();
+        if (!stopped) statusCallback.current(status);
+      } catch { /* Existing transport message remains; no invented success. */ }
+      finally { busy = false; }
+    }, 5000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -228,6 +246,30 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
           <div className={`rounded border p-3 ${remoteStatus?.workerReady ? 'border-emerald-700 text-emerald-300' : 'border-amber-800 text-amber-300'}`}>
             {remoteStatus?.workerReason ?? 'Noch kein Colab-Worker bestätigt. Nach dem Notebook-Start die Verbindung erneut prüfen.'}
           </div>
+          <div className="rounded border border-neutral-700 p-3 text-neutral-300">
+            {remoteStatus?.connectionProof?.state === 'PASS'
+              ? `Hin-/Rückweg bestätigt (${remoteStatus.connectionProof.device ?? 'Gerät unbekannt'}). Frische Worker-Antwort; noch kein Audiotest im Google-Konto.`
+              : remoteStatus?.connectionProof?.state === 'PENDING'
+                ? 'Verbindungstest gesendet. Warte auf frische Worker-Antwort über die Jobablage …'
+                : remoteStatus?.connectionProof?.state === 'EXPIRED'
+                  ? 'Verbindungstest abgelaufen. Worker starten und „Speichern & prüfen“ erneut wählen.'
+                  : 'Hin-/Rückweg noch nicht geprüft. „Speichern & prüfen“ sendet eine neue Testanforderung.'}
+          </div>
+          {desktop?.verifyColabEvidence && <button className="rounded border border-sky-700 px-3 py-2 text-sky-300" onClick={async () => {
+            try {
+              setPackageMessage('Mitgelieferte Dateien werden geprüft …');
+              const proof = await desktop.verifyColabEvidence();
+              setPackageMessage(proof.ok
+                ? `${proof.result === 'PASS' ? 'CI-Vorbereitung bestanden' : 'Vorbereitung NICHT verifiziert'} · ${proof.filesVerified} Dateien lokal geprüft · Version ${proof.appVersion} · Commit ${proof.sourceCommit?.slice(0, 12)}. ${proof.scope}`
+                : proof.message);
+            } catch (error) { setPackageMessage(String(error)); }
+          }}>Nachweise prüfen</button>}
+          {desktop?.saveColabNotebook && <button className="rounded border border-sky-700 px-3 py-2 text-sky-300" onClick={async () => {
+            try {
+              const result = await desktop.saveColabNotebook();
+              if (result.message) setPackageMessage(result.message);
+            } catch (error) { setPackageMessage(String(error)); }
+          }}>Notebook speichern & Colab öffnen</button>}
           {desktop?.openColabPackage && <button
             className="rounded border border-sky-700 px-3 py-2 text-sky-300"
             onClick={async () => {
@@ -244,9 +286,10 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
             </div>
             <ol className="space-y-1.5 list-none">
               {[
-                '„Colab-Paket öffnen“: das ZIP in den gewählten Drive-Jobordner kopieren und das mitgelieferte Notebook in Colab öffnen.',
-                'In Colab öffnen (colab.research.google.com → „Drive öffnen"), Laufzeit → Typ: T4 (GPU, empfohlen) oder CPU wählen, dann „Alles ausführen".',
-                'Das Notebook läuft im Hintergrund: es holt neue Jobs aus dem oben gewählten Drive-Ordner, rechnet sie und legt die Stems zurück. Bei „JOB_ORDNER" in der ersten Code-Zelle muss der selbe Ordnername stehen (z. B. airdox-stem-jobs).',
+                '„Notebook speichern & Colab öffnen“: das gespeicherte Notebook in Colab über „Hochladen“ öffnen. Google kann bereits hier die persönliche Anmeldung verlangen.',
+                'Vorbereitungszellen bis AUTH_REQUIRED ausführen. Paket, Modell und echter Testlauf werden automatisch geprüft – noch ohne Drive-Zugriff. Kein vorheriger ZIP-Upload nötig.',
+                'Erst dann Drive persönlich freigeben. JOB_ORDNER muss zum Windows-Drive-Ordner passen. Nutzungs-/Tarifbedingungen prüfen und den Worker bewusst starten; standardmäßig endet er nach einem Auftrag.',
+                '„Speichern & prüfen“ sendet eine frische Zufallsanforderung. Erst deren Antwort belegt den Hin-/Rückweg, danach folgt der eigentliche Audiotest.',
               ].map((line, index) => (
                 <div key={index} className="flex items-start space-x-2">
                   <span className="shrink-0 w-4 text-center font-mono text-neutral-500">{index + 1}</span>
@@ -259,7 +302,7 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
               <span>
                 Danach genügt im Editor ein Klick auf{' '}
                 <span className="text-neutral-300 font-semibold">„Externe Zerlegung (Google Colab)"</span> – der Rest
-                (Upload, Warten, Rückimport, Speicherung) läuft ohne Bedienung.
+                (Arbeitskopie, Warten, Rückimport, Speicherung) läuft bei aktiver, freigegebener Sitzung automatisch.
               </span>
             </div>
           </div>

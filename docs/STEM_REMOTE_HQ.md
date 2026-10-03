@@ -1,4 +1,4 @@
-# High Quality extern – Colab-Worker v2 (AirDox 0.4.3)
+# High Quality extern – Colab-Worker v2 (AirDox 0.4.4)
 
 ## Aufbau
 
@@ -24,6 +24,9 @@ Signatur. Nur Pakete aus vertrauenswürdiger Quelle ausführen.
 
 - `reachable`: Ablage erreichbar. Ein lokaler Ordner ist noch kein Cloud-Nachweis.
 - `workerReady`: kompatibles `colab-worker/2`-Lebenszeichen jünger als drei Minuten.
+- `connectionProof`: neue Nonce via `connection/request.json` → Python-Heartbeat
+  → `connection/response.json`; `PASS` nur bei passender frischer Antwort.
+  Belegt den Transport, nicht unabhängig Googles Identität.
 - Übernahme des konkreten Jobs: `manifest.worker.id` und `claim.json`.
 - Fertig: erst nach vollständiger lokaler Prüfung und Registrierung der Stems.
 
@@ -113,3 +116,21 @@ Dieser Test verarbeitet echtes Audiomaterial mit trainierten Gewichten bei
 Nachweis: `stem-gate-run/remote-real-model-evidence.json`. Er beweist nicht die
 reale Google-Verbindung, die Windows-GPU oder die musikalische Qualität auf
 beliebigem Audiomaterial. Dafür ist die dokumentierte Vor-Ort-Abnahme erforderlich.
+
+
+## Nachweiskette 0.4.4
+
+Der Windows-Job hängt hart vom erfolgreichen Modell-/Notebook-Job ab. Das
+exportierte Notebook wird in einer neuen Python-Umgebung auf Linux/CPU **bis
+vor** `AIRDOX_AUTH_GATE` tatsächlich ausgeführt. Sein SHA256 wird beim Windows-
+Build mit der ausgelieferten Notebook-Datei verglichen. Paket/Notebook sind
+plattformübergreifend deterministisch (ZIP_STORED, feste Zeitstempel, LF).
+
+`evidence-run.mjs` speichert echte Befehle, Exitcodes, Revision, Workflow und
+redigierte Logs; `run-tests.mjs` zusätzlich die Einzeltests und Skip-Gründe.
+`release_evidence.py` verweigert fehlende/falsche Revisionen, fehlgeschlagene
+Pflichtstufen und übersprungene Modelltests. Es erstellt die gemeinsame
+Auslieferung mit EXE-Hashes, Rohberichten, Windows-Screenshot und PowerShell-
+Verifier. Die App prüft die eingebetteten Vorbereitungsnachweise per IPC.
+
+Details: [START_HIER](COLAB_START_HIER.md), [Auth-Recherche](COLAB_AUTH_RECHERCHE.md).

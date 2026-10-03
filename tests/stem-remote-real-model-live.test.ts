@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makeHarness, runPython } from './support/remotePythonHarness';
 
 const modelDir = process.env.AIRODOX_STEM_MODEL_DIR;
@@ -27,7 +28,8 @@ for (const rate of [44100, 48000]) {
 await mkdir('stem-gate-run', { recursive: true });
 await writeFile('stem-gate-run/remote-real-model-evidence.json', JSON.stringify({
   test: 'real mixed audio -> trained BS-RoFormer -> Python worker -> editor import',
-  result: 'PASS', googleDriveTested: false, colabGpuTested: false, windowsUiTested: false,
+  sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  testedAt: new Date().toISOString(), result: 'PASS', googleDriveTested: false, colabGpuTested: false, windowsUiTested: false,
   evidence,
 }, null, 2));
 console.log('PASS: real model at 44.1 and 48 kHz; originals unchanged; all four stems imported.');

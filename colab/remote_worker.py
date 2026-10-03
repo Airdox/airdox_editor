@@ -514,6 +514,31 @@ def self_test():
     return 0
 
 
+def answer_connection_probe(root, status):
+    """Nonce echo proves a round-trip through this folder, not Google identity."""
+    try:
+        request = read_json(safe_path(root, 'connection/request.json'))
+        if not isinstance(request, dict) or request.get('schemaVersion') != 1:
+            return
+        nonce = request.get('nonce', '')
+        if not isinstance(nonce, str) or not re.fullmatch(r'[a-f0-9-]{36}', nonce):
+            return
+        age = time.time() * 1000 - request.get('requestedAt', 0)
+        if not -60000 <= age < 600000:
+            return
+        target = safe_path(root, 'connection/response.json')
+        previous_response = read_json(target)
+        if isinstance(previous_response, dict) and previous_response.get('nonce') == nonce:
+            return
+        write_json_atomic(target, dict(schemaVersion=1, nonce=nonce, respondedAt=int(time.time() * 1000),
+            workerId=status['id'], workerVersion=WORKER_VERSION, sourceCommit=status.get('sourceCommit'),
+            appVersion=status.get('appVersion'), device=status.get('device'), modelSha256=status.get('modelSha256'),
+            scope='Folder transport round-trip; does not independently identify Google as provider'))
+    except (OSError, ValueError, TypeError, ProtocolError):
+        # A half-synchronized/malformed probe must never stop audio jobs.
+        return
+
+
 def main(argv):
     args = parse_args(argv)
     if args.self_test:
@@ -531,6 +556,10 @@ def main(argv):
         raise ProtocolError("REMOTE_WORKER_CONFLICT", "Bereits ein Worker aktiv. Alte Colab-Sitzung stoppen und 3 Minuten warten.")
     stop = threading.Event()
     status = dict(schemaVersion=1, id=args.worker, version=WORKER_VERSION, state="ready", **health)
+    bundled_manifest = Path(__file__).resolve().parents[1] / 'bundle.json'
+    if bundled_manifest.is_file():
+        bundle = read_json(str(bundled_manifest))
+        status.update(sourceCommit=bundle.get('sourceRevision'), appVersion=bundle.get('appVersion'))
     heartbeat_errors = []
 
     def heartbeat():
@@ -541,6 +570,7 @@ def main(argv):
                     raise ProtocolError("REMOTE_WORKER_CONFLICT", "Zweite Colab-Sitzung erkannt")
                 status["heartbeatAt"] = int(time.time() * 1000)
                 write_json_atomic(status_path, dict(status))
+                answer_connection_probe(store.root, status)
             except Exception as error:
                 heartbeat_errors.append(str(error))
                 stop.set()

@@ -299,6 +299,15 @@ export interface RemoteServiceStatus {
   workerReason?: string;
   workerHeartbeatAt?: number;
   workerDevice?: string;
+  /** Fresh nonce response; proves transport only, not Google's identity or audio inference. */
+  connectionProof?: {
+    state: 'NOT_TESTED' | 'PENDING' | 'PASS' | 'EXPIRED';
+    requestedAt?: number;
+    respondedAt?: number;
+    workerId?: string;
+    sourceCommit?: string;
+    device?: string;
+  };
   jobs: RemoteStemJobView[];
   active: number;
   completed: number;

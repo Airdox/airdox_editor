@@ -929,3 +929,28 @@ ipcMain.handle('stems:open-colab-package', async () => {
     return { ok: false, message: `Colab-Paket fehlt. Bitte die vollständige Windows-Version verwenden. ${error.message}` };
   }
 });
+
+const colabResourceFolder = () => app.isPackaged ? path.join(process.resourcesPath, 'colab') : path.join(__dirname, '..', 'resources', 'colab');
+ipcMain.handle('stems:colab-evidence', async () => {
+  try { return await require('./colabPackage.cjs').verifyColabPackage(colabResourceFolder()); }
+  catch (error) { return { ok: false, message: `Nachweisprüfung fehlgeschlagen: ${error.message}` }; }
+});
+ipcMain.handle('stems:save-colab-notebook', async () => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Geprüftes Colab-Notebook als neue Datei speichern',
+      defaultPath: `airdox-colab-${app.getVersion()}.ipynb`,
+      filters: [{ name: 'Colab Notebook', extensions: ['ipynb'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: true, saved: false };
+    await require('./colabPackage.cjs').saveNotebook(colabResourceFolder(), path.resolve(result.filePath), p => originalSourceRegistry.isProtected(p));
+    try {
+      await shell.openExternal('https://colab.research.google.com/');
+      return { ok: true, saved: true, path: result.filePath, message: 'Notebook gespeichert. In Colab „Hochladen“ wählen. Google-Anmeldung und Freigabe erfolgen ausschließlich bei Google.' };
+    } catch {
+      return { ok: true, saved: true, path: result.filePath, message: 'Notebook gespeichert. Browser konnte nicht geöffnet werden; https://colab.research.google.com/ bitte selbst im Browser öffnen.' };
+    }
+  } catch (error) {
+    return { ok: false, message: `Notebook nicht gespeichert: ${error.message}. Vorhandene Dateien werden nicht überschrieben.` };
+  }
+});

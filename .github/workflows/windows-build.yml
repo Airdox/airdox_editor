@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   remote-model:
-    name: Echter Python-Fernpfad (CPU, kein Google-Drive-Nachweis)
+    name: Echter Modelllauf + Export-Notebook bis AUTH_REQUIRED (CPU)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,28 +32,47 @@ jobs:
           python -m pip install --no-deps msst==0.1.0
           python -m pip check
       - name: Verifiziertes Modell und Preflight
-        run: python colab/remote_setup.py --model-dir stem-gate-run/models --device cpu
+        run: node scripts/evidence-run.mjs model-preflight -- python colab/remote_setup.py --model-dir stem-gate-run/models --device cpu
       - name: Echter Modelllauf und Editor-Rückimport (44.1 und 48 kHz)
-        run: node scripts/run-tests.mjs --only stem-remote-real-model-live --fail-on-skip --timeout 1200000
+        run: node scripts/evidence-run.mjs model-live -- node scripts/run-tests.mjs --only stem-remote-real-model-live --fail-on-skip --timeout 1200000
         env:
           AIRODOX_STEM_MODEL_DIR: ${{ github.workspace }}/stem-gate-run/models
           AIRODOX_STEM_PYTHON: python
+      - name: Export-Notebook bauen
+        run: npm run stems:remote:bundle
+      - name: Tatsächlich ausgeliefertes Notebook bis zur Google-Grenze ausführen
+        run: node scripts/evidence-run.mjs notebook-preauth -- python scripts/test_colab_preauth.py --model-dir stem-gate-run/models
+      - name: Rohbericht in Nachweiskette übernehmen
+        run: cp stem-gate-run/remote-real-model-evidence.json evidence/
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: Colab_Real_Model_Evidence
+          name: Colab_PreAuth_Evidence
+          path: evidence/
+          if-no-files-found: error
+      - name: Fehlerdiagnose
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Colab_PreAuth_Diagnostics
           path: |
+            evidence/
             stem-gate-run/remote-real-model-evidence.json
             test-runner-failure.txt
           if-no-files-found: warn
 
   build:
+    name: Windows EXEs mit verpflichtender Nachweiskette
+    needs: remote-model
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - name: Node.js einrichten
-        uses: actions/setup-node@v4
+      - name: Nachweise genau dieses Workflow-Laufs laden
+        uses: actions/download-artifact@v4
+        with:
+          name: Colab_PreAuth_Evidence
+          path: evidence
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
@@ -64,28 +83,21 @@ jobs:
         run: npm ci
       - name: Native Module für Electron neu bauen
         run: npm run rekordbox:native:ensure
-      - name: Typprüfung und Notebook-Vertrag
-        run: |
-          npm run lint
-          node scripts/md-to-notebook.mjs colab/airdox-stem-remote-worker.md --check
+      - name: Typprüfung
+        run: node scripts/evidence-run.mjs windows-types -- npm run lint
+      - name: Notebook-Vertrag
+        run: node scripts/md-to-notebook.mjs colab/airdox-stem-remote-worker.md --check
       - name: Frontend und Engine bauen
         run: npm run build
-      - name: Test-Suite ausführen
-        run: npm test
-      - name: Windows Setup und portable EXE bauen
-        run: npm run package:win
+      - name: Test-Suite mit Einzelberichten
+        run: node scripts/evidence-run.mjs windows-tests -- npm test
+      - name: Windows Setup und portable EXE bauen (ohne Nachweise Abbruch)
+        run: node scripts/evidence-run.mjs windows-build -- npm run package:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Gepackte Windows-App starten und Remote-IPC prüfen
-        shell: pwsh
-        run: |
-          $env:AIRDOX_PACKAGED_SMOKE_DIR = Join-Path $env:RUNNER_TEMP 'airdox-smoke'
-          $app = Start-Process -FilePath '.\release\win-unpacked\airdox_SMART_Editor.exe' -PassThru
-          if (-not $app.WaitForExit(120000)) { Stop-Process -Id $app.Id -Force; throw 'Windows smoke timeout' }
-          if ($app.ExitCode -ne 0) { throw "Windows smoke failed: $($app.ExitCode)" }
-          $report = Get-Content (Join-Path $env:AIRDOX_PACKAGED_SMOKE_DIR 'windows-smoke.json') -Raw | ConvertFrom-Json
-          if ($report.result -ne 'PASS') { throw 'No passing Windows smoke report' }
-          Copy-Item (Join-Path $env:AIRDOX_PACKAGED_SMOKE_DIR 'windows-smoke.*') release
+          AIRDOX_REQUIRE_EVIDENCE: '1'
+      - name: Gepackte Windows-App, IPC und eingebettete Nachweise prüfen
+        run: node scripts/evidence-run.mjs windows-smoke -- pwsh -NoProfile -File scripts/windows-packaged-smoke.ps1
       - name: Prüfsummen erstellen
         shell: pwsh
         run: |
@@ -93,16 +105,19 @@ jobs:
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLower())  $($_.Name)"
           } | Set-Content release\SHA256SUMS.txt
-      - name: Windows-Dateien und passendes Colab-Paket
+      - name: Gemeinsame Auslieferung versiegeln und unabhängig prüfen
+        run: |
+          python scripts/release_evidence.py finalize
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/release_evidence.py verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\delivery\PRUEFEN.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows-Paket inklusive vollständiger Nachweiskette
         uses: actions/upload-artifact@v4
         with:
-          name: airdox_SMART_Editor_Windows_0.4.3
-          path: |
-            release/*-setup.exe
-            release/*-portable.exe
-            release/SHA256SUMS.txt
-            release/windows-smoke.*
-            resources/colab/*
+          name: airdox_SMART_Editor_Windows_0.4.4_mit_Nachweisen
+          path: delivery/
           if-no-files-found: error
       - name: Fehlerdiagnose
         if: failure()
@@ -110,6 +125,7 @@ jobs:
         with:
           name: Windows_Build_Diagnostics
           path: |
+            evidence/
             test-runner-failure.txt
             ${{ runner.temp }}/airdox-smoke/
           if-no-files-found: warn

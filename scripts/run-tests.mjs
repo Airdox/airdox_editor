@@ -34,7 +34,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -463,6 +463,19 @@ async function main() {
     `${skipped.length} übersprungen, ${failed.length} fehlgeschlagen  (${seconds}s, ${concurrency} parallel)`
   );
   console.log('────────────────────────────────────────────────────────────');
+
+  if (process.env.AIRDOX_TEST_REPORT) {
+    const reportPath = path.resolve(process.env.AIRDOX_TEST_REPORT);
+    await mkdir(path.dirname(reportPath), { recursive: true });
+    await writeFile(reportPath, JSON.stringify({
+      schemaVersion: 1, startedAt: new Date(startedAt).toISOString(), finishedAt: new Date().toISOString(),
+      result: failed.length || (options.failOnSkip && skipped.length) ? 'FAIL' : 'PASS',
+      passed: results.length - failed.length, failed: failed.length, skipped: skipped.length,
+      failOnSkip: options.failOnSkip,
+      tests: results.map(result => ({ ...result, output: Object.entries(process.env).filter(([key, value]) => /TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(key) && value?.length > 10).reduce((text, [, secret]) => text.split(secret).join('[REDACTED]'), result.output).replace(/(Bearer\s+)[A-Za-z0-9._~+\/-]+/gi, '$1[REDACTED]') })),
+      skips: skipped.map(({ file, skip }) => ({ file, reason: skip })),
+    }, null, 2) + '\n');
+  }
 
   if (failed.length) {
     // Ferndiagnose: Auf CI-Runnern hängen die Job-Logs an einem externen

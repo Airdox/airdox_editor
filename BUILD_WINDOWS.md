@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.3-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.3-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.4-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.4-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -45,14 +45,20 @@ keinen automatischen Tag-Release und keinen täglichen Zeitplan.
 - Windows: Typprüfung, Notebook-Konsistenz, Test-Suite, NSIS + portable EXE,
   gepackten Renderer starten und Fernjob-IPC prüfen, Colab-Ressourcen prüfen.
 - Linux: trainiertes BS-RoFormer-Modell hashprüfen; echte Python-Worker-Läufe
-  bei 44,1/48 kHz einschließlich Editor-Rückimport. Separates Nachweisartefakt.
-- Downloadartefakt: `airdox_SMART_Editor_Windows_0.4.3` mit EXEs, SHA256SUMS,
-  Windows-Smoke-Bericht und passendem Colab-Notebook/Worker-ZIP.
+  bei 44,1/48 kHz einschließlich Editor-Rückimport. Außerdem das **exportierte**
+  Notebook mit neuer Runtime bis `AUTH_REQUIRED` ausführen. Windows hängt von
+  diesem Job ab und lädt seine Nachweise aus demselben Lauf.
+- Downloadartefakt: `airdox_SMART_Editor_Windows_0.4.4_mit_Nachweisen`: **ein Paket**
+  mit EXEs, `NACHWEISKETTE.json`, `PRUEFEN.ps1`, Rohlogs/Einzeltestergebnissen,
+  Windows-Smoke-Bericht/-Screenshot und passendem Colab-Notebook/Worker-ZIP.
 
 Die Colab-Paketdateien werden durch `npm run stems:remote:bundle` aus demselben
 Checkout gebaut und als `resources/colab` mitgeliefert. Die Windows-Packskripte
 führen diesen Schritt automatisch aus (Python 3 erforderlich **beim Bauen**,
-nicht für den Fernpfad auf dem Nutzer-PC). `afterPack` verweigert ein Paket mit
+nicht für den Fernpfad auf dem Nutzer-PC). Lokale Entwicklerbuilds ohne
+Modell-/Notebook-Evidence werden ausdrücklich `NOT_VERIFIED` markiert; die
+geprüfte Notebook-Exportfunktion ist dann gesperrt. CI setzt
+`AIRDOX_REQUIRE_EVIDENCE=1` und bricht ohne die Pflichtnachweise ab. `afterPack` verweigert ein Paket mit
 fehlenden Colab-Dateien.
 
 **Wichtig:** Grüne Build-Tests sind kein Nachweis einer realen Google-Sitzung.
@@ -196,7 +202,7 @@ npm run stems:onnx:doctor -- --bench --seconds 30
 Ohne Modell läuft weiterhin der Studio-Pfad; Details, Modellquellen und die
 Hash-Pflege stehen in **`docs/STEM_ONNX_FASTPATH.md`**.
 
-### Prüfung der Reparatur
+### Historischer Prüfstand der lokalen Engine-Reparatur (nicht 0.4.4-Fernpfad)
 
 `npm run lint`, `npm run build` und `npm test` sind erfolgreich
 (46 Tests bestanden, 3 hardware-/modellabhängige Live-Tests übersprungen).

@@ -127,6 +127,7 @@ export class RemoteStemJobService {
   private timer?: NodeJS.Timeout;
   private polling?: Promise<RemoteServiceStatus>;
   private loaded = false;
+  private connectionProbe?: { nonce: string; requestedAt: number; target: string };
   private loading?: Promise<void>;
   private persistWrites = new Map<string, Promise<void>>();
 
@@ -175,6 +176,16 @@ export class RemoteStemJobService {
       root: this.settings.root,
       pollIntervalMs: this.pollIntervalMs(),
     });
+    this.connectionProbe = undefined;
+    try {
+      const transport = this.transportFor(this.settings);
+      await transport.probe();
+      const probe = { nonce: randomUUID(), requestedAt: this.now(), target: transport.target };
+      await transport.writeText('connection/request.json', JSON.stringify({ schemaVersion: 1, nonce: probe.nonce, requestedAt: probe.requestedAt }));
+      this.connectionProbe = probe;
+    } catch (error) {
+      this.options.logger?.warn?.('STEM-REMOTE', 'Verbindungsprobe noch nicht gesendet', { reason: String(error) });
+    }
     return this.status();
   }
 
@@ -1138,7 +1149,24 @@ export class RemoteStemJobService {
   private async withWorkerStatus(status: RemoteServiceStatus, transport?: IRemoteTransport): Promise<RemoteServiceStatus> {
     status.workerReady = false;
     status.workerReason = 'Kein betriebsbereiter Colab-Worker bestätigt. Notebook starten; Google-Drive-Synchronisierung prüfen.';
+    status.connectionProof = { state: 'NOT_TESTED' };
     if (!status.reachable || !transport) return status;
+    const probe = this.connectionProbe;
+    if (probe && probe.target === transport.target) {
+      status.connectionProof = { state: this.now() - probe.requestedAt < 600_000 ? 'PENDING' : 'EXPIRED', requestedAt: probe.requestedAt };
+      if (status.connectionProof.state === 'PENDING') {
+        try {
+          const raw = await transport.readText('connection/response.json');
+          const reply = raw ? JSON.parse(raw) : null;
+          if (reply?.schemaVersion === 1 && reply.nonce === probe.nonce && reply.workerVersion === 'colab-worker/2' &&
+              typeof reply.workerId === 'string' && Number.isFinite(reply.respondedAt) &&
+              reply.respondedAt >= probe.requestedAt - 60_000 && reply.respondedAt <= this.now() + 60_000) {
+            status.connectionProof = { state: 'PASS', requestedAt: probe.requestedAt, respondedAt: reply.respondedAt,
+              workerId: reply.workerId, sourceCommit: reply.sourceCommit, device: reply.device };
+          }
+        } catch { /* Incomplete Drive sync is not a passing response. */ }
+      }
+    }
     try {
       const raw = await transport.readText('worker.json');
       if (!raw) return status;
@@ -1149,7 +1177,7 @@ export class RemoteStemJobService {
       status.workerReady = worker.version === 'colab-worker/2' && worker.schemaVersion === 1 &&
         worker.state === 'ready' && Number.isFinite(age) && age >= -60_000 && age < 180_000;
       status.workerReason = status.workerReady
-        ? `Colab-Worker bereit (${worker.device}); Lebenszeichen vor ${Math.max(0, Math.round(age / 1000))} s. Jobübernahme bestätigt den Hinweg.`
+        ? `Colab-Worker bereit (${worker.device}); Lebenszeichen vor ${Math.max(0, Math.round(age / 1000))} s. Der separate Verbindungstest prüft den Hin- und Rückweg.`
         : 'Colab-Worker gestoppt, veraltet oder Lebenszeichen abgelaufen. Passendes Notebook erneut starten.';
     } catch (error) {
       status.workerReason = `Worker-Status nicht lesbar: ${error instanceof Error ? error.message : String(error)}`;

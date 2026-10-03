@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { makeHarness } from './support/remotePythonHarness';
+import { makeHarness, runPython } from './support/remotePythonHarness';
 
 async function scenario(name: string, test: (h: Awaited<ReturnType<typeof makeHarness>>) => Promise<void>) {
   const h = await makeHarness();
@@ -102,4 +102,18 @@ await scenario('cancellation during result download cannot be overwritten by com
   await h.remote.poll();
   assert.equal(h.remote.get(job.jobId)?.status, 'CANCELLED');
   await assert.rejects(h.local.stemBytes(job.jobId, 'vocals'));
+});
+
+await scenario('fresh nonce is answered by Python, stale or wrong responses never pass', async h => {
+  assert.equal((await h.remote.configure({ root: h.drive, kind: 'folder' })).connectionProof?.state, 'PENDING');
+  const probe = JSON.parse(await h.transport.readText('connection/request.json') || '{}');
+  await h.transport.writeText('connection/response.json', JSON.stringify({ ...probe, nonce: 'wrong', workerVersion: 'colab-worker/2', workerId: 'test', respondedAt: Date.now() }));
+  assert.equal((await h.remote.status()).connectionProof?.state, 'PENDING');
+  const script = "import sys;sys.path.insert(0,'colab');from remote_worker import answer_connection_probe;answer_connection_probe(sys.argv[1],dict(id='python',device='cpu',sourceCommit='test-revision'))";
+  await runPython(['-c', script, h.drive]);
+  assert.equal((await h.remote.status()).connectionProof?.state, 'PASS');
+  assert.equal((await h.remote.status()).connectionProof?.sourceCommit, 'test-revision');
+  assert.equal((await h.remote.configure({ root: h.drive })).connectionProof?.state, 'PENDING');
+  h.advance(600001);
+  assert.equal((await h.remote.status()).connectionProof?.state, 'EXPIRED');
 });

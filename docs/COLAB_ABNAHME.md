@@ -1,18 +1,24 @@
-# Colab v2 – Einrichtung und Abnahme
+# Colab v2 – Einrichtung und Abnahme (AirDox 0.4.4)
 
 ## Einrichtung auf Windows
 
 1. Neue AirDox-EXE starten, „Externe Zerlegung (Google Colab)“ → Einrichtung.
 2. Einen eigenen **synchronisierten** Drive-Unterordner wählen, etwa
    `G:\Meine Ablage\airdox-stem-jobs`. Ein beliebiger lokaler Ordner genügt nicht.
-3. „Colab-Paket öffnen“: `airdox-colab-worker.zip` in genau diesen Drive-Ordner
-   kopieren. Warten, bis Drive für Desktop die Synchronisierung bestätigt.
-4. Das mitgelieferte `airdox-stem-remote-worker.ipynb` in Colab öffnen.
-   `JOB_ORDNER` muss den Pfad relativ zu `Meine Ablage` enthalten.
-5. Laufzeittyp T4 GPU wählen und alle Zellen ausführen; Drive-Anmeldung selbst
-   bestätigen. Installation/Modelldownload abwarten. Keine Tokens weitergeben.
-6. Nach „BEREIT“ im Editor erneut „Speichern & Verbindung prüfen“ anklicken.
-   Ordnerzugriff und frisches Worker-Lebenszeichen werden getrennt angezeigt.
+3. „Nachweise prüfen“ prüft die eingebetteten Lieferdateien lokal. Der angezeigte
+   Modell-/Notebook-Test stammt aus CI, nicht von diesem PC. Die komplette
+   Kette bis zu den fertigen EXEs liegt im Download unter `NACHWEISKETTE.json`.
+4. „Notebook speichern & Colab öffnen“: Notebook bei Colab hochladen; die
+   Anmeldung bei Google kann bereits hier nötig sein. **Kein Worker-ZIP nach
+   Drive kopieren.** Die Vorbereitungszellen prüfen ihren eingebetteten Inhalt,
+   installieren die Runtime und trennen den echten Testausschnitt automatisch.
+5. Erst nach `AUTH_REQUIRED` die markierte Drive-Zelle persönlich freigeben.
+   `JOB_ORDNER` muss zum Pfad relativ zu „Meine Ablage“ passen. Google-Bedingungen
+   und Tarif prüfen, `WORKERBETRIEB_BESTAETIGT=True` setzen und den Worker bewusst
+   starten. Standard: ein Auftrag, dann beenden. Keine Tokens weitergeben.
+6. Nach „BEREIT“ im Editor „Speichern & prüfen“ anklicken. Ein neuer Zufallswert
+   wird zum Worker gesendet und muss zurückkommen. Ordnerzugriff, Lebenszeichen
+   und bestätigter Hin-/Rückweg sind getrennte Nachweise.
 7. Track laden und externe Zerlegung starten. Nur **eine** Colab-Sitzung und
    ein Editor pro Jobordner; Drive bietet keine verteilten atomaren Sperren.
 
@@ -38,7 +44,7 @@ Ein GitHub-Actions-CPU-Lauf ist ausdrücklich kein Ersatz für diese Abnahme.
 | Prüfung | Erwartung / festzuhaltender Nachweis |
 |---|---|
 | Versionen | EXE-Version, `bundle.json`, Colab-Ausgabe des Quellstands |
-| Bereitschaft | Ordner erreichbar UND Worker-Lebenszeichen aktuell |
+| Bereitschaft | Ordner erreichbar, frisches Worker-Lebenszeichen UND neue Challenge beantwortet |
 | Echter Auftrag | Job-ID aus Windows im Colab-Log wiederfinden |
 | Übernahme | Worker-ID, Gerät und Lebenszeichen sichtbar |
 | Ergebnis | Vier SHA256-geprüfte Stems, Status erst nach lokalem Import fertig |
@@ -54,6 +60,8 @@ Ein GitHub-Actions-CPU-Lauf ist ausdrücklich kein Ersatz für diese Abnahme.
 Menü **Hilfe → System-Protokoll → Log-Ordner**. Die aktuelle Tagesdatei enthält
 mehr Informationen als der UI-Ringpuffer. Zusätzlich aus der Jobablage sichern:
 
+- `preauth-report.json` – tatsächliche Vorbereitung dieser Laufzeit (nach Freigabe kopiert)
+- `connection/request.json`, `connection/response.json` – neue Zufallsanforderung/Antwort
 - `worker.json` – Worker-Bereitschaft, Version, Gerät, letztes Lebenszeichen
 - `jobs/<jobId>/manifest.json`, `claim.json`, ggf. `error.json`
 - `jobs/<jobId>/logs/worker.log`
@@ -67,3 +75,8 @@ Standardgrenzen: 10 Minuten bis Worker-Übernahme, 3 Minuten ohne Lebenszeichen,
 Bei Worker-Abbruch Job im Editor abbrechen/neu starten; alte Ergebnisse werden
 nicht als Ergebnis eines neuen Jobs angenommen. Bereits erfolgreich importierte
 Ergebnisse bleiben lokal erhalten.
+
+
+Ausführliche Schrittfolge: [START_HIER](COLAB_START_HIER.md).
+Recherche zur offiziellen CLI-/OAuth-Automatisierung und ihren Grenzen:
+[COLAB_AUTH_RECHERCHE.md](COLAB_AUTH_RECHERCHE.md).
