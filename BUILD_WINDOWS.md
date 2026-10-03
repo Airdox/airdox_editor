@@ -5,8 +5,8 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 
 | Befehl | Artefakt |
 | --- | --- |
-| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.4-setup.exe` |
-| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.4-portable.exe`) |
+| `npm run package:win:nsis` | Installer `airdox_SMART_Editor-0.4.5-setup.exe` |
+| `npm run package:win:portable` | Portable `.exe` (`airdox_SMART_Editor-0.4.5-portable.exe`) |
 | `npm run package:win` | beide Varianten |
 
 ## Voraussetzungen (auf dem Windows-Rechner)
@@ -47,8 +47,8 @@ keinen automatischen Tag-Release und keinen täglichen Zeitplan.
 - Linux: trainiertes BS-RoFormer-Modell hashprüfen; echte Python-Worker-Läufe
   bei 44,1/48 kHz einschließlich Editor-Rückimport. Außerdem das **exportierte**
   Notebook mit neuer Runtime bis `AUTH_REQUIRED` ausführen. Windows hängt von
-  diesem Job ab und lädt seine Nachweise aus demselben Lauf.
-- Downloadartefakt: `airdox_SMART_Editor_Windows_0.4.4_mit_Nachweisen`: **ein Paket**
+  diesem Job und dem echten CLI-OAuth-Grenztest ab; Nachweise stammen aus demselben Lauf.
+- Downloadartefakt: `airdox_SMART_Editor_Windows_0.4.5_mit_Nachweisen`: **ein Paket**
   mit EXEs, `NACHWEISKETTE.json`, `PRUEFEN.ps1`, Rohlogs/Einzeltestergebnissen,
   Windows-Smoke-Bericht/-Screenshot und passendem Colab-Notebook/Worker-ZIP.
 
@@ -202,7 +202,7 @@ npm run stems:onnx:doctor -- --bench --seconds 30
 Ohne Modell läuft weiterhin der Studio-Pfad; Details, Modellquellen und die
 Hash-Pflege stehen in **`docs/STEM_ONNX_FASTPATH.md`**.
 
-### Historischer Prüfstand der lokalen Engine-Reparatur (nicht 0.4.4-Fernpfad)
+### Historischer Prüfstand der lokalen Engine-Reparatur (nicht 0.4.5-Fernpfad)
 
 `npm run lint`, `npm run build` und `npm test` sind erfolgreich
 (46 Tests bestanden, 3 hardware-/modellabhängige Live-Tests übersprungen).
@@ -211,3 +211,18 @@ Fehlern, Download-/Hash-Fehler und die Neuauflösung der Engine ohne echte Downl
 Der vollständige Installer mit echten Gewichten und die gepackte Windows-EXE
 müssen zusätzlich auf Windows geprüft werden; der Linux-Testlauf ersetzt das nicht.
 Die bestehende EXE erhält die Reparatur erst durch einen neuen Windows-Build.
+
+
+### Unabhängige Download-Abnahme (0.4.5)
+
+Der Build lädt zunächst `Windows_Delivery_Candidate` hoch. Ein separater
+Windows-Job lädt diesen Kandidaten tatsächlich herunter, prüft den Inhalt und
+fügt seinen Bericht bei. Erst nach erneuter Dateiprüfung wird das endgültige
+`airdox_SMART_Editor_Windows_0.4.5_mit_Nachweisen` veröffentlicht. Zusätzlich
+untersucht diese Korrekturlieferung das konkrete Vorgängerartefakt 11288317441;
+der historische Vergleich ist vor Ablauf dessen Aufbewahrungsfrist auszuführen.
+
+`cli-auth` installiert das gepinnte offizielle CLI 0.7.4 unter Python 3.12 und
+stoppt nachweisbar vor der persönlichen Codeeingabe. Dies ist keine erfolgreiche
+Google-Anmeldung. Der optionale Helfer wird mitgeliefert; Windows-native
+CLI-Unterstützung wird nicht behauptet.

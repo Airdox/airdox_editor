@@ -34,7 +34,7 @@ try {
     'ABNAHME.md': 'test documentation',
     'airdox-colab-worker.zip': 'test payload',
   };
-  for (const stage of ['model-preflight', 'model-live', 'notebook-preauth']) contents[`nachweise/${stage}.json`] = JSON.stringify({ result: 'PASS', exitCode: 0, sourceCommit });
+  for (const stage of ['model-preflight', 'model-live', 'notebook-preauth', 'cli-auth-boundary']) contents[`nachweise/${stage}.json`] = JSON.stringify({ result: 'PASS', exitCode: 0, sourceCommit });
   contents['nachweise/notebook-execution.json'] = JSON.stringify({ notebookSha256: hash(contents['airdox-stem-remote-worker.ipynb']) });
   for (const [name, text] of Object.entries(contents)) await writeFile(path.join(kit, name), text);
   const proof = { schemaVersion: 1, sourceCommit, result: 'PASS', state: 'AUTH_REQUIRED', files:

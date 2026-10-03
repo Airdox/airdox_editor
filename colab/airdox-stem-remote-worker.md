@@ -1,4 +1,4 @@
-# AirDox 0.4.4 · Vorbereitung, Nachweis, Google-Freigabe
+# AirDox 0.4.5 · Vorbereitung, Nachweis, Google-Freigabe
 
 **Dieses Notebook ist im Windows-Paket selbstenthaltend.** Es benötigt kein
 Worker-ZIP in Google Drive. Verwenden Sie das Notebook aus „Notebook speichern

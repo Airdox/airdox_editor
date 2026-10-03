@@ -71,10 +71,13 @@ class EvidenceTests(unittest.TestCase):
             module.write_json(evidence / 'remote-real-model-evidence.json', dict(result='PASS', sourceCommit=revision))
             module.write_json(evidence / 'notebook-preauth-report.json', dict(result='PASS', state='AUTH_REQUIRED', sourceCommit=revision))
             module.write_json(evidence / 'windows-tests-tests.json', dict(passed=1, failed=0, skipped=0, output='Unicode regression: ←'))
+            module.write_json(evidence / 'cli-auth-boundary-report.json', dict(result='PASS', state='AUTH_REQUIRED', sourceCommit=revision, authenticated=False, runtimeProvisioned=False))
             module.write_json(evidence / 'model-live-tests.json', dict(passed=1, failed=0, skipped=0))
             kit = root / 'resources/colab'
             kit.mkdir(parents=True)
             (kit / 'airdox-stem-remote-worker.ipynb').write_bytes(b'unit notebook fixture')
+            (kit / 'airdox-colab-worker.zip').write_bytes(b'unit worker fixture')
+            (kit / 'CLI_AUTORISIERUNG.py').write_bytes(b'unit helper fixture')
             module.write_json(evidence / 'notebook-execution.json', dict(result='PASS', notebookSha256=module.digest(kit / 'airdox-stem-remote-worker.ipynb')))
             module.write_json(kit / 'PREAUTH_NACHWEIS.json', dict(schemaVersion=1, files=module.inventory(kit)))
             module.write_json(root / 'package.json', dict(version='unit'))
@@ -96,6 +99,18 @@ class EvidenceTests(unittest.TestCase):
                 report = module.verify_inventory(root / 'delivery', 'NACHWEISKETTE.json')
                 self.assertEqual(report['googleAuthentication'], 'NOT_ATTEMPTED')
                 self.assertIn('PRUEFEN.ps1', report['files'])
+                import audit_download
+                downloaded = audit_download.inspect(root / 'delivery', revision, require_cli=True)
+                self.assertTrue(downloaded['evidenceActuallyPresent'])
+                with self.assertRaises(ValueError):
+                    audit_download.inspect(root / 'delivery', 'wrong-source', require_cli=True)
+                audit_download.seal_audit(root / 'delivery', downloaded)
+                self.assertEqual(module.verify_inventory(root / 'delivery', 'NACHWEISKETTE.json')['downloadAudit'], 'PASS')
+                extra = root / 'delivery/unlisted-file'
+                extra.write_text('unexpected')
+                with self.assertRaises(ValueError):
+                    audit_download.inspect(root / 'delivery', revision, require_cli=True)
+                extra.unlink()
                 with self.assertRaises(ValueError):
                     module.finalize(root, evidence)
             if sys.platform == 'win32':
@@ -108,6 +123,29 @@ class EvidenceTests(unittest.TestCase):
                     failed = subprocess.run([shell, '-NoProfile', '-File', str(root / 'delivery/PRUEFEN.ps1')], capture_output=True, text=True)
                     self.assertNotEqual(failed.returncode, 0)
                     binary.write_bytes(b'0' * 1000001)
+
+    def test_oauth_probe_isolated_and_fail_closed(self):
+        from unittest.mock import patch
+        import os
+        sys.path.insert(0, str(ROOT / 'colab'))
+        import cli_auth
+        url = 'https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fsdk.cloud.google.com%2Fapplicationdefaultauthcode.html&response_type=code&token_usage=remote&state=discard-me&client_id=public-client&scope=openid'
+        def run(command, **kwargs):
+            self.assertIn('--auth=oauth2', command)
+            self.assertEqual(command[-1], 'whoami')
+            self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+            self.assertNotEqual(kwargs['env']['HOME'], os.environ.get('HOME'))
+            self.assertNotIn('GOOGLE_APPLICATION_CREDENTIALS', kwargs['env'])
+            return subprocess.CompletedProcess(command, 1, 'Enter the authorization code: ', url)
+        with patch.object(cli_auth.subprocess, 'run', side_effect=run):
+            report = cli_auth.probe('/test/colab', dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS='must-not-read'))
+        self.assertEqual(report['state'], 'AUTH_REQUIRED')
+        self.assertFalse(report['authenticated'])
+        self.assertNotIn('discard-me', json.dumps(report))
+        self.assertNotIn('public-client', json.dumps(report))
+        with patch.object(cli_auth.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'network failure')):
+            with self.assertRaises(RuntimeError):
+                cli_auth.probe('/test/colab', os.environ)
 
     def test_notebook_boundary_and_self_contained_payload(self):
         # Source template must fail safely instead of silently fetching arbitrary code.

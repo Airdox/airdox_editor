@@ -1,6 +1,6 @@
 # Colab: Produktionsworker und Qualitätsmessung
 
-## Produktionsworker (Windows 0.4.4)
+## Produktionsworker (Windows 0.4.5)
 
 `airdox-stem-remote-worker.md` ist die Quelle, `.ipynb` wird mit
 `npm run stems:remote:notebook` erzeugt. Die Windows-EXE enthält das passende

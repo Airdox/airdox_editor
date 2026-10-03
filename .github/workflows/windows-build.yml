@@ -60,9 +60,32 @@ jobs:
             test-runner-failure.txt
           if-no-files-found: warn
 
+  cli-auth:
+    name: Offizieller Colab-CLI bis zur OAuth-Eingabe (ohne Zugangsdaten)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Original-CLI installieren und echte Autorisierungsgrenze erreichen
+        run: node scripts/evidence-run.mjs cli-auth-boundary -- python colab/cli_auth.py prepare --directory "${{ runner.temp }}/airdox-cli" --report evidence/cli-auth-boundary-report.json --source-commit "${{ github.sha }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Colab_Auth_Boundary_Evidence
+          path: evidence/
+          if-no-files-found: error
+
   build:
     name: Windows EXEs mit verpflichtender Nachweiskette
-    needs: remote-model
+    outputs:
+      candidate-id: ${{ steps.candidate.outputs.artifact-id }}
+    needs: [remote-model, cli-auth]
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -71,6 +94,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: Colab_PreAuth_Evidence
+          path: evidence
+      - name: OAuth-Grenznachweis desselben Laufs laden
+        uses: actions/download-artifact@v4
+        with:
+          name: Colab_Auth_Boundary_Evidence
           path: evidence
       - uses: actions/setup-node@v4
         with:
@@ -113,10 +141,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\delivery\PRUEFEN.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Windows-Paket inklusive vollständiger Nachweiskette
+      - name: Kandidat für unabhängige Download-Abnahme
+        id: candidate
         uses: actions/upload-artifact@v4
         with:
-          name: airdox_SMART_Editor_Windows_0.4.4_mit_Nachweisen
+          name: Windows_Delivery_Candidate
           path: delivery/
           if-no-files-found: error
       - name: Fehlerdiagnose
@@ -128,4 +157,53 @@ jobs:
             evidence/
             test-runner-failure.txt
             ${{ runner.temp }}/airdox-smoke/
+          if-no-files-found: warn
+
+  delivery-audit:
+    name: Tatsächliche Downloads unabhängig prüfen und erst dann ausliefern
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Zuvor ausgeliefertes Paket 0.4.4 tatsächlich herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11288317441'
+          run-id: '37162349219'
+          github-token: ${{ github.token }}
+          path: previous-delivery
+          merge-multiple: true
+      - name: Vorherigen Paketinhalt feststellen (keine neue Google-Behauptung)
+        run: python scripts/audit_download.py --directory previous-delivery --expected-commit f152a669f3e53eecef4bdfb91906eb346d0ff5f0 --artifact-id 11288317441 --report previous-package-audit.json
+      - name: Neuen Kandidaten auf frischen Windows-Runner herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows_Delivery_Candidate
+          path: audited-delivery
+      - name: Nachweise und EXEs im Download prüfen und Prüfbericht beilegen
+        run: python scripts/audit_download.py --directory audited-delivery --expected-commit "${{ github.sha }}" --artifact-id "${{ needs.build.outputs.candidate-id }}" --seal --previous-report previous-package-audit.json
+      - name: Endgültigen Paketinhalt mit ausgeliefertem Prüfer prüfen
+        run: '& .\audited-delivery\PRUEFEN.ps1'
+      - name: Endgültiges Windows-Paket samt Nachweiskette
+        uses: actions/upload-artifact@v4
+        with:
+          name: airdox_SMART_Editor_Windows_0.4.5_mit_Nachweisen
+          path: audited-delivery/
+          if-no-files-found: error
+      - name: Unabhängige Prüfdiagnose
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Download_Audit_Diagnostics
+          path: |
+            previous-package-audit.json
+            audited-delivery/NACHWEISKETTE.json
+            audited-delivery/NACHWEISE/download-audit.json
           if-no-files-found: warn

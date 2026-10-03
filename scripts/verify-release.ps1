@@ -25,7 +25,7 @@ try {
         $count++
     }
     if ($count -lt 15) { throw 'Incomplete evidence inventory' }
-    $required = @('model-preflight', 'model-live', 'notebook-preauth', 'windows-types', 'windows-tests', 'windows-build', 'windows-smoke')
+    $required = @('model-preflight', 'model-live', 'notebook-preauth', 'cli-auth-boundary', 'windows-types', 'windows-tests', 'windows-build', 'windows-smoke')
     foreach ($stage in $required) {
         $recordPath = Join-Path $root "NACHWEISE/$stage.json"
         $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json

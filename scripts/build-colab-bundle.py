@@ -39,6 +39,7 @@ def main():
         cell['source'] = [line.replace('__AIRDOX_BUNDLE_B64__', base64.b64encode(payload).decode())
                          .replace('__AIRDOX_BUNDLE_SHA256__', hashlib.sha256(payload).hexdigest()) for line in cell['source']]
     (OUT / 'airdox-stem-remote-worker.ipynb').write_text(json.dumps(notebook, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
+    shutil.copyfile(ROOT / 'colab/cli_auth.py', OUT / 'CLI_AUTORISIERUNG.py')
     shutil.copyfile(ROOT / 'docs/COLAB_ABNAHME.md', OUT / 'ABNAHME.md')
     shutil.copyfile(ROOT / 'docs/COLAB_AUTH_RECHERCHE.md', OUT / 'GOOGLE_AUTH_RECHERCHE.md')
     (OUT / 'bundle.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8', newline='\n')

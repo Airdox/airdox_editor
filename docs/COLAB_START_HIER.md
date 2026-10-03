@@ -1,4 +1,4 @@
-# AirDox 0.4.4 – Windows-Paket mit Nachweiskette
+# AirDox 0.4.5 – Windows-Paket mit Nachweiskette
 
 ## 1 · Was ist bereits geprüft?
 
@@ -7,9 +7,14 @@ Prüfskript gemeinsam**. Kein separater CI-Download ist zur Einsicht nötig.
 
 | Datei | Zweck |
 |---|---|
-| `airdox_SMART_Editor-0.4.4-setup.exe` | Windows-Installation |
-| `airdox_SMART_Editor-0.4.4-portable.exe` | Portable Anwendung |
+| `airdox_SMART_Editor-0.4.5-setup.exe` | Windows-Installation |
+| `airdox_SMART_Editor-0.4.5-portable.exe` | Portable Anwendung |
 | `NACHWEISKETTE.json` | Commit, Workflow, Teststufen und Hash/Größe aller Lieferdateien |
+| `PAKET_INHALT.txt` | Inhaltsverzeichnis direkt im Paketstamm |
+| `NACHWEISE/download-audit.json` | Erneut heruntergeladener Kandidat auf unabhängigem Windows-Runner geprüft |
+| `NACHWEISE/previous-package-audit.json` | Tatsächlich heruntergeladenes Vorgängerpaket 0.4.4 geprüft |
+| `NACHWEISE/cli-auth-boundary-report.json` | Offizielles CLI 0.7.4 tatsächlich bis zur OAuth-Code-Aufforderung ausgeführt |
+| `Colab/CLI_AUTORISIERUNG.py` | Zusätzlicher Linux-/WSL-Helfer für Vorbereitung und ausdrücklich lokalen OAuth-Login |
 | `PRUEFEN.ps1` | Offline-Prüfung dieser Dateien, nur lesend |
 | `NACHWEISE/*.json` und `*.log` | Wirklich ausgeführte Befehle, Exitcodes, Zeiten und Rohlogs |
 | `NACHWEISE/model-live-tests.json` | Echter Modelltest ohne erlaubten Skip |
@@ -94,3 +99,24 @@ aber auch kein lokaler/CI-Test als erfolgreiche Google-Sitzung ausgegeben.
 - Der gebündelte Musik-Testausschnitt hat CC BY-NC-SA 3.0; Attribution im
   Worker-ZIP unter `tests/fixtures/musdb-falcon69/README.md`. Er ist kein vom
   Nutzer lizenzfreigestellter Track und nicht für kommerzielle Verwertung gedacht.
+
+
+## 5 · Optionaler CLI-Weg für vorhandenes Linux/WSL
+
+Nicht erforderlich für den normalen Windows-/Notebook-Weg. Voraussetzung:
+Linux/macOS oder vorhandenes WSL, Python >=3.12 und Internetzugang.
+
+Im Ordner `Colab` des entpackten Pakets:
+
+```sh
+python3 CLI_AUTORISIERUNG.py prepare --report "$HOME/airdox-cli-auth-boundary.json"
+# Automatisch bis AUTH_REQUIRED; keine vorhandenen Konten/Tokens benutzt.
+python3 CLI_AUTORISIERUNG.py login --consent
+# Nur im eigenen interaktiven Terminal: Google-Freigabe, Code lokal eingeben.
+```
+
+Keine Codes/Passwörter an den Chat senden. Der zweite Befehl ist **nicht** Teil
+der CI; er prüft nach persönlicher Zustimmung die Identität und legt noch keine
+Colab-Laufzeit an. Drive-Freigabe und Ressourcenbedingungen bleiben getrennte
+Schritte. Die vollständige Erklärung zu Scopes, privater Tokenspeicherung und
+Widerruf steht in `NACHWEISE/COLAB_AUTH_RECHERCHE.md`.

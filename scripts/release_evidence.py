@@ -15,7 +15,7 @@ import subprocess
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_PREAUTH = ('model-preflight', 'model-live', 'notebook-preauth')
+REQUIRED_PREAUTH = ('model-preflight', 'model-live', 'notebook-preauth', 'cli-auth-boundary')
 REQUIRED_RELEASE = REQUIRED_PREAUTH + ('windows-types', 'windows-tests', 'windows-build', 'windows-smoke')
 
 
@@ -98,7 +98,7 @@ def prepare_resource_proof(folder, evidence_dir, required=False):
             raise
     if stages:
         for name in [*(f'{s}.{ext}' for s in REQUIRED_PREAUTH for ext in ('json', 'log')),
-                     'model-live-tests.json', 'remote-real-model-evidence.json', 'notebook-preauth-report.json', 'notebook-execution.json']:
+                     'model-live-tests.json', 'remote-real-model-evidence.json', 'notebook-preauth-report.json', 'notebook-execution.json', 'cli-auth-boundary-report.json']:
             source = evidence_dir / name
             if not source.is_file():
                 raise ValueError(f'Required raw evidence missing: {name}')
@@ -139,6 +139,9 @@ def finalize(destination, evidence_dir):
     stages = validate_stages(evidence_dir, REQUIRED_RELEASE, revision, os.environ.get('GITHUB_RUN_ID'))
     model = json.loads((Path(evidence_dir) / 'remote-real-model-evidence.json').read_text(encoding='utf-8'))
     exported = json.loads((Path(evidence_dir) / 'notebook-preauth-report.json').read_text(encoding='utf-8'))
+    auth = json.loads((Path(evidence_dir) / 'cli-auth-boundary-report.json').read_text(encoding='utf-8'))
+    if auth.get('result') != 'PASS' or auth.get('state') != 'AUTH_REQUIRED' or auth.get('sourceCommit') != revision or auth.get('authenticated') is not False:
+        raise ValueError('Official CLI authorization boundary not proved for this source')
     tests = json.loads((Path(evidence_dir) / 'windows-tests-tests.json').read_text(encoding='utf-8'))
     smoke = json.loads((ROOT / 'release/windows-smoke.json').read_text(encoding='utf-8'))
     if model['result'] != 'PASS' or exported['result'] != 'PASS' or exported['state'] != 'AUTH_REQUIRED' or tests['failed'] or smoke['result'] != 'PASS':

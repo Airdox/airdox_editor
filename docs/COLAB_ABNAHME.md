@@ -1,4 +1,4 @@
-# Colab v2 – Einrichtung und Abnahme (AirDox 0.4.4)
+# Colab v2 – Einrichtung und Abnahme (AirDox 0.4.5)
 
 ## Einrichtung auf Windows
 

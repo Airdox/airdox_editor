@@ -1,4 +1,4 @@
-# High Quality extern – Colab-Worker v2 (AirDox 0.4.4)
+# High Quality extern – Colab-Worker v2 (AirDox 0.4.5)
 
 ## Aufbau
 
@@ -118,7 +118,7 @@ reale Google-Verbindung, die Windows-GPU oder die musikalische Qualität auf
 beliebigem Audiomaterial. Dafür ist die dokumentierte Vor-Ort-Abnahme erforderlich.
 
 
-## Nachweiskette 0.4.4
+## Nachweiskette 0.4.5
 
 Der Windows-Job hängt hart vom erfolgreichen Modell-/Notebook-Job ab. Das
 exportierte Notebook wird in einer neuen Python-Umgebung auf Linux/CPU **bis

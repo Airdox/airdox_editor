@@ -20,7 +20,7 @@ async function verifyColabPackage(folder) {
     }
   }
   if (proof.result === 'PASS') {
-    for (const stage of ['model-preflight', 'model-live', 'notebook-preauth']) {
+    for (const stage of ['model-preflight', 'model-live', 'notebook-preauth', 'cli-auth-boundary']) {
       const name = `nachweise/${stage}.json`;
       if (!proof.files[name]) throw new Error(`Pflichtnachweis fehlt: ${stage}`);
       const report = JSON.parse(await fs.readFile(path.join(root, name), 'utf8'));

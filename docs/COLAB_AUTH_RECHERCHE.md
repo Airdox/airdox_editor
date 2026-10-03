@@ -1,12 +1,12 @@
 # Google-Autorisierung und Automatisierung – technische Entscheidung
 
-Stand: 04.10.2026 · AirDox 0.4.4
+Stand: 04.10.2026 · AirDox 0.4.5
 
 ## Untersuchte offizielle Wege
 
 | Weg | Was automatisierbar ist | Verbleibende Voraussetzung | Entscheidung |
 |---|---|---|---|
-| Offizielles `google-colab-cli` | Laufzeiten, Ausführung von Skripten/Notebooks, Dateien und Sitzungen | Python ≥3.12; laut aktueller README Linux/macOS; legitime OAuth-/ADC-Anmeldung, Berechtigungen, verfügbare Ressourcen | Reale Möglichkeit, aber **nicht als geprüfte Windows-Funktion ausgeliefert**. Eine Diskussion über Windows-Fixes ist keine Supportzusage. |
+| Offizielles `google-colab-cli` | Laufzeiten, Ausführung von Skripten/Notebooks, Dateien und Sitzungen | Python ≥3.12; laut aktueller README Linux/macOS; legitime OAuth-/ADC-Anmeldung, Berechtigungen, verfügbare Ressourcen | Zusatzweg implementiert: Version 0.7.4 und Wheel-SHA256 festgelegt; echte CLI-Ausführung bis zur OAuth-Code-Eingabe. Linux/macOS bzw. WSL, **nicht native Windows-Unterstützung**. |
 | Native Desktop-OAuth-App | Autorisierung über Systembrowser und registrierten Loopback-Redirect | Eigenes korrekt registriertes Desktop-OAuth-Projekt, Scopes, State/PKCE und sichere Tokenspeicherung; Drive-OAuth ≠ Colab-Anmeldung | Kein improvisierter OAuth-Client; würde die Notebook-Anmeldung nicht ersetzen. |
 | Colab Enterprise Scheduling | Planbare Notebook-Jobs mit Cloud-IAM | Cloud-Projekt, APIs, IAM/Servicekonto, GCS, Abrechnung | Kein stilles Provisionieren kostenpflichtiger Ressourcen. |
 | Selbstenthaltendes Notebook | Paketentpacken, Installation, Hash-/Modellprüfung und Testtrennung ohne Drive-Zugriff | Google kann bereits zum Öffnen/Starten von Colab eine Anmeldung verlangen; Drive-Freigabe danach persönlich | **Implementierter Windows-Auslieferungsweg.** |
@@ -30,8 +30,8 @@ behaupten. Der CUDA-Paketindex und Google-GPU-Hardware sind davon nicht abgedeck
 ## Details zum offiziellen CLI (nicht mit dem Notebook verwechseln)
 
 Die aktuelle README und tieferen Auth-Dokumente nennen unterschiedliche
-Standardverfahren (ADC bzw. OAuth2); eine zukünftige Integration müsste das
-Verfahren ausdrücklich wählen und eine Version pinnen. `colab auth` betrifft
+Standardverfahren (ADC bzw. OAuth2). Der implementierte Helfer wählt deshalb
+explizit `--auth=oauth2` und pinnt Version 0.7.4 samt Wheel-Hash. `colab auth` betrifft
 zusätzlich die **GCP-Anmeldung in der Laufzeit**, nicht einfach den Login des
 steuernden CLI. Drive-Mount ist eine weitere Berechtigungsgrenze.
 
@@ -39,8 +39,9 @@ Die dokumentierte gebündelte OAuth2-Variante verwendet den Google-SDK-Remote-
 Redirect und eine lokale Codeeingabe. Das ist nicht das veraltete, blockierte
 Out-of-Band-Verfahren. Ein eigener OAuth-Client kann nicht ohne passende
 Redirect-Registrierung eingesetzt werden. Diese Recherche rechtfertigt weder
-Cookie-Extraktion noch Tokenweitergabe im Chat. Eine WSL-/Linux-CLI-Erweiterung
-wäre möglich, ist aber **nicht Teil des geprüften Windows-Pakets**.
+Cookie-Extraktion noch Tokenweitergabe im Chat. Ab 0.4.5 liegt `Colab/CLI_AUTORISIERUNG.py` als zusätzlicher Linux-/WSL-Weg
+im Windows-Downloadpaket. Er bereitet den offiziellen CLI vor und prüft seinen
+echten Autorisierungseinstieg. Er macht daraus keine native Windows-Funktion.
 
 ## Implementierte Schritte und Nachweise
 
@@ -90,3 +91,73 @@ Die CLI-Recherche wurde gegen Quellstand
 
 Web-Dokumente können sich nach diesem Stand ändern. Keine der Quellen belegt
 einen erfolgreichen Lauf im Google-Konto des Nutzers.
+
+
+## Konkrete CLI-Lösung ab 0.4.5: bis zur echten Eingabegrenze
+
+Die veröffentlichte Distribution wurde direkt auf PyPI recherchiert und ihr
+Authentifizierungscode im Wheel überprüft:
+
+- Paket `google-colab-cli==0.7.4`, Python mindestens 3.12.
+- Wheel `google_colab_cli-0.7.4-py3-none-any.whl`.
+- SHA256 `1435f3533a7064f27b8b81252da85370427d6cf93b94e6c34737bd1cc68ec292`.
+- Quelle: https://pypi.org/project/google-colab-cli/0.7.4/
+
+Der Helfer lädt ausschließlich dieses geprüfte Wheel von PyPI, installiert es
+in einer eigenen Umgebung und führt `pip check` aus. Dann startet er das
+**tatsächlich installierte CLI** mit `--auth=oauth2 ... whoami` in einem frischen,
+zugangsdatenfreien HOME und mit geschlossener Standardeingabe. Erwartet werden
+die Google-OAuth-Adresse, der registrierte SDK-Redirect und die Aufforderung
+`Enter the authorization code:`. Erst dann lautet der Befund `AUTH_REQUIRED`.
+Ein beliebiger Fehler oder Netzfehler zählt ausdrücklich nicht als Erfolg.
+
+Der veröffentlichte Bericht enthält Version, Wheel-Hash, installierte Pakete,
+Scopes, Exitcode und die erreichte Grenze. OAuth-State, vollständige
+Autorisierungs-URL, Codes und Tokens werden **nicht** in den Bericht übernommen.
+Die Eingabe wurde absichtlich nicht bedient; es wurde keine Identität bei
+Google verifiziert und keine Laufzeit angelegt. Auch ein erzeugter OAuth-Link
+beweist noch nicht, dass Google das konkrete Konto/den Tarif akzeptieren wird.
+
+### Persönliche Anmeldung – nur am eigenen Rechner
+
+1. Optional vorhandenes Linux/macOS oder WSL mit Python >=3.12 verwenden.
+   Windows-Nutzer ohne WSL bleiben beim selbstenthaltenden Notebook. Der Helfer
+   aktiviert keine Windows-Systemfunktionen und installiert kein WSL.
+2. Im entpackten Paket in den Ordner `Colab` wechseln und ausführen:
+   `python3 CLI_AUTORISIERUNG.py prepare --report "$HOME/airdox-cli-auth-boundary.json"`.
+3. Der automatische Test endet bei `AUTH_REQUIRED`, ohne eigene Konten anzufassen.
+4. Für die persönliche Freigabe ausdrücklich in **diesem eigenen Terminal**:
+   `python3 CLI_AUTORISIERUNG.py login --consent`.
+5. Den vom offiziellen CLI angezeigten Google-Link im Browser öffnen. Scopes
+   sorgfältig prüfen: Profil/E-Mail, Cloud Platform, Colaboratory und `drive.file`
+   gehören zu den vom CLI angeforderten Berechtigungen. Bei fehlendem Vertrauen
+   abbrechen, nicht bestätigen.
+6. Den von Google angezeigten einmaligen Code ausschließlich im eigenen
+   Terminal eingeben, **niemals im Chat**. Der Login-Aufruf wird nicht protokolliert.
+7. Das CLI prüft anschließend die angemeldete Identität. Dies ist noch kein
+   Drive-Mount und kein gestarteter GPU-Auftrag. Ressourcen werden nicht angelegt.
+
+Der Helfer legt seine Runtime standardmäßig unter
+`~/.local/share/airdox/colab-cli-0.7.4/` an. Zugangsdaten landen erst beim
+persönlichen Login in dessen `credentials-home/.config/colab-cli/token.json`;
+Verzeichnisrechte sind privat und neue Dateien erhalten durch umask 077 nur
+Benutzerzugriff. Diese Daten niemals in ein Support-/Downloadpaket kopieren.
+Berechtigungen lassen sich unter https://myaccount.google.com/permissions
+widerrufen. Die vorbereitende CI besitzt diese Zugangsdaten nicht.
+
+## Tatsächlicher Paketdownload statt nur Build-Verzeichnis
+
+Ein nachgelagerter Job lädt auf einem **frischen Windows-Runner** den gebauten
+Kandidaten herunter. Er prüft verpflichtende Dateinamen, jede Größe/jeden Hash,
+die acht Pflichtstufen, den Source-Commit und den CLI-Grenzbericht. Zusätzliche
+nicht verzeichnete Dateien werden ebenfalls abgelehnt. Danach werden
+`NACHWEISE/download-audit.json` und `PAKET_INHALT.txt` beigefügt, das Manifest
+aktualisiert und der endgültige Inhalt nochmals mit dem ausgelieferten Prüfer
+geprüft. Erst danach wird das endgültige Downloadartefakt veröffentlicht.
+
+Zusätzlich wird für diese Korrekturlieferung das bisherige Artefakt 0.4.4 mit ID
+11288317441 aus Lauf 37162349219 separat heruntergeladen und untersucht. Der
+Befund steht in `NACHWEISE/previous-package-audit.json`. Das beschreibt das
+GitHub-Artefakt, nicht eine unbekannte Datei auf dem Nutzer-PC. Historische
+Artefakte unterliegen der GitHub-Aufbewahrungsfrist; dieser Vergleich ist an
+jene konkrete Korrekturlieferung gebunden.
