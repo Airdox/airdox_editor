@@ -31,3 +31,8 @@ resources/stem-runtime/*
 # Build; einen Download gibt es nur über `npm run stems:bundle`.
 *.onnx
 !tests/fixtures/onnx/*.onnx
+
+# Validierungsläufe der Stem-Pipeline: Reports bleiben versioniert, die
+# erzeugten WAV-Renderings (mehrere MB) nicht – sie entstehen per `npm run
+# stems:*-validation` neu.
+artifacts/**/*.wav
