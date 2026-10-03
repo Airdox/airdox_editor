@@ -2,7 +2,7 @@ name: Windows-Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, arena/01a103d9-airdox-editor ]
   workflow_dispatch:
 
 permissions:
