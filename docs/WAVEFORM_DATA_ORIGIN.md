@@ -12,11 +12,11 @@ Diese Dokumentation beschreibt detailliert die zwei fundamentalen Bereiche von A
 In diesem Bereich entstammt jedes einzelne Byte der Wellenform-, Beatgrid- und Cue-Informationen direkt und unverändert den offiziellen Pioneer DJ Rekordbox-Analysedateien oder -Datenbanken. Es findet **keine** algorithmische Synthese oder Verfälschung durch den Browser statt.
 
 ### 1.1 Binäre ANLZ-Analysedateien (`.DAT`, `.EXT`, `.2EX`)
-Pioneer Rekordbox speichert bei der Track-Analyse vorberechnete Wellenform-Buckets in binären ANLZ-Containern ab (oft im Ordner `PIONEER/USBANLZ/...` auf USB-Sticks oder in `AppData/Roaming/Pioneer/rekordbox/share`). Das System decodiert diese Dateien über `src/rekordbox/anlzParser.ts`:
+Pioneer Rekordbox speichert bei der Track-Analyse vorberechnete Wellenform-Buckets in binären ANLZ-Containern ab (oft im Ordner `PIONEER/USBANLZ/...` auf USB-Sticks oder in `AppData/Roaming/Pioneer/rekordbox/share`). Da `djmdContent.AnalysisDataPath` in `master.db` stets auf die Basisdatei `ANLZ0000.DAT` verweist, lesen `electron/masterDbGate.cjs` und `electron/main.cjs` (`rekordbox:read-analysis-file`) vorhandene Geschwisterdateien `ANLZ0000.EXT` und `ANLZ0000.2EX` im selben Ordner automatisch read-only hinzu. Das System decodiert diese verketteten Container über `src/rekordbox/anlzStructure.ts` und `src/rekordbox/anlzParser.ts` in der Priorität `PWV7 > PWV5 > PWV6 > PWV4 > PWV3 > PWAV > PWV2`:
 
-* **PWV3 / PWV2 (Klassische Detail-Wellenform)**:
-  * 4-Bit oder 5-Bit logarithmische Amplitudendaten (0–31 bzw. 0–15).
-  * Monochrom-Wellenformdarstellung für Standard-CDJs (CDJ-900, CDJ-2000).
+* **PWV3 / PWAV / PWV2 (Klassische Monochrom-Wellenformen)**:
+  * `PWV3` (Detail, 150 Hz in `.EXT`), `PWAV` (400-Bucket-Vorschau in `.DAT`) und `PWV2` (100-Bucket-Miniatur in `.DAT`).
+  * 5-Bit Amplitudendaten (0–31). `PWAV` hat Vorrang vor `PWV2`, falls keine `.EXT`/`.2EX` existiert.
 * **PWV4 (RGB-Vorstufe 6-Byte Format)**:
   * 6 Bytes pro Zeitintervall. Die dominanten Frequenzbänder werden direkt aus den Pioneer-Bytes ausgelesen.
 * **PWV5 (RGB-Wellenform mit 16-Bit Bit-Packung)**:

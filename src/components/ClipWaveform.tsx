@@ -17,13 +17,14 @@
 import React, { useRef, useEffect } from 'react';
 import { PaletteClip, WaveformMode, WaveformAnalysisData } from '../types/rekordbox';
 import { analyzeAudioBuffer } from '../waveform/analyzer';
-import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
+import { REKORDBOX_BASELINE_HEX, spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
 
 // Cache for clips that do not carry native analysis (WeakMap = no leak)
 const computedAnalysisCache = new WeakMap<AudioBuffer, WaveformAnalysisData>();
 
 function resolveAnalysis(clip: PaletteClip): WaveformAnalysisData | null {
-  if (clip.analysis && clip.analysis.length > 0) return clip.analysis;
+  const minUsableBuckets = Math.min(16, Math.max(4, Math.floor((clip.duration || 1) * 4)));
+  if (clip.analysis && clip.analysis.length >= minUsableBuckets) return clip.analysis;
   if (clip.audioBuffer) {
     let analysis = computedAnalysisCache.get(clip.audioBuffer);
     if (!analysis) {
@@ -32,6 +33,7 @@ function resolveAnalysis(clip: PaletteClip): WaveformAnalysisData | null {
     }
     return analysis;
   }
+  if (clip.analysis && clip.analysis.length > 0) return clip.analysis;
   return null;
 }
 
@@ -54,11 +56,11 @@ export function drawDetailedClipWaveform(
   const centerY = height / 2;
   const maxHalf = height * 0.46;
 
-  // 1. Dark background + subtle centerline (matches DetailWaveform)
+  // 1. Dark background + Rekordbox #00A2E8 1px centerline
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = '#0b0c0f';
   ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = '#16171d';
+  ctx.strokeStyle = REKORDBOX_BASELINE_HEX;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, centerY);

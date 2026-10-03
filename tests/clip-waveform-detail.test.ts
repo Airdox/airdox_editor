@@ -10,8 +10,16 @@
 import assert from 'node:assert/strict';
 import { drawDetailedClipWaveform } from '../src/components/ClipWaveform';
 import { analyzeAudioBuffer } from '../src/waveform/analyzer';
+import {
+  REKORDBOX_BASELINE_HEX,
+  REKORDBOX_CORE_CYAN_HEX,
+  REKORDBOX_PEAK_WHITE_HEX,
+  renderRekordboxWaveformColumn,
+  sampleWaveformColumn,
+  spectralRgb,
+} from '../src/waveform/spectralColor';
 import { makeAudioBuffer } from './support/editingHarness';
-import { DataOrigin, PaletteClip } from '../src/types/rekordbox';
+import { DataOrigin, PaletteClip, WaveformAnalysisData } from '../src/types/rekordbox';
 
 const SAMPLE_RATE = 1000;
 
@@ -243,4 +251,91 @@ console.log('══════════════════════�
   console.log('[ PASS ] #6 Silent clip region renders empty (no invented floor)');
 }
 
-console.log('clip waveform detail: 6 checks OK');
+// #7: Rekordbox EDIT-mode 1px vertical column lock (DetailWaveform & TrackOverview)
+{
+  // 7a. Monochrome ANLZ buckets (low === mid === high) never bleach to white/beige
+  assert.equal(
+    spectralRgb(0.85, 0.85, 0.85),
+    'rgb(229, 28, 36)',
+    'monochrome peak maps to Rekordbox kick red #E51C24, never white/beige'
+  );
+  assert.equal(
+    spectralRgb(0.45, 0.45, 0.45),
+    'rgb(0, 240, 255)',
+    'monochrome mid maps to Rekordbox cyan #00F0FF'
+  );
+  assert.equal(
+    spectralRgb(0.28, 0.28, 0.28),
+    'rgb(160, 51, 255)',
+    'monochrome overtone maps to Rekordbox violet #A033FF'
+  );
+
+  // 7b. Silent column (< 0.01) draws ONLY 1px #00A2E8 baseline at centerY
+  const { canvas: cSilent, rec: rSilent } = makeStubCanvas(10, 100);
+  const ctxSilent = cSilent.getContext('2d')!;
+  renderRekordboxWaveformColumn(
+    ctxSilent,
+    4,
+    50,
+    44,
+    { totalAmp: 0.002, low: 0, mid: 0, high: 0 },
+    'RGB'
+  );
+  assert.equal(rSilent.fills.length, 1, 'silent column emits only 1px baseline');
+  assert.equal(rSilent.fills[0].style, REKORDBOX_BASELINE_HEX);
+  assert.equal(rSilent.fills[0].h, 1);
+
+  // 7c. High-peak column (> 0.7) emits outer edge, #E51C24 body, #00F0FF cyan core, and #FFFFFF peak highlight
+  const { canvas: cPeak, rec: rPeak } = makeStubCanvas(10, 100);
+  const ctxPeak = cPeak.getContext('2d')!;
+  renderRekordboxWaveformColumn(
+    ctxPeak,
+    5,
+    50,
+    44,
+    { totalAmp: 0.9, low: 0.9, mid: 0.5, high: 0.2 },
+    'RGB'
+  );
+  assert.equal(rPeak.fills.length, 4, 'high-peak RGB column emits 4 concentric 1px vertical layers');
+  assert.ok(rPeak.fills.every((f) => f.x === 5), 'every layer is aligned on column x=5');
+  assert.ok(rPeak.fills.some((f) => f.style === 'rgb(229, 28, 36)'), 'includes #E51C24 bass body');
+  assert.ok(rPeak.fills.some((f) => f.style === REKORDBOX_CORE_CYAN_HEX), 'includes #00F0FF cyan core');
+  assert.ok(rPeak.fills.some((f) => f.style === REKORDBOX_PEAK_WHITE_HEX), 'includes #FFFFFF peak center highlight');
+
+  // 7d. Coarse 100-bucket container across a 1300px overview/detail canvas renders continuous
+  //     1px columns (no 100-line barcode gaps and no 80px wide uniform flat blocks)
+  const coarseBuckets = 100;
+  const duration = 356.9;
+  const coarsePeaks = new Float32Array(coarseBuckets).fill(0.8);
+  coarsePeaks[0] = 0; // leading silence stays 0
+  const coarseAnalysis: WaveformAnalysisData = {
+    peaks: coarsePeaks,
+    peaksL: coarsePeaks,
+    peaksR: coarsePeaks,
+    lowEnergy: new Float32Array(coarseBuckets).fill(0.8),
+    midEnergy: new Float32Array(coarseBuckets).fill(0.8),
+    highEnergy: new Float32Array(coarseBuckets).fill(0.8),
+    length: coarseBuckets,
+    secPerBucket: duration / coarseBuckets,
+    origin: DataOrigin.REKORDBOX_ANLZ,
+  };
+  const beatGrid = { bpm: 127.5, firstBeat: 0.05 };
+  const viewStart = 10.0;
+  const viewDur = 15.0;
+  const width = 600;
+  const heights: number[] = [];
+  for (let x = 0; x < width; x++) {
+    const t0 = viewStart + (x / width) * viewDur;
+    const t1 = viewStart + ((x + 1) / width) * viewDur;
+    const s = sampleWaveformColumn(coarseAnalysis, t0, t1, duration, beatGrid);
+    heights.push(Math.round(s.totalAmp * 1000));
+  }
+  assert.ok(heights.every((h) => h > 0), 'no empty barcode gaps in active region');
+  const uniqueHeights = new Set(heights);
+  assert.ok(uniqueHeights.size > 40, `expected fine 1px column profile, got ${uniqueHeights.size} distinct heights`);
+  const silentSample = sampleWaveformColumn(coarseAnalysis, 0.1, 0.2, duration, beatGrid);
+  assert.equal(silentSample.totalAmp, 0, 'silent bucket #0 stays strictly 0');
+  console.log('[ PASS ] #7 Rekordbox EDIT-mode 1px vertical column lock verified');
+}
+
+console.log('clip waveform detail: 7 checks OK');

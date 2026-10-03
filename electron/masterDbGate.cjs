@@ -481,6 +481,70 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
+  // Rekordbox splittet die Analyse eines Tracks im selben USBANLZ-Ordner auf
+  // bis zu drei Geschwisterdateien auf:
+  //   ANLZ0000.DAT  → PPTH, PQTZ (Beatgrid), PCOB, PWAV (400), PWV2 (100)
+  //   ANLZ0000.EXT  → PCO2 (Extended Cues), PWV3, PWV4, PWV5 (150Hz RGB Detail), PSSI (Phrases)
+  //   ANLZ0000.2EX  → PWV6, PWV7 (150Hz 3-Band Detail)
+  // In master.db verweist AnalysisDataPath immer auf die .DAT-Datei. Wenn im
+  // selben Ordner die zugehörige .EXT- und/oder .2EX-Datei liegt, werden sie
+  // mit derselben Read-only-Fingerabdruck-Kontrolle hinzugelesen, damit nicht
+  // die 100-Bucket-Miniaturvorschau (PWV2 aus .DAT), sondern die hochauflösende
+  // Detail-Wellenform (PWV5/PWV7 aus .EXT/.2EX) sowie PCO2 und PSSI geladen werden.
+  let totalAnalysisSize = analysisStat.size;
+  let latestAnalysisMtime = analysisStat.mtimeMs;
+  const primaryExt = path.extname(analysisPath);
+  if (primaryExt.toLowerCase() === '.dat') {
+    const isUpper = primaryExt === primaryExt.toUpperCase();
+    const stem = analysisPath.slice(0, -primaryExt.length);
+    const siblingExtensions = isUpper ? ['.EXT', '.2EX'] : ['.ext', '.2ex'];
+    const buffers = [analysisBytes];
+    for (const sibExt of siblingExtensions) {
+      const sibPath = `${stem}${sibExt}`;
+      let sibStatBefore = null;
+      try {
+        sibStatBefore = await stat(sibPath);
+      } catch {
+        sibStatBefore = null;
+      }
+      if (
+        !sibStatBefore ||
+        !sibStatBefore.isFile() ||
+        sibStatBefore.size <= 0 ||
+        sibStatBefore.size > MAX_ANALYSIS_BYTES
+      ) {
+        continue;
+      }
+      let sibBytes = null;
+      let sibStatAfter = null;
+      try {
+        sibBytes = await readFile(sibPath);
+        sibStatAfter = await stat(sibPath);
+      } catch {
+        continue;
+      }
+      const sibUnchanged = Boolean(
+        sibBytes &&
+          sibStatAfter &&
+          sibStatAfter.isFile() &&
+          sibStatAfter.size === sibStatBefore.size &&
+          sibStatAfter.mtimeMs === sibStatBefore.mtimeMs &&
+          sibBytes.length === sibStatBefore.size
+      );
+      if (!sibUnchanged) continue;
+      const sibScan = anlz.scanAnlzSections(sibBytes);
+      if (!sibScan.valid) continue;
+      buffers.push(sibBytes);
+      totalAnalysisSize += sibStatBefore.size;
+      if (sibStatBefore.mtimeMs > latestAnalysisMtime) {
+        latestAnalysisMtime = sibStatBefore.mtimeMs;
+      }
+    }
+    if (buffers.length > 1) {
+      analysisBytes = Buffer.concat(buffers);
+    }
+  }
+
   // Gemeinsamer Walk mit dem Renderer-Parser (electron/generated/anlzStructure.cjs
   // ist das Spiegelmodul von src/rekordbox/anlzStructure.ts).
   const { scan, columns, summary } = anlz.decodeAnlzWaveform(analysisBytes);
@@ -621,8 +685,8 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     content: { ...content, originalPath },
     analysis: {
       path: analysisPath,
-      size: analysisStat.size,
-      modifiedAt: analysisStat.mtimeMs,
+      size: totalAnalysisSize,
+      modifiedAt: latestAnalysisMtime,
       tags: scan.tags,
       hasWaveform: true,
       truncated: Boolean(scan.truncated),

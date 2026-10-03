@@ -85,6 +85,13 @@ function pwv3Section(entryCount: number): Buffer {
   return section('PWV3', body, 0x18);
 }
 
+function monoPreviewSection(tag: 'PWAV' | 'PWV2', entryCount: number): Buffer {
+  const body = Buffer.alloc(8 + entryCount, 0x18);
+  body.writeUInt32BE(entryCount, 0);
+  body.writeUInt32BE(0x00100000, 4);
+  return section(tag, body, 0x14);
+}
+
 /** PQTZ: len_header 0x18, u4 ?, u4 ?, u4 len_beats, 8-byte entries. */
 function pqtzSection(beatCount: number): Buffer {
   const body = Buffer.alloc(0x18 + beatCount * 8, 0x00);
@@ -112,6 +119,8 @@ const FIXTURES: Array<{ name: string; bytes: Buffer }> = [
   { name: 'Nullbytes', bytes: Buffer.alloc(64) },
   { name: 'zu klein', bytes: Buffer.alloc(8) },
   { name: 'Legacy-Envelope (Länge nur in len_header)', bytes: Buffer.concat([(() => { const body = Buffer.alloc(24, 0x02); const b = Buffer.alloc(12 + body.length); b.write('PQTZ', 0, 'ascii'); b.writeUInt32BE(12 + body.length, 4); b.writeUInt32BE(0, 8); body.copy(b, 12); return b; })(), pwv5Section(2, 30)]) },
+  { name: 'DAT mit PWAV(400) + PWV2(100) → PWAV gewinnt vor PWV2', bytes: Buffer.concat([pmaiHeader(), ppthSection(PAV), monoPreviewSection('PWAV', 400), monoPreviewSection('PWV2', 100)]) },
+  { name: 'Verkettete .DAT + .EXT Container (eingebetteter PMAI-Header → PWV5 gewinnt)', bytes: Buffer.concat([pmaiHeader(), ppthSection(PAV), pqtzSection(32), monoPreviewSection('PWAV', 400), monoPreviewSection('PWV2', 100), pmaiHeader(), ppthSection(PAV), pwv3Section(600), pwv5Section(2, 600)]) },
 ];
 
 // ─── 1. Beide Module liefern dieselben Ergebnisse ────────────────────────

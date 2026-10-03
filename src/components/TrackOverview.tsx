@@ -7,7 +7,11 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { TrackModel } from '../types/rekordbox';
-import { spectralRgb } from '../waveform/spectralColor';
+import {
+  REKORDBOX_BASELINE_HEX,
+  renderRekordboxOverviewColumn,
+  sampleWaveformColumn,
+} from '../waveform/spectralColor';
 
 interface TrackOverviewProps {
   track: TrackModel | null;
@@ -41,71 +45,72 @@ export const TrackOverview: React.FC<TrackOverviewProps> = ({
     const height = canvas.height;
     ctx.clearRect(0, 0, width, height);
 
-    // Dark container background
-    ctx.fillStyle = '#0f1013';
-    ctx.fillRect(0, 0, width, height);
-
-    // Subtle horizontal center baseline
-    ctx.strokeStyle = '#1d1f26';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, height / 2);
-    ctx.lineTo(width, height / 2);
-    ctx.stroke();
+    // Rekordbox EDIT Overview container background (#4b4b4b with 16-bar grid divisions & #6b6b6b bottom ruler)
+    const baselineY = height - 4;
+    ctx.fillStyle = '#4b4b4b';
+    ctx.fillRect(0, 0, width, baselineY);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, baselineY, width, 1);
+    ctx.fillStyle = '#6b6b6b';
+    ctx.fillRect(0, baselineY + 1, width, 3);
 
     if (!track) {
+      ctx.fillStyle = REKORDBOX_BASELINE_HEX;
+      ctx.fillRect(0, baselineY - 1, width, 1);
       return;
     }
 
     const analysis = track.analysis;
     const duration = Math.max(1, track.duration);
 
+    // 16-bar vertical grid divisions inside the overview box (matching rekordbox_edit.png)
+    const spb = 60.0 / (track.beatGrid?.bpm || 120);
+    const sixteenBarSec = spb * (track.beatGrid?.meter || 4) * 16;
+    if (sixteenBarSec > 1) {
+      ctx.fillStyle = '#2d2d2d';
+      for (let t = track.beatGrid?.firstBeat || 0; t < duration; t += sixteenBarSec) {
+        const gx = Math.round((t / duration) * width);
+        ctx.fillRect(gx, 0, 1, baselineY);
+        ctx.fillStyle = '#d0d0d0';
+        ctx.fillRect(gx, baselineY + 1, 1, 2);
+        ctx.fillStyle = '#2d2d2d';
+      }
+    }
+
     const targetCols = width;
 
     if (analysis && analysis.length > 0) {
-      const buckets = analysis.length;
-      const bucketsPerCol = buckets / targetCols;
-
+      const maxBarHeight = Math.max(6, baselineY - 5);
       for (let col = 0; col < targetCols; col++) {
-        const startB = Math.floor(col * bucketsPerCol);
-        const endB = Math.min(buckets, Math.floor((col + 1) * bucketsPerCol));
-
-        let maxPeak = 0;
-        let sumLow = 0;
-        let sumMid = 0;
-        let sumHigh = 0;
-        let count = 0;
-
-        for (let b = startB; b < endB; b++) {
-          const p = analysis.peaks[b] || 0;
-          if (p > maxPeak) maxPeak = p;
-          sumLow += analysis.lowEnergy[b] || 0;
-          sumMid += analysis.midEnergy[b] || 0;
-          sumHigh += analysis.highEnergy[b] || 0;
-          count++;
-        }
-
-        const low = count > 0 ? sumLow / count : 0;
-        const mid = count > 0 ? sumMid / count : 0;
-        const high = count > 0 ? sumHigh / count : 0;
-
-        // Do not turn a zero-energy (CLEAR/silence) bucket into a cosmetic
-        // waveform column. The neutral baseline above remains visible instead.
-        if (maxPeak <= 0 && low <= 0 && mid <= 0 && high <= 0) continue;
-        const barH = maxPeak * (height - 4);
-        const yTop = (height - barH) / 2;
-
-        // Color based on spectral density (Rekordbox RGB spectral styling)
-        // Red = Bass, Green = Mids, Blue/Cyan = Highs — shared helper keeps
-        // the overview identical in hue to the detail waveform below it.
-        ctx.fillStyle = spectralRgb(low, mid, high);
-        ctx.fillRect(col, yTop, 1, barH);
+        const t0 = (col / targetCols) * duration;
+        const t1 = ((col + 1) / targetCols) * duration;
+        const sample = sampleWaveformColumn(
+          analysis,
+          t0,
+          t1,
+          duration,
+          track.beatGrid
+        );
+        renderRekordboxOverviewColumn(
+          ctx,
+          col,
+          baselineY,
+          maxBarHeight,
+          sample
+        );
       }
     } else {
-      // Intentionally leave the neutral baseline visible. A waveform must come
-      // from ANLZ or an explicitly labeled local analysis, never from a visual
-      // BPM/template approximation.
+      // Intentionally leave the neutral baseline visible.
+      ctx.fillStyle = REKORDBOX_BASELINE_HEX;
+      ctx.fillRect(0, baselineY - 1, width, 1);
     }
+
+    // Iconic orange 'E' badge at top-left of overview (matching rekordbox_edit.png)
+    ctx.fillStyle = '#ff8c00';
+    ctx.fillRect(2, 2, 7, 8);
+    ctx.fillStyle = '#191919';
+    ctx.font = 'bold 7px sans-serif';
+    ctx.fillText('E', 3, 9);
 
     // Draw Rekordbox Phrase Blocks (PSSI) along the bottom edge of overview
     if (track.phrases && track.phrases.length > 0) {

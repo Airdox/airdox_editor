@@ -48,13 +48,13 @@ var WAVEFORM_TAGS = Object.freeze([
 ]);
 var ANLZ_EXTENSIONS = Object.freeze([".dat", ".ext", ".2ex"]);
 var WAVEFORM_PRIORITY = Object.freeze({
-  PWV7: 7,
-  PWV5: 6,
-  PWV6: 5,
-  PWV4: 4,
+  PWV5: 7,
+  PWV7: 6,
+  PWV4: 5,
+  PWV6: 4,
   PWV3: 3,
-  PWV2: 2,
-  PWAV: 1
+  PWAV: 2,
+  PWV2: 1
 });
 function toAnlzDataView(input) {
   if (input instanceof ArrayBuffer) {
@@ -255,6 +255,15 @@ function scanAnlzSections(input) {
     );
     if (!isPrintableTag(tag)) {
       stopReason = "Unerwartete Bytes statt eines ANLZ-Sektionstags.";
+      break;
+    }
+    if (tag === "PMAI") {
+      const pmaiHeaderLen = view.getUint32(offset + 4, false);
+      if (pmaiHeaderLen >= 12 && offset + pmaiHeaderLen <= len) {
+        offset += pmaiHeaderLen;
+        continue;
+      }
+      stopReason = "Eingebetteter PMAI-Header der ANLZ-Datei ist ung\xFCltig.";
       break;
     }
     const lenHeader = view.getUint32(offset + 4, false);
