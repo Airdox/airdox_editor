@@ -1,0 +1,51 @@
+name: Windows Setup bauen
+
+# Läuft automatisch bei jedem Push auf main/master
+# UND wenn du einen Versions-Tag pushst (z.B. v1.0.0) -> dann wird zusätzlich
+# ein GitHub Release mit der setup.exe als Download angelegt.
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:   # erlaubt auch manuelles Starten über die GitHub-Weboberfläche
+
+jobs:
+  build-windows-setup:
+    runs-on: windows-latest
+
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      # electron-builder liest die Konfiguration aus package.json (Feld "build")
+      # und erzeugt eine fertige Windows-Setup.exe (NSIS-Installer).
+      - name: Windows-Setup bauen
+        run: npx electron-builder --win --publish never
+
+      # Das fertige Setup als Download-Artefakt an den Workflow-Lauf anhängen,
+      # damit du es dir bei jedem Push direkt bei GitHub herunterladen kannst.
+      - name: Setup-Datei hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: dist/*.exe
+          if-no-files-found: error
+
+      # Nur wenn du einen Tag wie v1.0.0 pushst: automatisch ein
+      # öffentliches Release mit der setup.exe als Download erstellen.
+      - name: Release erstellen (nur bei Versions-Tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
