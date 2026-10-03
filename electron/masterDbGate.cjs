@@ -9,9 +9,9 @@ function resolveAnlzPath(analysisPath) {
 
   const candidates = [
     path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', relativePioneer),
-    path.join('D:', 'PIONEER', relativePioneer),
+    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', relativePioneer),
     path.join('D:', cleanPath),
-    path.join('D:', 'PIONEER', cleanPath),
+    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', cleanPath),
     path.join('C:', 'PIONEER', relativePioneer),
     path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
   ];
