@@ -31,3 +31,11 @@ resources/stem-runtime/*
 # Build; einen Download gibt es nur über `npm run stems:bundle`.
 *.onnx
 !tests/fixtures/onnx/*.onnx
+
+# Generierte Repo-Analyse (tools/code_analysis/analyze_repo.py): kein
+# versioniertes Artefakt, jederzeit neu erzeugbar.
+code_analysis_out/
+visualization.html
+
+# Validierungs-/Zwischenergebnisse von Läufen (große WAVs, Reports)
+artifacts/

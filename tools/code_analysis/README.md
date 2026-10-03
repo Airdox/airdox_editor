@@ -7,7 +7,7 @@ interaktive Sichten übersetzt:
 |---|---|
 | `code_analysis_out/airdox.cc.json` | **CodeCharta**-Datei: 3D-Code-Stadt inkl. Git-Risiko-Metriken und kombiniertem `riskScore` |
 | `code_analysis_out/graph.json` | Rohdaten: Knoten, Metriken, Import-, IPC-, API-, Subprozess- und Protokoll-Kanten |
-| `visualization.html` (Repo-Root) | **Eigenständige D3-App** – per Doppelklick im Browser öffnen (Daten sind eingebettet) |
+| `visualization.html` (wird erzeugt) | **Eigenständige D3-App** – per Doppelklick im Browser öffnen (Daten sind eingebettet). Nicht versioniert: `python tools/code_analysis/analyze_repo.py` erzeugt sie neu. |
 
 ## 1) Analyse ausführen
 
@@ -102,7 +102,7 @@ Optional vorab validieren: `ccsh check code_analysis_out/airdox.cc.json`.
 
 ```bash
 # einfach öffnen (kein Server nötig, Daten sind eingebettet):
-visualization.html
+visualization.html (Erzeugnis, gitignoriert)
 ```
 
 - Knotenfarben: Blau = `src/` · Gelb = `electron/` · Rot = Root-Core (`server.ts`) ·
@@ -123,7 +123,7 @@ visualization.html
 | Komponente | Benötigt | Installiert? |
 |---|---|---|
 | `analyze_repo.py` (Weg A) | Python ≥ 3.9 (stdlib), `git` | nichts zu installieren |
-| `visualization.html` | Browser (einmalig Internet für D3-CDN) | nichts zu installieren |
+| `visualization.html` (Erzeugnis) | Browser (einmalig Internet für D3-CDN) | nichts zu installieren |
 | CodeCharta Web Studio | nur der Browser | nichts zu installieren |
 | Weg B: `run_gitlog_analysis.sh` | `npm i -g codecharta-analysis` (Node ≥ 20) **und Java ≥ 11** | nur für die Parser-Extras nötig |
 

@@ -15,9 +15,10 @@ Es entstehen zwei Artefakte im Ordner `release/`:
 2. **Git** (für den Klon aus GitHub)
 3. **Visual Studio Build Tools** mit „Desktopentwicklung mit C++“ – nur falls
    `npm ci` für `better-sqlite3-multiple-ciphers` kein fertiges Binary laden
-   kann. Der GitHub-Workflow `windows-latest` bringt die Build Tools bereits
-   mit; auf einem normalen Entwicklerrechner genügt in der Regel der
-   mitgelieferte Prebuild.
+   kann. Auf einem normalen Entwicklerrechner genügt in der Regel der
+   mitgelieferte Prebuild. (Die frühere PyInstaller-/Inno-Setup-Kette
+   inklusive `build.spec`, `setup.iss` und `build_pipeline.py` ist entfernt –
+   sie baute die Python-Vorversion und nicht die Electron-App.)
 
 `better-sqlite3-multiple-ciphers` ist **Pflichtabhängigkeit** (nicht mehr
 `optionalDependencies`): Ohne sie kann die App keine Rekordbox-`master.db`
