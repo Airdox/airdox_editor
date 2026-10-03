@@ -1184,7 +1184,7 @@ export class RemoteStemJobService {
       jobId: record.jobId,
       status: record.status,
       phase: record.phase,
-      percent: record.status === 'COMPLETED' ? 100 : Math.round(record.workerPercent ?? record.percent),
+      percent: record.status === 'COMPLETED' ? 100 : Math.min(99, Math.round(record.workerPercent ?? record.percent)),
       profile: record.profile,
       modelId: record.modelId,
       family: record.family,
