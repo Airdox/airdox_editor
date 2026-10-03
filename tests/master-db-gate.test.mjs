@@ -582,6 +582,57 @@ const DEVICE_QUERY = { trackId: '142225026', mediaPath: DEVICE_LOCATION, title: 
   assert.equal(result.original.path, originalPath);
 }
 
+// ─── 14. .DAT + .EXT im selben USBANLZ-Ordner: PWV5 aus .EXT gewinnt vor PWV2 aus .DAT ─
+{
+  const dbPath = 'C:\\Pioneer\\rekordbox7\\master.db';
+  const datPath = 'C:\\Pioneer\\rekordbox7\\analysis\\PQT000000.DAT';
+  const extPath = 'C:\\Pioneer\\rekordbox7\\analysis\\PQT000000.EXT';
+  const originalPath = 'C:\\Music\\Andreas Henneberg\\Skirmish (Original Mix).mp3';
+  const datOnlyBytes = Buffer.concat([
+    pmaiHeader(32),
+    ppthSection(originalPath),
+    section('PQTZ', Buffer.alloc(16, 0x01)),
+    (() => {
+      const b = Buffer.alloc(8 + 100, 0x18);
+      b.writeUInt32BE(100, 0);
+      b.writeUInt32BE(0x00100000, 4);
+      return section('PWV2', b, 0x14);
+    })(),
+  ]);
+  const extBody = Buffer.alloc(12 + 2 * 600, 0xa5);
+  extBody.writeUInt32BE(2, 0);
+  extBody.writeUInt32BE(600, 4);
+  extBody.writeUInt32BE(0, 8);
+  const extBytes = Buffer.concat([
+    pmaiHeader(32),
+    ppthSection(originalPath),
+    section('PWV5', extBody, 0x18),
+  ]);
+  const normalize = (value) => String(value).replace(/\\/g, '/').replace(/\/+?/g, '/').toLowerCase();
+  const { deps } = makeDeps({
+    stat: async (target) => {
+      const norm = normalize(target);
+      if (norm === normalize(dbPath)) return { isFile: () => true, size: 1024, mtimeMs: 1700000000000 };
+      if (norm === normalize(datPath)) return { isFile: () => true, size: datOnlyBytes.length, mtimeMs: 1700000001000 };
+      if (norm === normalize(extPath)) return { isFile: () => true, size: extBytes.length, mtimeMs: 1700000001500 };
+      if (norm === normalize(originalPath)) return { isFile: () => true, size: 9_876_543, mtimeMs: 1700000002000 };
+      throw enoent(target);
+    },
+    readFile: async (target) => {
+      const norm = normalize(target);
+      if (norm === normalize(datPath)) return datOnlyBytes;
+      if (norm === normalize(extPath)) return extBytes;
+      throw enoent(target);
+    },
+  });
+  const result = await resolveTrackFromMasterDb({ trackId: '142225026' }, deps);
+  assert.equal(result.ok, true, `expected .DAT+.EXT to resolve, got ${result.code}: ${result.reason}`);
+  assert.equal(result.analysis.waveform.tag, 'PWV5', 'sibling .EXT PWV5 must override .DAT PWV2');
+  assert.equal(result.analysis.waveform.buckets, 600);
+  assert.equal(result.analysis.size, datOnlyBytes.length + extBytes.length);
+  assert.equal(result.analysis.modifiedAt, 1700000001500);
+}
+
 // ─── scanAnlzSections: gespiegelt an anlzParser.ts ──────────────────────────
 {
   const ppthScan = scanAnlzSections(anlzWithPpth('C:\\Music\\Reference.wav'));

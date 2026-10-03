@@ -9,7 +9,7 @@ const {
 } = require('./dbReader.cjs');
 const { OriginalSourceRegistry } = require('./pathGuard.cjs');
 const { AnalysisPathRegistry } = require('./analysisRegistry.cjs');
-const { resolveTrackFromMasterDb } = require('./masterDbGate.cjs');
+const { resolveTrackFromMasterDb, scanAnlzSections } = require('./masterDbGate.cjs');
 const { checkRekordboxRuntime } = require('./rekordboxRuntimeCheck.cjs');
 const { inspectDemucsEnvironment, separateWav } = require('./demucsRunner.cjs');
 const { inspectStemRuntime } = require('./stemRuntime.cjs');
@@ -691,11 +691,62 @@ ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
     throw new Error('Die ANLZ-Quelldatei änderte Größe oder mtime während des Read-only-Lesevorgangs.');
   }
   originalSourceRegistry.register(localPath);
+
+  // Wenn eine .DAT-Datei angefordert wird, lese im selben Ordner vorhandene
+  // .EXT- und .2EX-Geschwisterdateien (PWV5/PWV7 Detail-Waveform, PCO2, PSSI)
+  // mit identischer Read-only-Prüfung wie im Master-DB-Gate hinzu.
+  let combinedData = data;
+  let totalSize = details.size;
+  let latestModifiedAt = details.mtimeMs;
+  const primaryExt = path.extname(localPath);
+  if (primaryExt.toLowerCase() === '.dat') {
+    const isUpper = primaryExt === primaryExt.toUpperCase();
+    const stem = localPath.slice(0, -primaryExt.length);
+    const siblingExtensions = isUpper ? ['.EXT', '.2EX'] : ['.ext', '.2ex'];
+    const buffers = [data];
+    for (const sibExt of siblingExtensions) {
+      const sibPath = `${stem}${sibExt}`;
+      let sibBefore = null;
+      try {
+        sibBefore = await stat(sibPath);
+      } catch {
+        sibBefore = null;
+      }
+      if (!sibBefore || !sibBefore.isFile() || sibBefore.size <= 0 || sibBefore.size > 1024 * 1024 * 1024) {
+        continue;
+      }
+      try {
+        const sibData = await readFile(sibPath);
+        const sibAfter = await stat(sibPath);
+        if (
+          sibData.byteLength !== sibBefore.size ||
+          sibAfter.size !== sibBefore.size ||
+          sibAfter.mtimeMs !== sibBefore.mtimeMs
+        ) {
+          continue;
+        }
+        const sibScan = scanAnlzSections(sibData);
+        if (!sibScan.valid) continue;
+        originalSourceRegistry.register(sibPath);
+        buffers.push(sibData);
+        totalSize += sibBefore.size;
+        if (sibBefore.mtimeMs > latestModifiedAt) {
+          latestModifiedAt = sibBefore.mtimeMs;
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (buffers.length > 1) {
+      combinedData = Buffer.concat(buffers);
+    }
+  }
+
   return {
-    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    data: combinedData.buffer.slice(combinedData.byteOffset, combinedData.byteOffset + combinedData.byteLength),
     path: localPath,
-    size: details.size,
-    modifiedAt: details.mtimeMs,
+    size: totalSize,
+    modifiedAt: latestModifiedAt,
     accessMode: 'READ_ONLY',
   };
 });

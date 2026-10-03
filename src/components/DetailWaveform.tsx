@@ -35,7 +35,11 @@ import {
   paletteDropTime,
   readPaletteClipDrag,
 } from '../utils/paletteDrag';
-import { spectralRgb, spectralRgbCore } from '../waveform/spectralColor';
+import {
+  REKORDBOX_BASELINE_HEX,
+  renderRekordboxWaveformColumn,
+  sampleWaveformColumn,
+} from '../waveform/spectralColor';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
@@ -208,30 +212,68 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const height = canvas.height;
       ctx.clearRect(0, 0, width, height);
 
-      // 1. Dark background
-      ctx.fillStyle = '#0b0c0f';
+      // 1. Dark background (Rekordbox EDIT #191919 on odd bars 1,3,5..., #000000 on even bars 2,4,6... and pre-track)
+      const rulerBottom = 18;
+      const hasPhraseLane = Boolean(track?.phrases && track.phrases.length > 0);
+      const waveBottom = hasPhraseLane ? Math.max(rulerBottom + 20, height - PHRASE_LANE_HEIGHT) : height;
+      const waveLaneHeight = Math.max(20, waveBottom - rulerBottom);
+      const centerY = rulerBottom + waveLaneHeight / 2;
+      const maxHalfHeight = waveLaneHeight * 0.44;
+
+      ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, width, height);
 
-      // Subtle horizontal centerline and amplitude bounds
-      const centerY = height / 2;
-      ctx.strokeStyle = '#16171d';
+      if (track) {
+        const bg = track.beatGrid;
+        const spb = 60.0 / bg.bpm;
+        const barDuration = spb * bg.meter;
+        const firstBarIdx = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / barDuration));
+        const lastBarIdx = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / barDuration);
+        for (let barIdx = firstBarIdx; barIdx <= lastBarIdx; barIdx++) {
+          // Odd bar numbers (Bar 1, 3, 5 -> barIdx 0, 2, 4) have #191919 background in Rekordbox EDIT
+          if (barIdx % 2 !== 0) continue;
+          const bStart = Math.max(0, bg.firstBeat + barIdx * barDuration);
+          const bEnd = Math.min(track.duration, bg.firstBeat + (barIdx + 1) * barDuration);
+          if (bEnd <= bStart) continue;
+          const x0 = Math.max(0, Math.min(width, timeToPixel(bStart, width)));
+          const x1 = Math.max(0, Math.min(width, timeToPixel(bEnd, width)));
+          if (x1 > x0) {
+            ctx.fillStyle = '#191919';
+            ctx.fillRect(x0, rulerBottom, x1 - x0, waveLaneHeight);
+          }
+        }
+      }
+
+      // Subtle horizontal amplitude bounds + Rekordbox centerline (#f2f2f2 pre-track, #00A2E8 inside track)
+      ctx.strokeStyle = '#707070';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, centerY);
-      ctx.lineTo(width, centerY);
-      ctx.moveTo(0, centerY - (height * 0.4));
-      ctx.lineTo(width, centerY - (height * 0.4));
-      ctx.moveTo(0, centerY + (height * 0.4));
-      ctx.lineTo(width, centerY + (height * 0.4));
+      ctx.moveTo(0, waveBottom - 0.5);
+      ctx.lineTo(width, waveBottom - 0.5);
       ctx.stroke();
 
-      ctx.fillStyle = '#111216';
-      ctx.fillRect(0, 0, width, 18); // top bar number strip
-      ctx.strokeStyle = '#222530';
+      if (track) {
+        const firstBeatX = Math.max(0, Math.min(width, timeToPixel(track.beatGrid.firstBeat, width)));
+        if (firstBeatX > 0) {
+          ctx.fillStyle = '#f2f2f2';
+          ctx.fillRect(0, Math.round(centerY), firstBeatX, 1);
+        }
+        ctx.fillStyle = REKORDBOX_BASELINE_HEX;
+        ctx.fillRect(firstBeatX, Math.round(centerY), Math.max(0, width - firstBeatX), 1);
+      } else {
+        ctx.fillStyle = REKORDBOX_BASELINE_HEX;
+        ctx.fillRect(0, Math.round(centerY), width, 1);
+      }
+
+      ctx.fillStyle = '#323232';
+      ctx.fillRect(0, 0, width, rulerBottom); // top bar number strip (Rekordbox #323232)
+      ctx.strokeStyle = '#707070';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, 18);
-      ctx.lineTo(width, 18);
+      ctx.moveTo(0, 0.5);
+      ctx.lineTo(width, 0.5);
+      ctx.moveTo(0, rulerBottom);
+      ctx.lineTo(width, rulerBottom);
       ctx.stroke();
 
       if (!track) {
@@ -249,183 +291,92 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         return;
       }
 
-      // 2. Beatgrid lines & Bar Numbers (Top header strip)
+      // 2. Beatgrid lines & Bar Numbers (Top header strip, matching rekordbox_edit.png)
       const bg = track.beatGrid;
       const secondsPerBeat = 60.0 / bg.bpm;
+      const barPx = (secondsPerBeat * bg.meter / viewDuration) * width;
       const startBeat = Math.max(0, Math.floor((viewOffset - bg.firstBeat) / secondsPerBeat));
       const endBeat = Math.ceil((viewOffset + viewDuration - bg.firstBeat) / secondsPerBeat);
 
       for (let b = startBeat; b <= endBeat; b++) {
         const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
+        const x = Math.round(timeToPixel(beatTime, width));
         if (x < -20 || x > width + 20) continue;
 
         const isBar = b % bg.meter === 0;
-        const barNumber = Math.floor(b / bg.meter) + 1;
+        const barIdx = Math.floor(b / bg.meter);
+        const barNumber = barIdx + 1;
+        const isMajorPhraseBar = (barNumber - 1) % 4 === 0;
 
         if (isBar) {
-          // Rekordbox authentic solid white Bar vertical downbeat line
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-
-          // Rekordbox Bar number in top ruler (e.g. 109, 113)
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 11px sans-serif';
-          ctx.fillText(`${barNumber}`, x + 3, 14);
-        } else {
-          // Intermediate beat lines (beats 2, 3, 4)
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-          ctx.lineWidth = 0.8;
-          ctx.beginPath();
-          ctx.moveTo(x, 18);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-
-          // Top ruler tick
-          ctx.strokeStyle = '#606578';
+          // Major 4-bar phrase lines (1, 5, 9, 13...) are crisp white (#fefefe);
+          // intermediate bar lines (2, 3, 4...) are medium grey (#6f6f6f).
+          ctx.strokeStyle = isMajorPhraseBar ? '#fefefe' : '#6f6f6f';
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(x, 12);
-          ctx.lineTo(x, 18);
+          ctx.moveTo(x + 0.5, 0);
+          ctx.lineTo(x + 0.5, waveBottom);
+          ctx.stroke();
+
+          if (isMajorPhraseBar || barPx >= 240) {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(`${barNumber}`, x + 4, 12);
+          }
+
+          // Iconic orange 'E' Edit-Start badge on Bar 1 (rekordbox_edit.png x=243, y=211)
+          if (barNumber === 1) {
+            ctx.fillStyle = '#ff8c00';
+            ctx.fillRect(x - 3, rulerBottom - 9, 7, 8);
+            ctx.fillStyle = '#191919';
+            ctx.font = 'bold 7px sans-serif';
+            ctx.fillText('E', x - 2, rulerBottom - 2);
+          }
+        } else {
+          // Sub-beat lines (beats 2, 3, 4): #000000 in top ruler and odd (#191919) bars,
+          // #242424 in even (#000000) bars — drawn behind the waveform.
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, 0);
+          ctx.lineTo(x + 0.5, rulerBottom);
+          ctx.stroke();
+
+          ctx.strokeStyle = barIdx % 2 === 0 ? '#000000' : '#242424';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, rulerBottom);
+          ctx.lineTo(x + 0.5, waveBottom);
           ctx.stroke();
         }
       }
 
-      // 3. Render the source waveform as a continuous silhouette.
+      // 3. Render the source waveform as 1-px vertical Rekordbox EDIT-mode columns.
       // Never use edit-operation bars or a synthetic beat pattern here: inserted,
       // replaced and overdubbed audio must be rendered by the same renderer as
       // the untouched source so the waveform has one consistent visual language.
       const analysis = track.analysis;
       if (analysis && analysis.length > 0) {
-        const buckets = analysis.length;
-        const secPerBucket = analysis.secPerBucket || (track.duration / buckets);
-        const startBucket = Math.max(0, Math.floor(viewOffset / secPerBucket) - 1);
-        const endBucket = Math.min(buckets - 1, Math.ceil((viewOffset + viewDuration) / secPerBucket) + 1);
-        const maxHalfH = height * 0.42;
+        const duration = Math.max(0.01, track.duration);
 
-        // Render from recorded analysis values only. The continuous envelope keeps
-        // the cleaned-up UI from main, while separate non-zero runs ensure a
-        // cleared/silent range is never bridged or given an invented minimum height.
-        type EnvelopePoint = { x: number; y: number };
-        type EnvelopeRun = { upper: EnvelopePoint[]; lower: EnvelopePoint[] };
-        const envelopeRuns = (amplitudeAt: (bucket: number) => number): EnvelopeRun[] => {
-          const runs: EnvelopeRun[] = [];
-          let run: EnvelopeRun | null = null;
-          for (let bucket = startBucket; bucket <= endBucket; bucket++) {
-            const amplitude = Math.max(0, Math.min(1, amplitudeAt(bucket) || 0));
-            if (amplitude <= 0) {
-              run = null;
-              continue;
-            }
-            if (!run) {
-              run = { upper: [], lower: [] };
-              runs.push(run);
-            }
-            const x = timeToPixel((bucket + 0.5) * secPerBucket, width);
-            const halfHeight = amplitude * maxHalfH;
-            run.upper.push({ x, y: centerY - halfHeight });
-            run.lower.push({ x, y: centerY + halfHeight });
-          }
-          return runs;
-        };
-
-        const drawEnvelope = (runs: EnvelopeRun[], colour: string | CanvasGradient, alpha = 1) => {
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = colour;
-          for (const { upper, lower } of runs) {
-            if (upper.length === 1) {
-              const halfHeight = centerY - upper[0].y;
-              ctx.fillRect(upper[0].x - 0.5, centerY - halfHeight, 1, halfHeight * 2);
-              continue;
-            }
-            ctx.beginPath();
-            ctx.moveTo(upper[0].x, centerY);
-            upper.forEach((point) => ctx.lineTo(point.x, point.y));
-            for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i].x, lower[i].y);
-            ctx.closePath();
-            ctx.fill();
-          }
-          ctx.restore();
-        };
-
-        const peakRuns = envelopeRuns((bucket) => analysis.peaks[bucket]);
-        if (waveformMode === 'BLUE') {
-          drawEnvelope(peakRuns, '#159fe8');
-          drawEnvelope(peakRuns, '#b8e9ff', 0.34);
-        } else if (waveformMode === '3BAND') {
-          // Each continuous layer follows its actual recorded frequency band.
-          drawEnvelope(envelopeRuns((bucket) => analysis.lowEnergy[bucket] * 0.85), '#ff3b45', 0.72);
-          drawEnvelope(envelopeRuns((bucket) => analysis.midEnergy[bucket] * 0.70), '#18d8df', 0.48);
-          drawEnvelope(envelopeRuns((bucket) => analysis.highEnergy[bucket] * 0.55), '#effcff', 0.30);
-        } else {
-          // RGB: rekordbox-authentic per-column spectral colouring. Every pixel
-          // column is coloured from the real frequency content at that time so
-          // drops (bass-heavy) glow red/orange while breaks and vocal passages
-          // read blue/green — song sections are recognisable at a glance.
-          // A single static top-to-bottom gradient cannot express this.
-          for (let x = 0; x < width; x++) {
-            const t0 = viewOffset + (x / width) * viewDuration;
-            const t1 = viewOffset + ((x + 1) / width) * viewDuration;
-            const b0 = Math.max(0, Math.floor(t0 / secPerBucket));
-            const b1 = Math.min(buckets - 1, Math.floor(t1 / secPerBucket));
-            if (b1 < b0) continue;
-
-            let maxPeak = 0;
-            let sumLow = 0;
-            let sumMid = 0;
-            let sumHigh = 0;
-            let count = 0;
-            for (let b = b0; b <= b1; b++) {
-              const p = analysis.peaks[b] || 0;
-              if (p > maxPeak) maxPeak = p;
-              sumLow += analysis.lowEnergy[b] || 0;
-              sumMid += analysis.midEnergy[b] || 0;
-              sumHigh += analysis.highEnergy[b] || 0;
-              count++;
-            }
-            // Zero-energy (CLEAR/silence) columns stay empty — no invented floor.
-            if (maxPeak <= 0) continue;
-
-            const low = count > 0 ? sumLow / count : 0;
-            const mid = count > 0 ? sumMid / count : 0;
-            const high = count > 0 ? sumHigh / count : 0;
-
-            const h = maxPeak * maxHalfH;
-            ctx.fillStyle = spectralRgb(low, mid, high);
-            ctx.fillRect(x, centerY - h, 1, h * 2);
-
-            // Bright inner core in the same spectral hue gives the glowing
-            // centre rekordbox waveforms have.
-            const coreH = h * 0.45;
-            if (coreH >= 0.5) {
-              ctx.fillStyle = spectralRgbCore(low, mid, high);
-              ctx.globalAlpha = 0.55;
-              ctx.fillRect(x, centerY - coreH, 1, coreH * 2);
-              ctx.globalAlpha = 1;
-            }
-          }
-        }
-
-        // Fine centre traces retain visual detail without manufacturing audio in
-        // zero-valued analysis buckets. The RGB columns already carry their own
-        // spectral highlight, so the white trace applies to envelope modes only.
-        if (waveformMode !== 'RGB') {
-          ctx.strokeStyle = 'rgba(220,245,255,.38)';
-          ctx.lineWidth = 0.7;
-          for (const { upper, lower } of peakRuns) {
-            if (upper.length < 2) continue;
-            ctx.beginPath();
-            upper.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-            ctx.stroke();
-            ctx.beginPath();
-            lower.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
-            ctx.stroke();
-          }
+        for (let x = 0; x < width; x++) {
+          const t0 = viewOffset + (x / width) * viewDuration;
+          const t1 = viewOffset + ((x + 1) / width) * viewDuration;
+          const sample = sampleWaveformColumn(
+            analysis,
+            t0,
+            t1,
+            duration,
+            track.beatGrid
+          );
+          renderRekordboxWaveformColumn(
+            ctx,
+            x,
+            centerY,
+            maxHalfHeight,
+            sample,
+            waveformMode
+          );
         }
       } else {
         // Never invent a rhythmic waveform from BPM metadata. Until real
@@ -438,28 +389,23 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
 
       }
 
-      // 3b. Beatgrid overlay lines over waveform (clean white downbeat lines, subtle beat lines)
+      // 3b. Beatgrid bar overlay lines (keep 4-bar major downbeats crisp white and
+      // intermediate bars subtle grey; sub-beats stay behind the waveform like rekordbox_edit.png)
       for (let b = startBeat; b <= endBeat; b++) {
-        const beatTime = bg.firstBeat + b * secondsPerBeat;
-        const x = timeToPixel(beatTime, width);
-        if (x < -10 || x > width + 10) continue;
         const isBar = b % bg.meter === 0;
+        if (!isBar) continue;
+        const beatTime = bg.firstBeat + b * secondsPerBeat;
+        const x = Math.round(timeToPixel(beatTime, width));
+        if (x < -10 || x > width + 10) continue;
+        const barNumber = Math.floor(b / bg.meter) + 1;
+        const isMajorPhraseBar = (barNumber - 1) % 4 === 0;
 
-        if (isBar) {
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.moveTo(x, 18);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-        } else {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-          ctx.lineWidth = 0.7;
-          ctx.beginPath();
-          ctx.moveTo(x, 18);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-        }
+        ctx.strokeStyle = isMajorPhraseBar ? 'rgba(254, 254, 254, 0.85)' : 'rgba(111, 111, 111, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, rulerBottom);
+        ctx.lineTo(x + 0.5, waveBottom);
+        ctx.stroke();
       }
 
       // 3c. Track-Part-Leiste (Intro / Build / Drop / Break / Outro) unter der

@@ -44,13 +44,13 @@ export const ANLZ_EXTENSIONS: readonly string[] = Object.freeze(['.dat', '.ext',
 
 /** Highest priority wins when a container carries more than one waveform. */
 export const WAVEFORM_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
-  PWV7: 7,
-  PWV5: 6,
-  PWV6: 5,
-  PWV4: 4,
+  PWV5: 7,
+  PWV7: 6,
+  PWV4: 5,
+  PWV6: 4,
   PWV3: 3,
-  PWV2: 2,
-  PWAV: 1,
+  PWAV: 2,
+  PWV2: 1,
 });
 
 export type WaveformStyle =
@@ -398,6 +398,18 @@ export function scanAnlzSections(
     );
     if (!isPrintableTag(tag)) {
       stopReason = 'Unerwartete Bytes statt eines ANLZ-Sektionstags.';
+      break;
+    }
+    if (tag === 'PMAI') {
+      // Multi-container ANLZ bundle (.DAT + .EXT + .2EX concatenated in memory):
+      // skip the 28/32-byte PMAI file header of the companion container so its
+      // sections (PWV5, PCO2, PSSI, PWV7) are walked in the same pass.
+      const pmaiHeaderLen = view.getUint32(offset + 4, false);
+      if (pmaiHeaderLen >= 12 && offset + pmaiHeaderLen <= len) {
+        offset += pmaiHeaderLen;
+        continue;
+      }
+      stopReason = 'Eingebetteter PMAI-Header der ANLZ-Datei ist ungültig.';
       break;
     }
     const lenHeader = view.getUint32(offset + 4, false);
