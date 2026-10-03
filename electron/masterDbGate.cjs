@@ -84,52 +84,67 @@ function driveRootOf(windowsPath) {
 }
 
 /**
- * AnalysisDataPath steht in djmdContent typischerweise als geräte-relativer,
- * POSIX-artiger Pfad ("/PIONEER/USBANLZ/.../ANLZ0000.DAT"), nicht als
- * Windows-Pfad mit Laufwerksbuchstabe. Wandelt ihn in "PIONEER\...\..."
- * (Backslashes, ohne führenden Trenner) um – oder liefert null, wenn der
- * Pfad bereits laufwerksabsolut ist (dann übernimmt toLocalPath/literal).
+ * Extrahiert "PIONEER\USBANLZ\..." (Backslashes) aus einem Pfad – egal ob
+ * der Pfad als kurzer geräte-relativer Pfad ("/PIONEER/USBANLZ/...") oder
+ * bereits als vollständiger Windows-Pfad ("D:\PIONEER\USBANLZ\...")
+ * vorliegt. Liefert null, wenn kein "PIONEER"-Segment gefunden wird.
  */
-function posixDeviceSuffix(rawPath) {
-  if (typeof rawPath !== 'string') return null;
-  if (/^[a-z]:[\\/]/i.test(rawPath)) return null;
-  const trimmed = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!trimmed) return null;
-  return trimmed.split('/').join('\\');
+function pioneerSuffixOf(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const normalized = value.replace(/\\/g, '/');
+  const upper = normalized.toUpperCase();
+  let idx;
+  if (upper.startsWith('PIONEER/')) {
+    idx = 0;
+  } else {
+    const marker = upper.indexOf('/PIONEER/');
+    if (marker === -1) return null;
+    idx = marker + 1;
+  }
+  const suffix = normalized.slice(idx).replace(/^\/+/, '');
+  if (!suffix) return null;
+  return suffix.split('/').join('\\');
 }
 
 /**
- * Leitet alle sinnvollen Kandidaten für die ANLZ-Datei her:
- *   1. der wörtliche Pfad aus der Datenbank (falls bereits laufwerksabsolut)
+ * Leitet alle sinnvollen Kandidaten für die ANLZ-Datei her, unabhängig
+ * davon, ob AnalysisDataPath in djmdContent kurz ("/PIONEER/USBANLZ/...")
+ * oder bereits laufwerksabsolut ("D:\PIONEER\USBANLZ\...") gespeichert ist:
+ *   1. der wörtliche Pfad aus der Datenbank
  *   2. deterministisch: Laufwerk der tatsächlich geöffneten Datenbank +
- *      geräte-relativer Rest aus AnalysisDataPath (zuverlässig, unabhängig
- *      vom Arbeitsverzeichnis des Prozesses)
- *   3. Ausweiche für Geräte-Exporte, die den PIONEER-Baum zusätzlich
- *      verschachteln (z. B. Rekordbox "Master"/Link-Export für CDJs:
- *      D:\PIONEER\Master\share\PIONEER\USBANLZ\... statt
- *      D:\PIONEER\USBANLZ\...) – abgeleitet von der echten Ordnerstruktur
- *      der gefundenen Datenbank, nicht fest auf ein Laufwerk verdrahtet.
+ *      "PIONEER\..."-Rest (zuverlässig, unabhängig vom Arbeitsverzeichnis)
+ *   3. dieselbe Ausweiche, aber unter der zusätzlichen Verschachtelung,
+ *      die Rekordbox "Master"/Link-Export für CDJs anlegt:
+ *      <Laufwerk>:\PIONEER\Master\share\PIONEER\USBANLZ\... statt
+ *      <Laufwerk>:\PIONEER\USBANLZ\...
+ *   4. dieselbe Verschachtelung, aber bezogen auf die Ordnerstruktur der
+ *      tatsächlich geöffneten Datenbank (falls deren Pfad abweicht)
+ * Nicht fest auf ein Laufwerk verdrahtet – der Laufwerksbuchstabe kommt
+ * immer von der Datenbank, die diesen Track tatsächlich geliefert hat.
  */
 function deriveAnlzCandidates(rawAnalysisPath, dbPath) {
   const candidates = [];
+  const add = (value) => {
+    if (value && !candidates.includes(value)) candidates.push(value);
+  };
 
-  const literal = toLocalPath(rawAnalysisPath);
-  if (literal) candidates.push(literal);
+  add(toLocalPath(rawAnalysisPath));
 
-  const suffix = posixDeviceSuffix(rawAnalysisPath);
+  const suffix = pioneerSuffixOf(rawAnalysisPath) || pioneerSuffixOf(candidates[0]);
   if (suffix && dbPath) {
     const root = driveRootOf(dbPath);
-    if (root) {
-      const deterministic = root + suffix;
-      if (!candidates.includes(deterministic)) candidates.push(deterministic);
+    const suffixWithoutPioneer = suffix.replace(/^PIONEER\\/i, '');
 
-      const dbNormalized = String(dbPath).replace(/\\/g, '/');
-      const dbMarker = dbNormalized.toUpperCase().lastIndexOf('/PIONEER/');
-      if (dbMarker !== -1) {
-        const base = dbNormalized.slice(0, dbMarker + 1).split('/').join('\\');
-        const nested = base + suffix;
-        if (!candidates.includes(nested)) candidates.push(nested);
-      }
+    if (root) {
+      add(root + suffix);
+      add(`${root}PIONEER\\Master\\share\\PIONEER\\${suffixWithoutPioneer}`);
+    }
+
+    const dbNormalized = String(dbPath).replace(/\\/g, '/');
+    const dbMarker = dbNormalized.toUpperCase().lastIndexOf('/PIONEER/');
+    if (dbMarker !== -1) {
+      const base = dbNormalized.slice(0, dbMarker + 1).split('/').join('\\');
+      add(base + suffix);
     }
   }
 
