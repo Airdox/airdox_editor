@@ -1,27 +1,4 @@
 
-// Auto-generated Pfadaufl�sung f�r D:\PIONEER
-function resolveAnlzPath(analysisPath) {
-  if (!analysisPath) return null;
-  if (fs.existsSync(resolveAnlzPath(analysisPath))) return analysisPath;
-
-  const cleanPath = String(analysisPath).replace(/^[A-Z]:[\\/]/i, '').replace(/^[\\/]/, '');
-  const relativePioneer = cleanPath.replace(/^PIONEER[\\/]/i, '');
-
-  const candidates = [
-    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', relativePioneer),
-    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', relativePioneer),
-    path.join('D:', cleanPath),
-    path.join('D:', 'PIONEER', 'Master', 'share', 'PIONEER', cleanPath),
-    path.join('C:', 'PIONEER', relativePioneer),
-    path.join(process.env.APPDATA || '', 'Pioneer', 'rekordbox', 'share', cleanPath)
-  ];
-
-  for (const cand of candidates) {
-    if (fs.existsSync(cand)) return cand;
-  }
-  return analysisPath;
-}
-
 /**
  * Master-DB-Gate (Phase 5) – verbindliche Track-Lade-Kette.
  *
@@ -100,6 +77,66 @@ const MAX_ANALYSIS_BYTES = 1024 * 1024 * 1024;
  * Converts an XML `Location`, a Windows path or a file:// URL into a local
  * filesystem path. Returns null for anything that is not a local path.
  */
+/** Laufwerksbuchstabe + ":\" eines Windows-Pfads, oder null. */
+function driveRootOf(windowsPath) {
+  const m = /^([a-z]:)[\\/]/i.exec(String(windowsPath || ''));
+  return m ? `${m[1]}\\` : null;
+}
+
+/**
+ * AnalysisDataPath steht in djmdContent typischerweise als geräte-relativer,
+ * POSIX-artiger Pfad ("/PIONEER/USBANLZ/.../ANLZ0000.DAT"), nicht als
+ * Windows-Pfad mit Laufwerksbuchstabe. Wandelt ihn in "PIONEER\...\..."
+ * (Backslashes, ohne führenden Trenner) um – oder liefert null, wenn der
+ * Pfad bereits laufwerksabsolut ist (dann übernimmt toLocalPath/literal).
+ */
+function posixDeviceSuffix(rawPath) {
+  if (typeof rawPath !== 'string') return null;
+  if (/^[a-z]:[\\/]/i.test(rawPath)) return null;
+  const trimmed = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!trimmed) return null;
+  return trimmed.split('/').join('\\');
+}
+
+/**
+ * Leitet alle sinnvollen Kandidaten für die ANLZ-Datei her:
+ *   1. der wörtliche Pfad aus der Datenbank (falls bereits laufwerksabsolut)
+ *   2. deterministisch: Laufwerk der tatsächlich geöffneten Datenbank +
+ *      geräte-relativer Rest aus AnalysisDataPath (zuverlässig, unabhängig
+ *      vom Arbeitsverzeichnis des Prozesses)
+ *   3. Ausweiche für Geräte-Exporte, die den PIONEER-Baum zusätzlich
+ *      verschachteln (z. B. Rekordbox "Master"/Link-Export für CDJs:
+ *      D:\PIONEER\Master\share\PIONEER\USBANLZ\... statt
+ *      D:\PIONEER\USBANLZ\...) – abgeleitet von der echten Ordnerstruktur
+ *      der gefundenen Datenbank, nicht fest auf ein Laufwerk verdrahtet.
+ */
+function deriveAnlzCandidates(rawAnalysisPath, dbPath) {
+  const candidates = [];
+
+  const literal = toLocalPath(rawAnalysisPath);
+  if (literal) candidates.push(literal);
+
+  const suffix = posixDeviceSuffix(rawAnalysisPath);
+  if (suffix && dbPath) {
+    const root = driveRootOf(dbPath);
+    if (root) {
+      const deterministic = root + suffix;
+      if (!candidates.includes(deterministic)) candidates.push(deterministic);
+
+      const dbNormalized = String(dbPath).replace(/\\/g, '/');
+      const dbMarker = dbNormalized.toUpperCase().lastIndexOf('/PIONEER/');
+      if (dbMarker !== -1) {
+        const base = dbNormalized.slice(0, dbMarker + 1).split('/').join('\\');
+        const nested = base + suffix;
+        if (!candidates.includes(nested)) candidates.push(nested);
+      }
+    }
+  }
+
+  if (candidates.length === 0 && rawAnalysisPath) candidates.push(rawAnalysisPath);
+  return candidates;
+}
+
 function toLocalPath(location) {
   if (typeof location !== 'string' || !location.trim()) return null;
   const value = location.trim();
@@ -328,25 +365,38 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  const analysisPath = toLocalPath(rawAnalysisPath) || rawAnalysisPath;
-  let analysisStat;
-  try {
-    analysisStat = await stat(analysisPath);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      return fail('ANLZ_NOT_FOUND', `ANLZ-Datei nicht gefunden: ${analysisPath}`, { ...dbContext, content });
+  const analysisCandidates = deriveAnlzCandidates(rawAnalysisPath, candidate.path);
+
+  let analysisPath = null;
+  let analysisStat = null;
+  let readError = null;
+  for (const candidatePath of analysisCandidates) {
+    try {
+      const s = await stat(candidatePath);
+      if (s && s.isFile()) {
+        analysisPath = candidatePath;
+        analysisStat = s;
+        break;
+      }
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') readError = { candidatePath, error };
+      // ENOENT: einfach den nächsten Kandidaten versuchen.
+    }
+  }
+
+  if (!analysisPath) {
+    if (readError) {
+      return fail(
+        'ANLZ_READ_FAILED',
+        `ANLZ-Datei nicht lesbar: ${readError.candidatePath} (${readError.error.message || readError.error})`,
+        { ...dbContext, content }
+      );
     }
     return fail(
-      'ANLZ_READ_FAILED',
-      `ANLZ-Datei nicht lesbar: ${analysisPath} (${error.message || error})`,
+      'ANLZ_NOT_FOUND',
+      `ANLZ-Datei nicht gefunden. Geprüft: ${analysisCandidates.join(' | ')}`,
       { ...dbContext, content }
     );
-  }
-  if (!analysisStat || !analysisStat.isFile()) {
-    return fail('ANLZ_NOT_FOUND', `ANLZ-Pfad verweist nicht auf eine Datei: ${analysisPath}`, {
-      ...dbContext,
-      content,
-    });
   }
   if (analysisStat.size > MAX_ANALYSIS_BYTES) {
     return fail(
