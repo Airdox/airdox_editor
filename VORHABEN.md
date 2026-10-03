@@ -155,6 +155,31 @@ nicht tut.
   Blob-Storage, das nicht aus jeder Umgebung erreichbar ist), und die
   Preflight-Tests laufen deterministisch gegen einen isolierten App-Root,
   statt von der Installation auf der Testmaschine abzuhängen.
+- **Zwei echte Regressionen behoben (03.10.2026).** `npm test` war auf `main`
+  rot (69/71), während der Windows-Build grün war – der Build führte die Suite
+  gar nicht aus. Beide Fehlschläge waren echte Defekte aus Reparatur-Skripten,
+  keine Testfehler:
+  1. **ANLZ-Fingerabdruck-Kontrolle fehlte.** Beim Umbau der ANLZ-
+     Kandidatensuche in `electron/masterDbGate.cjs` ging die Prüfung verloren,
+     dass die gelesene ANLZ-Datei zwischen Auswahl und Leseende unverändert
+     ist. Eine während des Lesens überschriebene oder halb geschriebene Datei
+     konnte damit als „die Waveform von Rekordbox" gelten. Der Gate vergleicht
+     jetzt nach dem `readFile` erneut `size` und `mtimeMs` der gewählten Datei
+     und bricht bei Abweichung **terminal** mit `ANLZ_READ_FAILED` ab – ohne auf
+     einen anderen Kandidaten auszuweichen – und lehnt auch eine kürzere als die
+     angekündigte Datei ab (Test in `tests/master-db-gate.test.mjs`).
+  2. **`asarUnpack`-Muster waren gelöscht.** `package.json` enthielt nur noch
+     drei Muster; die im Repo dokumentierten Stem-Muster
+     (`**/stem-runtime/**/*`, `**/models/**/*`, `python/**/*`,
+     `**/node-bridge.cjs`, `**/*.dll|.so|.dylib`) fehlten. Ursache war
+     `master-fix-and-push.cjs`, das `build.asarUnpack` hart überschrieb; das
+     Skript ergänzt die Liste jetzt nur noch, und
+     `tests/stem-asar-unpack.test.ts` wacht darüber, dass kein Reparatur-Skript
+     die Liste erneut ersetzt.
+  Der veraltete Reparatur-Rest `electron/masterDbGate.cjs.bak` (Kopie mit der
+  rekursiven `resolveAnlzPath`-Funktion, landete über `electron/**/*` sogar im
+  app.asar) ist entfernt, und der Windows-Build führt die Suite jetzt vor dem
+  Installer-Bau aus – „Build grün, Suite rot" bleibt damit nicht mehr unbemerkt.
 
 ### Was noch offen ist (ehrlich)
 

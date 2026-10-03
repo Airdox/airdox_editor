@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -42,6 +43,24 @@ async function run() {
   assert.ok(files.some((f) => f.includes('electron')), 'files includes electron');
   assert.ok(files.some((f) => f.includes('python') || f.includes('modelCatalog')), 'files includes python or catalog');
   console.log('  [PASS] files includes dist, electron, python/catalog');
+
+  // Regression 03.10.2026: `master-fix-and-push.cjs` hat `build.asarUnpack`
+  // hart neu gesetzt und dabei die Stem-Muster (stem-runtime, models, python,
+  // node-bridge.cjs) gelöscht – der Build hätte die Python-Runtime und den
+  // Node-Bridge-Aufruf nur noch aus dem app.asar heraus bedient. Reparatur-
+  // Skripte dürfen die Liste deshalb nur ergänzen, nie ersetzen.
+  for (const scriptName of ['master-fix-and-push.cjs', 'fix.cjs']) {
+    const scriptPath = path.resolve(scriptName);
+    if (!existsSync(scriptPath)) continue;
+    const script = await readFile(scriptPath, 'utf8');
+    // Erlaubt bleibt `= []` (Initialisierung) und `= <variable>`; verboten ist
+    // die Ersetzung durch eine fest verdrahtete Liste (`= ["…", …]`).
+    assert.ok(
+      !/build\.asarUnpack\s*=\s*\[\s*['"]/.test(script),
+      `${scriptName} darf build.asarUnpack nicht ersetzen, nur ergänzen`
+    );
+    console.log(`  [PASS] ${scriptName} ergänzt asarUnpack, statt es zu ersetzen`);
+  }
 
   console.log('ASAR unpack test passed – resources/stem-runtime and models are unpacked per §10');
 }
