@@ -98,6 +98,7 @@ import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { logger } from './utils/logger';
+import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
@@ -401,12 +402,25 @@ async function rebuildTrackFromSerialized(
 
 export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
   const [projectName, setProjectName] = useState<string>('New Project');
-  const [tracks, setTracks] = useState<TrackModel[]>([]);
+  const [tracks, setTrackState] = useState<TrackModel[]>([]);
+  const [trackRevision, setTrackRevision] = useState(0);
+  const setTracks = useCallback(
+    (nextTracks: TrackModel[] | ((current: TrackModel[]) => TrackModel[])) => {
+      setTrackRevision((revision) => revision + 1);
+      setTrackState(nextTracks);
+    },
+    []
+  );
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
 
   // Viewport & Timeline state
-  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [currentTime, setCurrentTimeState] = useState<number>(0);
+  const currentTimeRef = useRef(0);
+  const setCurrentTime = useCallback((nextTime: number) => {
+    currentTimeRef.current = nextTime;
+    setCurrentTimeState(nextTime);
+  }, []);
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
   const [waveformMode, setWaveformMode] = useState<WaveformMode>('RGB');
@@ -1011,25 +1025,38 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [cacheAnalysisMapping]);
 
-  // Real-time animation loop for playhead progress and VU stereo meters
+  // Keep transport precision at display refresh rate, but publish React UI state less often.
   useEffect(() => {
     let animId: number;
-    const updateLoop = () => {
+    let lastTimeUiUpdate = Number.NEGATIVE_INFINITY;
+    let lastMeterUiUpdate = Number.NEGATIVE_INFINITY;
+    const timeUiIntervalMs = 1000 / 30;
+    const meterUiIntervalMs = 1000 / 20;
+
+    const updateLoop = (timestamp: number) => {
       if (audioEngine.getIsPlaying()) {
         const time = audioEngine.getCurrentTime();
-        setCurrentTime(time);
+        currentTimeRef.current = time;
+        if (timestamp - lastTimeUiUpdate >= timeUiIntervalMs) {
+          setCurrentTimeState(time);
+          lastTimeUiUpdate = timestamp;
+        }
 
         // Keep detail view centered or following playhead if near boundary
         if (time > viewOffset + viewDuration * 0.9) {
           setViewOffset(Math.max(0, time - viewDuration * 0.2));
         }
 
-        const meter = audioEngine.getMasterMeter();
-        setMeterL(meter.left);
-        setMeterR(meter.right);
-      } else {
+        if (timestamp - lastMeterUiUpdate >= meterUiIntervalMs) {
+          const meter = audioEngine.getMasterMeter();
+          setMeterL(meter.left);
+          setMeterR(meter.right);
+          lastMeterUiUpdate = timestamp;
+        }
+      } else if (timestamp - lastMeterUiUpdate >= meterUiIntervalMs) {
         setMeterL((prev) => Math.max(0, prev * 0.85));
         setMeterR((prev) => Math.max(0, prev * 0.85));
+        lastMeterUiUpdate = timestamp;
       }
       animId = requestAnimationFrame(updateLoop);
     };
@@ -1577,7 +1604,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
 
     if (isPlaying) {
-      audioEngine.pause();
+      const pausedAt = audioEngine.pause();
+      setCurrentTime(pausedAt);
       setIsPlaying(false);
     } else {
       let loopStart = 0;
@@ -1587,23 +1615,25 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         loopEnd = selection.end;
       }
       if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTimeRef.current, loopActive, loopStart, loopEnd);
       } else {
-        audioEngine.play(workingAudioBuffer, currentTime, loopActive, loopStart, loopEnd);
+        audioEngine.play(workingAudioBuffer, currentTimeRef.current, loopActive, loopStart, loopEnd);
       }
       setIsPlaying(true);
     }
-  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom, currentTime]);
+  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom]);
 
   const handleReturnToStart = useCallback(() => {
     audioEngine.stop();
     setIsPlaying(false);
+    currentTimeRef.current = 0;
     setCurrentTime(0);
     setViewOffset(0);
   }, []);
 
   const handleSeek = useCallback((targetTime: number) => {
     const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
+    currentTimeRef.current = clamped;
     setCurrentTime(clamped);
     if (isPlaying && workingAudioBuffer) {
       if (activeTrackStems && stemsMixIsCustom) {
@@ -1614,7 +1644,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
 
-  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle
+  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle.
+  // Read transport time through a ref so 60fps playhead updates don't re-init MIDI listeners.
   useEffect(() => {
     let cancelled = false;
 
@@ -1646,7 +1677,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           break;
         case 'SEEK':
           if (action.value !== undefined) {
-            handleSeek(currentTime + action.value * 0.15);
+            handleSeek(currentTimeRef.current + action.value * 0.15);
           }
           break;
         case 'MASTER_VOLUME':
@@ -1664,7 +1695,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       unsubState();
       unsubActions();
     };
-  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, currentTime, handleMasterVolumeChange]);
+  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, handleMasterVolumeChange]);
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -1705,14 +1736,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
 
       const half = targetDuration / 2;
-      let newOffset = Math.max(0, currentTime - half);
+      let newOffset = Math.max(0, currentTimeRef.current - half);
       if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
         newOffset = Math.max(0, activeTrack.duration - targetDuration);
       }
       setViewDuration(targetDuration);
       setViewOffset(newOffset);
     },
-    [activeTrack, currentTime]
+    [activeTrack]
   );
   const handlePanView = (newOffset: number) => {
     const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
@@ -3638,17 +3669,16 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
 
       const arrayBuf = await file.arrayBuffer();
-      // Robust decodeAudioData with promise/callback compatibility
-      const decoded: AudioBuffer = await new Promise((resolve, reject) => {
+      // Hash the complete source file bytes, not a sample of the decoded left channel.
+      const decodedPromise: Promise<AudioBuffer> = new Promise((resolve, reject) => {
         const copy = arrayBuf.slice(0);
         const res = audioCtx.decodeAudioData(copy, resolve, reject);
         if (res && typeof (res as unknown as Promise<AudioBuffer>).then === 'function') {
           (res as unknown as Promise<AudioBuffer>).then(resolve).catch(reject);
         }
       });
-
+      const [decoded, sha256] = await Promise.all([decodedPromise, sha256Hex(arrayBuf)]);
       const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
-      const sha256 = audioEngine.computeBufferChecksum(decoded);
 
       // Check if the currently active deck track needs its audio file (or has matching name)
       const currentActive = tracks.find((t) => t.id === activeTrackId);
@@ -3803,8 +3833,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         });
       }
     } catch (err) {
-      logger.error('AUDIO_ENGINE', `Fehler beim Decodieren der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
-      alert('Konnte Audiodatei nicht decodieren. Bitte überprüfe das Dateiformat (WAV, MP3, AIFF, FLAC).');
+      logger.error('AUDIO_ENGINE', `Fehler beim Laden der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
+      alert(`Audiodatei konnte nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -3988,7 +4018,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           } else if (typeof mixTime === 'number' && typeof mixBar !== 'number') {
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           } else if (typeof mixTime !== 'number' && typeof mixBar !== 'number') {
-            mixTime = currentTime;
+            mixTime = currentTimeRef.current;
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           }
 
@@ -4082,7 +4112,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             const secPerBeat = 60 / activeTrack.bpm;
             const beats = action.params.beats || 16;
             const dur = beats * secPerBeat;
-            const start = action.params.start ?? currentTime;
+            const start = action.params.start ?? currentTimeRef.current;
             const end = Math.min(activeTrack.duration, start + dur);
             setSelection({
               start,
@@ -4096,7 +4126,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
           break;
         case 'ADD_CUE':
-          handleAddCue(action.params.time ?? currentTime);
+          handleAddCue(action.params.time ?? currentTimeRef.current);
           break;
         case 'ADD_MEMORY_CUE':
           handleAddMemoryCue();
@@ -4135,7 +4165,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     },
     [
       activeTrack,
-      currentTime,
       selection,
       tracks,
       handleSelectZoomPreset,
@@ -4312,7 +4341,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
           track={activeTrack}
-          currentTime={currentTime}
+          trackRevision={trackRevision}
+          currentTimeRef={currentTimeRef}
           viewOffset={viewOffset}
           viewDuration={viewDuration}
           waveformMode={waveformMode}

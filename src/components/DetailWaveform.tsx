@@ -40,10 +40,14 @@ import {
   renderRekordboxWaveformColumn,
   sampleWaveformColumn,
 } from '../waveform/spectralColor';
+import { drawPlayhead } from '../waveform/canvasLayers';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
-  currentTime: number;
+  /** Monotonic invalidation token for committed track changes in the parent. */
+  trackRevision: number;
+  /** Live transport position, updated independently from React renders. */
+  currentTimeRef: React.RefObject<number>;
   viewOffset: number;
   viewDuration: number;
   waveformMode: WaveformMode;
@@ -94,7 +98,8 @@ interface ContextMenuState {
 
 export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   track,
-  currentTime,
+  trackRevision,
+  currentTimeRef,
   viewOffset,
   viewDuration,
   waveformMode,
@@ -132,8 +137,10 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onAnalyzeParts,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const playheadCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [isSelecting, setIsSelecting] = useState(false);
   const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -150,12 +157,20 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const rect = container.getBoundingClientRect();
       const w = Math.floor(rect.width);
       const h = Math.floor(rect.height);
-      if (w > 10 && h > 10 && canvasRef.current) {
-        if (canvasRef.current.width !== w || canvasRef.current.height !== h) {
-          canvasRef.current.width = w;
-          canvasRef.current.height = h;
+      const canvases = [canvasRef.current, playheadCanvasRef.current].filter(
+        (canvas): canvas is HTMLCanvasElement => canvas !== null
+      );
+      if (w <= 10 || h <= 10 || canvases.length === 0) return;
+
+      let changed = false;
+      for (const canvas of canvases) {
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+          changed = true;
         }
       }
+      if (changed) setCanvasSize({ width: w, height: h });
     };
 
     updateCanvasSize();
@@ -198,10 +213,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     [quantize, track]
   );
 
-  // Render detail waveform loop
+  // Draw the static waveform scene only when its inputs or canvas size change.
   useEffect(() => {
-    let animId: number;
-
     const render = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -287,7 +300,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           ctx.lineTo(x, height);
           ctx.stroke();
         }
-        animId = requestAnimationFrame(render);
         return;
       }
 
@@ -691,34 +703,11 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 8. Draw Playhead (White vertical hairline)
-      const playX = timeToPixel(currentTime, width);
-      if (playX >= 0 && playX <= width) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(playX, 0);
-        ctx.lineTo(playX, height);
-        ctx.stroke();
-
-        // Top triangle pointer
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.moveTo(playX - 4, 0);
-        ctx.lineTo(playX + 4, 0);
-        ctx.lineTo(playX, 6);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      animId = requestAnimationFrame(render);
     };
 
     render();
-    return () => cancelAnimationFrame(animId);
   }, [
     track,
-    currentTime,
     viewOffset,
     viewDuration,
     waveformMode,
@@ -726,7 +715,29 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     hoveredTime,
     snapTime,
     timeToPixel,
+    canvasSize,
+    trackRevision,
   ]);
+
+  // Playback ticks repaint only the transparent playhead layer, reading the live transport ref.
+  useEffect(() => {
+    const canvas = playheadCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    if (!track) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    let animationFrameId = 0;
+    const renderPlayhead = () => {
+      drawPlayhead(ctx, currentTimeRef.current, viewOffset, viewDuration, canvas.width, canvas.height);
+      animationFrameId = requestAnimationFrame(renderPlayhead);
+    };
+
+    renderPlayhead();
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [currentTimeRef, track, viewOffset, viewDuration, canvasSize]);
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1093,6 +1104,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           onMouseLeave={handleMouseLeave}
           onContextMenu={handleContextMenu}
           className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
+        />
+        <canvas
+          ref={playheadCanvasRef}
+          width={1200}
+          height={320}
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full block pointer-events-none"
         />
 
         {/* Top Header Bar: BPM Badge + Predefined Zoom Levels Dropdown */}
