@@ -73,6 +73,22 @@ export interface FileLogInfo {
 const MAX_ENTRIES = 2000;
 const STORAGE_KEY = 'airdox.logs.v1';
 const STORAGE_MAX_ENTRIES = 400;
+/**
+ * Wie viele neue Einträge auflaufen dürfen, bevor der localStorage-Spiegel
+ * geschrieben wird.
+ *
+ * Vorher schrieb JEDER Log-Eintrag den kompletten Spiegel neu
+ * (`getItem` → `JSON.parse` → `push` → `slice` → `JSON.stringify` → `setItem`,
+ * alles synchron im Main-Thread). In Phasen mit vielen Einträgen war das
+ * teurer als die Arbeit, die geloggt wurde. Jetzt wird gepuffert und
+ * spätestens mit dem regulären Flush (3 s) geschrieben – die
+ * Datei-Protokollierung über IPC bleibt unverändert maßgeblich, und
+ * ERROR/FATAL sowie `flush(true)` schreiben weiterhin sofort.
+ */
+const STORAGE_WRITE_BATCH = 25;
+
+/** Form der Einträge im localStorage-Spiegel (bewusst schlank, ohne Details/Stack). */
+type StoredLogEntry = Pick<LogEntry, 'id' | 'timestamp' | 'timeString' | 'level' | 'category' | 'message' | 'sessionId'>;
 const FLUSH_INTERVAL_MS = 3000;
 const FLUSH_BATCH_SIZE = 50;
 
@@ -158,6 +174,12 @@ class LoggerService {
 
   // Persistenz-Warteschlange
   private persistQueue: LogEntry[] = [];
+  /** Gepufferter localStorage-Spiegel; `null` = noch nicht gelesen. */
+  private storageEntries: StoredLogEntry[] | null = null;
+  private storageDirty = false;
+  private storagePending = 0;
+  /** Diagnose: wie oft der Spiegel wirklich geschrieben wurde. */
+  private storageWrites = 0;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private inFlightFlush: Promise<void> | null = null;
   private consoleCaptureInstalled = false;
@@ -446,6 +468,9 @@ class LoggerService {
 
   public clear() {
     this.entries = [];
+    this.storageEntries = null;
+    this.storageDirty = false;
+    this.storagePending = 0;
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
@@ -476,16 +501,29 @@ class LoggerService {
 
   private persist(entry: LogEntry, immediate: boolean) {
     this.persistQueue.push(entry);
-    this.appendToStorage(entry);
-    if (immediate || this.persistQueue.length >= FLUSH_BATCH_SIZE) {
+    this.bufferForStorage(entry);
+
+    /*
+     * Nur flushen, wenn wirklich etwas läuft.
+     *
+     * Vorher stand hier `queue.length >= FLUSH_BATCH_SIZE` ohne Blick auf einen
+     * bereits laufenden Flush. Da `flush()` während eines laufenden Requests
+     * früh zurückkehrt, wuchs die Warteschlange über die Batch-Grenze hinaus –
+     * und danach rief JEDE weitere Log-Zeile `flush()` erneut auf (reiner
+     * No-Op, aber inklusive Speicher-Spiegel-Check). Jetzt übernimmt der
+     * Abschluss eines Flushes das Nachziehen (siehe `flush()`).
+     */
+    if (immediate || (this.persistQueue.length >= FLUSH_BATCH_SIZE && !this.inFlightFlush)) {
       void this.flush(immediate);
     }
   }
 
-  private appendToStorage(entry: LogEntry) {
+  /** Legt einen Eintrag in den Speicher-Puffer; geschrieben wird gebündelt. */
+  private bufferForStorage(entry: LogEntry) {
+    if (typeof localStorage === 'undefined') return;
     try {
-      const existing = this.readStorage();
-      existing.push({
+      if (this.storageEntries === null) this.storageEntries = this.readStorage();
+      this.storageEntries.push({
         id: entry.id,
         timestamp: entry.timestamp,
         timeString: entry.timeString,
@@ -494,14 +532,36 @@ class LoggerService {
         message: entry.message,
         sessionId: entry.sessionId,
       });
-      const trimmed = existing.slice(-STORAGE_MAX_ENTRIES);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+      if (this.storageEntries.length > STORAGE_MAX_ENTRIES) {
+        this.storageEntries = this.storageEntries.slice(-STORAGE_MAX_ENTRIES);
+      }
+      this.storageDirty = true;
+      this.storagePending += 1;
+      if (this.storagePending >= STORAGE_WRITE_BATCH) this.flushStorage();
     } catch {
       // Quota / nicht verfügbar – Datei-Persistenz bleibt maßgeblich.
     }
   }
 
-  private readStorage(): Array<Pick<LogEntry, 'id' | 'timestamp' | 'timeString' | 'level' | 'category' | 'message' | 'sessionId'>> {
+  /** Schreibt den Spiegel genau einmal für alle seit dem letzten Mal gepufferten Einträge. */
+  private flushStorage() {
+    if (!this.storageDirty || typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.storageEntries ?? []));
+      this.storageDirty = false;
+      this.storagePending = 0;
+      this.storageWrites += 1;
+    } catch {
+      // Quota / nicht verfügbar – Datei-Persistenz bleibt maßgeblich.
+    }
+  }
+
+  /** Diagnose für das System-Log-Modal. */
+  public getStorageWriteCount(): number {
+    return this.storageWrites;
+  }
+
+  private readStorage(): StoredLogEntry[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
@@ -515,6 +575,7 @@ class LoggerService {
   private restoreFromStorage() {
     try {
       const stored = this.readStorage();
+      this.storageEntries = stored;
       if (stored.length > 0) {
         this.entries = stored.slice(-Math.floor(this.maxEntries / 2)) as LogEntry[];
       }
@@ -525,6 +586,9 @@ class LoggerService {
 
   /** Sendet den Warteschlangen-Inhalt an den dateibasierten Main-/Server-Logger. */
   public async flush(urgent = false): Promise<void> {
+    // Der Speicher-Spiegel wird mit demselben Takt geschrieben (max. 1 × pro
+    // Flush-Fenster) statt einmal pro Eintrag.
+    this.flushStorage();
     if (this.persistQueue.length === 0) return;
     if (this.inFlightFlush && !urgent) return this.inFlightFlush;
 
@@ -573,6 +637,11 @@ class LoggerService {
       await task;
     } finally {
       this.inFlightFlush = null;
+      // Während des Flushes aufgelaufene Einträge sofort nachziehen, statt auf
+      // den 3-Sekunden-Takt zu warten.
+      if (this.persistQueue.length >= FLUSH_BATCH_SIZE) {
+        void this.flush(false);
+      }
     }
   }
 
