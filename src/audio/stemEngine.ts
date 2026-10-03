@@ -975,13 +975,31 @@ class StemEngine {
       // Polling (§20): fertig wird der Job erst, wenn der Editor die Ergebnisse
       // geprüft und importiert hat – nicht, wenn der Worker „fertig“ meldet.
       const pollInterval = 5_000;
+      let missingStatusSince: number | undefined;
+      let loggedPhase = '';
       for (;;) {
         if (options.signal?.aborted) {
           await this.cancelRemoteJob(job.jobId, 'Abbruch über das Deck');
           throw Object.assign(new Error('Die Fern-Separation wurde abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
         }
         const status = await this.pollRemoteJobs();
-        const current = status?.jobs.find((entry) => entry.jobId === job.jobId) ?? job;
+        const found = status?.jobs.find((entry) => entry.jobId === job.jobId);
+        if (!found) {
+          missingStatusSince ??= Date.now();
+          options.onProgress?.({ percent: job.percent, phaseText: 'Statusabfrage unterbrochen – Verbindung zum Fernjob-Dienst wird erneut geprüft', processedSeconds: 0, totalSeconds: duration });
+          if (Date.now() - missingStatusSince > 60_000) {
+            throw new Error(`Fernjob ${job.jobId}: Status seit 60 Sekunden nicht erreichbar. Job bleibt gespeichert; nach Wiederverbindung erneut prüfen.`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, pollInterval));
+          continue;
+        }
+        missingStatusSince = undefined;
+        const current = found;
+        const phaseKey = `${current.status}/${current.worker?.id ?? ''}/${current.error?.code ?? ''}`;
+        if (phaseKey !== loggedPhase) {
+          logger.info('STEM-REMOTE', `Fern-Job ${job.jobId}: ${current.status} – ${current.phase}`, { worker: current.worker, error: current.error });
+          loggedPhase = phaseKey;
+        }
         job = current;
         options.onProgress?.({
           percent: Math.max(2, Math.round(current.percent || 0)),

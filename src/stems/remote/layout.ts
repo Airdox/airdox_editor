@@ -43,7 +43,7 @@ export function isSafeJobId(jobId: unknown): jobId is string {
  */
 export function assertSafeRelative(relative: unknown): string {
   const value = typeof relative === 'string' ? relative : '';
-  if (!value || value.startsWith('/') || value.includes('\\') || value.split('/').includes('..')) {
+  if (!value || value.startsWith('/') || value.includes('\\') || value.includes(':') || value.split('/').some((part) => !part || part === '..' || part === '.')) {
     throw new Error(`Unsicherer relativer Pfad im Manifest: ${JSON.stringify(relative)}`);
   }
   return value;

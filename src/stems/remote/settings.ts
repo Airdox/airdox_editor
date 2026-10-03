@@ -21,13 +21,17 @@ export interface RemoteSettingsState {
   pollIntervalMs?: number;
   workerLeaseMs?: number;
   jobTimeoutMs?: number;
+  workerWaitMs?: number;
+  outputSyncWaitMs?: number;
 }
 
 export const REMOTE_DEFAULTS = {
   /** Poll-Intervall im Editor (§20: Polling genügt für Version 1). */
   pollIntervalMs: 15_000,
   /** Ohne Lebenszeichen gilt ein beanspruchter Job als verwaist. */
-  workerLeaseMs: 30 * 60_000,
+  workerLeaseMs: 3 * 60_000,
+  workerWaitMs: 10 * 60_000,
+  outputSyncWaitMs: 10 * 60_000,
   /** Absolute Obergrenze; danach FAILED mit Timeout-Grund (§21 E). */
   jobTimeoutMs: 6 * 60 * 60_000,
 } as const;
@@ -47,6 +51,8 @@ export function settingsFromEnv(env: Record<string, string | undefined> = proces
   if (env.AIRODOX_STEM_REMOTE_POLL_MS) fromEnv.pollIntervalMs = Number(env.AIRODOX_STEM_REMOTE_POLL_MS);
   if (env.AIRODOX_STEM_REMOTE_LEASE_MS) fromEnv.workerLeaseMs = Number(env.AIRODOX_STEM_REMOTE_LEASE_MS);
   if (env.AIRODOX_STEM_REMOTE_TIMEOUT_MS) fromEnv.jobTimeoutMs = Number(env.AIRODOX_STEM_REMOTE_TIMEOUT_MS);
+  if (env.AIRODOX_STEM_REMOTE_WAIT_MS) fromEnv.workerWaitMs = Number(env.AIRODOX_STEM_REMOTE_WAIT_MS);
+  if (env.AIRODOX_STEM_REMOTE_SYNC_MS) fromEnv.outputSyncWaitMs = Number(env.AIRODOX_STEM_REMOTE_SYNC_MS);
   return fromEnv;
 }
 

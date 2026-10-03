@@ -1,69 +1,38 @@
 #!/usr/bin/env python3
-"""airdox_SMART_Editor – High-Quality-Fernworker (Google Colab).
+"""Drive folder worker, protocol v1 / worker v2.
 
-Der Worker ist ein **Rechenknecht**: Er findet Jobs in der Google-Drive-Ablage,
-beansprucht sie, prüft den Input-Hash, rechnet mit dem High-Quality-Modell
-(BS-RoFormer über den vorhandenen Adapter ``python/bsroformer_inference.py``)
-und schreibt Stems, Hashes und Status zurück. Editorlogik gibt es hier nicht
-(§24, §42).
-
-Protokoll (dieselbe Ablage wie ``scripts/stem-remote-worker.ts``)::
-
-    <root>/jobs/<jobId>/manifest.json     Status + Modell + Input-Hash + Outputs
-    <root>/jobs/<jobId>/input/<file>.wav  Arbeitskopie (nie das Original)
-    <root>/jobs/<jobId>/claim.json        Lease: wer rechnet gerade
-    <root>/jobs/<jobId>/cancel.flag       Editor: „brich ab“
-    <root>/jobs/<jobId>/output/<stem>.wav Ergebnisse
-    <root>/jobs/<jobId>/output/result.json Ergebnisdokument
-    <root>/jobs/<jobId>/error.json        letzter Fehler
-
-Eigenschaften, die bewusst so sind:
-  * **Idempotenz** – ein Job mit Status COMPLETED/FAILED/CANCELLED wird nie
-    erneut gerechnet, auch nicht nach einem Colab-Neustart (§19).
-  * **Lease** – ein frisch beanspruchter Job gehört einem anderen Worker.
-  * **Hash-Kontrolle** – Input und jeder Output werden per SHA-256 geprüft;
-    Vollständigkeit aller erwarteten Stems wird erzwungen (§22, §34).
-  * **CPU-Rückfall** – schlägt die GPU fehl (oder fehlt sie), rechnet der
-    Adapter auf CPU weiter; der Zustand landet im Manifest (§7, §21 F/G/H).
-  * Keine Zugangsdaten im Job: Drive-Zugriff läuft über den gemounteten
-    Drive-Ordner, Tokens liegen nie in der Jobablage (§23).
-
-Aufruf (auch ohne Colab, z. B. zum Trockenlauf gegen einen lokalen Ordner)::
-
-    python3 colab/remote_worker.py --root /pfad/zur/jobablage --once
-    python3 colab/remote_worker.py --root /content/drive/MyDrive/airdox-stem-jobs --self-test
+Run ONE Colab session per job folder. Drive sync is not a distributed lock
+service; leases detect conflicts but cannot guarantee cross-client atomicity.
+The adapter computes locally; only verified, complete files are published.
 """
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hashlib
 import json
 import os
+from pathlib import Path
+import queue
+import re
 import shutil
-import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 SCHEMA_VERSION = 1
+WORKER_VERSION = "colab-worker/2"
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED"}
-JOB_ID_MIN = 8
-
-
-# --------------------------------------------------------------------------- #
-# Manifest-Helfer (bewusst ohne Abhängigkeiten – nur stdlib)
-# --------------------------------------------------------------------------- #
+MODEL_ID = "bsroformer-musdb18hq-4stem-zfturbo"
 
 
 class ProtocolError(Exception):
-    """Verletzung des Job-Protokolls (Manifest, Hashes, Vollständigkeit)."""
-
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str):
         super().__init__(message)
-        self.code = code
-        self.message = message
+        self.code, self.message = code, message
 
 
 def sha256_file(path: str) -> str:
@@ -74,552 +43,563 @@ def sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def read_json(path: str) -> Optional[dict]:
+def read_json(path: str):
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return json.load(handle)
     except FileNotFoundError:
         return None
 
 
-def write_json_atomic(path: str, payload: dict) -> None:
+def write_json_atomic(path: str, payload: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-        handle.write("\n")
-    os.replace(tmp, path)
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, allow_nan=False)
+            handle.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def safe_path(root: str, relative: str) -> str:
+    if not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative:
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Unsicherer relativer Pfad")
+    if relative.startswith("/") or any(p in {"", ".", ".."} for p in relative.split("/")):
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Pfad verlässt die Jobablage")
+    base = Path(root).resolve()
+    target = (base / relative).resolve()
+    if base not in target.parents:
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Pfad/Symlink verlässt die Jobablage")
+    return str(target)
 
 
 def validate_manifest(manifest: dict, expected_job_id: str) -> dict:
-    """Prüft die Felder, ohne die ein Job nicht sicher zuordenbar ist."""
-    if not isinstance(manifest, dict):
-        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Manifest ist kein Objekt")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,63}", expected_job_id) or ".." in expected_job_id:
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Ungültige Job-ID")
+    if not isinstance(manifest, dict) or manifest.get("jobId") != expected_job_id:
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Manifest-ID passt nicht zum Verzeichnis")
     if manifest.get("schemaVersion") != SCHEMA_VERSION:
-        raise ProtocolError("REMOTE_SCHEMA_UNSUPPORTED", f"Schema {manifest.get('schemaVersion')} wird nicht unterstützt")
-    if manifest.get("jobId") != expected_job_id:
-        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Manifest-Id passt nicht zum Verzeichnis")
+        raise ProtocolError("REMOTE_SCHEMA_UNSUPPORTED", "Nicht unterstützte Protokollversion")
     if manifest.get("status") not in TERMINAL_STATUSES | {"PENDING", "PREPARING", "RUNNING", "RECONSTRUCTING", "VALIDATING"}:
-        raise ProtocolError("REMOTE_MANIFEST_INVALID", f"Unbekannter Status {manifest.get('status')!r}")
-    for field in ("sha256", "fileName", "relativePath"):
-        if not manifest.get("input", {}).get(field):
-            raise ProtocolError("REMOTE_MANIFEST_INVALID", f"input.{field} fehlt")
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Unbekannter Status")
+    source = manifest.get("input") or {}
+    name = source.get("fileName", "")
+    if not isinstance(name, str) or not name or any(c in name for c in "/\\:") or name in {".", ".."}:
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Ungültiger Eingabename")
+    if source.get("relativePath") != f"jobs/{expected_job_id}/input/{name}":
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Input gehört nicht zu diesem Job")
+    if not re.fullmatch(r"[a-f0-9]{64}", str(source.get("sha256", ""))):
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Ungültiger Input-Hash")
     engine = manifest.get("engine") or {}
-    if not engine.get("modelId") or not engine.get("stems"):
-        raise ProtocolError("REMOTE_MANIFEST_INVALID", "engine.modelId/stems fehlt")
+    stems = engine.get("stems")
+    if not engine.get("modelId") or not isinstance(stems, list) or not stems or len(stems) != len(set(stems)):
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Modell/Stem-Liste fehlt oder ist mehrdeutig")
+    if any(s not in {"vocals", "drums", "bass", "other", "instrumental"} for s in stems):
+        raise ProtocolError("REMOTE_MANIFEST_INVALID", "Unbekannter Stem")
     return manifest
 
 
-def expected_stems(manifest: dict) -> List[str]:
-    return [str(stem) for stem in (manifest.get("engine", {}).get("stems") or [])]
-
-
-def verify_outputs(manifest: dict, output_dir: str) -> List[dict]:
-    """Stellt sicher, dass **alle** erwarteten Stems lesbar und nicht leer sind."""
-    stems = manifest.get("output", {}).get("stems") or []
-    delivered = {stem.get("id"): stem for stem in stems}
-    missing = [stem for stem in expected_stems(manifest) if stem not in delivered]
-    if missing:
-        raise ProtocolError("REMOTE_OUTPUT_INCOMPLETE", f"Es fehlen Stems: {', '.join(missing)}")
-    for stem_id, stem in delivered.items():
-        path = os.path.join(output_dir, os.path.basename(str(stem.get("fileName") or "")))
-        if not os.path.isfile(path) or os.path.getsize(path) <= 44:
-            raise ProtocolError("REMOTE_OUTPUT_EMPTY", f"Stem {stem_id} fehlt oder ist leer: {path}")
-        if stem.get("sha256") and sha256_file(path) != stem["sha256"]:
-            raise ProtocolError("REMOTE_OUTPUT_HASH_MISMATCH", f"Stem {stem_id} hat einen anderen Hash als im Manifest")
-    return list(delivered.values())
-
-
-# --------------------------------------------------------------------------- #
-# Job-Ablage
-# --------------------------------------------------------------------------- #
+def expected_stems(manifest):
+    return manifest["engine"]["stems"]
 
 
 class JobStore:
-    """Zugriff auf die Jobablage (gemounteter Drive-Ordner)."""
-
-    def __init__(self, root: str, worker_id: str, lease_seconds: int = 1800) -> None:
+    def __init__(self, root: str, worker_id: str, lease_seconds: float = 180):
         self.root = os.path.abspath(root)
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.jobs_dir = os.path.join(self.root, "jobs")
 
-    # -- Pfade ------------------------------------------------------------- #
-    def job_dir(self, job_id: str) -> str:
-        return os.path.join(self.jobs_dir, job_id)
+    def job_dir(self, job_id):
+        return safe_path(self.root, f"jobs/{job_id}")
 
-    def manifest_path(self, job_id: str) -> str:
+    def manifest_path(self, job_id):
         return os.path.join(self.job_dir(job_id), "manifest.json")
 
-    def claim_path(self, job_id: str) -> str:
+    def claim_path(self, job_id):
         return os.path.join(self.job_dir(job_id), "claim.json")
 
-    def input_path(self, job_id: str, file_name: str) -> str:
-        return os.path.join(self.job_dir(job_id), "input", os.path.basename(file_name))
-
-    def output_dir(self, job_id: str) -> str:
+    def output_dir(self, job_id):
         return os.path.join(self.job_dir(job_id), "output")
 
-    # -- Abfragen ---------------------------------------------------------- #
-    def list_job_ids(self) -> List[str]:
+    def list_job_ids(self):
         if not os.path.isdir(self.jobs_dir):
             return []
-        out = []
-        for name in sorted(os.listdir(self.jobs_dir)):
-            if name.startswith(".") or name.endswith(".tmp"):
-                continue
-            if len(name) < JOB_ID_MIN:
-                continue
-            if os.path.isfile(self.manifest_path(name)) or os.path.isfile(self.claim_path(name)):
-                out.append(name)
-        return out
+        return sorted(n for n in os.listdir(self.jobs_dir)
+                      if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,63}", n)
+                      and ".." not in n and os.path.isfile(self.manifest_path(n)))
 
-    def read_manifest(self, job_id: str) -> Optional[dict]:
+    def read_manifest(self, job_id):
         return read_json(self.manifest_path(job_id))
 
-    def write_manifest(self, job_id: str, manifest: dict) -> None:
+    def write_manifest(self, job_id, manifest):
         manifest["updatedAt"] = int(time.time() * 1000)
         manifest["updatedAtIso"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         write_json_atomic(self.manifest_path(job_id), manifest)
 
-    def claim_is_fresh(self, job_id: str) -> bool:
+    def claim_is_fresh(self, job_id):
         claim = read_json(self.claim_path(job_id))
-        if not claim:
+        if not claim or claim.get("id") == self.worker_id:
             return False
-        stamp = claim.get("heartbeatAt") or claim.get("claimedAt") or 0
-        try:
-            age = time.time() * 1000 - float(stamp)
-        except (TypeError, ValueError):
-            return False
-        if claim.get("id") == self.worker_id:
-            return False
-        return 0 <= age < self.lease_seconds * 1000
+        age = time.time() * 1000 - float(claim.get("heartbeatAt", 0))
+        return age < self.lease_seconds * 1000
 
-    def cancel_requested(self, job_id: str) -> bool:
-        return os.path.isfile(os.path.join(self.job_dir(job_id), "cancel.flag"))
-
-    def claim(self, job_id: str, **extra: Any) -> Dict[str, Any]:
-        claim = {
-            "id": self.worker_id,
-            "host": socket.gethostname(),
-            "claimedAt": int(time.time() * 1000),
-            "heartbeatAt": int(time.time() * 1000),
-            "version": "colab-worker/1",
-            **extra,
-        }
+    def claim(self, job_id, **extra):
+        now = int(time.time() * 1000)
+        claim = dict(id=self.worker_id, claimedAt=now, heartbeatAt=now, version=WORKER_VERSION, **extra)
         write_json_atomic(self.claim_path(job_id), claim)
         return claim
 
-    def heartbeat(self, job_id: str, claim: Dict[str, Any]) -> None:
+    def heartbeat(self, job_id, claim):
+        owner = read_json(self.claim_path(job_id))
+        if owner and owner.get("id") != self.worker_id:
+            raise ProtocolError("REMOTE_LEASE_LOST", "Ein anderer Worker hat die Lease übernommen. Nur eine Colab-Sitzung verwenden.")
         claim["heartbeatAt"] = int(time.time() * 1000)
         write_json_atomic(self.claim_path(job_id), claim)
 
-    def write_error(self, job_id: str, code: str, message: str, worker: str) -> None:
-        write_json_atomic(
-            os.path.join(self.job_dir(job_id), "error.json"),
-            {"jobId": job_id, "code": code, "message": message, "at": int(time.time() * 1000), "worker": worker},
-        )
+    def cancel_requested(self, job_id):
+        return os.path.isfile(os.path.join(self.job_dir(job_id), "cancel.flag"))
 
-    def log(self, job_id: str, message: str) -> None:
-        path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+    def write_error(self, job_id, code, message, worker):
+        write_json_atomic(os.path.join(self.job_dir(job_id), "error.json"),
+                          dict(jobId=job_id, code=code, message=message, worker=worker, at=int(time.time() * 1000)))
+
+    def log(self, job_id, message):
+        print(f"[STEM-REMOTE-WORKER] {job_id} {message}", flush=True)
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as handle:
+            dest = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "a", encoding="utf-8") as handle:
                 handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {message}\n")
         except OSError:
             pass
-        print(f"[STEM-REMOTE-WORKER] {job_id} {message}", flush=True)
-
-
-# --------------------------------------------------------------------------- #
-# Separation
-# --------------------------------------------------------------------------- #
 
 
 class LocalAdapterRunner:
-    """Ruft den vorhandenen Adapter ``python/bsroformer_inference.py`` auf.
-
-    Der Adapter ist derselbe, den der Editor lokal für den HQ-Pfad benutzt:
-    die Modell-/Neustart-Logik wird also nicht doppelt gebaut (§42). Er spricht
-    JSON-Lines; hier werden Fortschritt und Ergebnis gelesen.
-    """
-
-    def __init__(self, adapter: str) -> None:
+    def __init__(self, adapter):
         self.adapter = adapter
 
-    def _python_device(self, device: str) -> str:
-        return {"cuda": "cuda", "cpu": "cpu", "auto": "auto"}.get(device, "auto")
-
-    def run(
-        self,
-        *,
-        manifest: dict,
-        input_path: str,
-        output_dir: str,
-        model_dir: str,
-        device: str,
-        on_progress=None,
-    ) -> Dict[str, Any]:
+    def run(self, *, manifest, input_path, output_dir, model_dir, device, on_progress=None,
+            tick=lambda: None, timeout=21600, idle_timeout=1800):
         engine = manifest["engine"]
-        checkpoint = os.path.join(model_dir, os.path.basename(str(engine.get("checkpoint", {}).get("file") or "")))
-        config_file = engine.get("config", {}).get("file")
-        config_path = os.path.join(model_dir, os.path.basename(str(config_file))) if config_file else None
-        args = [
-            sys.executable,
-            self.adapter,
-            "--family",
-            str(engine.get("family") or "bs_roformer"),
-            "--checkpoint",
-            checkpoint,
-            "--input",
-            input_path,
-            "--output-dir",
-            output_dir,
-            "--stem-order",
-            ",".join(expected_stems(manifest)),
-            "--stems",
-            ",".join(expected_stems(manifest)),
-            "--chunk-size",
-            str(engine.get("chunkSizeSamples") or 131584),
-            "--num-overlap",
-            str(engine.get("numOverlap") or 4),
-            "--device",
-            self._python_device(device),
-        ]
-        if config_path and os.path.isfile(config_path):
-            args += ["--config", config_path]
+        checkpoint = os.path.join(model_dir, os.path.basename(engine["checkpoint"]["file"]))
+        config = os.path.join(model_dir, os.path.basename(engine["config"]["file"]))
+        args = [sys.executable, "-u", self.adapter, "--family", engine["family"],
+                "--checkpoint", checkpoint, "--config", config, "--input", input_path,
+                "--output-dir", output_dir, "--stem-order", ",".join(expected_stems(manifest)),
+                "--stems", ",".join(expected_stems(manifest)), "--chunk-size", str(engine.get("chunkSizeSamples", 131584)),
+                "--num-overlap", str(engine.get("numOverlap", 4)),
+                "--ensemble-passes", str(engine.get("ensemblePasses", 1)), "--device", device]
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   encoding="utf-8", errors="replace", bufsize=1)
+        events = queue.Queue(maxsize=256)
+        stop = threading.Event()
+        logs = deque(maxlen=25)
 
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-        report: Dict[str, Any] = {}
-        logs: List[str] = []
-        assert process.stdout is not None
-        for line in process.stdout:
-            line = line.strip()
-            if not line.startswith("{"):
-                logs.append(line)
-                continue
+        def pump(stream, source):
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            kind = event.get("type")
-            if kind == "progress" and on_progress:
-                on_progress(float(event.get("fraction") or 0.0), str(event.get("phase") or ""))
-            elif kind == "done":
-                report = event
-            elif kind == "error":
-                raise ProtocolError(str(event.get("code") or "INFERENCE_FAILED"), str(event.get("message") or "Adapter-Fehler"))
-            elif kind == "log":
-                logs.append(str(event.get("message")))
-        stderr = process.stderr.read() if process.stderr else ""
-        code = process.wait()
-        if code != 0:
-            raise ProtocolError("INFERENCE_FAILED", f"Adapter endete mit Code {code}: {(stderr or '')[-400:]}")
-        report["logs"] = logs[-20:]
-        return report
+                for line in iter(stream.readline, ""):
+                    while not stop.is_set():
+                        try:
+                            events.put((source, line[:16384]), timeout=0.1)
+                            break
+                        except queue.Full:
+                            continue
+                    if stop.is_set():
+                        break
+            finally:
+                stream.close()
+                while not stop.is_set():
+                    try:
+                        events.put((source, None), timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+
+        threads = [threading.Thread(target=pump, args=(stream, name), daemon=True)
+                   for stream, name in ((process.stdout, "stdout"), (process.stderr, "stderr"))]
+        for thread in threads:
+            thread.start()
+        started = last_progress = time.monotonic()
+        report = None
+        reported_error = None
+        ended = 0
+        try:
+            while ended < 2:
+                tick()
+                now = time.monotonic()
+                if now - started > timeout or now - last_progress > idle_timeout:
+                    raise ProtocolError("REMOTE_INFERENCE_TIMEOUT", "Berechnung ohne rechtzeitiges Ergebnis/Fortschritt beendet")
+                try:
+                    source, line = events.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    ended += 1
+                    continue
+                if source == "stderr":
+                    logs.append(line.strip())
+                    continue
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    logs.append(line.strip())
+                    continue
+                kind = event.get("type")
+                if kind == "progress":
+                    last_progress = time.monotonic()
+                    if on_progress:
+                        on_progress(float(event.get("fraction", 0)), str(event.get("phase", "")))
+                elif kind == "done":
+                    report = event
+                elif kind == "error":
+                    reported_error = ProtocolError(str(event.get("code", "INFERENCE_FAILED")), str(event.get("message", "Adapter-Fehler")))
+                elif kind == "log":
+                    logs.append(str(event.get("message", "")))
+            code = process.wait(timeout=5)
+            if reported_error:
+                raise reported_error
+            if code != 0:
+                raise ProtocolError("INFERENCE_FAILED", f"Adapter Exit {code}: {'; '.join(logs)[-1600:]}")
+            if not report or not isinstance(report.get("stems"), list):
+                raise ProtocolError("REMOTE_OUTPUT_INCOMPLETE", "Adapter meldete kein vollständiges Ergebnis")
+            return report
+        finally:
+            stop.set()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            for thread in threads:
+                thread.join(timeout=2)
 
 
-def run_job(
-    store: JobStore,
-    job_id: str,
-    manifest: dict,
-    *,
-    model_dir: str,
-    device: str,
-    adapter: str,
-    work_dir: str,
-) -> str:
-    """Ein Job, vollständig: Hash prüfen, rechnen, prüfen, zurückschreiben."""
-    if manifest.get("status") in TERMINAL_STATUSES:
-        store.log(job_id, f"übersprungen – Status {manifest['status']} (§19)")
+def _wav_geometry(path):
+    # The production adapter writes IEEE FLOAT WAV; stdlib wave cannot read it.
+    import struct
+    with open(path, "rb") as handle:
+        if handle.read(4) != b"RIFF":
+            raise ProtocolError("REMOTE_OUTPUT_INVALID", "Kein RIFF-WAV")
+        handle.read(4)
+        if handle.read(4) != b"WAVE":
+            raise ProtocolError("REMOTE_OUTPUT_INVALID", "Kein WAVE-Container")
+        geometry = None
+        data_bytes = None
+        file_bytes = os.path.getsize(path)
+        while handle.tell() + 8 <= file_bytes:
+            tag, size = struct.unpack("<4sI", handle.read(8))
+            if handle.tell() + size > file_bytes:
+                raise ProtocolError("REMOTE_OUTPUT_INVALID", "WAV ist unvollständig")
+            if tag == b"fmt ":
+                raw = handle.read(size)
+                if len(raw) < 16:
+                    raise ProtocolError("REMOTE_OUTPUT_INVALID", "WAV fmt fehlt")
+                fmt, channels, rate, _, align, bits = struct.unpack("<HHIIHH", raw[:16])
+                if fmt not in (1, 3) or channels not in (1, 2) or rate <= 0 or align != channels * bits // 8 or align == 0:
+                    raise ProtocolError("REMOTE_OUTPUT_INVALID", "Nicht unterstütztes WAV-Format")
+                geometry = channels, rate, align
+            else:
+                if tag == b"data":
+                    data_bytes = size
+                handle.seek(size, 1)
+            if size % 2:
+                handle.seek(1, 1)
+        if not geometry or not data_bytes or data_bytes % geometry[2]:
+            raise ProtocolError("REMOTE_OUTPUT_INVALID", "WAV ohne vollständige Audiodaten")
+        channels, rate, align = geometry
+        return data_bytes // align, rate, channels
+
+
+def verify_outputs(manifest, output_dir):
+    outputs = manifest.get("output", {}).get("stems", [])
+    if {s.get("id") for s in outputs} != set(expected_stems(manifest)):
+        raise ProtocolError("REMOTE_OUTPUT_INCOMPLETE", "Nicht alle Stems vorhanden")
+    for stem in outputs:
+        dest = safe_path(output_dir, stem["fileName"])
+        _wav_geometry(dest)
+        if sha256_file(dest) != stem["sha256"]:
+            raise ProtocolError("REMOTE_OUTPUT_HASH_MISMATCH", "Stem-Hash falsch")
+    return outputs
+
+
+def run_job(store, job_id, manifest, *, model_dir, device, adapter, work_dir,
+            sync_timeout=600, timeout=21600, idle_timeout=1800, heartbeat_interval=10):
+    validate_manifest(manifest, job_id)
+    if manifest["status"] in TERMINAL_STATUSES:
         return "skipped"
-    if store.cancel_requested(job_id):
-        manifest["status"] = "CANCELLED"
-        manifest["phase"] = "Vom Editor abgebrochen"
-        store.write_manifest(job_id, manifest)
-        store.log(job_id, "abgebrochen (cancel.flag)")
-        return "cancelled"
+    # PREPARING means editor has not yet published the input completely.
+    if manifest["status"] in {"PENDING", "PREPARING"}:
+        return "skipped"
     if store.claim_is_fresh(job_id):
-        store.log(job_id, "wird bereits von einem anderen Worker gerechnet – übersprungen")
         return "skipped"
+    claim = store.claim(job_id, device=device)
+    manifest.update(status="RUNNING", phase="Arbeitskopie wird synchronisiert", percent=1,
+                    attempts=int(manifest.get("attempts", 0)) + 1, worker=claim)
+    last_heartbeat = [0.0]
 
-    claim = store.claim(job_id, device=device, gpu=_gpu_name())
-    manifest["status"] = "RUNNING"
-    manifest["phase"] = "Arbeitskopie wird geladen"
-    manifest["percent"] = 1
-    manifest["attempts"] = int(manifest.get("attempts") or 0) + 1
-    manifest["worker"] = claim
-    store.write_manifest(job_id, manifest)
+    def tick():
+        if store.cancel_requested(job_id):
+            raise ProtocolError("INFERENCE_CANCELLED", "Vom Editor abgebrochen")
+        if time.monotonic() - last_heartbeat[0] >= heartbeat_interval:
+            store.heartbeat(job_id, claim)
+            last_heartbeat[0] = time.monotonic()
 
     try:
-        remote_input = os.path.join(store.root, manifest["input"]["relativePath"])
-        if not os.path.isfile(remote_input):
-            raise ProtocolError("REMOTE_INPUT_MISSING", f"Eingabedatei fehlt: {remote_input}")
-        local_input = os.path.join(work_dir, job_id, manifest["input"]["fileName"])
-        os.makedirs(os.path.dirname(local_input), exist_ok=True)
-        shutil.copyfile(remote_input, local_input)
-        actual = sha256_file(local_input)
-        if actual != manifest["input"]["sha256"]:
-            raise ProtocolError(
-                "REMOTE_INPUT_HASH_MISMATCH",
-                f"SHA256 der Arbeitskopie stimmt nicht ({actual[:12]}… statt {manifest['input']['sha256'][:12]}…)",
-            )
-        store.log(job_id, f"Arbeitskopie verifiziert ({actual[:12]}…) – CPU/GPU: {device}")
+        tick()
+        store.write_manifest(job_id, manifest)
+        remote_input = safe_path(store.root, manifest["input"]["relativePath"])
+        local_dir = safe_path(work_dir, job_id)
+        os.makedirs(local_dir, exist_ok=True)
+        local_input = safe_path(local_dir, manifest["input"]["fileName"])
+        deadline = time.monotonic() + sync_timeout
+        while True:
+            tick()
+            try:
+                shutil.copyfile(remote_input, local_input)
+                valid = (os.path.getsize(local_input) == manifest["input"]["bytes"]
+                         and sha256_file(local_input) == manifest["input"]["sha256"])
+            except (FileNotFoundError, PermissionError):
+                valid = False
+            if valid:
+                break
+            if time.monotonic() >= deadline:
+                raise ProtocolError("REMOTE_INPUT_SYNC_TIMEOUT", "Arbeitskopie fehlt/ist unvollständig. Drive-Synchronisierung prüfen.")
+            time.sleep(min(1, max(0.01, deadline - time.monotonic())))
+        store.log(job_id, "Input SHA256 verifiziert; lokale Berechnung startet")
+        inference_input = local_input
+        original_rate = manifest["input"]["sampleRate"]
+        if original_rate != 44100:
+            import soundfile as sf
+            from scipy.signal import resample_poly
+            from math import gcd
+            audio, rate = sf.read(local_input, dtype="float32", always_2d=True)
+            if rate != original_rate:
+                raise ProtocolError("REMOTE_INPUT_INVALID", "Eingabe-Samplerate passt nicht zum Manifest")
+            divisor = gcd(rate, 44100)
+            converted = resample_poly(audio, 44100 // divisor, rate // divisor, axis=0)
+            inference_input = os.path.join(local_dir, "model-input-44100.wav")
+            sf.write(inference_input, converted, 44100, subtype="FLOAT")
+        output_dir = safe_path(local_dir, "output")
+        shutil.rmtree(output_dir, ignore_errors=True)
+        os.makedirs(output_dir)
+        last_progress = [0.0]
 
-        output_dir = store.output_dir(job_id)
-        os.makedirs(output_dir, exist_ok=True)
-
-        def on_progress(fraction: float, phase: str) -> None:
-            manifest["percent"] = max(int(manifest.get("percent") or 0), min(99, int(fraction * 100)))
-            manifest["phase"] = phase or "Inferenz läuft"
-            manifest.setdefault("worker", claim)["heartbeatAt"] = int(time.time() * 1000)
+        def progress(fraction, phase):
+            tick()
+            if time.monotonic() - last_progress[0] < heartbeat_interval:
+                return
+            last_progress[0] = time.monotonic()
+            manifest.update(percent=max(1, min(95, int(fraction * 95))), phase=phase or "Berechnung läuft")
+            manifest["worker"] = dict(claim)
             store.write_manifest(job_id, manifest)
 
         runner = LocalAdapterRunner(adapter)
+        kwargs = dict(manifest=manifest, input_path=inference_input, output_dir=output_dir, model_dir=model_dir,
+                      on_progress=progress, tick=tick, timeout=timeout, idle_timeout=idle_timeout)
+        manifest["phase"] = "Berechnung läuft"
+        store.write_manifest(job_id, manifest)
         try:
-            report = runner.run(
-                manifest=manifest,
-                input_path=local_input,
-                output_dir=output_dir,
-                model_dir=model_dir,
-                device=device,
-                on_progress=on_progress,
-            )
+            report = runner.run(device=device, **kwargs)
         except ProtocolError as error:
-            if device != "cpu" and error.code in {"GPU_UNAVAILABLE", "GPU_OUT_OF_MEMORY", "INFERENCE_FAILED"}:
-                # §21 F/G: GPU nicht nutzbar ⇒ CPU versuchen, nicht aufgeben.
-                store.log(job_id, f"GPU-Ausfall ({error.code}) – CPU-Rückfall")
-                claim["cpuFallback"] = True
-                claim["fallbackReason"] = error.message[:300]
-                manifest["worker"] = claim
-                manifest["phase"] = "Verarbeitung läuft – CPU-Fallback"
-                store.write_manifest(job_id, manifest)
-                report = runner.run(
-                    manifest=manifest,
-                    input_path=local_input,
-                    output_dir=output_dir,
-                    model_dir=model_dir,
-                    device="cpu",
-                    on_progress=on_progress,
-                )
-                report["cpuFallback"] = True
-                report["fallbackReason"] = error.message[:300]
-            else:
+            if device == "cpu" or error.code not in {"GPU_UNAVAILABLE", "GPU_OUT_OF_MEMORY"}:
                 raise
-
-        # Outputs einsammeln und prüfen (§34)
+            store.log(job_id, f"{error.code}: CPU-Rückfall")
+            claim.update(device="cpu", cpuFallback=True, fallbackReason=error.message)
+            manifest.update(worker=dict(claim), phase="Berechnung läuft – CPU-Fallback")
+            store.write_manifest(job_id, manifest)
+            report = runner.run(device="cpu", **kwargs)
+        tick()
+        by_name = {s["name"]: s["path"] for s in report["stems"]}
+        if set(by_name) != set(expected_stems(manifest)) or len(report["stems"]) != len(by_name):
+            raise ProtocolError("REMOTE_OUTPUT_INCOMPLETE", "Adapter lieferte nicht genau die erwarteten Stems")
+        manifest.update(phase="Ergebnisse werden nach Drive übertragen", percent=96)
+        store.write_manifest(job_id, manifest)
         stems = []
         for stem_id in expected_stems(manifest):
-            candidate = os.path.join(output_dir, f"{stem_id}.wav")
-            if not os.path.isfile(candidate):
-                matches = [name for name in os.listdir(output_dir) if name.lower().startswith(stem_id.lower()) and name.endswith(".wav")]
-                if not matches:
-                    raise ProtocolError("REMOTE_OUTPUT_INCOMPLETE", f"Adapter hat keinen Stem {stem_id} geschrieben")
-                candidate = os.path.join(output_dir, matches[0])
-            size = os.path.getsize(candidate)
-            if size <= 44:
-                raise ProtocolError("REMOTE_OUTPUT_EMPTY", f"Stem {stem_id} ist leer ({size} Bytes)")
-            frames, sample_rate, channels = _wav_geometry(candidate)
-            stems.append(
-                {
-                    "id": stem_id,
-                    "fileName": os.path.basename(candidate),
-                    "relativePath": os.path.relpath(candidate, store.root).replace(os.sep, "/"),
-                    "sha256": sha256_file(candidate),
-                    "bytes": size,
-                    "frames": frames,
-                    "sampleRate": sample_rate,
-                    "channels": channels,
-                }
-            )
-
-        manifest["output"] = {
-            "stems": stems,
-            "resultFile": f"jobs/{job_id}/output/result.json",
-        }
-        manifest["status"] = "COMPLETED"
-        manifest["phase"] = "Fertig"
-        manifest["percent"] = 100
-        device_report = report.get("device") or device
-        manifest["worker"] = {
-            **claim,
-            "heartbeatAt": int(time.time() * 1000),
-            "device": device_report,
-            "cpuFallback": bool(report.get("cpuFallback")),
-            "fallbackReason": report.get("fallbackReason"),
-            "torch": report.get("torchVersion"),
-            "gpu": _gpu_name(),
-        }
+            tick()
+            candidate = Path(by_name[stem_id]).resolve()
+            if Path(output_dir).resolve() not in candidate.parents:
+                raise ProtocolError("REMOTE_OUTPUT_INVALID", "Adapter lieferte einen fremden Ausgabepfad")
+            if original_rate != 44100:
+                import numpy as np
+                data, rate = sf.read(candidate, dtype="float32", always_2d=True)
+                divisor = gcd(rate, original_rate)
+                restored = resample_poly(data, original_rate // divisor, rate // divisor, axis=0)
+                frames_expected = round(manifest["input"]["durationSeconds"] * original_rate)
+                restored = restored[:frames_expected]
+                if len(restored) < frames_expected:
+                    restored = np.pad(restored, ((0, frames_expected - len(restored)), (0, 0)))
+                sf.write(candidate, restored, original_rate, subtype="FLOAT")
+            frames, rate, channels = _wav_geometry(str(candidate))
+            if channels != manifest["input"]["channels"] or abs(frames / rate - manifest["input"]["durationSeconds"]) > 0.15:
+                raise ProtocolError("REMOTE_OUTPUT_INVALID", "Stem-Dauer/Kanäle passen nicht zur Arbeitskopie")
+            relative = f"jobs/{job_id}/output/{stem_id}.wav"
+            target = safe_path(store.root, relative)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            temp = target + ".tmp"
+            shutil.copyfile(candidate, temp)
+            os.replace(temp, target)
+            stems.append(dict(id=stem_id, fileName=f"{stem_id}.wav", relativePath=relative,
+                              sha256=sha256_file(str(candidate)), bytes=candidate.stat().st_size,
+                              frames=frames, sampleRate=rate, channels=channels))
+        tick()
+        claim.update(device=report.get("device", device), heartbeatAt=int(time.time() * 1000))
+        manifest.update(output=dict(stems=stems, resultFile=f"jobs/{job_id}/output/result.json"),
+                        worker=claim, status="COMPLETED", phase="Fertig", percent=100)
+        write_json_atomic(os.path.join(store.output_dir(job_id), "result.json"),
+                          dict(schemaVersion=1, jobId=job_id, status="COMPLETED", modelId=manifest["engine"]["modelId"],
+                               profile=manifest["engine"]["profile"], stems=stems, worker=claim, report=report.get("report", {})))
+        tick()
         store.write_manifest(job_id, manifest)
-        write_json_atomic(
-            os.path.join(output_dir, "result.json"),
-            {
-                "schemaVersion": SCHEMA_VERSION,
-                "jobId": job_id,
-                "status": "COMPLETED",
-                "modelId": manifest["engine"]["modelId"],
-                "profile": manifest["engine"]["profile"],
-                "completedAtIso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "stems": stems,
-                "worker": manifest["worker"],
-                "report": {key: report.get(key) for key in ("device", "durationMs", "weights") if key in report},
-            },
-        )
-        store.log(job_id, f"COMPLETED – {len(stems)} Stems, Gerät {device_report}")
+        store.log(job_id, "COMPLETED – alle Stems veröffentlicht")
         return "completed"
     except ProtocolError as error:
-        manifest["status"] = "FAILED"
-        manifest["phase"] = "Fehlgeschlagen"
-        manifest["error"] = {"code": error.code, "message": error.message, "at": int(time.time() * 1000)}
-        manifest["worker"] = {**claim, "heartbeatAt": int(time.time() * 1000)}
+        # A losing worker must not overwrite the new owner's manifest.
+        if error.code == "REMOTE_LEASE_LOST":
+            store.log(job_id, error.message)
+            return "skipped"
+        cancelled = error.code == "INFERENCE_CANCELLED"
+        manifest.update(status="CANCELLED" if cancelled else "FAILED", phase=error.message,
+                        error=dict(code=error.code, message=error.message, at=int(time.time() * 1000)))
         store.write_manifest(job_id, manifest)
         store.write_error(job_id, error.code, error.message, store.worker_id)
-        store.log(job_id, f"FAILED – {error.code}: {error.message}")
-        return "failed"
-    except Exception as error:  # noqa: BLE001 – ein Job darf den Worker nie beenden
-        manifest["status"] = "FAILED"
-        manifest["phase"] = "Fehlgeschlagen"
-        manifest["error"] = {"code": "INFERENCE_FAILED", "message": str(error)[:500], "at": int(time.time() * 1000)}
+        store.log(job_id, f"{manifest['status']}: {error.code}: {error.message}")
+        return "cancelled" if cancelled else "failed"
+    except Exception as error:
+        message = f"{type(error).__name__}: {error}"[:1500]
+        manifest.update(status="FAILED", phase="Worker-Fehler", error=dict(code="REMOTE_WORKER_FAILED", message=message))
         store.write_manifest(job_id, manifest)
-        store.write_error(job_id, "INFERENCE_FAILED", str(error)[:500], store.worker_id)
-        store.log(job_id, f"FAILED – INFERENCE_FAILED: {error}")
+        store.write_error(job_id, "REMOTE_WORKER_FAILED", message, store.worker_id)
+        store.log(job_id, message)
         return "failed"
 
 
-def _wav_geometry(path: str) -> Tuple[int, int, int]:
-    """Sample Rate, Kanäle und Frames aus einem PCM/Float-WAV-Header."""
-    import wave  # nur stdlib – läuft in Colab ohne Zusatzpakete
-
-    with wave.open(path, "rb") as handle:
-        frames = handle.getnframes()
-        sample_rate = handle.getframerate()
-        channels = handle.getnchannels()
-    return frames, sample_rate, channels
-
-
-def _gpu_name() -> str:
-    try:
-        import torch  # type: ignore
-
-        if torch.cuda.is_available():
-            return torch.cuda.get_device_name(0)
-        return "cpu"
-    except Exception:  # noqa: BLE001 – kein torch ⇒ reine CPU-Maschine
-        return "cpu"
-
-
-# --------------------------------------------------------------------------- #
-# Einstieg
-# --------------------------------------------------------------------------- #
-
-
-def self_test() -> int:
-    """Protokoll-Selbsttest ohne Torch/GPU – läuft überall (CI, Sandbox)."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = JobStore(tmp, "self-test-worker")
-        job_id = str(uuid.uuid4())
-        os.makedirs(store.job_dir(job_id), exist_ok=True)
-        # 1. Manifest schreiben, lesen, validieren
-        manifest = {
-            "schemaVersion": SCHEMA_VERSION,
-            "jobId": job_id,
-            "status": "RUNNING",
-            "createdAt": int(time.time() * 1000),
-            "engine": {"modelId": "bsroformer-musdb18hq-4stem-zfturbo", "profile": "HIGH_QUALITY", "stems": ["vocals", "drums", "bass", "other"]},
-            "input": {"fileName": "mix.wav", "relativePath": f"jobs/{job_id}/input/mix.wav", "sha256": "x" * 64, "bytes": 1},
-            "output": {"stems": []},
-        }
-        store.write_manifest(job_id, manifest)
-        assert validate_manifest(store.read_manifest(job_id), job_id)["jobId"] == job_id
-        # 2. Terminale Jobs werden nicht erneut gerechnet
-        done = dict(manifest, status="COMPLETED")
-        store.write_manifest(job_id, done)
-        assert run_job(store, job_id, store.read_manifest(job_id), model_dir=tmp, device="cpu", adapter="unused", work_dir=tmp) == "skipped"
-        # 3. Unvollständige Ergebnisse werden abgelehnt
-        done["status"] = "COMPLETED"
-        done["output"] = {"stems": [{"id": "vocals", "fileName": "vocals.wav", "sha256": "y" * 64, "bytes": 100}]}
-        try:
-            verify_outputs(done, tmp)
-            raise AssertionError("unvollständige Stems hätten abgelehnt werden müssen")
-        except ProtocolError as error:
-            assert error.code == "REMOTE_OUTPUT_INCOMPLETE"
-        # 4. Lease verhindert Doppelarbeit
-        other = JobStore(tmp, "other-worker")
-        other.claim(job_id)
-        assert store.claim_is_fresh(job_id) is True
-        assert JobStore(tmp, "other-worker").claim_is_fresh(job_id) is False
-        # 5. cancel.flag gewinnt
-        with open(os.path.join(store.job_dir(job_id), "cancel.flag"), "w", encoding="utf-8") as handle:
-            handle.write("{}")
-        pending = dict(manifest, status="RUNNING")
-        store.write_manifest(job_id, pending)
-        assert run_job(store, job_id, store.read_manifest(job_id), model_dir=tmp, device="cpu", adapter="unused", work_dir=tmp) == "cancelled"
-        print("[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, Abbruch)")
-    return 0
-
-
-def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)")
-    parser.add_argument("--root", default=os.environ.get("AIRODOX_STEM_REMOTE_DIR", ""), help="Jobablage (Drive-Ordner)")
-    parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"))
-    parser.add_argument("--adapter", default=os.environ.get("AIRODOX_STEM_ADAPTER", "/content/airdox/python/bsroformer_inference.py"))
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="AirDox Colab-Worker", allow_abbrev=False)
+    parser.add_argument("--root", default=os.environ.get("AIRODOX_STEM_REMOTE_DIR", ""))
+    parser.add_argument("--model-dir", default="/content/models")
+    parser.add_argument("--adapter", default=str(Path(__file__).resolve().parents[1] / "python/bsroformer_inference.py"))
     parser.add_argument("--work-dir", default="/content/airdox-work")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
-    parser.add_argument("--worker", default=f"colab-{socket.gethostname()}-{os.getpid()}")
-    parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument("--worker", default=f"colab-{uuid.uuid4().hex[:12]}")
+    parser.add_argument("--poll", type=float, default=15)
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--max-jobs", type=int, default=0, help="0 = unbegrenzt")
+    parser.add_argument("--max-jobs", type=int, default=0)
+    parser.add_argument("--sync-timeout", type=float, default=600)
+    parser.add_argument("--job-timeout", type=float, default=21600)
+    parser.add_argument("--idle-timeout", type=float, default=1800)
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
 
-def main(argv: List[str]) -> int:
+def self_test():
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        store = JobStore(root, "self-test")
+        job = str(uuid.uuid4())
+        store.claim(job)
+        assert JobStore(root, "other").claim_is_fresh(job)
+        try:
+            safe_path(root, "../outside")
+            raise AssertionError("path traversal accepted")
+        except ProtocolError:
+            pass
+    print("Worker protocol self-test PASS (not an inference test)")
+    return 0
+
+
+def main(argv):
     args = parse_args(argv)
     if args.self_test:
         return self_test()
-    if not args.root:
-        print("[STEM-REMOTE-WORKER] Kein --root angegeben (Drive-Ordner der Jobablage).", file=sys.stderr)
-        return 2
+    if not args.root or min(args.poll, args.sync_timeout, args.job_timeout, args.idle_timeout) <= 0:
+        raise ProtocolError("STEM_CONFIG_INVALID", "Jobordner und positive Zeitgrenzen erforderlich")
+    from remote_setup import preflight
+    health = preflight(args.model_dir, args.adapter, args.device)
     store = JobStore(args.root, args.worker)
+    os.makedirs(store.jobs_dir, exist_ok=True)
     os.makedirs(args.work_dir, exist_ok=True)
-    print(f"[STEM-REMOTE-WORKER] Start: worker={args.worker} root={store.root} device={args.device}", flush=True)
-    processed = 0
-    while True:
-        for job_id in store.list_job_ids():
-            if args.max_jobs and processed >= args.max_jobs:
-                break
-            manifest = store.read_manifest(job_id)
-            if not manifest:
-                continue
+    status_path = os.path.join(store.root, "worker.json")
+    previous = read_json(status_path)
+    if previous and previous.get("state") == "ready" and time.time() * 1000 - previous.get("heartbeatAt", 0) < 180000:
+        raise ProtocolError("REMOTE_WORKER_CONFLICT", "Bereits ein Worker aktiv. Alte Colab-Sitzung stoppen und 3 Minuten warten.")
+    stop = threading.Event()
+    status = dict(schemaVersion=1, id=args.worker, version=WORKER_VERSION, state="ready", **health)
+    heartbeat_errors = []
+
+    def heartbeat():
+        while not stop.is_set():
             try:
-                validate_manifest(manifest, job_id)
-            except ProtocolError as error:
-                store.log(job_id, f"Manifest ungültig: {error.message}")
-                continue
-            if manifest.get("status") in TERMINAL_STATUSES:
-                continue
-            outcome = run_job(
-                store,
-                job_id,
-                manifest,
-                model_dir=args.model_dir,
-                device=args.device,
-                adapter=args.adapter,
-                work_dir=args.work_dir,
-            )
-            if outcome in {"completed", "failed", "cancelled"}:
-                processed += 1
-        if args.once:
-            print(f"[STEM-REMOTE-WORKER] {processed} Job(s) bearbeitet – Ende (--once).", flush=True)
-            return 0
-        time.sleep(max(5, args.poll))
+                current = read_json(status_path)
+                if current and current.get("id") != args.worker and current.get("state") == "ready" and current != previous:
+                    raise ProtocolError("REMOTE_WORKER_CONFLICT", "Zweite Colab-Sitzung erkannt")
+                status["heartbeatAt"] = int(time.time() * 1000)
+                write_json_atomic(status_path, dict(status))
+            except Exception as error:
+                heartbeat_errors.append(str(error))
+                stop.set()
+                return
+            stop.wait(10)
+
+    status["heartbeatAt"] = int(time.time() * 1000)
+    write_json_atomic(status_path, status)
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    print(f"[STEM-REMOTE-WORKER] BEREIT: {args.worker}, {health['device']}, {MODEL_ID}", flush=True)
+    processed = failures = 0
+    try:
+        while not stop.is_set():
+            for job_id in store.list_job_ids():
+                if stop.is_set():
+                    break
+                try:
+                    manifest = store.read_manifest(job_id)
+                    validate_manifest(manifest, job_id)
+                    if manifest["status"] in TERMINAL_STATUSES:
+                        continue
+                    from remote_setup import validate_engine
+                    validate_engine(manifest["engine"])
+                    result = run_job(store, job_id, manifest, model_dir=args.model_dir, device=health["device"],
+                                     adapter=args.adapter, work_dir=args.work_dir, sync_timeout=args.sync_timeout,
+                                     timeout=args.job_timeout, idle_timeout=args.idle_timeout)
+                    if result in {"completed", "failed", "cancelled"}:
+                        processed += 1
+                        failures += result == "failed"
+                except (json.JSONDecodeError, OSError, ProtocolError, TypeError, ValueError) as error:
+                    store.log(job_id, f"Job nicht angenommen: {error}")
+                    if isinstance(error, ProtocolError):
+                        store.write_error(job_id, error.code, error.message, store.worker_id)
+                    failures += 1
+                if args.max_jobs and processed >= args.max_jobs:
+                    return 1 if failures else 0
+            if args.once:
+                return 1 if failures else 0
+            print(f"[STEM-REMOTE-WORKER] Wartet auf Jobs; bearbeitet={processed}", flush=True)
+            stop.wait(args.poll)
+        if heartbeat_errors:
+            raise ProtocolError("REMOTE_WORKER_HEARTBEAT_FAILED", heartbeat_errors[-1])
+        return 0
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        current = read_json(status_path)
+        if current and current.get("id") == args.worker:
+            status.update(state="stopped", heartbeatAt=int(time.time() * 1000))
+            write_json_atomic(status_path, status)
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print("Worker gestoppt. Offene Jobs bleiben erhalten.", flush=True)
+        sys.exit(130)
+    except Exception as error:
+        print(f"[STEM-REMOTE-WORKER] START/LAUF FEHLGESCHLAGEN: {error}", file=sys.stderr, flush=True)
+        sys.exit(1)

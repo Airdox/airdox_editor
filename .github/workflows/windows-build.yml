@@ -5,42 +5,107 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: windows-latest
+permissions:
+  contents: read
 
+jobs:
+  remote-model:
+    name: Echter Python-Fernpfad (CPU, kein Google-Drive-Nachweis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm ci --ignore-scripts
+      - name: Modellruntime installieren
+        run: |
+          python -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r colab/requirements-worker.txt
+          python -m pip install --no-deps msst==0.1.0
+          python -m pip check
+      - name: Verifiziertes Modell und Preflight
+        run: python colab/remote_setup.py --model-dir stem-gate-run/models --device cpu
+      - name: Echter Modelllauf und Editor-Rückimport (44.1 und 48 kHz)
+        run: node scripts/run-tests.mjs --only stem-remote-real-model-live --fail-on-skip --timeout 1200000
+        env:
+          AIRODOX_STEM_MODEL_DIR: ${{ github.workspace }}/stem-gate-run/models
+          AIRODOX_STEM_PYTHON: python
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Colab_Real_Model_Evidence
+          path: |
+            stem-gate-run/remote-real-model-evidence.json
+            test-runner-failure.txt
+          if-no-files-found: warn
 
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
       - name: Node.js einrichten
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Abhängigkeiten installieren
         run: npm ci
-
       - name: Native Module für Electron neu bauen
         run: npm run rekordbox:native:ensure
-
-      - name: Vite-Frontend bauen
+      - name: Typprüfung und Notebook-Vertrag
+        run: |
+          npm run lint
+          node scripts/md-to-notebook.mjs colab/airdox-stem-remote-worker.md --check
+      - name: Frontend und Engine bauen
         run: npm run build
-
-      # Die Suite lief zuletzt NICHT im Build, deshalb blieben zwei echte
-      # Regressionen unbemerkt (fehlende ANLZ-Fingerabdruck-Kontrolle im
-      # Master-DB-Gate, von einem Reparatur-Skript gelöschte asarUnpack-Muster).
-      # Der Runner meldet Fehlschläge als ::error-Annotation im Job-Log.
       - name: Test-Suite ausführen
         run: npm test
-
-      - name: Electron-Installer bauen (NSIS)
-        run: npm run package:win:nsis
+      - name: Windows Setup und portable EXE bauen
+        run: npm run package:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup-EXE als Artefakt hochladen
+      - name: Gepackte Windows-App starten und Remote-IPC prüfen
+        shell: pwsh
+        run: |
+          $env:AIRDOX_PACKAGED_SMOKE_DIR = Join-Path $env:RUNNER_TEMP 'airdox-smoke'
+          $app = Start-Process -FilePath '.\release\win-unpacked\airdox_SMART_Editor.exe' -PassThru
+          if (-not $app.WaitForExit(120000)) { Stop-Process -Id $app.Id -Force; throw 'Windows smoke timeout' }
+          if ($app.ExitCode -ne 0) { throw "Windows smoke failed: $($app.ExitCode)" }
+          $report = Get-Content (Join-Path $env:AIRDOX_PACKAGED_SMOKE_DIR 'windows-smoke.json') -Raw | ConvertFrom-Json
+          if ($report.result -ne 'PASS') { throw 'No passing Windows smoke report' }
+          Copy-Item (Join-Path $env:AIRDOX_PACKAGED_SMOKE_DIR 'windows-smoke.*') release
+      - name: Prüfsummen erstellen
+        shell: pwsh
+        run: |
+          Get-ChildItem release\*.exe | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash.ToLower())  $($_.Name)"
+          } | Set-Content release\SHA256SUMS.txt
+      - name: Windows-Dateien und passendes Colab-Paket
         uses: actions/upload-artifact@v4
         with:
-          name: airdox_SMART_Editor_Windows_Setup
-          path: release/*-setup.exe
+          name: airdox_SMART_Editor_Windows_0.4.3
+          path: |
+            release/*-setup.exe
+            release/*-portable.exe
+            release/SHA256SUMS.txt
+            release/windows-smoke.*
+            resources/colab/*
           if-no-files-found: error
+      - name: Fehlerdiagnose
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows_Build_Diagnostics
+          path: |
+            test-runner-failure.txt
+            ${{ runner.temp }}/airdox-smoke/
+          if-no-files-found: warn

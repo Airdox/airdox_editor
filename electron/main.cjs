@@ -20,6 +20,9 @@ const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
 const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
+if (app.isPackaged && process.env.AIRDOX_PACKAGED_SMOKE_DIR) {
+  app.setPath('userData', path.join(process.env.AIRDOX_PACKAGED_SMOKE_DIR, 'userData'));
+}
 
 // ---------------------------------------------------------------------------
 // Logging-System so früh wie möglich aktivieren – noch vor dem ersten
@@ -235,6 +238,7 @@ function createWindow() {
     }
   });
 
+  require('./packagedSmoke.cjs').attachPackagedSmoke(mainWindow, app);
   const developmentUrl = process.env.ELECTRON_RENDERER_URL;
   if (developmentUrl) {
     mainWindow.loadURL(developmentUrl);
@@ -912,4 +916,16 @@ app.on('before-quit', () => {
 app.on('window-all-closed', () => {
   logger.info('SYSTEM', 'Alle Fenster geschlossen (window-all-closed).');
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Only open the packaged, fixed resource directory; no renderer-controlled path.
+ipcMain.handle('stems:open-colab-package', async () => {
+  const folder = app.isPackaged ? path.join(process.resourcesPath, 'colab') : path.join(__dirname, '..', 'resources', 'colab');
+  try {
+    await access(path.join(folder, 'airdox-colab-worker.zip'));
+    const error = await shell.openPath(folder);
+    return error ? { ok: false, message: error } : { ok: true };
+  } catch (error) {
+    return { ok: false, message: `Colab-Paket fehlt. Bitte die vollständige Windows-Version verwenden. ${error.message}` };
+  }
 });

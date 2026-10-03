@@ -1,0 +1,15 @@
+# Installed in a separate venv, not in the Colab notebook kernel.
+# torch/torchaudio are installed separately from the official cu124 index.
+beartype==0.18.5
+einops==0.8.1
+rotary-embedding-torch==0.8.6
+numpy==1.26.4
+soundfile==0.13.1
+PyYAML==6.0.2
+ml-collections==1.1.0
+scipy==1.14.1
+packaging==24.2
+librosa==0.10.2.post1
+matplotlib==3.9.4
+omegaconf==2.3.0
+tqdm==4.67.1

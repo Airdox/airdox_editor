@@ -194,6 +194,10 @@ function afterPack(context) {
   const appOutDir = context && context.appOutDir;
   if (!appOutDir) fail('afterPack: appOutDir fehlt im electron-builder-Kontext.');
   console.log(`[airdox:packaging] afterPack: ${appOutDir}`);
+  for (const name of ['airdox-colab-worker.zip', 'airdox-stem-remote-worker.ipynb', 'bundle.json', 'ABNAHME.md']) {
+    const file = path.join(appOutDir, 'resources', 'colab', name);
+    if (!fs.existsSync(file) || fs.statSync(file).size === 0) fail(`Colab-Paket unvollständig: ${name}`);
+  }
 
   const asarPath = path.join(appOutDir, 'resources', 'app.asar');
   if (!fs.existsSync(asarPath)) {

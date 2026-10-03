@@ -1,7 +1,7 @@
 {
   "name": "airdox_SMART_Editor",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "airdox_SMART_Editor – Professioneller DJ-Audio-Editor mit nicht-destruktivem Rekordbox-Import.",
   "author": "Airdox",
   "type": "module",
@@ -14,9 +14,9 @@
     "build:anlz-structure:check": "node scripts/build-anlz-structure.mjs --check",
     "start": "node dist/server.cjs",
     "desktop": "npm run build && npm run rekordbox:native:ensure && electron .",
-    "package:win": "npm run build && electron-builder --win",
-    "package:win:nsis": "npm run build && electron-builder --win nsis",
-    "package:win:portable": "npm run build && electron-builder --win portable",
+    "package:win": "npm run build && npm run stems:remote:bundle && electron-builder --win nsis portable --publish never",
+    "package:win:nsis": "npm run build && npm run stems:remote:bundle && electron-builder --win nsis --publish never",
+    "package:win:portable": "npm run build && npm run stems:remote:bundle && electron-builder --win portable --publish never",
     "preview": "vite preview",
     "stems:setup": "bash scripts/setup-stem-model.sh",
     "stems:setup:bsroformer": "bash scripts/setup-bsroformer-model.sh",
@@ -53,7 +53,8 @@
     "clean": "rm -rf dist release server.js",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3-multiple-ciphers",
     "lint": "tsc --noEmit",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "stems:remote:bundle": "npm run stems:remote:notebook && python scripts/build-colab-bundle.py"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -121,6 +122,13 @@
       {
         "from": "src/stems/modelCatalog.json",
         "to": "modelCatalog.json"
+      },
+      {
+        "from": "resources/colab",
+        "to": "colab",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,

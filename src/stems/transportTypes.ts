@@ -294,6 +294,11 @@ export interface RemoteServiceStatus {
   reason?: string;
   /** True, wenn der Transport gerade erreichbar ist. */
   reachable: boolean;
+  /** A fresh, compatible Colab worker heartbeat, NOT merely a writable folder. */
+  workerReady?: boolean;
+  workerReason?: string;
+  workerHeartbeatAt?: number;
+  workerDevice?: string;
   jobs: RemoteStemJobView[];
   active: number;
   completed: number;
@@ -311,6 +316,8 @@ export interface RemoteSettings {
   workerLeaseMs?: number;
   /** Absolute Obergrenze für einen Fern-Job (§21 E). */
   jobTimeoutMs?: number;
+  workerWaitMs?: number;
+  outputSyncWaitMs?: number;
 }
 
 export interface StartRemoteStemJobPayload {

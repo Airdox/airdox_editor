@@ -73,6 +73,7 @@ export interface RemoteJobEngineRef {
   checkpoint?: { file: string; sha256?: string; url?: string };
   config?: { file: string; url?: string };
   numOverlap?: number;
+  ensemblePasses?: number;
   chunkSizeSamples?: number;
 }
 
@@ -178,6 +179,7 @@ export interface RemoteJobRecord {
   importedStems?: { id: StemId; filePath: string; bytes: number; sha256: string }[];
   worker?: RemoteWorkerLease;
   uploadedAt?: number;
+  outputWaitStartedAt?: number;
   lastPollAt?: number;
   /**
    * Zuletzt veröffentlichter Job-Steckbrief. Er erlaubt es, einen

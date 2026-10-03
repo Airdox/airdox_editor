@@ -230,7 +230,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   const [expertProfiles, setExpertProfiles] = React.useState(false);
   const currentMode = STEM_MODES.find((mode) => mode.profiles.includes(selectedProfile))?.id ?? 'fast';
   const remoteAvailable = Boolean(remoteStatus?.configured);
-  const remoteReady = remoteAvailable && remoteStatus?.reachable !== false;
+  const remoteReady = remoteAvailable && remoteStatus?.reachable === true && remoteStatus?.workerReady === true;
   const activeRemoteJob = (remoteStatus?.jobs ?? []).find(
     (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
   );
@@ -239,7 +239,9 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
     ? `Noch nicht eingerichtet – Button „Externe Zerlegung (Google Colab)" öffnet die Einrichtung (Drive-Ordner + Colab-Worker). Bis dahin läuft High Quality lokal.`
     : remoteStatus?.reachable === false
       ? `${remoteLabel} ist gerade nicht erreichbar. Der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
-      : `Bereit: ${remoteLabel}. Klick auf „Externe Zerlegung (Google Colab)" startet: Arbeitskopie hochladen → Colab rechnet → Stems automatisch zurück.`;
+      : !remoteStatus?.workerReady
+        ? (remoteStatus?.workerReason ?? 'Ablage erreichbar, aber noch kein Colab-Worker bestätigt.')
+        : `Bereit: ${remoteLabel}. Klick auf „Externe Zerlegung (Google Colab)" startet: Arbeitskopie hochladen → Colab rechnet → Stems automatisch zurück.`;
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
     const known = STEM_CONFIGS.find((cfg) => cfg.id === id);
@@ -609,6 +611,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
         <div className="mt-1 text-[10px] text-[#7ef0b0] flex items-center space-x-2">
           <span>
             Externer Colab-Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
+            {activeRemoteJob.worker?.heartbeatAt ? ` · Lebenszeichen ${new Date(activeRemoteJob.worker.heartbeatAt).toLocaleTimeString()}` : ' · noch nicht übernommen'}
             {activeRemoteJob.cpuFallback ? ' (CPU-Fallback)' : activeRemoteJob.device ? ` (${activeRemoteJob.device})` : ''}
           </span>
           {onCancelSeparation && (

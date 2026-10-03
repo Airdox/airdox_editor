@@ -75,6 +75,7 @@ declare global {
         modifiedAt: number;
         accessMode: 'READ_ONLY';
       } | null>;
+      openColabPackage(): Promise<{ ok: boolean; message?: string }>;
       chooseDirectory(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
       getStemEngineStatus(): Promise<{
         available: boolean;

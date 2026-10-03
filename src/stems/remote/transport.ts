@@ -23,7 +23,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RemoteTransportConfig } from './types';
-import { REMOTE_JOBS_DIR } from './layout';
+import { assertSafeRelative, REMOTE_JOBS_DIR } from './layout';
 
 const run = promisify(execFile);
 
@@ -62,7 +62,7 @@ export interface IRemoteTransport {
 }
 
 function toLocal(root: string, relative: string): string {
-  return path.join(root, ...relative.split('/').filter(Boolean));
+  return path.join(root, ...assertSafeRelative(relative).split('/'));
 }
 
 async function sha256OfFile(filePath: string): Promise<string> {
@@ -155,6 +155,7 @@ export class FolderTransport implements IRemoteTransport {
   }
 
   async writeBytes(relative: string, bytes: Uint8Array): Promise<void> {
+    await probeFolder(this.root); // Never recreate a disconnected mount as a local directory.
     const file = toLocal(this.root, relative);
     await mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;

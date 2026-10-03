@@ -31,3 +31,7 @@ resources/stem-runtime/*
 # Build; einen Download gibt es nur über `npm run stems:bundle`.
 *.onnx
 !tests/fixtures/onnx/*.onnx
+
+# Generated release packages and bundled Colab sources
+release/
+resources/colab/

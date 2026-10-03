@@ -27,7 +27,7 @@
  *    hochgeladen; vom Original werden nur Hash/Größe/mtime *gelesen* (§3, §31).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ModelRegistry } from '../modelRegistry';
@@ -147,7 +147,8 @@ export class RemoteStemJobService {
   /** Reihenfolge: Umgebung < gespeicherte Datei < explizite Overrides. */
   private async effectiveSettings(): Promise<RemoteSettingsState> {
     const file = await loadRemoteSettingsFile(this.root);
-    return mergeRemoteSettings(settingsFromEnv(this.options.env ?? process.env), file, this.options.settings);
+    this.settings = mergeRemoteSettings(settingsFromEnv(this.options.env ?? process.env), file, this.options.settings);
+    return this.settings;
   }
 
   private transportFor(settings: RemoteSettingsState): IRemoteTransport {
@@ -163,6 +164,8 @@ export class RemoteStemJobService {
     if (settings.pollIntervalMs !== undefined) next.pollIntervalMs = settings.pollIntervalMs;
     if (settings.workerLeaseMs !== undefined) next.workerLeaseMs = settings.workerLeaseMs;
     if (settings.jobTimeoutMs !== undefined) next.jobTimeoutMs = settings.jobTimeoutMs;
+    if (settings.workerWaitMs !== undefined) next.workerWaitMs = settings.workerWaitMs;
+    if (settings.outputSyncWaitMs !== undefined) next.outputSyncWaitMs = settings.outputSyncWaitMs;
     await saveRemoteSettingsFile(this.root, next);
     this.settings = mergeRemoteSettings(settingsFromEnv(this.options.env ?? process.env), next);
     this.options.logger?.info?.('STEM-REMOTE', 'Fernpfad-Einstellungen gespeichert', {
@@ -303,6 +306,7 @@ export class RemoteStemJobService {
       (record) => record.idempotencyKey === idempotencyKey && record.status !== 'FAILED' && record.status !== 'CANCELLED'
     );
     if (existing) {
+      await rm(path.dirname(workingPath), { recursive: true, force: true });
       this.options.logger?.info?.('STEM-REMOTE', `Identischer Fern-Job existiert bereits (${existing.jobId}) – kein zweiter Lauf (§19)`, {
         idempotencyKey,
         status: existing.status,
@@ -375,6 +379,7 @@ export class RemoteStemJobService {
           ? { file: descriptor.config.file, url: descriptor.config.url }
           : undefined,
         numOverlap: this.registry.parametersFor(descriptor, profile).numOverlap,
+        ensemblePasses: this.registry.parametersFor(descriptor, profile).ensemblePasses,
         chunkSizeSamples: descriptor.chunkSizeSamples,
       },
     });
@@ -508,12 +513,21 @@ export class RemoteStemJobService {
     } catch (error) {
       return this.statusFromSettings(settings, false, error instanceof Error ? error.message : String(error));
     }
+    for (const record of this.records.values()) {
+      if (isTerminalStatus(record.status)) continue;
+      if (this.now() - record.createdAt > this.jobTimeoutMs()) {
+        await this.expire(record, 'REMOTE_TIMEOUT', 'Zeitüberschreitung – kein vollständiges Ergebnis.');
+        await this.failRemote(transport, record).catch(() => undefined);
+        await transport.writeText(`jobs/${record.jobId}/cancel.flag`, 'timeout').catch(() => undefined);
+      }
+    }
     try {
       await transport.probe();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       for (const record of this.records.values()) {
         if (isTerminalStatus(record.status)) continue;
+        record.phase = 'Drive nicht erreichbar – Wiederverbindung wird versucht';
         record.transportDegraded = true;
         record.transportErrors += 1;
         await this.persist(record);
@@ -525,7 +539,11 @@ export class RemoteStemJobService {
     }
 
     for (const record of [...this.records.values()]) {
-      if (isTerminalStatus(record.status) && record.localJobId) continue;
+      if (record.status === 'FAILED' || record.status === 'CANCELLED') {
+        await transport.writeText(`jobs/${record.jobId}/cancel.flag`, record.error?.code ?? 'cancelled').catch(() => undefined);
+        continue;
+      }
+      if (record.status === 'COMPLETED' && record.localJobId) continue;
       try {
         await this.syncRecord(record, transport);
       } catch (error) {
@@ -534,6 +552,17 @@ export class RemoteStemJobService {
           record.transportErrors += 1;
           await this.persist(record);
           continue;
+        }
+        if (error instanceof RemoteProtocolError && error.code === 'REMOTE_OUTPUT_SYNC_PENDING') {
+          record.outputWaitStartedAt ??= this.now();
+          if (this.now() - record.outputWaitStartedAt < (this.settings.outputSyncWaitMs ?? REMOTE_DEFAULTS.outputSyncWaitMs)) {
+            record.status = 'VALIDATING';
+            record.phase = 'Ergebnisse noch nicht vollständig synchronisiert – Drive wird erneut geprüft';
+            await this.persist(record);
+            this.emitEvent('progress', record);
+            continue;
+          }
+          error = new RemoteProtocolError('REMOTE_OUTPUT_SYNC_TIMEOUT', 'Ergebnisdateien nach Ablauf der Synchronisierungsfrist weiterhin unvollständig.');
         }
         // Inhaltliche Fehler (Manifest kaputt, Hash falsch, Datei fehlt) sind
         // endgültig – der Nutzer bekommt eine verständliche Ursache.
@@ -553,10 +582,11 @@ export class RemoteStemJobService {
       }
     }
     this.schedulePolling();
-    return this.statusFromSettings(settings, true, undefined, transport);
+    return this.withWorkerStatus(this.statusFromSettings(settings, true, undefined, transport), transport);
   }
 
   private async syncRecord(record: RemoteJobRecord, transport: IRemoteTransport): Promise<void> {
+    if (record.cancelRequestedAt || record.status === 'FAILED' || record.status === 'CANCELLED') return;
     const manifestPath = `jobs/${record.jobId}/manifest.json`;
     const raw = await transport.readText(manifestPath);
     if (raw === null) {
@@ -591,6 +621,10 @@ export class RemoteStemJobService {
       return;
     }
 
+    if (manifest.input.sha256 !== record.workingCopySha256 || manifest.idempotencyKey !== record.idempotencyKey ||
+        manifest.engine.modelId !== record.modelId || JSON.stringify(manifest.engine.stems) !== JSON.stringify(record.stems)) {
+      throw new RemoteProtocolError('REMOTE_MANIFEST_INVALID', 'Worker-Ergebnis gehört nicht zum angelegten Auftrag.');
+    }
     record.lastPollAt = this.now();
     record.transportDegraded = false;
     record.transportErrors = 0;
@@ -633,6 +667,31 @@ export class RemoteStemJobService {
       return;
     }
 
+    const rejection = await transport.readText(`jobs/${record.jobId}/error.json`);
+    if (rejection && !manifest.worker) {
+      const detail = JSON.parse(rejection);
+      if (detail.worker && detail.code) throw new RemoteProtocolError(detail.code, String(detail.message));
+    }
+    const claimRaw = await transport.readText(`jobs/${record.jobId}/claim.json`);
+    if (claimRaw) {
+      try {
+        const claim = JSON.parse(claimRaw);
+        if (claim.id === manifest.worker?.id && Number.isFinite(claim.heartbeatAt)) {
+          record.worker = { ...manifest.worker!, heartbeatAt: Math.max(claim.heartbeatAt, manifest.worker?.heartbeatAt ?? 0) };
+        }
+      } catch { /* a partial sync must not erase the last heartbeat */ }
+    }
+    const heartbeat = record.worker?.heartbeatAt ?? record.worker?.claimedAt;
+    if (heartbeat && this.now() - heartbeat > this.workerLeaseMs()) {
+      await this.expire(record, 'REMOTE_WORKER_STALE', 'Colab sendet kein Lebenszeichen mehr. Sitzung prüfen und Job erneut starten.');
+      await transport.writeText(`jobs/${record.jobId}/cancel.flag`, 'worker stale').catch(() => undefined);
+      return;
+    }
+    if (!record.worker && this.now() - (record.uploadedAt ?? record.createdAt) > (this.settings.workerWaitMs ?? REMOTE_DEFAULTS.workerWaitMs)) {
+      await this.expire(record, 'REMOTE_WORKER_NOT_STARTED', 'Kein Colab-Worker hat den Auftrag übernommen. Notebook starten und denselben Drive-Ordner prüfen.');
+      await transport.writeText(`jobs/${record.jobId}/cancel.flag`, 'worker absent').catch(() => undefined);
+      return;
+    }
     // Laufend: Phase aus Worker-Sicht übersetzen (§13 – der Nutzer sieht
     // „Verarbeitung läuft – GPU/CPU“ statt einer technischen Zeile).
     const previous = record.status;
@@ -652,29 +711,20 @@ export class RemoteStemJobService {
       });
     }
 
-    // Zeitüberschreitung: kein Worker, kein Ergebnis, zu lange her (§21 E).
-    if (this.now() - record.createdAt > this.jobTimeoutMs()) {
-      record.status = 'FAILED';
-      record.error = {
-        code: 'REMOTE_TIMEOUT',
-        message: `Fern-Job ${record.jobId} hat nach ${Math.round(this.jobTimeoutMs() / 60_000)} Minuten kein Ergebnis geliefert.`,
-      };
-      record.phase = 'Zeitüberschreitung – kein Worker-Ergebnis';
-      record.finishedAt = this.now();
+    if (!record.worker) {
+      record.phase = `Wartet auf Colab-Übernahme (${Math.floor((this.now() - record.createdAt) / 1000)} s) – Notebook und Drive-Synchronisierung prüfen`;
       await this.persist(record);
-      await this.failRemote(transport, record).catch(() => undefined);
-      this.emitEvent('failed', record);
-      return;
     }
+  }
 
-    // Beansprucht, aber kein Lebenszeichen mehr: nicht sofort aufgeben, nur
-    // sichtbar machen. Erst der Gesamt-Timeout oben beendet den Job.
-    if (record.worker?.claimedAt && !manifest.worker?.heartbeatAt) {
-      const age = this.now() - record.worker.claimedAt;
-      if (age > this.workerLeaseMs()) {
-        record.phase = `Worker ohne Lebenszeichen seit ${Math.round(age / 60_000)} Minuten – neuer Versuch auf einem anderen Worker möglich`;
-      }
-    }
+  private async expire(record: RemoteJobRecord, code: string, message: string): Promise<void> {
+    record.status = 'FAILED';
+    record.error = { code, message };
+    record.phase = message;
+    record.finishedAt = this.now();
+    await this.persist(record);
+    this.options.logger?.error?.('STEM-REMOTE', `${record.jobId}: ${code}: ${message}`);
+    this.emitEvent('failed', record);
   }
 
   private phaseTextFor(manifest: RemoteJobManifest): string {
@@ -762,9 +812,10 @@ export class RemoteStemJobService {
 
     for (const stem of manifest.output.stems) {
       const bytes = await transport.readBytes(stem.relativePath);
-      if (!bytes || bytes.byteLength === 0) {
-        throw new RemoteProtocolError('REMOTE_OUTPUT_MISSING', `Ergebnis ${stem.id} fehlt in der Jobablage (${stem.relativePath}).`);
+      if (!bytes || bytes.byteLength < stem.bytes) {
+        throw new RemoteProtocolError('REMOTE_OUTPUT_SYNC_PENDING', `Ergebnis ${stem.id} fehlt in der Jobablage (${stem.relativePath}).`);
       }
+      if (bytes.byteLength !== stem.bytes) throw new RemoteProtocolError('REMOTE_OUTPUT_INVALID', 'Stem-Dateigröße stimmt nicht mit Manifest überein.');
       const actualHash = sha256Bytes(bytes);
       if (stem.sha256 && actualHash !== stem.sha256) {
         throw new RemoteProtocolError(
@@ -1034,7 +1085,29 @@ export class RemoteStemJobService {
       reason = error instanceof Error ? error.message : String(error);
       reachable = false;
     }
-    return this.statusFromSettings(settings, reachable, reason, transport);
+    return this.withWorkerStatus(this.statusFromSettings(settings, reachable, reason, transport), transport);
+  }
+
+  private async withWorkerStatus(status: RemoteServiceStatus, transport?: IRemoteTransport): Promise<RemoteServiceStatus> {
+    status.workerReady = false;
+    status.workerReason = 'Kein betriebsbereiter Colab-Worker bestätigt. Notebook starten; Google-Drive-Synchronisierung prüfen.';
+    if (!status.reachable || !transport) return status;
+    try {
+      const raw = await transport.readText('worker.json');
+      if (!raw) return status;
+      const worker = JSON.parse(raw);
+      status.workerHeartbeatAt = worker.heartbeatAt;
+      status.workerDevice = worker.device;
+      const age = this.now() - worker.heartbeatAt;
+      status.workerReady = worker.version === 'colab-worker/2' && worker.schemaVersion === 1 &&
+        worker.state === 'ready' && Number.isFinite(age) && age >= -60_000 && age < 180_000;
+      status.workerReason = status.workerReady
+        ? `Colab-Worker bereit (${worker.device}); Lebenszeichen vor ${Math.max(0, Math.round(age / 1000))} s. Jobübernahme bestätigt den Hinweg.`
+        : 'Colab-Worker gestoppt, veraltet oder Lebenszeichen abgelaufen. Passendes Notebook erneut starten.';
+    } catch (error) {
+      status.workerReason = `Worker-Status nicht lesbar: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    return status;
   }
 
   private statusFromSettings(

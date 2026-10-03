@@ -309,6 +309,8 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
       root: typeof input.root === 'string' ? input.root.slice(0, 400) : undefined,
       pollIntervalMs: Number.isFinite(Number(input.pollIntervalMs)) ? Number(input.pollIntervalMs) : undefined,
       workerLeaseMs: Number.isFinite(Number(input.workerLeaseMs)) ? Number(input.workerLeaseMs) : undefined,
+      workerWaitMs: Number.isFinite(Number(input.workerWaitMs)) ? Number(input.workerWaitMs) : undefined,
+      outputSyncWaitMs: Number.isFinite(Number(input.outputSyncWaitMs)) ? Number(input.outputSyncWaitMs) : undefined,
       jobTimeoutMs: Number.isFinite(Number(input.jobTimeoutMs)) ? Number(input.jobTimeoutMs) : undefined,
     };
     return bridge.configureRemoteJobs(sanitized);

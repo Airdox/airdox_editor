@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // Rekordbox source is refused in the main process.
   saveExportFile: (payload) => ipcRenderer.invoke('rekordbox:save-export-file', payload),
   openProjectFile: () => ipcRenderer.invoke('rekordbox:open-project-file'),
+  openColabPackage: () => ipcRenderer.invoke('stems:open-colab-package'),
   chooseDirectory: (options) => ipcRenderer.invoke('rekordbox:choose-directory', options),
   // Preflight and inference are separate so missing/unsupported Python is known
   // before a large audio buffer is handed to the model process.

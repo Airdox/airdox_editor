@@ -41,6 +41,7 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
   const [root, setRoot] = useState<string>(remoteStatus?.root ?? '');
   const [probe, setProbe] = useState<ProbeState>({ state: 'idle' });
   const [folderBusy, setFolderBusy] = useState(false);
+  const [packageMessage, setPackageMessage] = useState('');
 
   if (!isOpen) return null;
 
@@ -205,7 +206,7 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
               {probe.state === 'ok' && (
                 <span className="flex items-center space-x-1.5 text-[#34d399] font-semibold">
                   <CheckCircle2 size={13} />
-                  <span>Verbunden: {probe.label ?? 'Google Drive'} – {probe.root}</span>
+                  <span>Ablage erreichbar (noch kein Worker-Nachweis): {probe.label ?? 'Google Drive'} – {probe.root}</span>
                 </span>
               )}
             </div>
@@ -224,14 +225,26 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
             )}
           </div>
 
+          <div className={`rounded border p-3 ${remoteStatus?.workerReady ? 'border-emerald-700 text-emerald-300' : 'border-amber-800 text-amber-300'}`}>
+            {remoteStatus?.workerReason ?? 'Noch kein Colab-Worker bestätigt. Nach dem Notebook-Start die Verbindung erneut prüfen.'}
+          </div>
+          {desktop?.openColabPackage && <button
+            className="rounded border border-sky-700 px-3 py-2 text-sky-300"
+            onClick={async () => {
+              try {
+                const result = await desktop.openColabPackage();
+                setPackageMessage(result.ok ? 'Paketordner geöffnet: ZIP und Notebook gehören zu dieser App-Version.' : result.message);
+              } catch (error) { setPackageMessage(String(error)); }
+            }}>Colab-Paket öffnen</button>}
+          {packageMessage && <div className="text-neutral-300">{packageMessage}</div>}
           {/* Colab-Worker */}
           <div className="space-y-2.5">
             <div className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold">
-              2 · Colab-Worker (einmalig, ca. 5 Minuten)
+              2 · Colab-Worker (pro Colab-Sitzung starten)
             </div>
             <ol className="space-y-1.5 list-none">
               {[
-                'Notebook aus dem Repo öffnen: colab/airdox-stem-remote-worker.ipynb (fehlend: im Repo „npm run stems:remote:notebook" – dann Datei nach Google Drive hochladen).',
+                '„Colab-Paket öffnen“: das ZIP in den gewählten Drive-Jobordner kopieren und das mitgelieferte Notebook in Colab öffnen.',
                 'In Colab öffnen (colab.research.google.com → „Drive öffnen"), Laufzeit → Typ: T4 (GPU, empfohlen) oder CPU wählen, dann „Alles ausführen".',
                 'Das Notebook läuft im Hintergrund: es holt neue Jobs aus dem oben gewählten Drive-Ordner, rechnet sie und legt die Stems zurück. Bei „JOB_ORDNER" in der ersten Code-Zelle muss der selbe Ordnername stehen (z. B. airdox-stem-jobs).',
               ].map((line, index) => (
