@@ -16,12 +16,27 @@ if (fs.existsSync(paths.packageJson)) {
     let pkg = JSON.parse(fs.readFileSync(paths.packageJson, 'utf8'));
     if (!pkg.build) pkg.build = {};
     
-    // Unpack für schwere Binaries erzwingen
-    pkg.build.asarUnpack = [
+    // Unpack fuer schwere Binaries ERGAENZEN - niemals ersetzen!
+    // Dieses Skript hat die Liste schon einmal hart ueberschrieben und dabei
+    // die Stem-Muster (**/stem-runtime/**/*, **/models/**/*, python/**/*,
+    // **/node-bridge.cjs) geloescht; tests/stem-asar-unpack.test.ts fordert
+    // sie. Deshalb bleiben vorhandene Muster erhalten und nur fehlende werden
+    // angehaengt.
+    if (!Array.isArray(pkg.build.asarUnpack)) pkg.build.asarUnpack = [];
+    for (const pattern of [
         "node_modules/better-sqlite3-multiple-ciphers/**/*",
         "node_modules/onnxruntime-node/**/*",
-        "**/*.node"
-    ];
+        "**/*.node",
+        "**/*.dll",
+        "**/*.so",
+        "**/*.dylib",
+        "**/node-bridge.cjs",
+        "**/stem-runtime/**/*",
+        "**/models/**/*",
+        "python/**/*"
+    ]) {
+        if (!pkg.build.asarUnpack.includes(pattern)) pkg.build.asarUnpack.push(pattern);
+    }
 
     // AUSSCHLIESSLICH NSIS-Installer konfigurieren (kein Portable!)
     pkg.build.win = {
@@ -41,7 +56,7 @@ if (fs.existsSync(paths.packageJson)) {
     };
 
     fs.writeFileSync(paths.packageJson, JSON.stringify(pkg, null, 2));
-    console.log('  ? package.json: NSIS-Installer-Ziel und asarUnpack erfolgreich gesetzt.');
+    console.log('  ? package.json: NSIS-Installer-Ziel gesetzt, asarUnpack ergaenzt (bestehende Muster bleiben erhalten).');
 } else {
     console.error('  ? package.json nicht gefunden!');
     process.exit(1);

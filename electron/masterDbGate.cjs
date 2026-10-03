@@ -439,6 +439,48 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
+  // Fingerabdruck-Kontrolle: Die gewählte ANLZ-Datei muss zwischen Auswahl und
+  // Leseende unverändert geblieben sein (Größe + mtime, wie in dbReader.cjs für
+  // master.db). Ändert sich die Quelle während des Lesens, sind die gelesenen
+  // Bytes kein zusammenhängender Rekordbox-Stand – dann wird hier abgebrochen
+  // und ausdrücklich NICHT auf einen anderen Kandidaten ausgewichen. Sonst
+  // könnte der Editor die Waveform eines halb geschriebenen oder fremden
+  // Stands als „die Waveform von Rekordbox" ausgeben.
+  let analysisStatAfter = null;
+  try {
+    analysisStatAfter = await stat(analysisPath);
+  } catch (error) {
+    return fail(
+      'ANLZ_READ_FAILED',
+      `ANLZ-Datei nach dem Lesen nicht mehr prüfbar: ${analysisPath} (${error.message || error})`,
+      { ...dbContext, content }
+    );
+  }
+  const fingerprintUnchanged = Boolean(
+    analysisStatAfter &&
+      analysisStatAfter.isFile() &&
+      analysisStatAfter.size === analysisStat.size &&
+      analysisStatAfter.mtimeMs === analysisStat.mtimeMs
+  );
+  if (!fingerprintUnchanged) {
+    const before = `${analysisStat.size} B, mtime ${analysisStat.mtimeMs}`;
+    const after = analysisStatAfter
+      ? `${analysisStatAfter.size} B, mtime ${analysisStatAfter.mtimeMs}`
+      : 'nicht mehr vorhanden';
+    return fail(
+      'ANLZ_READ_FAILED',
+      `ANLZ-Quelle hat sich während des Lesens verändert (vorher: ${before}; nachher: ${after}): ${analysisPath}`,
+      { ...dbContext, content }
+    );
+  }
+  if (analysisBytes.length !== analysisStat.size) {
+    return fail(
+      'ANLZ_READ_FAILED',
+      `ANLZ-Datei wurde unvollständig gelesen (${analysisBytes.length} von ${analysisStat.size} Bytes): ${analysisPath}`,
+      { ...dbContext, content }
+    );
+  }
+
   // Gemeinsamer Walk mit dem Renderer-Parser (electron/generated/anlzStructure.cjs
   // ist das Spiegelmodul von src/rekordbox/anlzStructure.ts).
   const { scan, columns, summary } = anlz.decodeAnlzWaveform(analysisBytes);

@@ -127,7 +127,14 @@
     "asarUnpack": [
       "node_modules/better-sqlite3-multiple-ciphers/**/*",
       "node_modules/onnxruntime-node/**/*",
-      "**/*.node"
+      "**/*.node",
+      "**/*.dll",
+      "**/*.so",
+      "**/*.dylib",
+      "**/node-bridge.cjs",
+      "**/stem-runtime/**/*",
+      "**/models/**/*",
+      "python/**/*"
     ],
     "directories": {
       "output": "release"

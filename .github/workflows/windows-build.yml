@@ -26,6 +26,13 @@ jobs:
       - name: Vite-Frontend bauen
         run: npm run build
 
+      # Die Suite lief zuletzt NICHT im Build, deshalb blieben zwei echte
+      # Regressionen unbemerkt (fehlende ANLZ-Fingerabdruck-Kontrolle im
+      # Master-DB-Gate, von einem Reparatur-Skript gelöschte asarUnpack-Muster).
+      # Der Runner meldet Fehlschläge als ::error-Annotation im Job-Log.
+      - name: Test-Suite ausführen
+        run: npm test
+
       - name: Electron-Installer bauen (NSIS)
         run: npm run package:win:nsis
         env:

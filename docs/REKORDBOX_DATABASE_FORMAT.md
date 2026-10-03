@@ -193,8 +193,16 @@ dokumentierten Aufbau:
 ## 6. Prüfstatus
 
 * `npm run lint` — TypeScript ohne Fehler.
-* `npm test` — **70/70 Tests bestanden**, 4 umgebungsabhängige SKIPs
-  (Python/PyTorch/onnxruntime fehlen in der Sandbox), 0 fehlgeschlagen.
+* `npm test` — **71/71 Tests bestanden**, 4 umgebungsabhängige SKIPs
+  (Python/PyTorch/onnxruntime fehlen in der Sandbox), 0 fehlgeschlagen
+  (Stand 03.10.2026; davor 69/71, siehe „Regressionen" unten).
+* **Regressionen behoben (03.10.2026).** Der Gate prüft nach dem Lesen der ANLZ
+  wieder den Fingerabdruck der Quelle (Größe + `mtimeMs`) und bricht bei
+  Abweichung terminal mit `ANLZ_READ_FAILED` ab, statt auf einen anderen
+  Kandidaten auszuweichen; die im Repo dokumentierten `asarUnpack`-Muster
+  (Stem-Runtime, Modelle, Python, Node-Bridge, native Bibliotheken) sind in
+  `package.json` wiederhergestellt. Beides war echte Funktionsverlust durch
+  Reparatur-Skripte, kein Testfehler; Details in `VORHABEN.md`, Phase 6.
 * `npx tsx tests/rekordbox-db-env-pipeline.test.ts` — **14/14 bestanden**
   (echte SQLCipher-Byteblöcke → SQL → Einträge → TrackModel → ANLZ-Waveform).
 * `node tests/db-reader-keys.test.mjs`, `npx tsx tests/rekordbox-db-import.test.ts`
