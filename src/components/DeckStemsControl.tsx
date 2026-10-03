@@ -550,7 +550,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
          */}
         <button
           onClick={() => {
-            if (activeRemoteJob) return; // läuft bereits – „Abbrechen" in der Statuszeile
+            if (activeRemoteJob) { onStartExternalSeparation(); return; } // bestehenden Job-Monitor öffnen
             if (!remoteAvailable) {
               onOpenRemoteSetup();
               return;

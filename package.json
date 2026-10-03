@@ -33,6 +33,7 @@
     "stems:remote:worker": "tsx scripts/stem-remote-worker.ts",
     "stems:remote:notebook": "node scripts/md-to-notebook.mjs colab/airdox-stem-remote-worker.md",
     "stems:remote:selftest": "python3 colab/remote_worker.py --self-test",
+    "stems:remote:evidence": "node scripts/remote-evidence.mjs",
     "test:stems:remote": "node scripts/run-tests.mjs --filter stem-remote-",
     "test:stems": "node scripts/run-tests.mjs --group stems",
     "test:stems:live": "node scripts/run-tests.mjs --group stems-live",

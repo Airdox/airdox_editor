@@ -321,6 +321,13 @@ async function run() {
     assert.equal(await h6.remote.cancel(job.jobId).then((result) => result.accepted), false, 'zweiter Abbruch ist wirkungslos');
     const flag = await readFile(path.join(h6.drive, 'jobs', job.jobId, 'cancel.flag'), 'utf8');
     assert.match(flag, /Testabbruch/, 'der Worker erfährt vom Abbruch');
+    // Drive kann das alte RUNNING-Manifest noch liefern, obwohl lokal schon
+    // CANCELLED gespeichert ist. Ein Poll darf den Abbruch nie zurückdrehen.
+    await h6.remote.poll();
+    assert.equal(h6.remote.get(job.jobId)?.status, 'CANCELLED', 'altes Drive-Manifest reaktiviert keinen Abbruch');
+    const retry = await startJob(h6, 'cancelled-retry');
+    assert.notEqual(retry.jobId, job.jobId, 'ein abgebrochener Job darf nicht idempotent wiederaufgenommen werden');
+    await h6.remote.cancel(retry.jobId, 'Testbereinigung');
 
     // Der Worker sieht die Fahne und setzt CANCELLED, statt zu rechnen.
     await runWorker(h6);
