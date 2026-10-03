@@ -290,10 +290,30 @@ function normalizeMediaPathForComparison(value?: string): string {
   return normalized.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase();
 }
 
+/**
+ * Rekordbox schreibt in ANLZ-PPTH manchmal "?/Dateiname.mp3", wenn das Laufwerk
+ * zum Analysezeitpunkt keinen Buchstaben hatte. Dann ist der Ordner-Prefix nicht
+ * vertrauenswuerdig. Spiegelt isSameMediaPath() aus electron/masterDbGate.cjs.
+ */
+function isUnknownDriveMediaPath(value?: string): boolean {
+  return typeof value === 'string' && /^\?[/\\]/.test(value.trim());
+}
+
+function mediaFileName(value?: string): string {
+  if (!value) return '';
+  return (value.replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
+}
+
 function areSameMediaPath(left?: string, right?: string): boolean {
   const normalizedLeft = normalizeMediaPathForComparison(left);
   const normalizedRight = normalizeMediaPathForComparison(right);
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+  if (normalizedLeft && normalizedRight && normalizedLeft === normalizedRight) return true;
+  if (isUnknownDriveMediaPath(left) || isUnknownDriveMediaPath(right)) {
+    const leftName = mediaFileName(left);
+    const rightName = mediaFileName(right);
+    return Boolean(leftName && rightName && leftName === rightName);
+  }
+  return false;
 }
 
 /** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
