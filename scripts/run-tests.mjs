@@ -497,7 +497,7 @@ async function main() {
     if (process.env.GITHUB_ACTIONS) {
       const escape = (value) => String(value).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
       for (const result of failed) {
-        const tail = result.output.trim().split('\n').slice(-25).join('\n').slice(0, 4000);
+        const tail = result.output.trim().split('\n').slice(-60).join('\n').slice(0, 6000);
         console.log(
           `::error file=${result.file},title=Test fehlgeschlagen::${escape(
             `${result.file} fehlgeschlagen${result.timedOut ? ' (Zeitüberschreitung)' : ''}:\n${tail || '(keine Ausgabe)'}`

@@ -2,6 +2,14 @@
 # Hash consistency is NOT a digital publisher signature.
 param([string]$Directory = $PSScriptRoot)
 $ErrorActionPreference = 'Stop'
+# Use .NET directly: Get-FileHash may be unavailable in Windows PowerShell
+# when launched from PowerShell 7 with its inherited module search path.
+function Get-PackageSha256([string]$File) {
+    $stream = [System.IO.File]::OpenRead($File)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try { return [System.BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose(); $stream.Dispose() }
+}
 try {
     $root = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/')
     $manifest = Get-Content -LiteralPath (Join-Path $root 'NACHWEISKETTE.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -13,7 +21,7 @@ try {
         $target = [System.IO.Path]::GetFullPath((Join-Path $root $name))
         if (-not $target.StartsWith($root + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Path escape: $name" }
         $file = Get-Item -LiteralPath $target
-        if ($file.Length -ne $entry.Value.bytes -or (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value.sha256) { throw "Changed or incomplete: $name" }
+        if ($file.Length -ne $entry.Value.bytes -or (Get-PackageSha256 $target) -ne $entry.Value.sha256) { throw "Changed or incomplete: $name" }
         $count++
     }
     if ($count -lt 15) { throw 'Incomplete evidence inventory' }
@@ -23,7 +31,7 @@ try {
         $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($record.result -ne 'PASS' -or $record.exitCode -ne 0 -or $record.sourceCommit -ne $manifest.sourceCommit) { throw "Stage not passing or wrong source: $stage" }
         if ($record.log.file -ne "$stage.log") { throw "Unexpected log path: $stage" }
-        $hash = (Get-FileHash -LiteralPath (Join-Path $root "NACHWEISE/$stage.log") -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = (Get-PackageSha256 (Join-Path $root "NACHWEISE/$stage.log"))
         if ($hash -ne $record.log.sha256) { throw "Changed log: $stage" }
         if (-not $manifest.files.PSObject.Properties["NACHWEISE/$stage.json"]) { throw "Unbound stage: $stage" }
     }
