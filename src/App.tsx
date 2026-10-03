@@ -3120,7 +3120,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Der Renderer kann die vom Gate bestätigte ANLZ-Waveform nicht dekodieren.');
       }
       if (extraction.waveformTag !== gateWaveform.tag || extraction.waveform.length !== gateWaveform.buckets) {
-        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Waveform-Abschnitt oder Bucket-Anzahl weichen vom Gate-Nachweis ab.');
+        throw new Error(
+          `[ANLZ_WAVEFORM_UNREADABLE] Waveform-Abschnitt oder Bucket-Anzahl weichen vom Gate-Nachweis ab. ` +
+            `Gate: ${gateWaveform.tag}/${gateWaveform.buckets} Buckets, Renderer: ${extraction.waveformTag ?? 'kein Tag'}/${extraction.waveform.length} Buckets, ` +
+            `ANLZ: ${gate.analysis.path} (${analysisSource.data.byteLength} Bytes)`
+        );
       }
       if (!isNativeRekordboxWaveform(extraction.waveform)) {
         throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die dekodierte Waveform trägt keine REKORDBOX_ANLZ-Herkunft.');
@@ -3302,7 +3306,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die Track-Waveform ist nicht als Rekordbox-ANLZ markiert.');
       }
       if (resolvedDef.analysis.length !== gateWaveform.buckets) {
-        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die Renderer-Bucket-Anzahl stimmt nicht mit dem Gate-Nachweis überein.');
+        throw new Error(
+          `[ANLZ_WAVEFORM_UNREADABLE] Die Renderer-Bucket-Anzahl stimmt nicht mit dem Gate-Nachweis überein. ` +
+            `Gate: ${gateWaveform.buckets}, Track: ${resolvedDef.analysis.length}`
+        );
       }
 
       setTracks((previous) => {
