@@ -439,13 +439,16 @@ async function resolveTrackFromMasterDb(query = {}, deps = {}) {
     );
   }
 
-  // Fingerabdruck-Kontrolle: Die gewählte ANLZ-Datei muss zwischen Auswahl und
-  // Leseende unverändert geblieben sein (Größe + mtime, wie in dbReader.cjs für
-  // master.db). Ändert sich die Quelle während des Lesens, sind die gelesenen
-  // Bytes kein zusammenhängender Rekordbox-Stand – dann wird hier abgebrochen
-  // und ausdrücklich NICHT auf einen anderen Kandidaten ausgewichen. Sonst
-  // könnte der Editor die Waveform eines halb geschriebenen oder fremden
-  // Stands als „die Waveform von Rekordbox" ausgeben.
+  // TOCTOU-Beweis und Fingerabdruck-Kontrolle in einem: Die gelesenen Bytes
+  // müssen exakt aus dem Dateizustand des Vorab-Stat stammen. Die gewählte
+  // ANLZ-Datei muss zwischen Auswahl und Leseende unverändert geblieben sein
+  // (Größe + mtime, wie in dbReader.cjs für master.db); zusätzlich muss die
+  // Anzahl gelesener Bytes der angekündigten Größe entsprechen. Sonst stammen
+  // Gate-Waveform und gemeldeter size/mtime-Fingerdruck aus zwei verschiedenen
+  // Lesezuständen und die Waveform könnte zu einem halb geschriebenen oder
+  // fremden Stand gehören – dann wird hier abgebrochen und ausdrücklich NICHT
+  // auf einen anderen Kandidaten ausgewichen. Dieselbe Nachlese-Prüfung wie
+  // `rekordbox:read-analysis-file`.
   let analysisStatAfter = null;
   try {
     analysisStatAfter = await stat(analysisPath);
