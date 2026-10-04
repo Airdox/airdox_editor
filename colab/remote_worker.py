@@ -36,6 +36,19 @@ Aufruf (auch ohne Colab, z. B. zum Trockenlauf gegen einen lokalen Ordner)::
 
     python3 colab/remote_worker.py --root /pfad/zur/jobablage --once
     python3 colab/remote_worker.py --root /content/drive/MyDrive/airdox-stem-jobs --self-test
+    python3 colab/remote_worker.py --root /content/drive/MyDrive/airdox-stem-jobs --check-store
+
+``--check-store`` ist die Antwort auf „der Editor wartet, aber nichts passiert“:
+Es druckt je Job Status, Phase, Arbeitskopie, Lease und Abbruchfahne und danach
+ein Urteil – **ohne** etwas zu verändern und ohne zu rechnen. Es ist der
+schnellste Weg festzustellen, ob der Worker und der Editor überhaupt denselben
+Ordner sehen.
+
+Kommandozeile ist absichtlich streng: unbekannte Optionen brechen ab, und
+Abkürzungen sind abgeschaltet (`allow_abbrev=False`). Ein `--model X` darf
+niemals stillschweigend als `--model-dir X` gelesen werden – genau das ließ
+einen Job mit falschem Modellpfad starten, statt zu melden, dass die Option
+nicht existiert.
 """
 from __future__ import annotations
 
@@ -905,18 +918,222 @@ def _gpu_name() -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Ablage-Diagnose (`--check-store`)
+# --------------------------------------------------------------------------- #
+
+
+def _format_age(seconds: Optional[float]) -> str:
+    """Alter in Sekunden menschenlesbar – „vor 12 s“ / „vor 7 min“ / „vor 2.1 h“."""
+    if seconds is None:
+        return "unbekannt"
+    if seconds < 90:
+        return f"vor {int(seconds)} s"
+    if seconds < 5400:
+        return f"vor {int(seconds / 60)} min"
+    return f"vor {seconds / 3600:.1f} h"
+
+
+def _age_seconds(stamp_ms: Any) -> Optional[float]:
+    """Alter eines Millisekunden-Zeitstempels aus einem Manifest/Claim."""
+    try:
+        value = float(stamp_ms)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return max(0.0, time.time() - value / 1000.0)
+
+
+def _count_label(count: int, singular: str, plural: str) -> str:
+    """„1 offener Job“ / „2 offene Jobs“ – Urteile sollen lesbar sein."""
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _format_bytes(size: Optional[int]) -> str:
+    try:
+        value = float(size)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "unbekannt"
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def describe_store(
+    store: "JobStore",
+    expected_model: str = "",
+    expected_profile: str = "",
+) -> Tuple[List[str], str, bool]:
+    """Momentaufnahme der Jobablage: je Job Status, Lease, Abbruchfahne – plus Urteil.
+
+    Liest ausschließlich (kein Schreiben, kein Rechnen) und ist damit auch auf
+    einem fremden oder schreibgeschützten Laufwerk benutzbar. Rückgabe:
+    (Zeilen, Urteil, ablage_lesbar). Genau das ist die Frage, die beim Status
+    „Wartet auf den externen Rechner“ offen bleibt: Sehen Worker und Editor
+    dieselbe Ablage, und wartet dort wirklich ein Job auf einen Rechner?
+    """
+    lines: List[str] = [f"[STEM-REMOTE-WORKER] Ablage: {store.root}"]
+    if not os.path.isdir(store.root):
+        lines.append(f"[STEM-REMOTE-WORKER]   {store.root} existiert nicht.")
+        return lines, (
+            "Die Ablage existiert nicht. JOB_ORDNER im Notebook und der Jobablage-Ordner im Editor "
+            "müssen derselbe Ordner desselben Google-Kontos sein (im Editor: Einstellungen → Externe "
+            "Zerlegung → Jobablage wählen)."
+        ), False
+    if not os.path.isdir(store.jobs_dir):
+        lines.append(f"[STEM-REMOTE-WORKER]   {store.jobs_dir} existiert nicht.")
+        return lines, (
+            "Die Ablage ist da, hat aber keinen jobs/-Ordner. Entweder hat der Editor noch nichts "
+            "veröffentlicht, oder Drive hat diesen Unterordner noch nicht synchronisiert."
+        ), False
+
+    job_ids = store.list_job_ids()
+    if not job_ids:
+        lines.append(f"[STEM-REMOTE-WORKER]   {store.jobs_dir} ist leer.")
+        return lines, (
+            "Kein einziger Job in der Ablage. Prüfen: (1) Steht im Editor unter Einstellungen → "
+            "Externe Zerlegung derselbe Ordner? (2) Ist Drive für Desktop angemeldet und "
+            "synchronisiert (der Editor kann den Cloud-Upload nicht bestätigen)?"
+        ), True
+
+    open_jobs: List[str] = []
+    fresh_claims: List[str] = []
+    stale_claims: List[str] = []
+    cancelled: List[str] = []
+    model_mismatch: List[str] = []
+
+    for job_id in job_ids:
+        manifest = store.read_manifest(job_id)
+        lines.append(f"[STEM-REMOTE-WORKER]   {job_id}")
+        if not manifest:
+            lines.append("[STEM-REMOTE-WORKER]     manifest.json fehlt oder ist unlesbar (Upload unvollständig?)")
+            open_jobs.append(job_id)
+            continue
+        status = str(manifest.get("status"))
+        engine = manifest.get("engine") or {}
+        age = _format_age(_age_seconds(manifest.get("updatedAt")))
+        lines.append(
+            f"[STEM-REMOTE-WORKER]     Status: {status} · Phase: {manifest.get('phase') or '–'} · "
+            f"Modell: {engine.get('modelId')} ({engine.get('profile') or '–'}) · Manifest {age}"
+        )
+        if status in TERMINAL_STATUSES:
+            lines.append("[STEM-REMOTE-WORKER]     abgeschlossen – wird von keinem Worker mehr angefasst")
+        else:
+            open_jobs.append(job_id)
+
+        job_input = manifest.get("input") or {}
+        relative = str(job_input.get("relativePath") or "")
+        input_path = os.path.join(store.root, relative) if relative else ""
+        if input_path and os.path.isfile(input_path):
+            lines.append(
+                f"[STEM-REMOTE-WORKER]     Arbeitskopie: {os.path.basename(relative)} "
+                f"({_format_bytes(os.path.getsize(input_path))}) liegt bereit"
+            )
+        else:
+            lines.append(
+                f"[STEM-REMOTE-WORKER]     Arbeitskopie: {os.path.basename(relative) or '–'} fehlt/unterwegs "
+                "(Drive synchronisiert noch, oder der Upload ist abgebrochen)"
+            )
+
+        claim = read_json(store.claim_path(job_id))
+        if not claim:
+            lines.append("[STEM-REMOTE-WORKER]     Lease: keine – dieser Job hat noch keinen Rechner gesehen")
+        else:
+            heart = _age_seconds(claim.get("heartbeatAt") or claim.get("claimedAt"))
+            fresh = status not in TERMINAL_STATUSES and (
+                heart is not None and heart < store.lease_seconds
+            )
+            lines.append(
+                f"[STEM-REMOTE-WORKER]     Lease: {claim.get('id')} ({claim.get('host') or '–'}, "
+                f"Lebenszeichen {_format_age(heart)}) – {'frisch' if fresh else 'abgelaufen'}"
+            )
+            if status not in TERMINAL_STATUSES:
+                (fresh_claims if fresh else stale_claims).append(job_id)
+
+        if store.cancel_requested(job_id):
+            cancelled.append(job_id)
+            lines.append("[STEM-REMOTE-WORKER]     Abbruchfahne: JA – der nächste Worker bricht diesen Job ab")
+        if manifest.get("error"):
+            lines.append(f"[STEM-REMOTE-WORKER]     letzter Fehler: {manifest['error'].get('code')}: {manifest['error'].get('message')}")
+
+        if status not in TERMINAL_STATUSES and expected_model and engine.get("modelId") != expected_model:
+            model_mismatch.append(job_id)
+            lines.append(
+                f"[STEM-REMOTE-WORKER]     Achtung: dieser Worker ist auf Modell {expected_model} gestellt und "
+                f"würde den Job überspringen (verbindlich ist das Manifest)."
+            )
+        if (
+            status not in TERMINAL_STATUSES
+            and expected_profile
+            and engine.get("profile")
+            and engine.get("profile") != expected_profile
+        ):
+            lines.append(
+                f"[STEM-REMOTE-WORKER]     Hinweis: Formular-Profil {expected_profile} ≠ Manifest "
+                f"{engine.get('profile')} – gerechnet wird nach dem Manifest."
+            )
+
+    lines.append(
+        f"[STEM-REMOTE-WORKER]   {len(job_ids)} Job(s) in der Ablage, davon {len(open_jobs)} offen, "
+        f"{len(fresh_claims)} frisch beansprucht, {len(stale_claims)} mit abgelaufener Lease, "
+        f"{len(cancelled)} mit Abbruchfahne."
+    )
+    if not open_jobs:
+        verdict = (
+            "Kein offener Job. Fertige oder beendete Jobs werden nie erneut gerechnet – im Editor "
+            "einen neuen externen Lauf starten."
+        )
+        return lines, verdict, True
+    if model_mismatch:
+        verdict = (
+            f"{len(model_mismatch)} Job(s) würden übersprungen – sie verlangen ein anderes Modell als das "
+            f"gestartete ({', '.join(model_mismatch)}). Entweder MODELL_ID im Notebook leeren (dann gilt das "
+            "Manifest) oder im Editor dasselbe Modell wählen."
+        )
+        return lines, verdict, True
+    if cancelled:
+        verdict = (
+            f"Abbruchfahne liegt vor ({', '.join(cancelled)}) – beim nächsten Worker-Durchlauf werden diese "
+            "Jobs abgebrochen; im Editor bleibt der Job dann CANCELLED."
+        )
+        return lines, verdict, True
+    if fresh_claims:
+        verdict = (
+            f"{len(fresh_claims)} Job(s) frisch beansprucht ({', '.join(fresh_claims)}) – hier rechnet "
+            "offenbar ein Worker. Wenn im Editor trotzdem nichts vorangeht: prüfen, ob der Worker im "
+            "richtigen Ordner schreibt und ob Drive die Ergebnisse zurücksynchronisiert."
+        )
+        return lines, verdict, True
+    if stale_claims:
+        verdict = (
+            f"Abgelaufene Lease ({', '.join(stale_claims)}) – der vorige Rechner ist mitten im Lauf "
+            "verschwunden (Colab-Neustart?). Ein neuer Worker darf übernehmen; dauert es zu lange, im "
+            "Editor abbrechen und neu starten."
+        )
+        return lines, verdict, True
+    verdict = (
+        f"{_count_label(len(open_jobs), 'offener Job', 'offene Jobs')} ohne Lease: genau der Zustand "
+        "„Wartet auf den externen Rechner“. Jetzt muss ein Worker laufen – im Colab-Notebook Zelle 5 "
+        "(Worker starten) ausführen; er beansprucht den Job über claim.json. Läuft die Zelle schon, prüfen, "
+        "ob dort dieselbe Ablage genannt ist (JOB_ORDNER) und ob der Lauf ohne Fehler gestartet ist."
+    )
+    return lines, verdict, True
+
+
+# --------------------------------------------------------------------------- #
 # Einstieg
 # --------------------------------------------------------------------------- #
 
 
 def self_test() -> int:
     """Protokoll-Selbsttest ohne Torch/GPU – läuft überall (CI, Sandbox)."""
+    import contextlib
+    import io
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
-        parsed = parse_args(["--root", tmp, "--model", "test-model", "--profile", "HIGH_QUALITY", "--once"])
-        assert parsed.root == tmp and parsed.model_dir == "/content/models"
-        assert parsed.only_model == "test-model" and parsed.only_profile == "HIGH_QUALITY"
         store = JobStore(tmp, "self-test-worker")
         job_id = str(uuid.uuid4())
         os.makedirs(store.job_dir(job_id), exist_ok=True)
@@ -949,7 +1166,7 @@ def self_test() -> int:
         other.claim(job_id)
         assert store.claim_is_fresh(job_id) is True
         assert JobStore(tmp, "other-worker").claim_is_fresh(job_id) is False
-        # Lease-Lebenszeichen laufen auch ohne Inferenz-Progress weiter.
+        # Lease und globaler Heartbeat laufen auch ohne Inferenz-Progress weiter.
         heartbeat_job_id = str(uuid.uuid4())
         os.makedirs(store.job_dir(heartbeat_job_id), exist_ok=True)
         heartbeat_claim = store.claim(heartbeat_job_id)
@@ -1079,17 +1296,102 @@ def self_test() -> int:
             trace_steps = {json.loads(line)["step"] for line in handle if line.strip()}
         for step in ("worker.claimed", "worker.input_verified", "worker.inference_started", "worker.inference_progress", "worker.cancelled"):
             assert step in trace_steps, f"Diagnoseprotokoll enthält {step} nicht"
-        print("[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, Trace/Log-Begrenzung, Abbruch vor/während der Rechnung)")
+        # 9. Kommandozeilen-Vertrag: die Zeile, die das Colab-Notebook baut
+        #    (colab/airdox-stem-remote-worker.md, Zelle 5). Zwei echte Defekte
+        #    sind hier festgenagelt:
+        #      * `--model X` wurde von argparse als Abkürzung von `--model-dir`
+        #        gelesen – der Worker rechnete mit „bsroformer-…“ als
+        #        Modellordner, statt zu melden, dass etwas nicht stimmt.
+        #      * `--profile` existierte gar nicht und beendete den ganzen Lauf
+        #        mit Exit 2; im Editor blieb „Wartet auf den externen Rechner“
+        #        stehen, weil nie ein Worker beanspruchte.
+        cli = parse_args(
+            [
+                "--root", tmp,
+                "--model-dir", "/content/models",
+                "--adapter", fake_adapter,
+                "--work-dir", os.path.join(tmp, "work"),
+                "--device", "auto",
+                "--poll", "15",
+                "--cancel-poll", "5",
+                "--worker", "colab-selftest",
+                "--model", "bsroformer-musdb18hq-4stem-zfturbo",
+                "--profile", "HIGH_QUALITY",
+                "--max-jobs", "1",
+                "--once",
+            ]
+        )
+        assert cli.model_dir == "/content/models", f"--model hat den Modellordner verändert ({cli.model_dir})"
+        assert cli.model == "bsroformer-musdb18hq-4stem-zfturbo"
+        assert cli.profile == "HIGH_QUALITY"
+        assert cli.once is True and cli.max_jobs == 1
+        assert parse_args(["--root", tmp, "--check-store"]).check_store is True
+        # Unbekannte Optionen müssen laut abbrechen – stilles Weiterlaufen wäre
+        # genau das, was den Nutzer im Editor warten lässt.
+        for unknown in (["--profilee", "X"], ["--nicht-vorhanden"]):
+            try:
+                # Die erwartete argparse-Meldung gehört zum Test, nicht in die
+                # Ausgabe des Selbsttests (sie sieht sonst wie ein Fehler aus).
+                with contextlib.redirect_stderr(io.StringIO()):
+                    parse_args(["--root", tmp, *unknown])
+            except SystemExit as exit_error:
+                assert exit_error.code not in (0, None), f"unbekannte Option {unknown} muss mit Fehlercode abbrechen"
+            else:
+                raise AssertionError(f"unbekannte Option {unknown[0]} wurde stillschweigend akzeptiert")
+        # 10. Ablage-Diagnose: ohne Lease ⇒ „wartet auf einen Rechner“,
+        #     mit frischer Lease ⇒ „hier rechnet ein Worker“.
+        open_id = str(uuid.uuid4())
+        os.makedirs(store.job_dir(open_id), exist_ok=True)
+        store.write_manifest(
+            open_id,
+            dict(
+                live_manifest,
+                jobId=open_id,
+                status="RUNNING",
+                input={**live_manifest["input"], "relativePath": f"jobs/{open_id}/input/mix.wav"},
+            ),
+        )
+        lines, verdict, readable = describe_store(store, "bsroformer-musdb18hq-4stem-zfturbo")
+        assert readable is True
+        assert any(open_id in line for line in lines), "die Diagnose muss den offenen Job nennen"
+        assert "ohne Lease" in verdict, f"Wartezustand nicht als solcher benannt: {verdict}"
+        assert "frisch beansprucht" not in verdict
+        other.claim(open_id)
+        _, verdict_claimed, _ = describe_store(store)
+        assert "frisch beansprucht" in verdict_claimed, f"frische Lease nicht erkannt: {verdict_claimed}"
+        _, verdict_wrong_model, _ = describe_store(store, "ein-anderes-modell")
+        assert "Modell" in verdict_wrong_model, f"Modellfilter nicht gemeldet: {verdict_wrong_model}"
+        with open(store.cancel_flag_path(open_id), "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        _, verdict_cancel, _ = describe_store(store)
+        assert "Abbruchfahne" in verdict_cancel, f"Abbruchfahne nicht gemeldet: {verdict_cancel}"
+        store.consume_cancel_flag(open_id)
+        empty_root = os.path.join(tmp, "leer")
+        os.makedirs(os.path.join(empty_root, "jobs"), exist_ok=True)
+        _, verdict_empty, readable_empty = describe_store(JobStore(empty_root, "self-test-worker"))
+        assert readable_empty is True and "Kein einziger Job" in verdict_empty
+
+        print(
+            "[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, "
+            "Trace/Log-Begrenzung, Abbruch vor/während der Rechnung, Kommandozeile, Ablage-Diagnose)"
+        )
     return 0
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    # allow_abbrev=False verhindert, dass `--model` fälschlicherweise als
-    # Abkürzung für `--model-dir` interpretiert wird (argparse-Standard ist
-    # True). Das war der Hauptgrund dafür, dass der Worker in Colab mit einem
-    # falschen Modell-Pfad lief oder gleich bei `--profile` abstürzte – der
-    # Nutzer sah daraufhin ewig „warte auf Reaktion vom externen Rechner".
-    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)", allow_abbrev=False)
+    """Kommandozeile des Fernworkers.
+
+    ``allow_abbrev=False`` ist **kein Detail**: argparse würde ``--model`` sonst
+    als eindeutige Abkürzung von ``--model-dir`` akzeptieren. Genau so startete
+    das Colab-Notebook lange einen Worker, dessen Modellordner plötzlich die
+    Modell-Id war – der Job wurde beansprucht und scheiterte am fehlenden
+    Checkpoint, statt zu melden, dass die Option nicht existiert. Unbekannte
+    Optionen müssen deshalb laut abbrechen.
+    """
+    parser = argparse.ArgumentParser(
+        description="airdox High-Quality-Fernworker (Colab)",
+        allow_abbrev=False,
+    )
     parser.add_argument("--root", default=os.environ.get("AIRODOX_STEM_REMOTE_DIR", ""), help="Jobablage (Drive-Ordner)")
     parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"),
                         help="Ordner mit den Modell-Checkpoints")
@@ -1107,11 +1409,34 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     )
     parser.add_argument("--once", action="store_true", help="Nur einen Poll-Durchlauf, dann beenden")
     parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Anzahl Jobs, dann beenden (0 = unbegrenzt)")
-    parser.add_argument("--model", default="", dest="only_model",
-                        help="Nur Jobs mit dieser modelId bearbeiten (leer = alle)")
-    parser.add_argument("--profile", default="", dest="only_profile",
-                        help="Nur Jobs mit diesem Profil bearbeiten (leer = alle)")
+    parser.add_argument(
+        "--model",
+        default="",
+        help=(
+            "Erwartetes Modell aus dem Notebook-Formular. Es ist ein Filter: Jobs, deren Manifest ein "
+            "anderes Modell verlangt, werden übersprungen (verbindlich bleibt der Steckbrief). Leer = alle."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        default="",
+        help=(
+            "Profil aus dem Notebook-Formular (z. B. HIGH_QUALITY). Nur Hinweis: die Parameter kommen "
+            "immer aus dem Manifest; eine Abweichung wird protokolliert."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Mehr Diagnose-Ausgabe (jede Poll-Runde)")
+    parser.add_argument(
+        "--idle-log-seconds",
+        type=float,
+        default=float(os.environ.get("AIRODOX_STEM_IDLE_LOG_SECONDS", "60")),
+        help="Warte-Meldung im Abstand dieser Sekunden (0 = aus) – damit man im Notebook sieht, dass der Worker lebt",
+    )
+    parser.add_argument(
+        "--check-store",
+        action="store_true",
+        help="Ablage nur ansehen (Status, Lease, Abbruchfahne, Urteil) und beenden – verändert nichts",
+    )
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -1135,10 +1460,22 @@ def main(argv: List[str]) -> int:
         print("[STEM-REMOTE-WORKER] Kein --root angegeben (Drive-Ordner der Jobablage).", file=sys.stderr)
         return 2
     store = JobStore(args.root, args.worker)
+
+    # „Der Editor wartet, aber nichts passiert“ ist keine Rechenfrage, sondern
+    # eine Frage der Ablage. `--check-store` beantwortet sie ohne Rechnen und
+    # ohne Schreiben.
+    if args.check_store:
+        lines, verdict, readable = describe_store(store, args.model, args.profile)
+        for line in lines:
+            print(line, flush=True)
+        print(f"[STEM-REMOTE-WORKER] Urteil: {verdict}", flush=True)
+        return 0 if readable else 1
+
     os.makedirs(args.work_dir, exist_ok=True)
     # Startup-Heartbeat **vor** dem ersten Poll: der Editor (und der Nutzer)
     # sehen so sofort, dass der Worker die Ablage erreicht hat – statt ewig
-    # auf eine Reaktion zu warten (§21).
+    # auf eine Reaktion zu warten (§21, §42). Der Editor liest
+    # `worker.status.json` und zeigt sie als Lebenszeichen.
     startup = {
         "version": "colab-worker/2",
         "root": store.root,
@@ -1148,8 +1485,8 @@ def main(argv: List[str]) -> int:
         "workDir": args.work_dir,
         "pollSeconds": args.poll,
         "cancelPollSeconds": args.cancel_poll,
-        "onlyModel": args.only_model or None,
-        "onlyProfile": args.only_profile or None,
+        "onlyModel": args.model or None,
+        "onlyProfile": args.profile or None,
         "gpu": _gpu_name(),
         "pid": os.getpid(),
         "python": sys.executable,
@@ -1159,8 +1496,8 @@ def main(argv: List[str]) -> int:
     _console_event(args.worker, "worker.started", rootLabel=os.path.basename(os.path.normpath(store.root)), device=args.device, gpu=startup["gpu"])
     store.log("", f"Start – root={store.root} device={args.device} model-dir={args.model_dir} "
                   f"adapter={args.adapter} poll={args.poll}s cancel-poll={args.cancel_poll}s "
-                  f"gpu={startup['gpu']} filter-model={args.only_model or '*'} "
-                  f"filter-profile={args.only_profile or '*'}")
+                  f"gpu={startup['gpu']} filter-model={args.model or '*'} "
+                  f"filter-profile={args.profile or '*'}")
     # Adapter und Modelldir prüfen – Fehler sofort ins Log, statt still zu
     # warten bis der erste Job kommt und dann kryptisch zu scheitern.
     if not os.path.isfile(args.adapter):
@@ -1170,15 +1507,30 @@ def main(argv: List[str]) -> int:
     else:
         models_present = [f for f in os.listdir(args.model_dir) if f.endswith((".ckpt", ".pt", ".pth", ".onnx", ".yaml", ".yml"))]
         store.log("", f"Modelle im Ordner: {', '.join(models_present) if models_present else '(keine)'}")
+    if not os.path.isdir(store.jobs_dir):
+        store.log("", f"Achtung: {store.jobs_dir} existiert (noch) nicht – es gibt nichts zu tun, bis der "
+                      "Ordner da ist. Prüfen, ob JOB_ORDNER im Notebook der Jobablage im Editor entspricht.")
     processed = 0
     cycles = 0
+    last_inventory: Optional[str] = None
+    last_idle_log = time.time()
+    filtered_notices: Dict[str, str] = {}
     while True:
         cycles += 1
-        job_ids = store.list_job_ids()
         seen = 0
         considered = 0
         pending = 0
         cycle_processed = 0
+        job_ids = store.list_job_ids()
+        # Änderung der Jobliste sofort melden – im Notebook sieht man damit,
+        # dass der Worker den Drive-Ordner wirklich liest (kein stummer Lauf).
+        inventory = ",".join(job_ids)
+        if inventory != last_inventory:
+            last_inventory = inventory
+            last_idle_log = time.time()
+            store.log("", f"Ablage {store.jobs_dir}: {len(job_ids)} Job(s)"
+                          + (f" – {', '.join(job_ids)}" if job_ids else " (leer, warte)"))
+        idle = True
         for job_id in job_ids:
             if args.max_jobs and processed >= args.max_jobs:
                 break
@@ -1188,6 +1540,8 @@ def main(argv: List[str]) -> int:
             try:
                 validate_manifest(manifest, job_id)
             except ProtocolError as error:
+                # Ein unvollständig synchronisiertes Manifest ist kein Grund,
+                # den Job zu verwerfen: der Editor veröffentlicht erneut.
                 store.log_event(job_id, "worker.manifest_invalid", "Manifest konnte nicht validiert werden.", level="error", code=error.code)
                 continue
             if manifest.get("status") in TERMINAL_STATUSES:
@@ -1195,17 +1549,33 @@ def main(argv: List[str]) -> int:
                 continue
             seen += 1
             considered += 1
-            # Filter aus dem Colab-Formular (--model / --profile): nur Jobs
-            # bearbeiten, die zum ausgewählten Modell/Profil passen.
-            if args.only_model and manifest.get("engine", {}).get("modelId") != args.only_model:
-                if args.verbose:
-                    store.log(job_id, f"übersprungen – anderes Modell ({manifest.get('engine', {}).get('modelId')} != {args.only_model})")
+            engine = manifest.get("engine") or {}
+            # Filter aus dem Notebook-Formular (`--model`): verbindlich bleibt
+            # der Steckbrief im Manifest – der Worker rechnet nie ein anderes
+            # Modell als das bestellte. Ein abweichender Filter wird als
+            # Hinweis gemeldet (einmal je Änderung), damit niemand rätselt,
+            # warum nichts passiert.
+            if args.model and engine.get("modelId") != args.model:
+                notice = (
+                    f"übersprungen – verlangt Modell {engine.get('modelId')}, dieser Worker ist auf "
+                    f"{args.model} gestellt (--model). Im Notebook MODELL_ID leeren, damit das Manifest gilt."
+                )
+                if filtered_notices.get(job_id) != notice:
+                    filtered_notices[job_id] = notice
+                    store.log(job_id, notice)
                 continue
-            if args.only_profile and manifest.get("engine", {}).get("profile") != args.only_profile:
-                if args.verbose:
-                    store.log(job_id, f"übersprungen – anderes Profil ({manifest.get('engine', {}).get('profile')} != {args.only_profile})")
-                continue
+            # `--profile` ist nur ein Hinweis: die Parameter kommen aus dem
+            # Manifest; eine Abweichung wird protokolliert.
+            if args.profile and engine.get("profile") and engine.get("profile") != args.profile:
+                notice = (
+                    f"Hinweis: Formular-Profil {args.profile} ≠ Manifest {engine.get('profile')} – "
+                    "gerechnet wird nach dem Manifest."
+                )
+                if filtered_notices.get(f"{job_id}:profil") != notice:
+                    filtered_notices[f"{job_id}:profil"] = notice
+                    store.log(job_id, notice)
             pending += 1
+            idle = False
             outcome = run_job(
                 store,
                 job_id,
@@ -1246,6 +1616,10 @@ def main(argv: List[str]) -> int:
             return 0
         if args.verbose:
             store.log("", f"Zyklus {cycles}: {considered} offene Jobs, {seen} gesamt, schlafe {sleep_seconds}s")
+        if idle and args.idle_log_seconds > 0 and time.time() - last_idle_log >= args.idle_log_seconds:
+            last_idle_log = time.time()
+            store.log("", f"Warte auf Jobs – {len(job_ids)} in der Ablage, Stand {time.strftime('%H:%M:%S')} "
+                          "(diese Zelle darf weiterlaufen).")
         time.sleep(sleep_seconds)
 
 

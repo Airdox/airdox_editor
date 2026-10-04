@@ -33,6 +33,8 @@ const files = [
   'tests/stem-remote-job-service.test.ts',
   'tests/stem-remote-manifest-python.test.mjs',
   'tests/stem-remote-worker-selftest.test.mjs',
+  // Hält die tatsächlich vom Notebook verwendeten CLI-Optionen fest.
+  'tests/stem-remote-worker-cli.test.mjs',
   'tests/stem-remote-manifest.test.ts',
   'tests/stem-remote-setup-config.test.ts',
   'docs/STEM_REMOTE_HQ.md',

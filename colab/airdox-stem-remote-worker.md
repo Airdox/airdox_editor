@@ -4,9 +4,8 @@ Dieses Notebook ist der **externe Rechenworker** für den High-Quality-Pfad des
 airdox_SMART_Editor. Der Editor schreibt eine **Arbeitskopie** und ein
 Job-Manifest in einen Google-Drive-Ordner; dieses Notebook nimmt den Job an,
 rechnet mit BS-RoFormer und legt die Stems samt SHA-256 zurück. Danach erkennt
-der Editor `COMPLETED` und importiert die Ergebnisse. Für jeden Job muss die
-Worker-Zelle in einer aktiven Colab-Laufzeit laufen: Drive-Sync allein startet
-oder weckt Colab **nicht**. Nach Ende/Abbruch einer Laufzeit die Zelle erneut starten.
+der Editor `COMPLETED` und importiert die Ergebnisse – der Benutzer muss Colab
+**nicht** bedienen, außer diesem Notebook einmal zu starten.
 
 > **Arbeitsweise.** Es gibt keinen Server und keine Datenbank (§38): Google Drive
 > ist die Jobablage, dieses Notebook der Rechenknecht. Die gesamte Editorlogik
@@ -27,6 +26,26 @@ oder weckt Colab **nicht**. Nach Ende/Abbruch einer Laufzeit die Zelle erneut st
 > verbraucht. Kein GPU-Betrieb geht weiter, kein Ergebnis wird noch importiert,
 > und derselbe Jobordner bleibt für einen neuen Lauf benutzbar. Takt:
 > `--cancel-poll` (Sekunden).
+>
+> **Wenn der Editor „Wartet auf den externen Rechner“ zeigt.** Das heißt: der
+> Steckbrief liegt in der Ablage, aber kein Rechner hat ihn beansprucht
+> (`claim.json` fehlt). Drei Ursachen, in dieser Reihenfolge prüfen:
+>
+> 1. **Anderer Ordner.** `JOB_ORDNER` (Zelle 1) und der im Editor gewählte
+>    Ordner müssen derselbe Ordner desselben Google-Kontos sein. Zelle 5 druckt
+>    vor dem Start `--check-store` – dort steht das Urteil im Klartext.
+> 2. **Worker läuft nicht.** Zelle 5 muss ausgeführt sein und darf nicht sofort
+>    mit einem Fehlercode enden. Sie läuft **absichtlich** weiter und meldet alle
+>    60 s „Warte auf Jobs …“ – das ist der Lebensbeweis, kein Hänger.
+> 3. **Modellfilter.** Steht `MODELL_ID` auf einem anderen Modell als im
+>    Steckbrief, überspringt der Worker den Job: Er rechnet **nie** ein anderes
+>    Modell als das im Manifest. `MODELL_ID = ""` lässt das Manifest
+>    entscheiden. Ein sofort beendeter Lauf (unbekannte Option, fehlender
+>    Adapter) wird in Zelle 5 als Fehlercode gemeldet.
+>
+> `python3 colab/remote_worker.py --root "<Jobablage>" --check-store` zeigt den
+> Zustand jederzeit an – auf dem Laptop wie in Colab und **ohne** etwas zu
+> verändern.
 
 <<<CELL md
 ### 0 · Was hier passiert
@@ -37,8 +56,7 @@ oder weckt Colab **nicht**. Nach Ende/Abbruch einer Laufzeit die Zelle erneut st
    keine erfundene URL, `sha256` wird geprüft, sobald der Katalog ihn nennt
 4. `colab/remote_worker.py` starten: Jobs finden, beanspruchen, verifizieren,
    rechnen (GPU, sonst CPU), Ergebnisse + Hashes zurückschreiben
-5. Im Leerlauf zeigt `worker.poll` alle `POLL_SEKUNDEN`, wie viele Jobordner geprüft wurden; pro Job schreibt der Worker korrelierbare Schritte nach `jobs/<jobId>/logs/worker.jsonl` und `worker.log` (jeweils auf 200 Zeilen begrenzt). Im Ablage-Root zeigen `worker.status.json` und `worker.log`, ob der Worker den Ordner erreicht und welche Phase er bearbeitet.
-6. Nach einem Worker-Claim zeigt der Editor `claim.json`-Lebenszeichen und übernimmt die Worker-Schritte ins Statusfenster. Die CLI-Optionen `--model` und `--profile` werden ausdrücklich erkannt; Abkürzungen von `--model-dir` sind deaktiviert, damit Colab-Argumente nicht falsch zugeordnet werden.
+5. Am Ende zeigt das Notebook, welche Jobs fertig sind
 
 Der Worker ruft den **vorhandenen** Adapter `python/bsroformer_inference.py` auf –
 dieselbe Kette, die der Editor lokal für den HQ-Pfad benutzt. Es wird kein
@@ -90,6 +108,11 @@ if os.path.isdir(os.path.join("/content/drive/MyDrive", os.path.dirname(REPO_ARC
     os.makedirs(REPO_DIR, exist_ok=True)
     subprocess.run(["tar", "-xzf", os.path.join("/content/drive/MyDrive", REPO_ARCHIV), "-C", REPO_DIR], check=True)
     print("Quellcode aus Drive-Archiv entpackt:", REPO_DIR)
+    print(
+        "Achtung: Ein Archiv in Drive ist ein eingefrorener Stand. Läuft der Editor mit einer neueren "
+        "Fassung, passen Kommandozeile und Jobprotokoll nicht zusammen – dann das Archiv neu bauen "
+        "(npm run stems:gate:archive) oder REPO_ARCHIV leeren und aus Git beziehen."
+    )
 else:
     if not os.path.isdir(os.path.join(REPO_DIR, ".git")):
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, REPO_DIR], check=True)
@@ -97,6 +120,11 @@ else:
         subprocess.run(["git", "-C", REPO_DIR, "fetch", "origin", BRANCH, "--depth", "1"], check=False)
         subprocess.run(["git", "-C", REPO_DIR, "checkout", "FETCH_HEAD"], check=False)
     print("Quellcode ausgecheckt:", REPO_DIR)
+
+# Welcher Stand rechnet hier? (Editor-Log und Colab-Ausgabe müssen denselben
+# Stand zeigen – sonst passen Worker und Jobprotokoll nicht zusammen.)
+stand = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+print("Quellcode-Stand:", (stand.stdout or "").strip() or "unbekannt (kein Git)")
 
 ADAPTER = os.path.join(REPO_DIR, "python", "bsroformer_inference.py")
 WORKER = os.path.join(REPO_DIR, "colab", "remote_worker.py")
@@ -179,11 +207,31 @@ print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Ab
 >>>
 
 <<<CELL py
-# 5 · Worker starten und für neue Jobs laufen lassen.
-#    Drive-Sync startet diese Zelle nicht automatisch. Die Ausgabe zeigt
-#    worker.poll (scanned/pending); nach einem Colab-Neustart Zelle erneut ausführen.
-import subprocess, sys, os
+# 5 · Erst nachsehen, dann rechnen lassen.
+#
+#     Wichtig: Läuft der Worker, bleibt diese Zelle **absichtlich** offen – er
+#     wartet auf Jobs. Alle 60 s erscheint „Warte auf Jobs …“; das ist der
+#     Beweis, dass er lebt, kein Hänger. Zelle stoppen = Worker aus (ein
+#     halbfertiger Job wird beim nächsten Start wieder aufgenommen).
+import os, subprocess, sys, time
 
+def ablage_ansehen(zusatz=None):
+    """`--check-store`: Status, Lease, Abbruchfahne und ein Urteil – ohne Rechnen."""
+    return subprocess.run(
+        [sys.executable, WORKER, "--root", JOB_ROOT, "--check-store", *(zusatz or [])],
+        capture_output=True, text=True,
+    )
+
+# 5a) Vorflug: Sehen Notebook und Editor dieselbe Ablage, und wartet dort ein Job?
+vorflug_zusatz = []
+if MODELL_ID:
+    vorflug_zusatz += ["--model", MODELL_ID]
+vorflug = ablage_ansehen(vorflug_zusatz)
+print(vorflug.stdout.strip() or vorflug.stderr.strip())
+if vorflug.returncode != 0:
+    print("!! Die Ablage ist so nicht benutzbar – der Worker würde nichts finden. Bitte zuerst das Urteil oben klären.")
+
+# 5b) Worker starten
 kommando = [
     sys.executable, WORKER,
     "--root", JOB_ROOT,
@@ -207,12 +255,38 @@ if VERBOSE:
     kommando += ["--verbose"]
 
 print("Start:", " ".join(kommando))
-subprocess.run(kommando, check=False)
+gestartet = time.time()
+ergebnis = subprocess.run(kommando, check=False)
+laufzeit = time.time() - gestartet
+
+# 5c) Ein sofort beendeter Worker ist der klassische Grund, warum der Editor
+#     „Wartet auf den externen Rechner“ zeigt: nichts hat den Job beansprucht.
+if ergebnis.returncode != 0:
+    print(
+        f"!! Der Worker wurde nach {laufzeit:.0f} s mit Code {ergebnis.returncode} beendet. "
+        "Der Job bleibt in der Ablage und wird beim nächsten Start wieder aufgenommen – "
+        "aber nur, wenn die Ursache oben behoben ist (unbekannte Option, fehlender Adapter, keine Rechte am Ordner)."
+    )
+else:
+    print(f"Worker beendet (Laufzeit {laufzeit:.0f} s).")
+
+# 5d) Nach dem Lauf derselbe Blick wie vorher: was steht jetzt in der Ablage?
+nachher = ablage_ansehen()
+print(nachher.stdout.strip() or nachher.stderr.strip())
 >>>
 
 <<<CELL py
 # 6 · Übersicht: welche Jobs liegen in der Ablage, welcher Status?
-import json, os
+#     Diese Zelle kommt ohne den Worker aus (sie funktioniert also auch, wenn der
+#     Quellcode-Stand defekt ist) und beantwortet die Frage, die der Editor nicht
+#     beantworten kann: Hat der Rechner den Job überhaupt gesehen?
+import json, os, time
+
+def alter(stempel):
+    try:
+        return f"vor {int(max(0, time.time() - float(stempel) / 1000))} s"
+    except (TypeError, ValueError):
+        return "unbekannt"
 
 jobs_dir = os.path.join(JOB_ROOT, "jobs")
 zeilen = []
@@ -225,30 +299,42 @@ for name in sorted(os.listdir(jobs_dir)) if os.path.isdir(jobs_dir) else []:
             data = json.load(handle)
     except Exception:
         continue
-    trace_path = os.path.join(jobs_dir, name, "logs", "worker.jsonl")
-    last_step = "-"
+    claim = {}
     try:
-        with open(trace_path, encoding="utf-8") as handle:
-            lines = [line for line in handle if line.strip()]
-        if lines:
-            last_step = str(json.loads(lines[-1]).get("step") or "-")
-    except (OSError, ValueError):
-        pass
-    zeilen.append((name, data.get("status"), data.get("phase"), data.get("engine", {}).get("modelId"), (data.get("worker") or {}).get("device"), last_step))
-for job_id, status, phase, model, device, last_step in zeilen:
-    print(f"{job_id}  {status:<10} {str(model):<36} {str(device or '-'):<8} {last_step:<28} {phase or ''}")
+        with open(os.path.join(jobs_dir, name, "claim.json"), encoding="utf-8") as handle:
+            claim = json.load(handle)
+    except Exception:
+        claim = {}
+    input_datei = os.path.join(jobs_dir, name, "input", os.path.basename(str((data.get("input") or {}).get("fileName") or "")))
+    zeile = {
+        "job": name,
+        "status": data.get("status"),
+        "phase": data.get("phase"),
+        "model": (data.get("engine") or {}).get("modelId"),
+        "device": (data.get("worker") or {}).get("device"),
+        "lease": f"{claim.get('id')} ({alter(claim.get('heartbeatAt') or claim.get('claimedAt'))})" if claim else "keine",
+        "input": "da" if os.path.isfile(input_datei) else "fehlt/unterwegs",
+        "cancel": "JA" if os.path.isfile(os.path.join(jobs_dir, name, "cancel.flag")) else "nein",
+    }
+    zeilen.append(zeile)
+for z in zeilen:
+    print(
+        f"{z['job']}  {str(z['status']):<10} {str(z['model']):<36} {str(z['device'] or '-'):<8} "
+        f"Input {z['input']:<15} Lease {z['lease']:<28} Abbruch {z['cancel']}  {z['phase'] or ''}"
+    )
 print(f"\n{len(zeilen)} Job(s) in der Ablage.")
-print("Der Editor importiert COMPLETED automatisch. Für weitere Jobs muss die Worker-Zelle in der aktiven Colab-Laufzeit weiterlaufen.")
+print("Der Editor erkennt COMPLETED automatisch und importiert die Stems – Colab muss dafür nichts weiter tun.")
+
+# Und dieselbe Sicht noch einmal mit Urteil: was ist als Nächstes zu tun?
+if os.path.isfile(WORKER):
+    subprocess.run([sys.executable, WORKER, "--root", JOB_ROOT, "--check-store"], check=False)
 >>>
 
 <<<CELL md
-### Diagnose: Statusfenster wartet länger als zwei Minuten
+### Ablaufspur während eines Jobs
 
-1. Job-ID im Editor notieren. Unter `jobs/<jobId>/` müssen `manifest.json` und `input/*.wav` im selben Drive-Konto/Jobordner sichtbar sein. Mit der Drive-Webansicht prüfen, dass Windows tatsächlich synchronisiert hat.
-2. Die Ausgabe der laufenden Worker-Zelle muss regelmäßig eine Zeile `worker.poll` mit `scanned`, `pending` und `processed` zeigen. Fehlt die Zeile, ist Zelle #5 noch nicht gestartet (z. B. weil Setup/Modelldownload noch läuft) oder die Laufzeit steht. `scanned: 0` trotz offenem Editor-Job spricht für einen falschen `JOB_ORDNER`, falschen Drive-Mount oder noch nicht synchronisierte Datei.
-3. Sobald der Worker den Job sieht, erscheint `claim.json`; `heartbeatAt` muss während der Rechnung weiterlaufen. Im Ablage-Root aktualisiert `worker.status.json` zusätzlich den Worker-Heartbeat und die aktive Jobphase. Der Editor übernimmt Claim und Worker-Protokoll beim nächsten Poll.
-4. `jobs/<jobId>/logs/worker.jsonl` enthält strukturierte Ereignisse (`worker.claimed`, `worker.input_verified`, `worker.inference_started`, `worker.inference_progress`, `worker.output_written`, `worker.completed` oder `worker.failed`). `worker.log` ist die menschenlesbare Ergänzung; bei Fehlern außerdem `error.json` prüfen.
-5. Bei `COMPLETED` muss `manifest.json` alle Outputs aufführen. Danach zeigt der Editor `editor.output_validated` und `editor.result_imported`. Die Ablaufspur wird auch im Statusfenster angezeigt.
-
-Keine `input/*.wav`, Zugangsdaten oder vollständigen privaten Pfade in öffentliche Logs/Issues kopieren. Für neue Jobs muss die Colab-Worker-Zelle aktiv bleiben; Drive-Sync allein startet keinen externen Rechner.
+- In der Worker-Zellenausgabe erscheint regelmäßig ein strukturiertes `worker.poll` mit `scanned`, `pending` und `processed`. Im Leerlauf meldet `--idle-log-seconds` zusätzlich, dass die Zelle weiterläuft; ein geänderter Jobbestand wird sofort angezeigt.
+- Im Ablage-Root zeigt `worker.status.json` Worker-ID, Host, Gerät/GPU, aktuelle Phase und Heartbeat. Während eines Jobs aktualisiert der Heartbeat-Thread zusätzlich `claim.json` und die globale Statusdatei.
+- Für jeden Job enthält `jobs/<jobId>/logs/worker.jsonl` die korrelierbaren Ereignisse (`worker.claimed`, `worker.input_verified`, `worker.inference_started`, Fortschritt, geprüfte Outputs und Abschluss/Fehler); `worker.log` ist die lesbare Ergänzung. Logs sind auf 200 Zeilen begrenzt; Start-/Diagnosemeldungen landen außerdem im Root-`worker.log`.
+- Fehlerdetails stehen zusätzlich in `error.json`; vor dem Teilen private Pfade, Dateinamen, Zugangsdaten und Audioinhalte entfernen. Die lokale Simulation belegt nicht, dass Google Drive oder eine echte Colab-Laufzeit synchronisiert hat.
 >>>

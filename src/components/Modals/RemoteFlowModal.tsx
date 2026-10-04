@@ -52,7 +52,9 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
   const stallWarning = job ? remoteJobStallWarning(job, now) : null;
   const warning = status?.reachable === false || job?.transportDegraded
     ? `Die Jobablage ist derzeit nicht erreichbar. ${status?.reason ?? 'Bitte Drive für Desktop, Anmeldung, Internetverbindung und den gewählten Ordner prüfen.'} Der Job wird nicht automatisch als fehlgeschlagen gewertet.`
-    : stallWarning;
+    : stallWarning
+      ? `${stallWarning} Für eine unverändernde Ablage-Diagnose: python3 colab/remote_worker.py --root "<Jobablage>" --check-store.`
+      : null;
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-4" role="presentation">
       <section role="dialog" aria-modal="true" aria-label="Datenfluss der externen Zerlegung" className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-[#111923] text-neutral-100 shadow-2xl shadow-cyan-950/50">

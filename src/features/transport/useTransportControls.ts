@@ -11,12 +11,14 @@
  *   ohne Zugriff auf den Komponenten-Zustand testbar und lesbar ist.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type React from 'react';
 import { audioEngine } from '../../audio/audioEngine';
 import { getPositionSec, setPosition } from '../../state/transportStore';
 import type { SelectionRange, TrackModel } from '../../types/rekordbox';
 import type { StemsMixerState, TrackStems } from '../../audio/stemEngine';
+import { createSeekScheduler, DEFAULT_SEEK_COALESCE_MS, type SeekScheduler } from './seekScheduler';
+import { logger } from '../../utils/logger';
 
 /** Voreinstellungen des Zoom-Menüs in Takten. */
 export type ZoomPreset = '2_BARS' | '4_BARS' | '8_BARS' | '16_BARS' | '32_BARS' | '64_BARS' | 'FULL_TRACK';
@@ -72,6 +74,86 @@ export function useTransportControls(options: UseTransportControlsOptions): Tran
     setViewOffset,
   } = options;
 
+  /*
+   * Sprünge bündeln (`features/transport/seekScheduler`).
+   *
+   * Vorher rief jeder Seek während der Wiedergabe sofort `audioEngine.play(…)`
+   * auf. Ein Log-Ausschnitt aus dem echten Betrieb: fünf Neustarts in 101 ms,
+   * sechsmal dieselbe Zielposition – jeder ein abgerissener und neu gebauter
+   * Audiograph. Ursache ist die Web-Audio-Architektur (eine laufende
+   * `AudioBufferSourceNode` lässt sich nicht umsetzen), nicht der Nutzer.
+   *
+   * Der Scheduler wird einmal gebaut und liest beim Neustart die *aktuellen*
+   * Werte aus einem Ref – würde er pro Render neu entstehen, ginge der
+   * Drosseltakt bei jeder Zustandsänderung verloren.
+   */
+  const latestPlaybackRef = useRef({
+    workingAudioBuffer,
+    activeTrackStems,
+    stemsMixerState,
+    stemsMixIsCustom,
+    loopActive,
+    selection,
+  });
+  useEffect(() => {
+    latestPlaybackRef.current = {
+      workingAudioBuffer,
+      activeTrackStems,
+      stemsMixerState,
+      stemsMixIsCustom,
+      loopActive,
+      selection,
+    };
+  });
+
+  const seekSchedulerRef = useRef<SeekScheduler | null>(null);
+  if (seekSchedulerRef.current === null) {
+    seekSchedulerRef.current = createSeekScheduler({
+      minIntervalMs: DEFAULT_SEEK_COALESCE_MS,
+      // Billiger Pfad: Position sofort – Playhead und Zeitanzeige bleiben am Klick.
+      applyPosition: (target) => {
+        setPosition(target);
+        audioEngine.setSeekTarget(target);
+      },
+      // Der Ton steht schon dort: nur die Zielanzeige freigeben.
+      releaseOverride: () => audioEngine.clearSeekTarget(),
+      // Teurer Pfad: Audiograph genau einmal pro Fenster neu aufsetzen.
+      restart: (target) => {
+        const current = latestPlaybackRef.current;
+        if (!current.workingAudioBuffer) return;
+        let loopStart = 0;
+        let loopEnd = 0;
+        if (current.loopActive && current.selection) {
+          loopStart = current.selection.start;
+          loopEnd = current.selection.end;
+        }
+        if (current.activeTrackStems && current.stemsMixIsCustom) {
+          audioEngine.playWithStems(
+            current.activeTrackStems,
+            current.stemsMixerState,
+            target,
+            current.loopActive,
+            loopStart,
+            loopEnd
+          );
+        } else {
+          audioEngine.play(current.workingAudioBuffer, target, current.loopActive, loopStart, loopEnd);
+        }
+      },
+      // Dieselbe Kategorie wie „Wiedergabe gestartet bei …“: die Bündelung
+      // steht im Log direkt neben dem Neustart, den sie erklärt.
+      onCoalesce: ({ requested, targetSec }) => {
+        logger.debug('AUDIO_ENGINE', `Seek gebündelt: ${requested} Anfragen → 1 Neustart bei ${targetSec.toFixed(3)}s`);
+      },
+    });
+  }
+
+  // Anderer Track oder andere Arbeitskopie: offene Sprünge gehören zum alten
+  // Graphen und werden verworfen, statt in die neue Wiedergabe zu feuern.
+  useEffect(() => {
+    seekSchedulerRef.current?.cancel();
+  }, [activeTrack?.id, workingAudioBuffer]);
+
   // Playback Toggle (supports both master working audio and isolated multi-stem playback)
   const handleTogglePlay = useCallback(() => {
     if (!activeTrack) {
@@ -89,6 +171,10 @@ export function useTransportControls(options: UseTransportControlsOptions): Tran
       }
       return;
     }
+
+    // Ein noch geplanter Seek-Neustart darf weder die Pause überholen (er
+    // würde die Wiedergabe wieder starten) noch einen zweiten Aufbau auslösen.
+    seekSchedulerRef.current?.cancel();
 
     if (isPlaying) {
       // `pause()` liefert die exakte Position: sie geht in den Store, damit
@@ -123,33 +209,32 @@ export function useTransportControls(options: UseTransportControlsOptions): Tran
   ]);
 
   const handleReturnToStart = useCallback(() => {
+    seekSchedulerRef.current?.cancel();
     audioEngine.stop();
     setIsPlaying(false);
     setPosition(0);
     setViewOffset(0);
   }, [setIsPlaying, setViewOffset]);
 
+  /**
+   * Sprung während der Wiedergabe: Die Position geht sofort in Store und
+   * Engine (Playhead folgt ohne Verzögerung), der teure Neuaufbau des
+   * Audiographen läuft gebündelt über `seekScheduler` – höchstens ein Neustart
+   * pro `DEFAULT_SEEK_COALESCE_MS`, immer mit der neuesten Zielposition.
+   */
   const handleSeek = useCallback(
     (targetTime: number) => {
       const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
-      setPosition(clamped);
       if (isPlaying && workingAudioBuffer) {
-        if (activeTrackStems && stemsMixIsCustom) {
-          audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
-        } else {
-          audioEngine.play(workingAudioBuffer, clamped, loopActive);
-        }
+        seekSchedulerRef.current?.seek(clamped);
+        return;
       }
+      // Im Pausenzustand ist der Store maßgeblich: kein Engine-Zugriff, damit
+      // ein Sprung im Hauptdeck nicht die Zeit eines Clip-Decks verschiebt.
+      seekSchedulerRef.current?.cancel();
+      setPosition(clamped);
     },
-    [
-      activeTrack,
-      isPlaying,
-      workingAudioBuffer,
-      activeTrackStems,
-      stemsMixerState,
-      stemsMixIsCustom,
-      loopActive,
-    ]
+    [activeTrack, isPlaying, workingAudioBuffer]
   );
 
   // Zoom controls
