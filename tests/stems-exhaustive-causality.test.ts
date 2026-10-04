@@ -150,7 +150,7 @@ async function runExhaustiveTests() {
 
   console.log('\n--- GROUP 5: Cache identity ---');
   stemEngine.clearCache();
-  assert.equal(stemEngine.hasCachedStems('track-matrix', 'sha-matrix'), false, 'Cache clears fully');
+  assert.equal(stemEngine.hasCachedStems('track-matrix'), false, 'Cache clears fully');
   console.log('  [PASS] Cache clear verified.');
   passedCount++;
 

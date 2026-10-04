@@ -40,14 +40,15 @@ import {
   renderRekordboxWaveformColumn,
   sampleWaveformColumn,
 } from '../waveform/spectralColor';
-import { drawPlayhead } from '../waveform/canvasLayers';
+import { drawPlayhead, drawSelectionOverlay, drawSnapGuide } from '../waveform/canvasLayers';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
-  /** Monotonic invalidation token for committed track changes in the parent. */
-  trackRevision: number;
+  /** UI time used to redraw a seeked playhead while transport is stopped. */
+  currentTime: number;
   /** Live transport position, updated independently from React renders. */
   currentTimeRef: React.RefObject<number>;
+  isPlaying: boolean;
   viewOffset: number;
   viewDuration: number;
   waveformMode: WaveformMode;
@@ -98,8 +99,9 @@ interface ContextMenuState {
 
 export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   track,
-  trackRevision,
+  currentTime,
   currentTimeRef,
+  isPlaying,
   viewOffset,
   viewDuration,
   waveformMode,
@@ -137,16 +139,23 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onAnalyzeParts,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const selectionOverlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const playheadCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const currentTrackRef = useRef(track);
+  currentTrackRef.current = track;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const isSelectingRef = useRef(false);
+  const dragStartSecRef = useRef<number | null>(null);
+  const hoveredTimeRef = useRef<number | null>(null);
+  const overlayFrameRef = useRef<number | null>(null);
+  const selectionUpdateFrameRef = useRef<number | null>(null);
+  const pendingSelectionRef = useRef<SelectionRange | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [dragStartSec, setDragStartSec] = useState<number | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
-  const [hoveredPos, setHoveredPos] = useState<{ x: number; y: number } | null>(null);
 
   // Dynamic canvas sizing to respond to panel collapse/expand and container layout changes
   useEffect(() => {
@@ -157,7 +166,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const rect = container.getBoundingClientRect();
       const w = Math.floor(rect.width);
       const h = Math.floor(rect.height);
-      const canvases = [canvasRef.current, playheadCanvasRef.current].filter(
+      const canvases = [canvasRef.current, selectionOverlayCanvasRef.current, playheadCanvasRef.current].filter(
         (canvas): canvas is HTMLCanvasElement => canvas !== null
       );
       if (w <= 10 || h <= 10 || canvases.length === 0) return;
@@ -572,136 +581,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         ctx.strokeRect(lx1, 18, lx2 - lx1, height - 18);
       });
 
-      // 6. Draw SELECTION BOX (Screenshots 01, 02, 03)
-      if (selection && selection.duration > 0) {
-        const selX1 = timeToPixel(selection.start, width);
-        const selX2 = timeToPixel(selection.end, width);
-        const selW = selX2 - selX1;
 
-        if (selX2 > 0 && selX1 < width) {
-          const clampedX1 = Math.max(0, selX1);
-          const clampedX2 = Math.min(width, selX2);
-
-          // Translucent selection tint
-          ctx.fillStyle = 'rgba(0, 136, 255, 0.16)';
-          ctx.fillRect(clampedX1, 18, clampedX2 - clampedX1, height - 18);
-
-          // Vivid electric blue border
-          ctx.strokeStyle = '#0088ff';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(selX1, 18, selW, height - 20);
-
-          // Distinctive corner diagonal handle tabs (top-left & bottom-right)
-          const handleSize = 10;
-          ctx.fillStyle = '#0088ff';
-
-          // Top-Left corner handle
-          ctx.beginPath();
-          ctx.moveTo(selX1, 18);
-          ctx.lineTo(selX1 + handleSize, 18);
-          ctx.lineTo(selX1, 18 + handleSize);
-          ctx.closePath();
-          ctx.fill();
-
-          // Bottom-Right corner handle
-          ctx.beginPath();
-          ctx.moveTo(selX2, height - 2);
-          ctx.lineTo(selX2 - handleSize, height - 2);
-          ctx.lineTo(selX2, height - 2 - handleSize);
-          ctx.closePath();
-          ctx.fill();
-
-          // Floating Selection Info Box in top-right of selection (e.g. 9.0 Bars / 36 Beats / 00:16)
-          const infoBoxX = Math.min(width - 90, Math.max(selX1 + 10, selX2 - 85));
-          ctx.fillStyle = 'rgba(8, 10, 15, 0.85)';
-          ctx.fillRect(infoBoxX - 4, 24, 86, 46);
-          ctx.strokeStyle = '#0088ff';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(infoBoxX - 4, 24, 86, 46);
-
-          ctx.textAlign = 'right';
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 12px sans-serif';
-          ctx.fillText(`${selection.barsCount.toFixed(1)} Bars`, infoBoxX + 76, 38);
-
-          ctx.fillStyle = '#b0b5c5';
-          ctx.font = '10px sans-serif';
-          ctx.fillText(`${Math.round(selection.beatsCount)} Beats`, infoBoxX + 76, 52);
-
-          const durSec = Math.floor(selection.duration);
-          const durSub = Math.floor((selection.duration % 1) * 100);
-          ctx.fillText(`00:${durSec.toString().padStart(2, '0')}`, infoBoxX + 76, 64);
-          ctx.textAlign = 'left';
-        }
-      }
-
-      // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
-      if (track && hoveredTime !== null) {
-        const bg = track.beatGrid;
-        const spb = 60.0 / bg.bpm;
-        const snappedTime = snapTime(hoveredTime);
-        const snappedX = timeToPixel(snappedTime, width);
-        const rawX = timeToPixel(hoveredTime, width);
-
-        if (snappedX >= 0 && snappedX <= width) {
-          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
-          const isBar = beatIndex % bg.meter === 0;
-          const barNum = Math.floor(beatIndex / bg.meter) + 1;
-          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
-
-          // Subtle glowing translucent beam along the snapped grid line
-          const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
-          glowGrad.addColorStop(0, 'rgba(0, 229, 255, 0)');
-          glowGrad.addColorStop(0.5, isBar ? 'rgba(0, 229, 255, 0.22)' : 'rgba(0, 229, 255, 0.12)');
-          glowGrad.addColorStop(1, 'rgba(0, 229, 255, 0)');
-          ctx.fillStyle = glowGrad;
-          ctx.fillRect(snappedX - 12, 18, 24, height - 18);
-
-          // Vivid snap vertical line
-          ctx.strokeStyle = isBar ? '#00e5ff' : '#00b4d8';
-          ctx.lineWidth = isBar ? 1.8 : 1.2;
-          ctx.setLineDash([4, 3]);
-          ctx.beginPath();
-          ctx.moveTo(snappedX, 18);
-          ctx.lineTo(snappedX, height);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Snap cursor indicator arrow at top insertion ruler
-          ctx.fillStyle = '#00e5ff';
-          ctx.beginPath();
-          ctx.moveTo(snappedX - 4, 18);
-          ctx.lineTo(snappedX + 4, 18);
-          ctx.lineTo(snappedX, 23);
-          ctx.closePath();
-          ctx.fill();
-
-          // If raw cursor differs from snapped line, show subtle connector
-          if (Math.abs(rawX - snappedX) > 2) {
-            ctx.strokeStyle = 'rgba(0, 229, 255, 0.45)';
-            ctx.lineWidth = 0.8;
-            ctx.beginPath();
-            ctx.moveTo(rawX, height - 12);
-            ctx.lineTo(snappedX, height - 12);
-            ctx.stroke();
-          }
-
-          // Floating Tooltip Badge above ruler or near cursor
-          const badgeText = `${isBar ? `BAR ${barNum}` : `B${barNum}.${beatInBar}`} • ${snappedTime.toFixed(2)}s`;
-          ctx.font = 'bold 9.5px monospace';
-          const badgeW = ctx.measureText(badgeText).width + 12;
-          const badgeX = Math.max(4, Math.min(width - badgeW - 4, snappedX - badgeW / 2));
-          
-          ctx.fillStyle = 'rgba(10, 15, 24, 0.92)';
-          ctx.fillRect(badgeX, 3, badgeW, 14);
-          ctx.strokeStyle = isBar ? '#00e5ff' : '#0096c7';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(badgeX, 3, badgeW, 14);
-
-          ctx.fillStyle = isBar ? '#ffffff' : '#90e0ef';
-          ctx.fillText(badgeText, badgeX + 6, 13.5);
-        }
-      }
 
     };
 
@@ -711,13 +591,53 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     viewOffset,
     viewDuration,
     waveformMode,
-    selection,
-    hoveredTime,
-    snapTime,
     timeToPixel,
     canvasSize,
-    trackRevision,
   ]);
+
+  const drawDynamicOverlay = useCallback(() => {
+    const canvas = selectionOverlayCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawSelectionOverlay(ctx, selection, viewOffset, viewDuration, canvas.width, canvas.height);
+    drawSnapGuide(
+      ctx,
+      hoveredTimeRef.current,
+      track?.beatGrid ?? null,
+      snapTime,
+      viewOffset,
+      viewDuration,
+      canvas.width,
+      canvas.height
+    );
+  }, [track, selection, snapTime, viewOffset, viewDuration, canvasSize]);
+
+  const drawDynamicOverlayRef = useRef(drawDynamicOverlay);
+  drawDynamicOverlayRef.current = drawDynamicOverlay;
+
+  const scheduleOverlayRender = useCallback(() => {
+    if (overlayFrameRef.current !== null) return;
+    overlayFrameRef.current = requestAnimationFrame(() => {
+      overlayFrameRef.current = null;
+      drawDynamicOverlayRef.current();
+    });
+  }, []);
+
+  useEffect(() => {
+    drawDynamicOverlay();
+  }, [drawDynamicOverlay]);
+
+  useEffect(() => () => {
+    isSelectingRef.current = false;
+    dragStartSecRef.current = null;
+    hoveredTimeRef.current = null;
+    pendingSelectionRef.current = null;
+    if (overlayFrameRef.current !== null) cancelAnimationFrame(overlayFrameRef.current);
+    if (selectionUpdateFrameRef.current !== null) cancelAnimationFrame(selectionUpdateFrameRef.current);
+    overlayFrameRef.current = null;
+    selectionUpdateFrameRef.current = null;
+  }, [track?.id]);
 
   // Playback ticks repaint only the transparent playhead layer, reading the live transport ref.
   useEffect(() => {
@@ -728,6 +648,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
+    if (!isPlaying) return;
 
     let animationFrameId = 0;
     const renderPlayhead = () => {
@@ -737,7 +658,20 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
 
     renderPlayhead();
     return () => cancelAnimationFrame(animationFrameId);
-  }, [currentTimeRef, track, viewOffset, viewDuration, canvasSize]);
+  }, [currentTimeRef, isPlaying, track, viewOffset, viewDuration, canvasSize]);
+
+  // While paused there is no RAF loop; redraw once for a seek, track or viewport change.
+  useEffect(() => {
+    if (isPlaying) return;
+    const canvas = playheadCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    if (!track) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    drawPlayhead(ctx, currentTimeRef.current, viewOffset, viewDuration, canvas.width, canvas.height);
+  }, [currentTime, currentTimeRef, isPlaying, track, viewOffset, viewDuration, canvasSize]);
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -773,8 +707,8 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const newEnd = Math.max(selection.start, clickedTime);
       updateSelectionRange(newStart, newEnd);
     } else {
-      setIsSelecting(true);
-      setDragStartSec(clickedTime);
+      isSelectingRef.current = true;
+      dragStartSecRef.current = clickedTime;
       onSeek(clickedTime);
       setContextMenu(null);
     }
@@ -786,53 +720,82 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const currX = e.clientX - rect.left;
-    const currY = e.clientY - rect.top;
     const rawTime = pixelToTime(currX, rect.width);
 
-    // Track hover position for snap-to-beat guide
-    setHoveredTime(rawTime);
-    setHoveredPos({ x: currX, y: currY });
+    // Ref-driven dynamic layer: pointer movement does not rerender React or the static waveform.
+    hoveredTimeRef.current = rawTime;
+    scheduleOverlayRender();
 
-    if (!isSelecting || dragStartSec === null) return;
+    const dragStartSec = dragStartSecRef.current;
+    if (!isSelectingRef.current || dragStartSec === null) return;
     const currTime = snapTime(rawTime);
 
     const start = Math.min(dragStartSec, currTime);
     const end = Math.max(dragStartSec, currTime);
 
     if (end - start > 0.05) {
-      updateSelectionRange(start, end);
+      scheduleSelectionRange(start, end);
     }
   };
 
   const handleMouseLeave = () => {
-    setHoveredTime(null);
-    setHoveredPos(null);
-    setIsSelecting(false);
-    setDragStartSec(null);
+    flushSelectionUpdate();
+    hoveredTimeRef.current = null;
+    isSelectingRef.current = false;
+    dragStartSecRef.current = null;
+    scheduleOverlayRender();
   };
 
   const handleMouseUp = () => {
-    setIsSelecting(false);
-    setDragStartSec(null);
+    flushSelectionUpdate();
+    isSelectingRef.current = false;
+    dragStartSecRef.current = null;
   };
 
-  const updateSelectionRange = (start: number, end: number) => {
-    if (!track) return;
-    const bg = track.beatGrid;
+  const buildSelectionRange = (start: number, end: number): SelectionRange | null => {
+    const activeTrack = currentTrackRef.current;
+    if (!activeTrack) return null;
+    const bg = activeTrack.beatGrid;
     const spb = 60.0 / bg.bpm;
     const startBeat = Math.max(0, (start - bg.firstBeat) / spb);
     const endBeat = Math.max(0, (end - bg.firstBeat) / spb);
     const beatsCount = Math.max(0, endBeat - startBeat);
-    const barsCount = beatsCount / bg.meter;
-
-    onSelect({
+    return {
       start,
       end,
       startBeat,
       endBeat,
       beatsCount,
-      barsCount,
+      barsCount: beatsCount / bg.meter,
       duration: end - start,
+    };
+  };
+
+  const updateSelectionRange = (start: number, end: number) => {
+    const nextSelection = buildSelectionRange(start, end);
+    if (nextSelection) onSelectRef.current(nextSelection);
+  };
+
+  const flushSelectionUpdate = () => {
+    if (selectionUpdateFrameRef.current !== null) {
+      cancelAnimationFrame(selectionUpdateFrameRef.current);
+      selectionUpdateFrameRef.current = null;
+    }
+    const pendingSelection = pendingSelectionRef.current;
+    pendingSelectionRef.current = null;
+    if (pendingSelection) onSelectRef.current(pendingSelection);
+  };
+
+  const scheduleSelectionRange = (start: number, end: number) => {
+    const nextSelection = buildSelectionRange(start, end);
+    if (!nextSelection) return;
+    pendingSelectionRef.current = nextSelection;
+    if (selectionUpdateFrameRef.current !== null) return;
+    selectionUpdateFrameRef.current = requestAnimationFrame(() => {
+      selectionUpdateFrameRef.current = null;
+      const pendingSelection = pendingSelectionRef.current;
+      pendingSelectionRef.current = null;
+      if (pendingSelection) onSelectRef.current(pendingSelection);
     });
   };
 
@@ -1104,6 +1067,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
           onMouseLeave={handleMouseLeave}
           onContextMenu={handleContextMenu}
           className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
+        />
+        <canvas
+          ref={selectionOverlayCanvasRef}
+          width={1200}
+          height={320}
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full block pointer-events-none"
         />
         <canvas
           ref={playheadCanvasRef}

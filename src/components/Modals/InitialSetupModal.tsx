@@ -191,7 +191,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
               onChange={(newPath) => setPaths((prev) => ({ ...prev, appProjectsPath: newPath }))}
               presets={APP_PROJECTS_PRESETS}
               dialogTitle="Projekt- & Anwendungsverzeichnis auswählen"
-              helperText="Hier werden bearbeitete Projekte (.airdox.json), Audioexporte (WAV, FLAC, MP3) und Aufnahmen gespeichert."
+              helperText="Hier werden bearbeitete Projekte (.airdox.json), derzeit verfügbare WAV-Audioexporte und Aufnahmen gespeichert."
               icon={<HardDrive size={12} className="text-[#0088ff]" />}
               badgeText="Projekte"
             />

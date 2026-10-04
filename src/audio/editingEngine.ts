@@ -1200,15 +1200,18 @@ export function renderEditSegments(
   return output;
 }
 
-/** Synchronizes a TrackModel with every causal output field. */
-export function applyExecutionToTrack(track: TrackModel, result: EditExecutionResult): void {
-  track.duration = result.newDuration;
-  track.cues = result.newCues;
-  track.workingSegments = result.newSegments;
-  track.analysis = result.newAnalysis;
-  if (result.newLoops) track.loops = result.newLoops;
-  if (result.newBeatGrid) track.beatGrid = result.newBeatGrid;
-  if (result.newPhrases) track.phrases = result.newPhrases;
+/** Returns a new TrackModel synchronized with every causal edit output. */
+export function applyExecutionToTrack(track: TrackModel, result: EditExecutionResult): TrackModel {
+  return {
+    ...track,
+    duration: result.newDuration,
+    cues: result.newCues,
+    workingSegments: result.newSegments,
+    analysis: result.newAnalysis,
+    ...(result.newLoops ? { loops: result.newLoops } : {}),
+    ...(result.newBeatGrid ? { beatGrid: result.newBeatGrid } : {}),
+    ...(result.newPhrases ? { phrases: result.newPhrases } : {}),
+  };
 }
 
 /** High-fidelity complete-state Undo/Redo stack. */

@@ -17,6 +17,7 @@
  *   6. Layout: Pfade bleiben in der Jobwurzel (kein Ausbruch aus der Ablage)
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   buildManifest,
   buildResultDocument,
@@ -84,7 +85,12 @@ async function run() {
   const roundTrip = parseManifest(serializeManifest(manifest), manifest.jobId);
   assert.deepEqual(roundTrip.input, manifest.input);
   assert.deepEqual(roundTrip.engine.stems, ['drums', 'bass', 'other', 'vocals']);
+  const sharedFixture = readFileSync(new URL('./fixtures/stem-remote-manifest-v1.json', import.meta.url), 'utf8');
+  const fixtureManifest = parseManifest(sharedFixture, '00000000-0000-4000-8000-000000000001');
+  assert.equal(fixtureManifest.schemaVersion, REMOTE_JOB_SCHEMA_VERSION);
+  assert.deepEqual(fixtureManifest.engine.stems, ['drums', 'bass', 'other', 'vocals']);
   console.log(`  ✓ Manifest ${manifest.jobId.slice(0, 8)}… serialisiert und wieder gelesen`);
+  console.log('  ✓ Gemeinsame v1-Fixture wird vom TypeScript-Editor akzeptiert');
 
   // =========================================================================
   console.log('\n[ TEST ] #2 Kaputte/fremde Manifeste werden abgelehnt');
