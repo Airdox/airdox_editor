@@ -112,6 +112,8 @@ import {
   subscribeTransport,
 } from './state/transportStore';
 import { startPlayheadDriver, type PlayheadDriverHandle } from './features/transport/playheadDriver';
+import { useTransportControls, DEFAULT_VIEW_DURATION_SEC } from './features/transport/useTransportControls';
+import { useMidiBridge } from './features/transport/useMidiBridge';
 import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
@@ -1639,169 +1641,49 @@ export default function App() {
     [activeTrackStems, stemsMixerState]
   );
 
-  // Playback Toggle (supports both master working audio and isolated multi-stem playback)
-  const handleTogglePlay = useCallback(() => {
-    if (!activeTrack) {
-      alert('Bitte lade zuerst einen Track oder importiere eine Audiodatei (WAV, MP3, FLAC).');
-      return;
-    }
+  /*
+   * Transport, Zoom und Ansichtsfenster liegen in `features/transport`.
+   * Der Hook bekommt die Abhängigkeiten als Parameter und gibt dieselben
+   * Handler zurück wie zuvor – verschoben, nicht umgeschrieben.
+   */
+  const {
+    handleTogglePlay,
+    handleReturnToStart,
+    handleSeek,
+    handleZoomIn,
+    handleZoomOut,
+    handleResetZoom,
+    handleSelectZoomPreset,
+    handlePanView,
+  } = useTransportControls({
+    activeTrack,
+    workingAudioBuffer,
+    isPlaying,
+    setIsPlaying,
+    loopActive,
+    selection,
+    activeTrackStems,
+    stemsMixerState,
+    stemsMixIsCustom,
+    audioFileInputRef,
+    viewDuration,
+    setViewDuration,
+    setViewOffset,
+  });
 
-    if (!workingAudioBuffer) {
-      if (
-        confirm(
-          `Für "${activeTrack.title}" ist noch keine Audiodatei verknüpft.\n\nMöchtest du jetzt die passende Originaldatei (WAV, MP3, FLAC, AIFF) auswählen?`
-        )
-      ) {
-        audioFileInputRef.current?.click();
-      }
-      return;
-    }
-
-    if (isPlaying) {
-      // `pause()` liefert die exakte Position: sie geht in den Store, damit
-      // Playhead und Anzeigen ohne React-Update nachziehen.
-      setPosition(audioEngine.pause());
-      setIsPlaying(false);
-    } else {
-      let loopStart = 0;
-      let loopEnd = 0;
-      if (loopActive && selection) {
-        loopStart = selection.start;
-        loopEnd = selection.end;
-      }
-      if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, getPositionSec(), loopActive, loopStart, loopEnd);
-      } else {
-        audioEngine.play(workingAudioBuffer, getPositionSec(), loopActive, loopStart, loopEnd);
-      }
-      setIsPlaying(true);
-    }
-  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom]);
-
-  const handleReturnToStart = useCallback(() => {
-    audioEngine.stop();
-    setIsPlaying(false);
-    setPosition(0);
-    setViewOffset(0);
-  }, []);
-
-  const handleSeek = useCallback((targetTime: number) => {
-    const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
-    setPosition(clamped);
-    if (isPlaying && workingAudioBuffer) {
-      if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
-      } else {
-        audioEngine.play(workingAudioBuffer, clamped, loopActive);
-      }
-    }
-  }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
-
-  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle.
-  // Read transport time through a ref so 60fps playhead updates don't re-init MIDI listeners.
-  useEffect(() => {
-    let cancelled = false;
-
-    const refreshDeviceState = () => {
-      if (cancelled) return;
-      setIsMidiConnected(midiManager.getConnectedDevices().length > 0);
-      setMidiStatusLabel(midiManager.getStatusLabel());
-    };
-
-    midiManager.init().then(refreshDeviceState);
-    const unsubState = midiManager.onStateChange(refreshDeviceState);
-
-    const unsubActions = midiManager.subscribe((action) => {
-      switch (action.type) {
-        case 'STEM_TOGGLE':
-          if (action.stem) handleToggleStemMute(action.stem);
-          break;
-        case 'STEM_SOLO':
-          if (action.stem) handleToggleStemSolo(action.stem);
-          break;
-        case 'PLAY_PAUSE':
-          handleTogglePlay();
-          break;
-        case 'CUE':
-          handleReturnToStart();
-          break;
-        case 'LOOP_TOGGLE':
-          setLoopActive((prev) => !prev);
-          break;
-        case 'SEEK':
-          if (action.value !== undefined) {
-            handleSeek(getPositionSec() + action.value * 0.15);
-          }
-          break;
-        case 'MASTER_VOLUME':
-          if (action.value !== undefined) {
-            handleMasterVolumeChange(action.value);
-          }
-          break;
-        default:
-          break;
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      unsubState();
-      unsubActions();
-    };
-  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, handleMasterVolumeChange]);
-
-  // Zoom controls
-  const handleZoomIn = () => {
-    setViewDuration((prev) => Math.max(3.0, prev * 0.7));
-  };
-  const handleZoomOut = () => {
-    setViewDuration((prev) => Math.min(activeTrack?.duration || 120, prev * 1.4));
-  };
-  const handleResetZoom = () => {
-    setViewDuration(18.0);
-  };
-  const handleSelectZoomPreset = useCallback(
-    (preset: '2_BARS' | '4_BARS' | '8_BARS' | '16_BARS' | '32_BARS' | '64_BARS' | 'FULL_TRACK') => {
-      const bpm = activeTrack?.bpm || 120.0;
-      const secPerBar = (60 / bpm) * 4;
-      let targetDuration = 16.0;
-
-      if (preset === 'FULL_TRACK') {
-        targetDuration = activeTrack ? activeTrack.duration : 60.0;
-        setViewOffset(0);
-        setViewDuration(targetDuration);
-        return;
-      }
-
-      const barMap: Record<string, number> = {
-        '2_BARS': 2,
-        '4_BARS': 4,
-        '8_BARS': 8,
-        '16_BARS': 16,
-        '32_BARS': 32,
-        '64_BARS': 64,
-      };
-      const bars = barMap[preset] || 16;
-      targetDuration = bars * secPerBar;
-
-      if (activeTrack && targetDuration > activeTrack.duration) {
-        targetDuration = activeTrack.duration;
-      }
-
-      const half = targetDuration / 2;
-      let newOffset = Math.max(0, getPositionSec() - half);
-      if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
-        newOffset = Math.max(0, activeTrack.duration - targetDuration);
-      }
-      setViewDuration(targetDuration);
-      setViewOffset(newOffset);
-    },
-    [activeTrack]
-  );
-  const handlePanView = (newOffset: number) => {
-    const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
-    setViewOffset(Math.max(0, Math.min(maxOffset, newOffset)));
-  };
+  // Hardware-Bedienung (Pioneer DDJ): Zuordnung Ereignis → Aktion in
+  // `features/transport/useMidiBridge`.
+  useMidiBridge({
+    handleTogglePlay,
+    handleReturnToStart,
+    handleSeek,
+    handleToggleStemMute,
+    handleToggleStemSolo,
+    handleMasterVolumeChange,
+    setLoopActive,
+    setMidiConnected: setIsMidiConnected,
+    setMidiStatusLabel,
+  });
 
   // Pioneer Memory Cue Jump Handlers (Memory Call < and >)
   const handlePrevMemoryCue = useCallback(() => {
