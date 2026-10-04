@@ -73,7 +73,7 @@ function createStorage(initial: Record<string, string> = {}): SettingsStorage & 
   const fremd = createStorage({ [SETTINGS_STORAGE_KEY]: '{"unbekanntesFeld":42}' });
   const geladen = loadPersistedSettings(fremd);
   assert.equal(geladen.recordingFormat, DEFAULT_PERSISTED_SETTINGS.recordingFormat);
-  assert.equal((geladen as Record<string, unknown>).unbekanntesFeld, 42, 'unbekannte Felder werden übernommen');
+  assert.equal((geladen as unknown as Record<string, unknown>).unbekanntesFeld, 42, 'unbekannte Felder werden übernommen');
 
   const keinSpeicher = loadPersistedSettings(null);
   assert.deepEqual(keinSpeicher, DEFAULT_PERSISTED_SETTINGS);
