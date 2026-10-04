@@ -1,0 +1,36 @@
+{
+  "$comment": [
+    "Harte Schwellen für scripts/check-bundle-budget.mjs und scripts/bench-waveform.mjs.",
+    "Werte sind Obergrenzen; Unterschreiten ist ausdrücklich erlaubt.",
+    "Kalibrierung: gemessener Referenzwert (04.10.2026, Referenzmaschine) mit",
+    "Faktor ~2 Reserve – der Wächter soll echte Regressionen finden, nicht die",
+    "Tagesform der CI-Maschine messen. Neue Referenzmessung über",
+    "`npm run bench -- --json`; danach Limits neu setzen."
+  ],
+  "bundle": {
+    "startGzipKb": 260,
+    "startRawKb": 900,
+    "$comment": [
+      "Start = Entry-Chunk plus seine statischen Imports (aus dist/.vite/manifest.json).",
+      "Lazy-Chunks zählen nicht mit. Gemessen (04.10.2026): 197,5 kB gzip / 664,3 kB roh",
+      "nach dem Lazy-Umbau der Modals (vorher 361 kB / 1334 kB)."
+    ]
+  },
+  "bench": {
+    "$comment": [
+      "Schlüssel müssen exakt den Ergebnisnamen aus scripts/bench-waveform.mjs entsprechen,",
+      "sonst wird das Limit still ignoriert (unbekannte Schlüssel werden übersprungen).",
+      "Der Benchmark wärmt auf und prüft das Minimum aus 5 Läufen; genau diese Minima sind",
+      "hier hinterlegt (Referenzmessung 04.10.2026 nach dem Lazy-Modal-Umbau):",
+      "analyze30sMs 6,74 | analyze300sMs 69,01 | columns18s30sMs 0,117 | columnsFullTrack300sMs 0,53.",
+      "Reserve ~2x für die Rechenpfade; bei Sub-Millisekunden-Messungen greift ein absoluter",
+      "Boden (1,5–2 ms), damit die Tagesform der CI-Maschine nicht zum Fehlalarm führt.",
+      "Vorherige Rohmessungen ohne Aufwärmlauf (18,29 / 180,22 / 2,539 / 0,636 ms) waren",
+      "JIT-Kaltstart-Artefakte und sind als Budgetgrundlage unbrauchbar."
+    ],
+    "analyze30sMs": 15,
+    "analyze300sMs": 140,
+    "columns18s30sMs": 2,
+    "columnsFullTrack300sMs": 1.5
+  }
+}

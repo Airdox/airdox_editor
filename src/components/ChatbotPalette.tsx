@@ -39,6 +39,13 @@ interface ChatbotPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   trackContext: TrackEditorContext;
+  /**
+   * Optionaler Live-Kontext: liefert die Wiedergabeposition im Moment des
+   * Absendens. `trackContext` wird nur bei Änderungen neu berechnet und wäre
+   * für die Position schnell veraltet (die Position liegt im Transport-Store
+   * und erzeugt bewusst keinen Render).
+   */
+  getTrackContext?: () => TrackEditorContext;
   onExecuteAction: (action: ChatbotAction) => void;
   onSelectZoomPreset?: (preset: any) => void;
 }
@@ -84,6 +91,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
   isOpen,
   onClose,
   trackContext,
+  getTrackContext,
   onExecuteAction,
   onSelectZoomPreset,
 }) => {
@@ -188,7 +196,7 @@ export const ChatbotPalette: React.FC<ChatbotPaletteProps> = ({
         body: JSON.stringify({
           messages: [...messages, userMsg].slice(-10),
           model: selectedModel,
-          trackContext,
+          trackContext: getTrackContext ? getTrackContext() : trackContext,
         }),
       });
 

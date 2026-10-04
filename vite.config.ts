@@ -72,6 +72,28 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      // Der Manifest ist die Grundlage für scripts/check-bundle-budget.mjs:
+      // nur so ist eindeutig, welche Chunks zum Startpfad gehören und welche
+      // lazy geladen werden.
+      manifest: true,
+      rollupOptions: {
+        output: {
+          // three.js liegt ausschließlich hinter React.lazy (MultiLayer3DVisualizer)
+          // und darf deshalb nie im Startchunk landen. React/Lucide wandern in
+          // eigene, cachebare Chunks.
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('node_modules/three')) return 'three';
+            if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) {
+              return 'react-vendor';
+            }
+            if (id.includes('node_modules/lucide-react')) return 'lucide';
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
