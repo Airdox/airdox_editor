@@ -10,21 +10,36 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = [
   'package.json',
   'scripts/remote-evidence.mjs',
+  'scripts/run-tests.mjs',
+  'scripts/md-to-notebook.mjs',
   'src/stems/remote/manifest.ts',
   'src/stems/remote/remoteStemJobService.ts',
+  'src/stems/remote/diagnostics.ts',
+  'src/stems/remote/layout.ts',
+  'src/stems/remote/types.ts',
   'src/stems/remote/transport.ts',
   'src/stems/remote/settings.ts',
+  'src/stems/transportTypes.ts',
+  'src/components/Modals/RemoteFlowModal.tsx',
+  'src/components/Modals/RemoteSetupModal.tsx',
+  'src/components/DeckStemsControl.tsx',
   'scripts/stem-remote-worker.ts',
   'colab/remote_worker.py',
   'colab/airdox-stem-remote-worker.md',
   'colab/airdox-stem-remote-worker.ipynb',
+  'colab/README.md',
   'src/stems/modelCatalog.json',
+  'tests/stem-remote-cancel-request-guard.test.ts',
   'tests/stem-remote-job-service.test.ts',
+  'tests/stem-remote-manifest-python.test.mjs',
+  'tests/stem-remote-worker-selftest.test.mjs',
+  // Hält die tatsächlich vom Notebook verwendeten CLI-Optionen fest.
+  'tests/stem-remote-worker-cli.test.mjs',
   'tests/stem-remote-manifest.test.ts',
   'tests/stem-remote-setup-config.test.ts',
-  // Nagelt die Kommandozeile fest, die das Notebook baut: `--model` darf den
-  // Modellordner nicht überschreiben, unbekannte Optionen müssen abbrechen.
-  'tests/stem-remote-worker-cli.test.mjs',
+  'docs/STEM_REMOTE_HQ.md',
+  'docs/STEM_REMOTE_NACHWEISKETTE.md',
+  'docs/FERN_JOB_LOGDIAGNOSE.md',
 ];
 const out = path.join(root, 'stem-gate-run', 'remote-evidence.json');
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
@@ -33,17 +48,31 @@ const git = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8
 const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' });
 const checks = [
   ['notebook-sync', 'node', ['scripts/md-to-notebook.mjs', 'colab/airdox-stem-remote-worker.md', '--check']],
-  ['remote-tests', 'npm', ['run', 'test:stems:remote']],
-  ['python-worker-selftest', 'python3', ['colab/remote_worker.py', '--self-test']],
+  ['wait-warning-regression', 'node', ['scripts/run-tests.mjs', '--only', 'stem-remote-job-service', '--serial']],
+  ['colab-worker-selftest', 'node', ['scripts/run-tests.mjs', '--only', 'stem-remote-worker-selftest', '--serial']],
+  ['remote-protocol-suite', 'npm', ['run', 'test:stems:remote']],
 ];
 const results = [];
 for (const [name, command, args] of checks) {
   // Do not save subprocess logs: they may contain local paths or user data.
-  const proc = spawnSync(command, args, { cwd: root, stdio: 'inherit', timeout: 300_000, shell: process.platform === 'win32' });
-  results.push({ name, passed: proc.status === 0 && !proc.error, exitCode: proc.status, error: proc.error?.code ?? null });
+  const startedAt = Date.now();
+  const proc = spawnSync(command, args, {
+    cwd: root,
+    stdio: 'inherit',
+    timeout: 300_000,
+    shell: process.platform === 'win32',
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+  });
+  results.push({
+    name,
+    passed: proc.status === 0 && !proc.error,
+    exitCode: proc.status,
+    error: proc.error?.code ?? null,
+    durationMs: Date.now() - startedAt,
+  });
 }
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   scope: 'LOCAL_SIMULATION_ONLY',
   googleDriveVerified: false,
   colabVerified: false,

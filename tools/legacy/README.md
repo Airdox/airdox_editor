@@ -8,6 +8,24 @@ Importgraphen von `src`, `electron`, `scripts`, `tests`, `server.ts` und
 Sie liegen hier, statt gelöscht zu werden, weil sie teilweise dokumentieren,
 *wie* ein Problem damals gefunden wurde:
 
+## Sicherheitswarnung
+
+**Nicht ausführen.** Mehrere Skripte starten bei manuellem Aufruf irreversible
+oder externe Git-Aktionen. Insbesondere enthalten `full_auto_fix.mjs`,
+`master-fix-and-push.cjs`, `fix_and_force_push.cjs` und
+`setup-installer-pipeline.cjs` Abfolgen wie `git fetch origin main`,
+`git reset --hard origin/main`, `git checkout` älterer Stände sowie
+`git commit`/`git push origin main`. Weitere Skripte committen oder pushen
+direkt auf `main`. In einem Arbeitsverzeichnis mit eigenen Änderungen oder
+GitHub-Zugang kann ein Aufruf diese Arbeit überschreiben. Vor einer etwaigen
+Wiederverwendung müssen Zweck, Befehle, Zielbranch und Pfade einzeln geprüft
+und alle automatischen Git-Schreib-/Netzwerkaktionen entfernt werden.
+
+Die früher unter `src/` liegenden Varianten (`src/fix.js`,
+`src/full_auto_fix.mjs`, `src/build_pipeline.py`) wurden gemäß
+`docs/REFACTORING_PLAN.md` (WP-15) gelöscht; nichts referenzierte sie. Sie
+bleiben über die Git-Historie abrufbar.
+
 | Datei(en) | Ursprünglicher Zweck | Ersetzt durch |
 |---|---|---|
 | `fix.cjs`, `fix-typo.cjs`, `fix_context_syntax.cjs`, `clean_fix.cjs`, `fix_and_force_push.cjs`, `master-fix-and-push.cjs`, `full_auto_fix.mjs` | Einmalige Quelltext-Reparaturen per Skript (mit hartkodierten Windows-Pfaden) | normale Commits, PR-Review, Test-Suite |

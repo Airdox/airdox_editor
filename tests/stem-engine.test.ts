@@ -105,7 +105,7 @@ async function runTests() {
 
   // Test 7: Cache handling – clear and hasCached
   console.log('[ TEST ] #7 Cache handling');
-  assert.ok(!stemEngine.hasCachedStems(trackId, sha256), 'cache empty after clear');
+  assert.ok(!stemEngine.hasCachedStems(trackId), 'cache empty after clear');
   console.log('  -> [PASS] Cache clear works.');
 
   // Test 8: If engine available, try real separation (optional – may skip in CI)
@@ -123,7 +123,8 @@ async function runTests() {
       assert.ok(progressReports.length > 0, 'progress reported');
       console.log('  -> [PASS] Real AI separation succeeded.');
       // Verify cache now has entry
-      assert.ok(stemEngine.hasCachedStems(trackId, sha256), 'cached after real separation');
+      assert.match(stems.inputFingerprint, /^stem-pcm-wav-v1:sha256:[a-f0-9]{64}$/);
+      assert.ok(stemEngine.hasCachedStems(trackId, stems.inputFingerprint), 'cached by exact PCM input after real separation');
       // Verify sum reconstruction not required for AI (allow small error), but check non-zero
       const bassData = stems.bass.getChannelData(0);
       let energy = 0;

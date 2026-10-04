@@ -23,7 +23,7 @@ import { applyAnlzExtractionToTrack, parseAnlzBinary } from '../../rekordbox/dat
 import { parseRekordboxXmlAsync } from '../../rekordbox/xmlParser';
 import { isNativeRekordboxWaveform } from '../../waveform/analysisComposer';
 import { setPosition } from '../../state/transportStore';
-import { DataOrigin, type EditHistoryEntry, type RekordboxCueSource, type SelectionRange, type TrackModel } from '../../types/rekordbox';
+import { DataOrigin, type RekordboxCueSource, type SelectionRange, type TrackModel } from '../../types/rekordbox';
 import type { OperationTelemetry } from '../../components/Modals/OperationFeedbackModal';
 import { logger } from '../../utils/logger';
 import {
@@ -44,8 +44,8 @@ export interface TrackImportDependencies {
   setAnalysisIndexStatus: React.Dispatch<React.SetStateAction<string>>;
   setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
   setSelection: React.Dispatch<React.SetStateAction<SelectionRange | null>>;
-  setUndoStack: React.Dispatch<React.SetStateAction<EditHistoryEntry[]>>;
-  setRedoStack: React.Dispatch<React.SetStateAction<EditHistoryEntry[]>>;
+  /** Verwirft den Bearbeitungsverlauf (beim Laden eines anderen Tracks). */
+  clearEditHistory: () => void;
   setViewOffset: React.Dispatch<React.SetStateAction<number>>;
   /** Zustand der Import-Modalitäten (Sammlungsauswahl, Ladeanzeige). */
   setXmlCollectionModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -94,8 +94,7 @@ export function useTrackImport(options: TrackImportDependencies): TrackImportCon
     setAnalysisIndexStatus,
     setIsPlaying,
     setSelection,
-    setUndoStack,
-    setRedoStack,
+    clearEditHistory,
     setViewOffset,
     setXmlCollectionModalOpen,
     setXmlFileName,
@@ -712,8 +711,7 @@ const handleSelectTrackFromXml = async (track: TrackModel) => {
     setViewOffset(0);
     setIsPlaying(false);
     setSelection(null);
-    setUndoStack([]);
-    setRedoStack([]);
+    clearEditHistory();
     audioEngine.stop();
 
     await cacheAnalysisMapping(resolvedDef, analysisSource.path, 'MASTER_DB_GATE', {

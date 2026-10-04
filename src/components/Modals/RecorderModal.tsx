@@ -1,4 +1,5 @@
 import React from 'react';
+import { isAudioExportFormatSupported } from '../../audio/audioExporter';
 import {
   Activity,
   CheckCircle2,
@@ -163,10 +164,25 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-neutral-500"><FileAudio size={13} /> Dateiformat</div>
               <div className="grid grid-cols-3 gap-1.5">
-                {(['WAV', 'FLAC', 'MP3'] as RecorderFormat[]).map((item) => (
-                  <button key={item} disabled={!canEdit} onClick={() => onSetFormat(item)} className={`py-2 rounded border text-[11px] font-bold ${format === item ? 'border-[#00a2ff] bg-[#09233b] text-white' : 'border-[#2a2e39] bg-[#171a22] text-neutral-500 hover:text-neutral-200'} disabled:opacity-45`}>{item}</button>
-                ))}
+                {(['WAV', 'FLAC', 'MP3'] as RecorderFormat[]).map((item) => {
+                  const isSupported = isAudioExportFormatSupported(item);
+                  return (
+                    <button
+                      key={item}
+                      disabled={!canEdit || !isSupported}
+                      aria-disabled={!isSupported}
+                      title={isSupported ? undefined : `${item}-Export ist derzeit nicht verfügbar; bitte WAV wählen.`}
+                      onClick={() => onSetFormat(item)}
+                      className={`py-2 rounded border text-[11px] font-bold ${format === item ? 'border-[#00a2ff] bg-[#09233b] text-white' : 'border-[#2a2e39] bg-[#171a22] text-neutral-500 hover:text-neutral-200'} disabled:opacity-45 disabled:cursor-not-allowed`}
+                    >
+                      {item}{!isSupported && <span className="block text-[8px] font-normal">nicht verfügbar</span>}
+                    </button>
+                  );
+                })}
               </div>
+              <p className="text-[9px] leading-snug text-amber-300/80">
+                FLAC und MP3 sind deaktiviert, bis echte Encoder und passende Container integriert und geprüft sind.
+              </p>
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-[10px] text-neutral-500">Samplerate<select disabled={!canEdit} value={sampleRate} onChange={(e) => onSetSampleRate(Number(e.target.value) as 44100 | 48000)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={48000}>48 kHz</option><option value={44100}>44.1 kHz</option></select></label>
                 <label className="text-[10px] text-neutral-500">Bit-Tiefe<select disabled={!canEdit || format === 'MP3'} value={bitDepth} onChange={(e) => onSetBitDepth(Number(e.target.value) as 16 | 24 | 32)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={24}>24 Bit</option><option value={16}>16 Bit</option><option value={32}>32 Bit Float</option></select></label>
@@ -208,7 +224,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
           <div className="text-[10px] text-neutral-500 max-w-[55%] flex gap-1.5 items-center"><ShieldCheck size={13} className="text-[#00c853] shrink-0" /> Original- und Rekordbox-Dateien bleiben unverändert. Aufnahme wird erst am Ende als neue Datei geschrieben.</div>
           <div className="flex gap-2">
             {isDone ? <button onClick={onClose} className="px-4 py-2 rounded bg-[#2a2e3a] hover:bg-[#383d4b] text-xs text-white">Schließen</button> : <button onClick={onClose} disabled={busy} className="px-4 py-2 rounded text-xs text-neutral-400 hover:text-white disabled:opacity-40">Abbrechen</button>}
-            {stage === 'RECORDING' ? <button onClick={onStop} className="px-5 py-2 rounded bg-[#c92727] hover:bg-[#e23636] text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} /> Aufnahme stoppen</button> : <button onClick={onStart} disabled={busy || stage === 'DONE'} className="px-5 py-2 rounded bg-[#0088ff] hover:bg-[#1595ff] disabled:opacity-40 text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} />{stage === 'PREROLL' ? 'Vorbereiten…' : 'Aufnahme starten'}</button>}
+            {stage === 'RECORDING' ? <button onClick={onStop} className="px-5 py-2 rounded bg-[#c92727] hover:bg-[#e23636] text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} /> Aufnahme stoppen</button> : <button onClick={onStart} disabled={busy || stage === 'DONE' || !isAudioExportFormatSupported(format)} title={!isAudioExportFormatSupported(format) ? 'Dieses Aufnahmeformat ist derzeit nicht verfügbar; bitte WAV wählen.' : undefined} className="px-5 py-2 rounded bg-[#0088ff] hover:bg-[#1595ff] disabled:opacity-40 text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} />{stage === 'PREROLL' ? 'Vorbereiten…' : 'Aufnahme starten'}</button>}
           </div>
         </div>
       </div>

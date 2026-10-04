@@ -24,19 +24,25 @@ Beim Start eines externen Jobs öffnet sich ein kompaktes Statusfenster. Es zeig
 Arbeitskopie, Übergabe an den Drive-Sync-Ordner, Wartezeit auf den Worker,
 Verarbeitung und geprüften Rückimport. Job-ID, Modell-Phase, vom Worker
 **gemeldeter** Fortschritt, Rechenort und Transportzustand bleiben sichtbar.
-Wenn mehr als zwei Minuten kein neuer Jobstatus bzw. 90 Sekunden kein
-Worker-Lebenszeichen ankommt, erscheint ein Hinweis mit konkreten Prüfschritten;
-ein temporärer Transportausfall wird nicht fälschlich als gescheiterter Job
-bezeichnet. Das Fenster lässt sich schließen, während der Job weiterläuft, und
-über die schwebende Status-Schaltfläche erneut öffnen. „Jetzt prüfen“ löst einen
-neuen Poll aus; „Job abbrechen“ fordert den Abbruch an. Fehler bleiben bis zum
-Schließen lesbar.
+Nach 120 Sekunden ohne Worker-Claim erscheint eine konkrete Diagnose; nach
+90 Sekunden ohne Worker-Lebenszeichen ein eigener Heartbeat-Hinweis. Die Uhr
+basiert auf `phaseUpdatedAt`/Worker-Heartbeat und wird von unveränderten
+Editor-Polls nicht zurückgesetzt. Der Job bleibt dabei aktiv und wird nicht
+vorschnell als fehlgeschlagen markiert. Ein aufklappbares Ablaufprotokoll zeigt
+korrelierbare Schritte aus Editor und Worker. Das Fenster lässt sich schließen,
+während der Job weiterläuft, und über die schwebende Status-Schaltfläche erneut
+öffnen. „Jetzt prüfen“ löst einen neuen Poll aus; „Job abbrechen“ fordert den
+Abbruch an.
 
-**Grenze:** Drive für Desktop bestätigt dem Editor keinen Cloud-Upload. „An
-Drive-Ordner übergeben“ bedeutet nur, dass die lokale Arbeitskopie/Jobablage
-geschrieben wurde; die tatsächliche Cloud-Synchronisierung wird nicht als
-bestätigt dargestellt. Das Fenster visualisiert den Fern-Stem-Workflow, nicht
-eine allgemeine Dateireparatur.
+**Wichtig:** Drive für Desktop bestätigt dem Editor keinen Cloud-Upload und
+startet/aktiviert auch keine Colab-Laufzeit. Die Colab-Worker-Zelle muss in einer
+aktiven Laufzeit laufen und denselben `JOB_ORDNER` verwenden. Fehlt nach zwei
+Minuten ein Claim, prüft die Warnung genau diesen Punkt sowie Sync und Drive-Mount.
+
+**Grenze:** „An Drive-Ordner übergeben“ bedeutet nur, dass die lokale
+Arbeitskopie/Jobablage geschrieben wurde; die tatsächliche Cloud-Synchronisierung
+wird nicht als bestätigt dargestellt. Das Fenster visualisiert den
+Fern-Stem-Workflow, nicht eine allgemeine Dateireparatur.
 
 ## 1. Was der Nutzer sieht
 
@@ -51,8 +57,9 @@ In der Deck-Stem-Leiste steht nur noch:
 | **Abbrechen** | legt `cancel.flag` in die Ablage und meldet das Ergebnis des Klicks sofort an der Leiste („Abbruch gemeldet…“ / Grund, wenn Drive nicht erreichbar war). Beide Worker prüfen die Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
 
 Es gibt keine Python-, Colab- oder Checkpoint-Bedienung in der UI und keine
-Tracebacks: technische Details stehen im Log (`STEM-REMOTE`), der Nutzer sieht
-eine Ursache in einem Satz („Google Drive ist gerade nicht erreichbar …“).
+Tracebacks. Das Popup zeigt eine begrenzte, lesbare Ablaufspur; ausführlichere
+Technikdetails stehen im Log (`STEM-REMOTE`) und in den Jobdateien. Der Nutzer
+sieht eine Ursache in einem Satz („Google Drive ist gerade nicht erreichbar …“).
 Die übrigen Qualitätsprofile (`Vorschau`, `High`, `Max`) bleiben unter
 „Weitere Profile“ erhalten – nichts wurde entfernt.
 
@@ -66,13 +73,17 @@ Deck-Stem-Leiste → Einrichtungs-Dialog:
    (`gdrive:airdox-stem-jobs`). „Speichern & Verbindung prüfen" schreibt die
    Einstellung nach `RemoteJobs/settings.json` und zeigt sofort, ob die Ablage
    erreichbar ist.
-2. **Colab-Worker (einmalig):** Notebook `colab/airdox-stem-remote-worker.ipynb`
+2. **Colab-Worker:** Notebook `colab/airdox-stem-remote-worker.ipynb`
    (Bau: `npm run stems:remote:notebook`) nach Google Drive hochladen, in Colab
-   öffnen, Laufzeit T4/CPU wählen, „Alles ausführen". `JOB_ORDNER` in der
-   ersten Code-Zelle muss den gewählten Drive-Ordner benennen.
+   öffnen und `JOB_ORDNER` auf denselben Drive-Ordner setzen. Drive-Mount
+   freigeben, Quellcode/Branch passend zur Editor-Version bereitstellen und die
+   Worker-Zelle (#5) starten. Sie muss für neue Jobs in einer aktiven Colab-
+   Laufzeit laufen; nach Ende/Abbruch der Laufzeit erneut starten. Drive-Sync
+   kann Colab nicht automatisch wecken.
 
-Danach genügt ein Klick auf den Button – Upload, Warten, Rückimport,
-Speicherung und Verknüpfung mit dem Original-Track laufen ohne Bedienung.
+Sobald der Worker aktiv ist, laufen Upload, Warten, Rückimport, Speicherung und
+Verknüpfung ohne weitere Schritte. Ohne laufende Worker-Zelle bleibt ein Job
+korrekt als wartend sichtbar; die UI zeigt nach 120 s, wo geprüft werden muss.
 
 Für Entwickler bleiben Umgebungsvariablen (oder `RemoteJobs/settings.json` im
 Engine-Datenordner) als Programmierpfad; die Datei, die der Dialog schreibt,
@@ -99,7 +110,8 @@ jobs/<jobId>/cancel.flag       Abbruchwunsch des Editors
 jobs/<jobId>/error.json        Fehlergrund, falls der Worker scheitert
 jobs/<jobId>/input/<track>.wav Arbeitskopie (niemals das Original)
 jobs/<jobId>/output/<stem>.wav Stems + result.json
-logs/worker.log                Worker-Protokoll (ohne Geheimnisse)
+jobs/<jobId>/logs/worker.log   menschenlesbares Worker-Protokoll
+jobs/<jobId>/logs/worker.jsonl strukturierte, korrelierbare Schritte (max. 200)
 ```
 
 Nach einem erfüllten Abbruch **verbraucht** der Worker die `cancel.flag`
@@ -223,7 +235,8 @@ ausdrücklich.
 | Test | Was er belegt |
 | --- | --- |
 | `tests/stem-remote-manifest.test.ts` | Manifest-Vertrag: Schema, Id-Abgleich, Pfad-Ausbruch, Idempotenzschlüssel, Vollständigkeit |
-| `tests/stem-remote-job-service.test.ts` | echter Weg Editor → Ablage → **echter Worker** → Import; Neustart, Transportausfall, Timeout, Abbruch, kaputte Ergebnisse |
+| `tests/stem-remote-job-service.test.ts` | Wartewarnung bleibt trotz Polls sichtbar; Claim-/Heartbeat-Übernahme; echter Weg Editor → Ablage → **Worker** → Import samt Ablaufspur, Neustart, Transportausfall, Timeout, Abbruch und kaputten Ergebnissen |
+| `tests/stem-remote-worker-selftest.test.mjs` | Python/Colab-Worker ohne GPU: Protokoll, strukturierte Trace-Schritte, 200-Zeilen-Logbegrenzung, Lease-Heartbeat und Abbruch vor/während der Rechnung |
 | `tests/onnx-fast-separation-live.test.ts` | schneller Pfad in-process: Stems, Pegel, Cache, Original unverändert, DirectML→CPU-Fallback |
 | `tests/onnx-fixture-python-ort.test.ts` | Testgraph mit echter ORT-Session (Signatur, Werte, Determinismus) |
 
@@ -245,3 +258,35 @@ Maschinen ohne Checkpoint überspringt die Suite diese Tests sauber.
   Ordner, der Worker ein Skript.
 * Der Fernpfad braucht keinen lokal installierten HQ-Checkpoint – der Worker
   lädt genau das Modell aus dem Katalog, das im Steckbrief steht.
+
+## 10. Diagnose: Popup wartet auf den externen Rechner
+
+Die Anzeige `RUNNING` ohne Worker-ID bedeutet: Der Editor hat die Eingabe lokal
+veröffentlicht, aber noch keinen Claim aus dem Worker gesehen. Das ist nicht
+gleichbedeutend mit „Colab rechnet“. Schritt für Schritt:
+
+1. Job-ID und Ablaufprotokoll im Popup prüfen. Der letzte Editor-Schritt sollte
+   `editor.waiting_for_worker` sein; nach 120 s erscheint der Worker-Claim-Hinweis.
+2. Im Windows-Drive-Sync-Ordner `jobs/<jobId>/manifest.json` und
+   `jobs/<jobId>/input/` prüfen. Danach denselben Ordner in Drive Web ansehen:
+   nur dort ist die Cloud-Synchronisierung bestätigt.
+3. In Colab muss die Worker-Zelle laufen. Die Ausgabe meldet regelmäßig
+   `worker.poll` mit `scanned/pending`. Kein `worker.poll` = Zelle #5 ist noch nicht
+   gestartet (z. B. Setup/Modelldownload läuft) oder die Laufzeit steht;
+   `scanned: 0` bei offenem Editor-Job = meist falscher `JOB_ORDNER`, Mount oder
+   noch nicht synchronisierte Dateien.
+4. Nach dem Claim muss `jobs/<jobId>/claim.json` einen Worker und ein
+   fortlaufend erneuertes `heartbeatAt` enthalten. Im Popup sollte nun die
+   Worker-ID stehen. Die Lease wird unabhängig von Modell-Progress erneuert.
+5. `jobs/<jobId>/logs/worker.jsonl` führt `worker.claimed`,
+   `worker.input_verified`, `worker.inference_started`, Fortschritts- und
+   Ergebnis-/Fehlerschritte; `worker.log` ist die lesbare Ergänzung.
+   `error.json` enthält den Maschinenfehlercode. Die App übernimmt diese
+   Ereignisse in das Ablaufprotokoll des Statusfensters.
+6. Nach `worker.completed` müssen Manifest und Ergebnisdateien `COMPLETED`
+   melden; im Editor folgen `editor.output_validated` und
+   `editor.result_imported`. Der lokale E2E-Test prüft die gleiche Kette mit
+   einem Pipeline-Double und beweist ausdrücklich **keinen** Google-/Colab-Lauf.
+
+Vor dem Teilen Logs auf private Pfade prüfen; nie Audiodaten, Credentials oder
+Token-Dateien öffentlich weitergeben.

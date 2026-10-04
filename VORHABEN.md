@@ -172,10 +172,11 @@ nicht tut.
      drei Muster; die im Repo dokumentierten Stem-Muster
      (`**/stem-runtime/**/*`, `**/models/**/*`, `python/**/*`,
      `**/node-bridge.cjs`, `**/*.dll|.so|.dylib`) fehlten. Ursache war
-     `master-fix-and-push.cjs`, das `build.asarUnpack` hart überschrieb; das
-     Skript ergänzt die Liste jetzt nur noch, und
-     `tests/stem-asar-unpack.test.ts` wacht darüber, dass kein Reparatur-Skript
-     die Liste erneut ersetzt.
+     das historische `master-fix-and-push.cjs` (jetzt unter
+     `tools/legacy/` archiviert), das `build.asarUnpack` hart
+     überschrieb. Die aktive Konfiguration in `package.json` enthält wieder die
+     nötigen Muster; `tests/stem-asar-unpack.test.ts` prüft sie und bewahrt die
+     archivierte Fassung als Auditmaterial gegen dieselbe Regression.
   Der veraltete Reparatur-Rest `electron/masterDbGate.cjs.bak` (Kopie mit der
   rekursiven `resolveAnlzPath`-Funktion, landete über `electron/**/*` sogar im
   app.asar) ist entfernt, und der Windows-Build führt die Suite jetzt vor dem

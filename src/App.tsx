@@ -100,9 +100,16 @@ import {
   type StemArchitectureViewState,
   type WorkspacePathSettings,
 } from './audio/stemArchitectures';
+import {
+  RemoteCancelRequestGuard,
+  REMOTE_CANCEL_RETRY_COOLDOWN_MS,
+} from './stems/remote/remoteCancelRequestGuard';
 import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
+import { useEditHistory } from './hooks/useEditHistory';
+import { createEditHistoryEntry, restoreEditHistoryEntry } from './audio/editHistory';
+import { updateTrackById } from './state/trackUpdates';
 import { logger } from './utils/logger';
 import {
   getPositionSec,
@@ -124,7 +131,6 @@ import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
 import { detectTrackParts } from './audio/phraseDetection';
 import {
-  cloneAudioBuffer,
   executeCopy,
   executeCut,
   executeRippleDelete,
@@ -134,7 +140,8 @@ import {
   executeReplace,
   executeOverdub,
   applyExecutionToTrack,
-  EditCommandContext,
+  type EditCommandContext,
+  type EditExecutionResult,
   isExactSameSourceSlotRoundTrip,
 } from './audio/editingEngine';
 
@@ -170,6 +177,19 @@ export default function App() {
       setTrackState(nextTracks);
     },
     []
+  );
+  /**
+   * Ein Track wird ersetzt, nicht an Ort und Stelle verändert: In-Place-Mutation
+   * plus `setTracks([...tracks])` funktioniert nur, solange jede Änderung von
+   * einem Render gefolgt wird – und ein Edit, der den Arbeitspuffer verändert,
+   * würde sonst dieselbe Track-Identität behalten. `updateTrackById` erzeugt ein
+   * neues Track-Objekt und damit ein echtes Re-Render.
+   */
+  const updateTrack = useCallback(
+    (trackId: string, update: (track: TrackModel) => TrackModel) => {
+      setTracks((current) => updateTrackById(current, trackId, update));
+    },
+    [setTracks]
   );
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
@@ -246,8 +266,6 @@ export default function App() {
   const [clipboardProvenance, setClipboardProvenance] = useState<ClipboardProvenance | null>(null);
 
   // History Stack for Undo / Redo
-  const [undoStack, setUndoStack] = useState<EditHistoryEntry[]>([]);
-  const [redoStack, setRedoStack] = useState<EditHistoryEntry[]>([]);
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
@@ -325,9 +343,18 @@ export default function App() {
    */
   const [remoteNotice, setRemoteNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
   const [remoteCancelPendingJobId, setRemoteCancelPendingJobId] = useState<string | null>(null);
+  /**
+   * Abbruch-Sperre über den Guard statt über einen einzelnen Ref: eine
+   * angenommene Anfrage bleibt gesperrt, bis der Job einen Endzustand meldet,
+   * eine abgelehnte/fehlgeschlagene bekommt eine kurze Wartezeit (Cooldown).
+   * Ohne diesen zweiten Zustand konnte ein Klick auf „Abbrechen“ in einer
+   * Fehlschleife beliebig oft wiederholt werden.
+   */
+  const remoteCancelRequestGuardRef = useRef(new RemoteCancelRequestGuard());
+  const [remoteCancelCooldownJobId, setRemoteCancelCooldownJobId] = useState<string | null>(null);
+  const remoteCancelCooldownTimersRef = useRef(new Map<string, number>());
   const [remoteFlowRunning, setRemoteFlowRunning] = useState(false);
   const [remoteFlowTrack, setRemoteFlowTrack] = useState('');
-  const remoteCancelPendingRef = useRef<string | null>(null);
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
   // Separationen und wird wie die übrigen Settings lokal persistiert.
   const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
@@ -400,6 +427,19 @@ export default function App() {
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+
+  /**
+   * Ein Bearbeitungsschritt hat genau zwei Wirkungen: der Track bekommt seine
+   * neuen Segmente (unveränderlich ersetzt) und der Arbeitspuffer wird der neu
+   * gerenderte. Beides gehört zusammen – eine Stelle statt neun.
+   */
+  const commitEditExecution = useCallback(
+    (trackId: string, result: EditExecutionResult) => {
+      updateTrack(trackId, (track) => applyExecutionToTrack(track, result));
+      setWorkingAudioBuffer(result.newBuffer);
+    },
+    [updateTrack]
+  );
 
 
   // Chatbot Palette state
@@ -629,15 +669,24 @@ export default function App() {
   }, []);
 
 
-  // Check cached stems on track change
+  /*
+   * Stems nur übernehmen, wenn der *aktuelle* Arbeitspuffer denselben
+   * PCM-Fingerabdruck hat wie bei der Trennung. Ein Edit erzeugt einen neuen
+   * Puffer; die Stems des Quelltracks dürfen dann nicht weiterlaufen, sonst
+   * passen Wellenform und Stem-Mischung nicht mehr zueinander.
+   */
   useEffect(() => {
-    if (activeTrack) {
-      const cached = stemEngine.getCachedStems(activeTrack.id, activeTrack.originalSha256);
+    if (activeTrack && workingAudioBuffer) {
+      const cached = stemEngine.getCachedStemsForBuffer(
+        activeTrack.id,
+        workingAudioBuffer,
+        activeTrack.originalSha256
+      );
       setActiveTrackStems(cached || null);
     } else {
       setActiveTrackStems(null);
     }
-  }, [activeTrackId, activeTrack]);
+  }, [activeTrackId, activeTrack, workingAudioBuffer]);
 
   // Engine-Status beim Start abfragen: die UI baut daraus Profil-Auswahl UND
   // die Stem-Liste (die kommt aus dem Deskriptor, nicht aus einer Konstanten).
@@ -904,12 +953,36 @@ export default function App() {
    * Doppelklicks werden über einen Ref geblockt, damit nicht elf Abbrüche im
    * Protokoll stehen, während der erste noch läuft.
    */
+  /**
+   * Kurzzeitige Sperre nach einer abgelehnten/fehlgeschlagenen Abbruchanfrage:
+   * Der Benutzer sieht „Kurz warten…“ statt eines Buttons, der sofort wieder
+   * denselben Fehler erzeugt.
+   */
+  const startRemoteCancelCooldown = useCallback((jobId: string) => {
+    const previousTimer = remoteCancelCooldownTimersRef.current.get(jobId);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    setRemoteCancelCooldownJobId(jobId);
+    const timer = window.setTimeout(() => {
+      if (remoteCancelCooldownTimersRef.current.get(jobId) !== timer) return;
+      remoteCancelCooldownTimersRef.current.delete(jobId);
+      setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+      // Der Guard gibt denselben Job erst nach Ablauf der Wartezeit wieder frei.
+    }, REMOTE_CANCEL_RETRY_COOLDOWN_MS);
+    remoteCancelCooldownTimersRef.current.set(jobId, timer);
+  }, []);
+
   const cancelRemoteFlowJob = useCallback((jobId: string) => {
-    if (remoteCancelPendingRef.current === jobId) {
-      setRemoteNotice({ tone: 'info', text: 'Der erste Abbruch ist noch unterwegs – bitte einen Moment warten.' });
+    const cancelGuard = remoteCancelRequestGuardRef.current;
+    if (!cancelGuard.begin(jobId)) {
+      setRemoteNotice({
+        tone: 'info',
+        text: cancelGuard.isCoolingDown(jobId)
+          ? 'Die letzte Abbruchanfrage wurde nicht bestätigt – einen Moment warten, dann erneut versuchen.'
+          : 'Der erste Abbruch ist noch unterwegs – bitte einen Moment warten.',
+      });
       return;
     }
-    remoteCancelPendingRef.current = jobId; // synchron: blockiert Doppelklicks vor React-Render
+    setRemoteCancelCooldownJobId(null);
     setRemoteCancelPendingJobId(jobId);
     setRemoteFlowError(null);
     setRemoteNotice({ tone: 'info', text: 'Abbruch wird an den externen Rechner gemeldet…' });
@@ -919,6 +992,7 @@ export default function App() {
         const result = await stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer');
         const status = await stemEngine.pollRemoteJobs();
         if (status) setStemRemoteStatus(status);
+        cancelGuard.settle(jobId, result.accepted);
         if (result.accepted) {
           logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angenommen – der Worker verwirft die laufende Rechnung.`);
           setRemoteFlowError(null);
@@ -930,18 +1004,56 @@ export default function App() {
         setRemoteFlowError(reason);
         setRemoteFlowOpen(true);
         setRemoteNotice({ tone: 'error', text: result.deferred ? reason : `Abbruch nicht möglich: ${reason}` });
+        startRemoteCancelCooldown(jobId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        cancelGuard.settle(jobId, false);
         logger.error('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} fehlgeschlagen: ${message}`, { jobId });
         setRemoteFlowError(`Abbruch fehlgeschlagen: ${message}`);
         setRemoteFlowOpen(true);
         setRemoteNotice({ tone: 'error', text: `Abbruch fehlgeschlagen: ${message}` });
+        startRemoteCancelCooldown(jobId);
       } finally {
-        remoteCancelPendingRef.current = null;
-        setRemoteCancelPendingJobId(null);
+        // Eine angenommene Anfrage bleibt gesperrt, bis der Job einen
+        // Endzustand meldet (die Statusabfrage räumt den Guard dort auf).
+        if (!cancelGuard.isPending(jobId)) {
+          setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
+        }
       }
     })();
-  }, []);
+  }, [startRemoteCancelCooldown]);
+
+  /*
+   * Abbruch-Sperren nur so lange halten, wie der Job läuft: Jobs in einem
+   * Endzustand (oder verschwundene) dürfen keine Sperre im Renderer
+   * hinterlassen – sonst bliebe der Abbrechen-Button an einem längst
+   * beendeten Job hängen.
+   */
+  useEffect(() => {
+    if (!stemRemoteStatus) return;
+    for (const jobId of remoteCancelRequestGuardRef.current.trackedJobIds()) {
+      const job = stemRemoteStatus.jobs.find((entry) => entry.jobId === jobId);
+      if (job && job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED') continue;
+      remoteCancelRequestGuardRef.current.forget(jobId);
+      const timer = remoteCancelCooldownTimersRef.current.get(jobId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      remoteCancelCooldownTimersRef.current.delete(jobId);
+      setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
+      setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+    }
+  }, [stemRemoteStatus]);
+
+  // Beim Abbau dürfen keine Cooldown-Timer zurückbleiben: sie würden in einen
+  // bereits verworfenen Zustand schreiben.
+  useEffect(
+    () => () => {
+      for (const timer of remoteCancelCooldownTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      remoteCancelCooldownTimersRef.current.clear();
+    },
+    []
+  );
 
   const handleCancelStemSeparation = useCallback(() => {
     const remoteJob = (stemRemoteStatus?.jobs ?? []).find(
@@ -1320,7 +1432,6 @@ export default function App() {
           return {
             ...t,
             cues: [...t.cues, newCue],
-            isModified: true,
           };
         }
         return t;
@@ -1354,7 +1465,6 @@ export default function App() {
               beats: newBeats,
               origin: DataOrigin.USER_EDIT,
             },
-            isModified: true,
           };
         }
         return t;
@@ -1389,7 +1499,6 @@ export default function App() {
               beats: newBeats,
               origin: DataOrigin.USER_EDIT,
             },
-            isModified: true,
           };
         }
         return t;
@@ -1444,114 +1553,64 @@ export default function App() {
     }
   };
 
+  /*
+   * Verlauf: `audio/editHistory*.ts` snapshotet nur kleine Metadaten und hält
+   * den unveränderlichen Arbeitspuffer per Referenz; der Hook führt je Track
+   * einen eigenen, auf 30 Schritte begrenzten Stapel. Ein neuer Edit verwirft
+   * damit nur den Redo-Zweig dieses Tracks, nicht den anderer Decks.
+   */
+  const {
+    undoStack,
+    redoStack,
+    allUndoCount,
+    allRedoCount,
+    push: pushHistoryEntry,
+    undo: takeUndoEntry,
+    redo: takeRedoEntry,
+    clear: clearEditHistory,
+  } = useEditHistory(activeTrackId || null);
+
   // Snapshot current state for Undo (stores buffer, duration, analysis, cues, segments)
   const pushHistorySnapshot = (desc: string) => {
     if (!activeTrack) return;
-    const snapshot: EditHistoryEntry = {
-      description: desc,
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setUndoStack((prev) => [...prev.slice(-30), snapshot]);
-    setRedoStack([]);
+    pushHistoryEntry(createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, desc));
   };
 
   // Undo / Redo
   const handleUndo = () => {
-    if (undoStack.length === 0 || !activeTrack) return;
-    const previous = undoStack[undoStack.length - 1];
-    setUndoStack((prev) => prev.slice(0, -1));
+    if (!activeTrack) return;
+    const current = createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, 'Before Undo');
+    const previous = takeUndoEntry(current);
+    if (!previous) return;
 
-    // Push current to redo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Undo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setRedoStack((prev) => [...prev, currentSnapshot]);
-
-    // Restore track state
-    activeTrack.workingSegments = previous.segments;
-    activeTrack.cues = previous.cues;
-    if (previous.duration !== undefined) {
-      activeTrack.duration = previous.duration;
-    }
-    if (previous.analysis) {
-      activeTrack.analysis = previous.analysis;
-    }
+    const restored = restoreEditHistoryEntry(activeTrack, previous, {
+      renderWorkingAudio: (source, segments) => audioEngine.renderWorkingAudio(source, segments),
+      analyzeAudioBuffer: (buffer) => analyzeAudioBuffer(buffer, DataOrigin.PROJECT),
+    });
+    updateTrack(activeTrack.id, () => restored.track);
+    if (restored.audioBuffer) setWorkingAudioBuffer(restored.audioBuffer);
     setSelection(previous.selection);
-
-    if (previous.audioBuffer) {
-      setWorkingAudioBuffer(previous.audioBuffer);
-      if (!previous.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
-      }
-    } else if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
-      setWorkingAudioBuffer(reRendered);
-      activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-    }
-    setTracks([...tracks]);
   };
 
   const handleRedo = () => {
-    if (redoStack.length === 0 || !activeTrack) return;
-    const next = redoStack[redoStack.length - 1];
-    setRedoStack((prev) => prev.slice(0, -1));
+    if (!activeTrack) return;
+    const current = createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, 'Before Redo');
+    const next = takeRedoEntry(current);
+    if (!next) return;
 
-    // Push current to undo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Redo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setUndoStack((prev) => [...prev, currentSnapshot]);
-
-    activeTrack.workingSegments = next.segments;
-    activeTrack.cues = next.cues;
-    if (next.duration !== undefined) {
-      activeTrack.duration = next.duration;
-    }
-    if (next.analysis) {
-      activeTrack.analysis = next.analysis;
-    }
+    const restored = restoreEditHistoryEntry(activeTrack, next, {
+      renderWorkingAudio: (source, segments) => audioEngine.renderWorkingAudio(source, segments),
+      analyzeAudioBuffer: (buffer) => analyzeAudioBuffer(buffer, DataOrigin.PROJECT),
+    });
+    updateTrack(activeTrack.id, () => restored.track);
+    if (restored.audioBuffer) setWorkingAudioBuffer(restored.audioBuffer);
     setSelection(next.selection);
-
-    if (next.audioBuffer) {
-      setWorkingAudioBuffer(next.audioBuffer);
-      if (!next.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
-      }
-    } else if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
-      setWorkingAudioBuffer(reRendered);
-      activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-    }
-    setTracks([...tracks]);
   };
 
   // Clear History handler (confirmed through ClearHistoryModal)
   const handleClearHistoryConfirm = () => {
-    const totalCount = undoStack.length + redoStack.length;
-    setUndoStack([]);
-    setRedoStack([]);
+    const totalCount = allUndoCount + allRedoCount;
+    clearEditHistory();
     logger.info('EDITING', `[History] Cleared ${totalCount} history snapshots after user confirmation.`);
     showOperationFeedback({
       title: 'Bearbeitungsverlauf geleert',
@@ -1811,9 +1870,7 @@ export default function App() {
       beatOffsets: beatOffsetsForRange(activeTrack, effectiveSel.start, effectiveSel.end),
       ...nativeSourceCoordinatesForRange(activeTrack, effectiveSel.start, effectiveSel.end),
     });
-    applyExecutionToTrack(activeTrack, execution);
-    setWorkingAudioBuffer(execution.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, execution);
     setSelection(null);
 
     showOperationFeedback({
@@ -1858,9 +1915,7 @@ export default function App() {
       } : undefined)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Audio Segment eingefügt (Paste)',
@@ -1901,9 +1956,7 @@ export default function App() {
       } : undefined)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Audio Segment eingefügt (Insert)',
@@ -1983,9 +2036,7 @@ export default function App() {
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Clip in Deck A eingefügt (Insert)',
@@ -2046,9 +2097,7 @@ export default function App() {
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
@@ -2100,9 +2149,7 @@ export default function App() {
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Deck A überlagert (Overdub mit Clip)',
@@ -2173,9 +2220,7 @@ export default function App() {
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
     setSelection(null);
 
     showOperationFeedback({
@@ -2215,9 +2260,7 @@ export default function App() {
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
     setSelection(null);
 
     showOperationFeedback({
@@ -2252,9 +2295,7 @@ export default function App() {
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Bereich stummgeschaltet (Clear / Mute)',
@@ -2272,16 +2313,20 @@ export default function App() {
   const handleAddCue = (pos: number) => {
     if (!activeTrack) return;
     pushHistorySnapshot('Add Cue');
-    const newCue = {
-      id: `cue-${Date.now()}`,
-      name: `Cue ${activeTrack.cues.length + 1}`,
-      type: 'MEMORY' as const,
-      position: pos,
-      color: '#ff2a2a',
-      origin: DataOrigin.USER_EDIT,
-    };
-    activeTrack.cues.push(newCue);
-    setTracks([...tracks]);
+    updateTrack(activeTrack.id, (track) => ({
+      ...track,
+      cues: [
+        ...track.cues,
+        {
+          id: `cue-${Date.now()}`,
+          name: `Cue ${track.cues.length + 1}`,
+          type: 'MEMORY' as const,
+          position: pos,
+          color: '#ff2a2a',
+          origin: DataOrigin.USER_EDIT,
+        },
+      ],
+    }));
   };
 
   // ANLZ belongs to the explicitly active XML/DB track. It is read-only input
@@ -2313,8 +2358,7 @@ export default function App() {
     setAnalysisIndexStatus,
     setIsPlaying,
     setSelection,
-    setUndoStack,
-    setRedoStack,
+    clearEditHistory,
     setViewOffset,
     setXmlCollectionModalOpen,
     setXmlFileName,
@@ -2444,11 +2488,10 @@ export default function App() {
     setPosition(0);
     setViewOffset(0);
     setViewDuration(16.0);
-    setUndoStack([]);
-    setRedoStack([]);
+    clearEditHistory();
     audioEngine.stop();
     setIsPlaying(false);
-  }, []);
+  }, [clearEditHistory]);
 
   // Track context exposed to AI Copilot
   const chatbotTrackContext: TrackEditorContext = useMemo(() => {
@@ -2478,8 +2521,8 @@ export default function App() {
       quantize,
       waveformMode,
       paletteClipsCount: paletteClips.length,
-      undoCount: undoStack.length,
-      redoCount: redoStack.length,
+      undoCount: allUndoCount,
+      redoCount: allRedoCount,
       mixInAnalysis,
     };
   }, [
@@ -2489,8 +2532,8 @@ export default function App() {
     quantize,
     waveformMode,
     paletteClips.length,
-    undoStack.length,
-    redoStack.length,
+    allUndoCount,
+    allRedoCount,
   ]);
 
   /*
@@ -2541,9 +2584,6 @@ export default function App() {
           pushHistorySnapshot('Set Mix-In Point');
 
           // 2. Set or update Hot Cue
-          const existingCueIdx = activeTrack.cues.findIndex(
-            (c) => (c.type === 'HOT_CUE' && c.letter === cueSlot) || (c.name && c.name.startsWith('MIX-IN'))
-          );
 
           const hotCueNumber =
             cueSlot === 'A' ? 0 : cueSlot === 'B' ? 1 : cueSlot === 'C' ? 2 : cueSlot === 'D' ? 3 : 0;
@@ -2563,12 +2603,15 @@ export default function App() {
             origin: DataOrigin.USER_EDIT,
           };
 
-          if (existingCueIdx >= 0) {
-            activeTrack.cues[existingCueIdx] = newCue;
-          } else {
-            activeTrack.cues.push(newCue);
-          }
-          setTracks([...tracks]);
+          updateTrack(activeTrack.id, (track) => {
+            const existingCueIdx = track.cues.findIndex(
+              (cue) => (cue.type === 'HOT_CUE' && cue.letter === cueSlot) || (cue.name && cue.name.startsWith('MIX-IN'))
+            );
+            const cues = [...track.cues];
+            if (existingCueIdx >= 0) cues[existingCueIdx] = newCue;
+            else cues.push(newCue);
+            return { ...track, cues };
+          });
 
           // 3. Set zoom preset
           if (action.params.zoomPreset) {
@@ -2675,7 +2718,7 @@ export default function App() {
     [
       activeTrack,
       selection,
-      tracks,
+      updateTrack,
       handleSelectZoomPreset,
       handleSeek,
       handleAddCue,
@@ -2738,7 +2781,7 @@ export default function App() {
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
-        hasHistory={undoStack.length > 0 || redoStack.length > 0}
+        hasHistory={allUndoCount > 0 || allRedoCount > 0}
         onCopy={handleCopy}
         onCut={handleCut}
         onPaste={handlePaste}
@@ -2807,6 +2850,7 @@ export default function App() {
         remoteStatus={stemRemoteStatus}
         remoteEnabled={stemRemoteEnabled}
         remoteCancelPendingJobId={remoteCancelPendingJobId}
+        remoteCancelCooldownJobId={remoteCancelCooldownJobId}
         remoteNotice={remoteNotice}
         onDismissRemoteNotice={() => setRemoteNotice(null)}
         onRemoteEnabledChange={setStemRemoteEnabled}

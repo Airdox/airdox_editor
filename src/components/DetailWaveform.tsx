@@ -12,7 +12,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { createLayerScheduler } from '../waveform/layerScheduler';
-import { drawPlayhead } from '../waveform/canvasLayers';
+import { drawPlayhead, drawSelectionOverlay, drawSnapGuide } from '../waveform/canvasLayers';
 import { subscribeTransport } from '../state/transportStore';
 import {
   TrackModel,
@@ -164,6 +164,17 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const isSelectingRef = useRef(false);
   const dragStartSecRef = useRef<number | null>(null);
   const hoveredTimeRef = useRef<number | null>(null);
+  /**
+   * Auswahl-Änderungen werden auf einen Frame gedrosselt: Ein Ziehen erzeugt
+   * sonst pro Mausereignis ein `onSelect` (React-Update von `App`). Der
+   * Ref-Spiegel hält dabei immer den aktuellen Track bzw. Callback.
+   */
+  const currentTrackRef = useRef(track);
+  currentTrackRef.current = track;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const pendingSelectionRef = useRef<SelectionRange | null>(null);
+  const selectionUpdateFrameRef = useRef<number | null>(null);
 
   /** Logische Canvas-Größe in CSS-Pixeln (die Backing-Store-Größe ist DPR-skaliert). */
   const logicalSizeRef = useRef({ width: 0, height: 0 });
@@ -621,137 +632,23 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
 
   overlayPaintRef.current = (ctx, width, height) => {
     ctx.clearRect(0, 0, width, height);
-      // 6. Draw SELECTION BOX (Screenshots 01, 02, 03)
-      if (selection && selection.duration > 0) {
-        const selX1 = timeToPixel(selection.start, width);
-        const selX2 = timeToPixel(selection.end, width);
-        const selW = selX2 - selX1;
 
-        if (selX2 > 0 && selX1 < width) {
-          const clampedX1 = Math.max(0, selX1);
-          const clampedX2 = Math.min(width, selX2);
+      // 6. Auswahlrahmen (Screenshots 01, 02, 03) inklusive Kennzahlen-Box.
+      //    Die Zeichnung liegt in `waveform/canvasLayers.ts`, damit die
+      //    Detail-Wellenform und die Tests dieselbe Implementierung nutzen.
+      drawSelectionOverlay(ctx, selection, viewOffset, viewDuration, width, height);
 
-          // Translucent selection tint
-          ctx.fillStyle = 'rgba(0, 136, 255, 0.16)';
-          ctx.fillRect(clampedX1, 18, clampedX2 - clampedX1, height - 18);
-
-          // Vivid electric blue border
-          ctx.strokeStyle = '#0088ff';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(selX1, 18, selW, height - 20);
-
-          // Distinctive corner diagonal handle tabs (top-left & bottom-right)
-          const handleSize = 10;
-          ctx.fillStyle = '#0088ff';
-
-          // Top-Left corner handle
-          ctx.beginPath();
-          ctx.moveTo(selX1, 18);
-          ctx.lineTo(selX1 + handleSize, 18);
-          ctx.lineTo(selX1, 18 + handleSize);
-          ctx.closePath();
-          ctx.fill();
-
-          // Bottom-Right corner handle
-          ctx.beginPath();
-          ctx.moveTo(selX2, height - 2);
-          ctx.lineTo(selX2 - handleSize, height - 2);
-          ctx.lineTo(selX2, height - 2 - handleSize);
-          ctx.closePath();
-          ctx.fill();
-
-          // Floating Selection Info Box in top-right of selection (e.g. 9.0 Bars / 36 Beats / 00:16)
-          const infoBoxX = Math.min(width - 90, Math.max(selX1 + 10, selX2 - 85));
-          ctx.fillStyle = 'rgba(8, 10, 15, 0.85)';
-          ctx.fillRect(infoBoxX - 4, 24, 86, 46);
-          ctx.strokeStyle = '#0088ff';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(infoBoxX - 4, 24, 86, 46);
-
-          ctx.textAlign = 'right';
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 12px sans-serif';
-          ctx.fillText(`${selection.barsCount.toFixed(1)} Bars`, infoBoxX + 76, 38);
-
-          ctx.fillStyle = '#b0b5c5';
-          ctx.font = '10px sans-serif';
-          ctx.fillText(`${Math.round(selection.beatsCount)} Beats`, infoBoxX + 76, 52);
-
-          const durSec = Math.floor(selection.duration);
-          const durSub = Math.floor((selection.duration % 1) * 100);
-          ctx.fillText(`00:${durSec.toString().padStart(2, '0')}`, infoBoxX + 76, 64);
-          ctx.textAlign = 'left';
-        }
-      }
-
-      // 7. Draw Snap-to-Beat Hover Guide & Target Highlight
-      const hoveredTime = hoveredTimeRef.current;
-      if (track && hoveredTime !== null) {
-        const bg = track.beatGrid;
-        const spb = 60.0 / bg.bpm;
-        const snappedTime = snapTime(hoveredTime);
-        const snappedX = timeToPixel(snappedTime, width);
-        const rawX = timeToPixel(hoveredTime, width);
-
-        if (snappedX >= 0 && snappedX <= width) {
-          const beatIndex = Math.round((snappedTime - bg.firstBeat) / spb);
-          const isBar = beatIndex % bg.meter === 0;
-          const barNum = Math.floor(beatIndex / bg.meter) + 1;
-          const beatInBar = ((beatIndex % bg.meter) + bg.meter) % bg.meter + 1;
-
-          // Subtle glowing translucent beam along the snapped grid line
-          const glowGrad = ctx.createLinearGradient(snappedX - 12, 0, snappedX + 12, 0);
-          glowGrad.addColorStop(0, 'rgba(0, 229, 255, 0)');
-          glowGrad.addColorStop(0.5, isBar ? 'rgba(0, 229, 255, 0.22)' : 'rgba(0, 229, 255, 0.12)');
-          glowGrad.addColorStop(1, 'rgba(0, 229, 255, 0)');
-          ctx.fillStyle = glowGrad;
-          ctx.fillRect(snappedX - 12, 18, 24, height - 18);
-
-          // Vivid snap vertical line
-          ctx.strokeStyle = isBar ? '#00e5ff' : '#00b4d8';
-          ctx.lineWidth = isBar ? 1.8 : 1.2;
-          ctx.setLineDash([4, 3]);
-          ctx.beginPath();
-          ctx.moveTo(snappedX, 18);
-          ctx.lineTo(snappedX, height);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Snap cursor indicator arrow at top insertion ruler
-          ctx.fillStyle = '#00e5ff';
-          ctx.beginPath();
-          ctx.moveTo(snappedX - 4, 18);
-          ctx.lineTo(snappedX + 4, 18);
-          ctx.lineTo(snappedX, 23);
-          ctx.closePath();
-          ctx.fill();
-
-          // If raw cursor differs from snapped line, show subtle connector
-          if (Math.abs(rawX - snappedX) > 2) {
-            ctx.strokeStyle = 'rgba(0, 229, 255, 0.45)';
-            ctx.lineWidth = 0.8;
-            ctx.beginPath();
-            ctx.moveTo(rawX, height - 12);
-            ctx.lineTo(snappedX, height - 12);
-            ctx.stroke();
-          }
-
-          // Floating Tooltip Badge above ruler or near cursor
-          const badgeText = `${isBar ? `BAR ${barNum}` : `B${barNum}.${beatInBar}`} • ${snappedTime.toFixed(2)}s`;
-          ctx.font = 'bold 9.5px monospace';
-          const badgeW = ctx.measureText(badgeText).width + 12;
-          const badgeX = Math.max(4, Math.min(width - badgeW - 4, snappedX - badgeW / 2));
-          
-          ctx.fillStyle = 'rgba(10, 15, 24, 0.92)';
-          ctx.fillRect(badgeX, 3, badgeW, 14);
-          ctx.strokeStyle = isBar ? '#00e5ff' : '#0096c7';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(badgeX, 3, badgeW, 14);
-
-          ctx.fillStyle = isBar ? '#ffffff' : '#90e0ef';
-          ctx.fillText(badgeText, badgeX + 6, 13.5);
-        }
-      }
+      // 7. Hover-Führung auf der Rasterlinie (Beat/Takt) samt Badge.
+      drawSnapGuide(
+        ctx,
+        hoveredTimeRef.current,
+        track?.beatGrid ?? null,
+        snapTime,
+        viewOffset,
+        viewDuration,
+        width,
+        height
+      );
 
       // 8. Playhead (weiße Haarlinie + Dreieck oben). Die Zeichnung liegt in
       //    `waveform/canvasLayers.ts` und wird hier ohne Leeren aufgerufen –
@@ -815,6 +712,25 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     };
   }, [requestOverlayPaint]);
 
+  /*
+   * Beim Trackwechsel (und beim Abbau) werden Zeiger- und Auswahl-Zustand
+   * verworfen: Die Bezugszeiten eines alten Tracks dürfen nicht in den neuen
+   * übernommen werden, und geplante Frames wären für den falschen Track.
+   */
+  useEffect(
+    () => () => {
+      isSelectingRef.current = false;
+      dragStartSecRef.current = null;
+      hoveredTimeRef.current = null;
+      pendingSelectionRef.current = null;
+      if (selectionUpdateFrameRef.current !== null) {
+        cancelAnimationFrame(selectionUpdateFrameRef.current);
+        selectionUpdateFrameRef.current = null;
+      }
+    },
+    [track?.id]
+  );
+
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!track) return;
@@ -847,7 +763,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       // Extend selection
       const newStart = Math.min(selection.start, clickedTime);
       const newEnd = Math.max(selection.start, clickedTime);
-      updateSelectionRange(newStart, newEnd);
+      scheduleSelectionRange(newStart, newEnd);
     } else {
       isSelectingRef.current = true;
       dragStartSecRef.current = clickedTime;
@@ -875,11 +791,12 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     const end = Math.max(dragStartSecRef.current, currTime);
 
     if (end - start > 0.05) {
-      updateSelectionRange(start, end);
+      scheduleSelectionRange(start, end);
     }
   };
 
   const handleMouseLeave = () => {
+    flushSelectionUpdate();
     hoveredTimeRef.current = null;
     requestOverlayPaint();
     isSelectingRef.current = false;
@@ -887,27 +804,50 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   };
 
   const handleMouseUp = () => {
+    flushSelectionUpdate();
     isSelectingRef.current = false;
     dragStartSecRef.current = null;
   };
 
-  const updateSelectionRange = (start: number, end: number) => {
-    if (!track) return;
-    const bg = track.beatGrid;
+  const buildSelectionRange = (start: number, end: number): SelectionRange | null => {
+    const activeTrack = currentTrackRef.current;
+    if (!activeTrack) return null;
+    const bg = activeTrack.beatGrid;
     const spb = 60.0 / bg.bpm;
     const startBeat = Math.max(0, (start - bg.firstBeat) / spb);
     const endBeat = Math.max(0, (end - bg.firstBeat) / spb);
     const beatsCount = Math.max(0, endBeat - startBeat);
-    const barsCount = beatsCount / bg.meter;
-
-    onSelect({
+    return {
       start,
       end,
       startBeat,
       endBeat,
       beatsCount,
-      barsCount,
+      barsCount: beatsCount / bg.meter,
       duration: end - start,
+    };
+  };
+
+  const flushSelectionUpdate = () => {
+    if (selectionUpdateFrameRef.current !== null) {
+      cancelAnimationFrame(selectionUpdateFrameRef.current);
+      selectionUpdateFrameRef.current = null;
+    }
+    const pendingSelection = pendingSelectionRef.current;
+    pendingSelectionRef.current = null;
+    if (pendingSelection) onSelectRef.current(pendingSelection);
+  };
+
+  const scheduleSelectionRange = (start: number, end: number) => {
+    const nextSelection = buildSelectionRange(start, end);
+    if (!nextSelection) return;
+    pendingSelectionRef.current = nextSelection;
+    if (selectionUpdateFrameRef.current !== null) return;
+    selectionUpdateFrameRef.current = requestAnimationFrame(() => {
+      selectionUpdateFrameRef.current = null;
+      const pendingSelection = pendingSelectionRef.current;
+      pendingSelectionRef.current = null;
+      if (pendingSelection) onSelectRef.current(pendingSelection);
     });
   };
 

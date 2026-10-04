@@ -329,3 +329,12 @@ print("Der Editor erkennt COMPLETED automatisch und importiert die Stems – Col
 if os.path.isfile(WORKER):
     subprocess.run([sys.executable, WORKER, "--root", JOB_ROOT, "--check-store"], check=False)
 >>>
+
+<<<CELL md
+### Ablaufspur während eines Jobs
+
+- In der Worker-Zellenausgabe erscheint regelmäßig ein strukturiertes `worker.poll` mit `scanned`, `pending` und `processed`. Im Leerlauf meldet `--idle-log-seconds` zusätzlich, dass die Zelle weiterläuft; ein geänderter Jobbestand wird sofort angezeigt.
+- Im Ablage-Root zeigt `worker.status.json` Worker-ID, Host, Gerät/GPU, aktuelle Phase und Heartbeat. Während eines Jobs aktualisiert der Heartbeat-Thread zusätzlich `claim.json` und die globale Statusdatei.
+- Für jeden Job enthält `jobs/<jobId>/logs/worker.jsonl` die korrelierbaren Ereignisse (`worker.claimed`, `worker.input_verified`, `worker.inference_started`, Fortschritt, geprüfte Outputs und Abschluss/Fehler); `worker.log` ist die lesbare Ergänzung. Logs sind auf 200 Zeilen begrenzt; Start-/Diagnosemeldungen landen außerdem im Root-`worker.log`.
+- Fehlerdetails stehen zusätzlich in `error.json`; vor dem Teilen private Pfade, Dateinamen, Zugangsdaten und Audioinhalte entfernen. Die lokale Simulation belegt nicht, dass Google Drive oder eine echte Colab-Laufzeit synchronisiert hat.
+>>>

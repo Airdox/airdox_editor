@@ -8,6 +8,15 @@ npm und github.com funktionieren. Ohne trainierte Gewichte bleibt das
 Stem-Isolation-Gate (Teil 2) offen und Separation gilt ausdrücklich **nicht**
 als produktionsreif.
 
+## Separater Fernworker
+
+`airdox-stem-remote-worker.md` / `.ipynb` ist der laufende Worker für
+Fern-Stem-Jobs, nicht dieses Qualitäts-Gate. Die Colab-Zelle muss in einer
+aktiven Laufzeit laufen und denselben Drive-Ordner wie der Editor beobachten;
+Drive-Sync startet Colab nicht. Diagnose, Logpfade und echte Abnahme:
+[`docs/STEM_REMOTE_HQ.md`](../docs/STEM_REMOTE_HQ.md#10-diagnose-popup-wartet-auf-den-externen-rechner)
+und [`docs/STEM_REMOTE_NACHWEISKETTE.md`](../docs/STEM_REMOTE_NACHWEISKETTE.md).
+
 | Datei | Status |
 |---|---|
 | `airdox-stem-gate.md` | **Quelle der Wahrheit** – hier ändern |

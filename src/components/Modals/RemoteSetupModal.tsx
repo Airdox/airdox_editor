@@ -227,13 +227,13 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
           {/* Colab-Worker */}
           <div className="space-y-2.5">
             <div className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold">
-              2 · Colab-Worker (einmalig, ca. 5 Minuten)
+              2 · Colab-Worker (einmalig einrichten; Laufzeit aktiv halten)
             </div>
             <ol className="space-y-1.5 list-none">
               {[
                 'Notebook aus dem Repo öffnen: colab/airdox-stem-remote-worker.ipynb (fehlend: im Repo „npm run stems:remote:notebook" – dann Datei nach Google Drive hochladen).',
-                'In Colab öffnen (colab.research.google.com → „Drive öffnen"), Laufzeit → Typ: T4 (GPU, empfohlen) oder CPU wählen, dann „Alles ausführen".',
-                'Das Notebook läuft im Hintergrund: es holt neue Jobs aus dem oben gewählten Drive-Ordner, rechnet sie und legt die Stems zurück. Bei „JOB_ORDNER" in der ersten Code-Zelle muss der selbe Ordnername stehen (z. B. airdox-stem-jobs).',
+                'In Colab öffnen (colab.research.google.com → „Drive öffnen"), Laufzeit → T4 (GPU, empfohlen) oder CPU wählen, Drive-Mount freigeben und „Alles ausführen". Beim Test eines nicht gemergten Editor-Branches auch BRANCH in der ersten Code-Zelle setzen.',
+                'Die Worker-Zelle #5 muss in einer aktiven Colab-Laufzeit laufen und denselben JOB_ORDNER verwenden (z. B. airdox-stem-jobs). Drive-Sync startet Colab nicht; nach Ende/Abbruch der Laufzeit die Zelle erneut starten. Die Ausgabe zeigt worker.poll bzw. den letzten Verarbeitungsschritt.',
               ].map((line, index) => (
                 <div key={index} className="flex items-start space-x-2">
                   <span className="shrink-0 w-4 text-center font-mono text-neutral-500">{index + 1}</span>
@@ -244,9 +244,9 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
             <div className="flex items-center space-x-1.5 text-neutral-500">
               <Play size={11} className="text-[#f0b429]" />
               <span>
-                Danach genügt im Editor ein Klick auf{' '}
-                <span className="text-neutral-300 font-semibold">„Externe Zerlegung (Google Colab)"</span> – der Rest
-                (Upload, Warten, Rückimport, Speicherung) läuft ohne Bedienung.
+                Solange Colab-Zelle #5 läuft, genügt im Editor ein Klick auf{' '}
+                <span className="text-neutral-300 font-semibold">„Externe Zerlegung (Google Colab)"</span>. Upload,
+                Rückimport und Speicherung laufen dann automatisch.
               </span>
             </div>
           </div>

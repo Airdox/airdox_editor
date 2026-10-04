@@ -24,6 +24,8 @@
  * Feldern, nicht in neuen Statusnamen.
  */
 import type { BackendKind, ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from '../types';
+import type { RemoteJobTraceEvent } from '../transportTypes';
+export type { RemoteJobTraceEvent } from '../transportTypes';
 
 /** Version des Manifest-Schemas. Erhöhen, wenn Felder brechen (nicht additiv). */
 export const REMOTE_JOB_SCHEMA_VERSION = 1;
@@ -156,6 +158,12 @@ export interface RemoteJobRecord {
   jobId: string;
   createdAt: number;
   updatedAt: number;
+  /** Zeitpunkt der letzten fachlichen Phase/Progress-Änderung (nicht jedes Polling). */
+  phaseUpdatedAt?: number;
+  /** Begrenzte, persistente Ablaufspur; wird nicht bei jedem Poll erweitert. */
+  trace?: RemoteJobTraceEvent[];
+  /** Worker-Event-IDs für Deduplizierung, auch wenn ältere Trace-Zeilen rotiert wurden. */
+  workerTraceIds?: string[];
   status: RemoteJobStatus;
   phase: string;
   percent: number;

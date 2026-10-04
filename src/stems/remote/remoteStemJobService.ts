@@ -35,7 +35,7 @@ import type { StemJobService, StemServiceLogger } from '../stemJobService';
 import type { ModelDescriptor, OriginalIntegrity, SeparationJobMetadata, StemId } from '../types';
 import { JOB_SCHEMA_VERSION } from '../types';
 import { analyzeAudio, decodeWav, sha256File, parseWavLayout } from '../wavIo';
-import { jobCancelPath, jobErrorPath, stemFileName } from './layout';
+import { jobCancelPath, jobClaimPath, jobErrorPath, jobWorkerTracePath, stemFileName } from './layout';
 import {
   buildManifest,
   buildResultDocument,
@@ -63,7 +63,14 @@ import {
   transportConfigFrom,
   type RemoteSettingsState,
 } from './settings';
-import { REMOTE_PHASES, REMOTE_JOB_SCHEMA_VERSION, type RemoteJobManifest, type RemoteJobRecord, type RemoteJobStatus } from './types';
+import {
+  REMOTE_PHASES,
+  REMOTE_JOB_SCHEMA_VERSION,
+  type RemoteJobManifest,
+  type RemoteJobRecord,
+  type RemoteJobStatus,
+  type RemoteJobTraceEvent,
+} from './types';
 import type {
   RemoteServiceStatus,
   RemoteSettings,
@@ -103,6 +110,8 @@ export interface RemoteServiceEvent {
 }
 
 const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/;
+const MAX_REMOTE_TRACE_EVENTS = 120;
+const MAX_WORKER_TRACE_LINES = 200;
 
 function toBuffer(bytes: Uint8Array | ArrayBuffer): Buffer {
   return bytes instanceof ArrayBuffer ? Buffer.from(new Uint8Array(bytes)) : Buffer.from(bytes);
@@ -238,6 +247,160 @@ export class RemoteStemJobService {
     return this.options.now ? this.options.now() : Date.now();
   }
 
+  /** Aktualisiert ausschließlich fachlichen Fortschritt, nie bloß den Persistenzzeitpunkt. */
+  private setState(
+    record: RemoteJobRecord,
+    update: { status?: RemoteJobStatus; phase?: string; percent?: number; workerPercent?: number }
+  ): boolean {
+    let changed = false;
+    if (update.status !== undefined && update.status !== record.status) {
+      record.status = update.status;
+      changed = true;
+    }
+    if (update.phase !== undefined && update.phase !== record.phase) {
+      record.phase = update.phase;
+      changed = true;
+    }
+    if (update.percent !== undefined && Number.isFinite(update.percent)) {
+      const nextPercent = Math.max(record.percent, Math.min(100, Math.max(0, update.percent)));
+      if (nextPercent !== record.percent) {
+        record.percent = nextPercent;
+        changed = true;
+      }
+    }
+    if (update.workerPercent !== undefined && Number.isFinite(update.workerPercent)) {
+      const nextWorkerPercent = Math.max(record.workerPercent ?? 0, Math.min(99, Math.max(0, update.workerPercent)));
+      if (nextWorkerPercent !== record.workerPercent) {
+        record.workerPercent = nextWorkerPercent;
+        changed = true;
+      }
+    }
+    if (changed) record.phaseUpdatedAt = this.now();
+    return changed;
+  }
+
+  private logTraceEvent(event: RemoteJobTraceEvent): void {
+    const details = {
+      jobId: event.jobId,
+      source: event.source,
+      step: event.step,
+      status: event.status,
+      phase: event.phase,
+      worker: event.workerId,
+      code: event.code,
+      percent: event.percent,
+      device: event.device,
+    };
+    const message = `jobId=${event.jobId} step=${event.step} ${event.message}`;
+    if (event.level === 'error') this.options.logger?.error?.('STEM-REMOTE', message, details);
+    else if (event.level === 'warning') this.options.logger?.warn?.('STEM-REMOTE', message, details);
+    else this.options.logger?.info?.('STEM-REMOTE', message, details);
+  }
+
+  private addTrace(
+    record: RemoteJobRecord,
+    step: string,
+    message: string,
+    level: RemoteJobTraceEvent['level'] = 'info',
+    extra: Partial<Pick<RemoteJobTraceEvent, 'workerId' | 'code' | 'percent' | 'device'>> = {}
+  ): void {
+    const event: RemoteJobTraceEvent = {
+      id: `editor-${randomUUID()}`,
+      source: 'editor',
+      jobId: record.jobId,
+      at: this.now(),
+      step,
+      level,
+      message: message.slice(0, 400),
+      status: record.status,
+      phase: record.phase.slice(0, 180),
+      ...extra,
+    };
+    record.trace = [...(record.trace ?? []), event].slice(-MAX_REMOTE_TRACE_EVENTS);
+    this.logTraceEvent(event);
+  }
+
+  /** Worker-JSONL aus der Jobablage wird inkrementell in die lokale Ablaufspur übernommen. */
+  private async syncWorkerTrace(record: RemoteJobRecord, transport: IRemoteTransport): Promise<void> {
+    let raw: string | null;
+    try {
+      raw = await transport.readText(jobWorkerTracePath(record.jobId));
+    } catch {
+      // Das Diagnoseprotokoll ist Zusatzinformation: sein kurzfristiger
+      // Sync-Ausfall darf den eigentlichen Jobstatus nicht überschreiben.
+      return;
+    }
+    if (!raw) return;
+    const known = new Set(record.workerTraceIds ?? (record.trace ?? [])
+      .filter((event) => event.source === 'worker')
+      .map((event) => event.id));
+    const parsedLines = raw.split(/\r?\n/).filter(Boolean).slice(-MAX_WORKER_TRACE_LINES);
+    for (const line of parsedLines) {
+      let value: Record<string, unknown>;
+      try {
+        value = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue; // Drive kann gerade eine teilweise synchronisierte letzte Zeile liefern.
+      }
+      if (value.source !== 'worker' || value.jobId !== record.jobId || typeof value.id !== 'string' || known.has(value.id)) continue;
+      if (typeof value.at !== 'number' || !Number.isFinite(value.at) || typeof value.step !== 'string' || typeof value.message !== 'string') continue;
+      const level: RemoteJobTraceEvent['level'] = value.level === 'warning' || value.level === 'error' ? value.level : 'info';
+      const event: RemoteJobTraceEvent = {
+        id: value.id.slice(0, 200),
+        source: 'worker',
+        jobId: record.jobId,
+        at: value.at,
+        step: value.step.slice(0, 100),
+        level,
+        message: value.message.slice(0, 400),
+        workerId: typeof value.workerId === 'string' ? value.workerId.slice(0, 100) : undefined,
+        status: typeof value.status === 'string' ? value.status as RemoteJobStatus : undefined,
+        phase: typeof value.phase === 'string' ? value.phase.slice(0, 180) : undefined,
+        code: typeof value.code === 'string' ? value.code.slice(0, 100) : undefined,
+        percent: typeof value.percent === 'number' && Number.isFinite(value.percent) ? Math.max(0, Math.min(100, value.percent)) : undefined,
+        device: typeof value.device === 'string' ? value.device.slice(0, 80) : undefined,
+      };
+      record.trace = [...(record.trace ?? []), event].slice(-MAX_REMOTE_TRACE_EVENTS);
+      known.add(event.id);
+      this.logTraceEvent(event);
+    }
+    record.workerTraceIds = [...known].slice(-MAX_WORKER_TRACE_LINES);
+  }
+
+  private async workerLeaseFromTransport(
+    record: RemoteJobRecord,
+    manifestWorker: RemoteJobManifest['worker'],
+    transport: IRemoteTransport
+  ): Promise<RemoteJobManifest['worker']> {
+    let raw: string | null;
+    try {
+      raw = await transport.readText(jobClaimPath(record.jobId));
+    } catch {
+      return manifestWorker;
+    }
+    if (!raw) return manifestWorker;
+    try {
+      const claim = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof claim.id !== 'string' || typeof claim.claimedAt !== 'number' || !Number.isFinite(claim.claimedAt)) return manifestWorker;
+      if (manifestWorker && manifestWorker.id !== claim.id) return manifestWorker;
+      const heartbeatAt = typeof claim.heartbeatAt === 'number' && Number.isFinite(claim.heartbeatAt)
+        ? Math.max(manifestWorker?.heartbeatAt ?? 0, claim.heartbeatAt)
+        : manifestWorker?.heartbeatAt;
+      if (!manifestWorker && (!heartbeatAt || this.now() - heartbeatAt > this.workerLeaseMs())) return undefined;
+      return {
+        ...(manifestWorker ?? {}),
+        id: claim.id,
+        claimedAt: manifestWorker?.claimedAt ?? claim.claimedAt,
+        heartbeatAt,
+        host: manifestWorker?.host ?? (typeof claim.host === 'string' ? claim.host : undefined),
+        device: manifestWorker?.device ?? (typeof claim.device === 'string' ? claim.device : undefined),
+        version: manifestWorker?.version ?? (typeof claim.version === 'string' ? claim.version : undefined),
+      };
+    } catch {
+      return manifestWorker;
+    }
+  }
+
   /* --------------------------------------------------------------------- *
    * Start
    * --------------------------------------------------------------------- */
@@ -321,9 +484,12 @@ export class RemoteStemJobService {
       jobId,
       createdAt: now,
       updatedAt: now,
+      phaseUpdatedAt: now,
+      trace: [],
       status: 'PREPARING',
       phase: REMOTE_PHASES.uploading,
       percent: 0,
+      workerPercent: 0,
       trackName,
       profile,
       modelId: descriptor.id,
@@ -345,6 +511,7 @@ export class RemoteStemJobService {
       attempts: 0,
     };
     this.records.set(jobId, record);
+    this.addTrace(record, 'editor.job_created', 'Fern-Job angelegt; Arbeitskopie und Manifest werden vorbereitet.');
     await this.persist(record);
 
     const manifest = buildManifest({
@@ -406,14 +573,23 @@ export class RemoteStemJobService {
       }
     } catch (error) {
       const unreachable = error instanceof RemoteUnreachableError;
-      record.status = unreachable ? 'PREPARING' : 'FAILED';
+      this.setState(record, {
+        status: unreachable ? 'PREPARING' : 'FAILED',
+        phase: unreachable ? 'Google Drive nicht erreichbar – Upload wird wiederholt' : 'Upload fehlgeschlagen',
+      });
       record.transportErrors += 1;
       record.transportDegraded = unreachable;
       record.error = {
         code: unreachable ? 'REMOTE_UNREACHABLE' : 'REMOTE_UPLOAD_FAILED',
         message: error instanceof Error ? error.message : String(error),
       };
-      record.phase = unreachable ? 'Google Drive nicht erreichbar – Upload wird wiederholt' : 'Upload fehlgeschlagen';
+      this.addTrace(
+        record,
+        unreachable ? 'editor.transport_degraded' : 'editor.job_failed',
+        unreachable ? 'Jobablage beim Veröffentlichen nicht erreichbar; Upload wird wiederholt.' : 'Veröffentlichen der Arbeitskopie ist fehlgeschlagen.',
+        unreachable ? 'warning' : 'error',
+        { code: record.error.code }
+      );
       await this.persist(record);
       this.emitEvent(unreachable ? 'transport' : 'failed', record);
       if (!unreachable) {
@@ -423,10 +599,11 @@ export class RemoteStemJobService {
       return this.toView(record);
     }
 
-    record.status = 'RUNNING';
-    record.phase = REMOTE_PHASES.waitingWorker;
+    this.setState(record, { status: 'RUNNING', phase: REMOTE_PHASES.waitingWorker, percent: 0 });
     record.transportDegraded = false;
     record.error = undefined;
+    this.addTrace(record, 'editor.input_published', 'Arbeitskopie und Manifest wurden in der konfigurierten Jobablage veröffentlicht.');
+    this.addTrace(record, 'editor.waiting_for_worker', 'Warte auf den Claim des externen Workers.');
     await this.persist(record);
     // Die Ablage muss denselben Stand zeigen wie der Editor. Bliebe dort
     // "PREPARING" stehen, obwohl die Arbeitskopie vollständig liegt, würden
@@ -530,8 +707,12 @@ export class RemoteStemJobService {
       const message = error instanceof Error ? error.message : String(error);
       for (const record of this.records.values()) {
         if (isTerminalStatus(record.status)) continue;
+        const newlyDegraded = !record.transportDegraded;
         record.transportDegraded = true;
         record.transportErrors += 1;
+        if (newlyDegraded) {
+          this.addTrace(record, 'editor.transport_degraded', 'Jobablage nicht erreichbar; Status bleibt erhalten und wird weiter geprüft.', 'warning');
+        }
         await this.persist(record);
       }
       this.options.logger?.warn?.('STEM-REMOTE', `Transport nicht erreichbar – Jobstände bleiben erhalten (§21 C): ${message}`, {
@@ -576,18 +757,22 @@ export class RemoteStemJobService {
         await this.syncRecord(record, transport);
       } catch (error) {
         if (error instanceof RemoteUnreachableError) {
+          const newlyDegraded = !record.transportDegraded;
           record.transportDegraded = true;
           record.transportErrors += 1;
+          if (newlyDegraded) {
+            this.addTrace(record, 'editor.transport_degraded', 'Jobablage während der Statusprüfung nicht erreichbar; Job bleibt aktiv.', 'warning');
+          }
           await this.persist(record);
           continue;
         }
         // Inhaltliche Fehler (Manifest kaputt, Hash falsch, Datei fehlt) sind
         // endgültig – der Nutzer bekommt eine verständliche Ursache.
         const code = error instanceof RemoteProtocolError ? error.code : 'REMOTE_FAILED';
-        record.status = 'FAILED';
         record.error = { code, message: error instanceof Error ? error.message : String(error) };
-        record.phase = 'Fehlgeschlagen';
+        this.setState(record, { status: 'FAILED', phase: 'Fehlgeschlagen' });
         record.finishedAt = this.now();
+        this.addTrace(record, 'editor.job_failed', 'Remote-Job wurde nach einer Protokoll- oder Ergebnisprüfung abgelehnt.', 'error', { code });
         await this.persist(record);
         await this.writeRemoteError(transport, record).catch(() => undefined);
         this.options.logger?.error?.('STEM-REMOTE', `jobId=${record.jobId} status=FAILED reason=${code}`, {
@@ -637,24 +822,38 @@ export class RemoteStemJobService {
       return;
     }
 
+    const wasDegraded = record.transportDegraded;
+    const previousWorkerId = record.worker?.id;
     record.lastPollAt = this.now();
     record.transportDegraded = false;
     record.transportErrors = 0;
     record.attempts = manifest.attempts ?? record.attempts;
-    if (manifest.worker) {
-      record.worker = manifest.worker;
-      record.device = this.deviceFromWorker(manifest.worker);
-      record.cpuFallback = manifest.worker.cpuFallback;
-      record.fallbackReason = manifest.worker.fallbackReason;
+    if (wasDegraded) this.addTrace(record, 'editor.transport_recovered', 'Jobablage ist wieder erreichbar; Statusabfrage wird fortgesetzt.');
+
+    const worker = await this.workerLeaseFromTransport(record, manifest.worker, transport);
+    if (worker) {
+      record.worker = worker;
+      record.device = this.deviceFromWorker(worker);
+      record.cpuFallback = worker.cpuFallback;
+      record.fallbackReason = worker.fallbackReason;
     }
-    if (typeof manifest.percent === 'number') record.workerPercent = manifest.percent;
+    await this.syncWorkerTrace(record, transport);
+    if (worker && previousWorkerId !== worker.id) {
+      this.addTrace(record, 'editor.worker_claim_observed', `Worker ${worker.id} hat den Job beansprucht.`, 'info', {
+        workerId: worker.id,
+        device: worker.device,
+      });
+    }
 
     // Abbruch des Nutzers gewinnt immer: ein danach eintreffendes Ergebnis wird
     // nicht mehr importiert und der Job steht nicht als COMPLETED (§37).
     if (record.cancelRequestedAt && isTerminalStatus(manifest.status)) {
-      record.status = 'CANCELLED';
-      record.phase = manifest.status === 'COMPLETED' ? 'Abgebrochen – Ergebnis des Workers verworfen' : REMOTE_PHASES.cancelled;
+      this.setState(record, {
+        status: 'CANCELLED',
+        phase: manifest.status === 'COMPLETED' ? 'Abgebrochen – Ergebnis des Workers verworfen' : REMOTE_PHASES.cancelled,
+      });
       record.finishedAt = record.finishedAt ?? this.now();
+      this.addTrace(record, 'editor.job_cancelled', 'Abbruch bestätigt; ein späteres Worker-Ergebnis wird verworfen.', 'warning');
       await this.persist(record);
       this.emitEvent('cancelled', record);
       return;
@@ -668,12 +867,21 @@ export class RemoteStemJobService {
     }
 
     if (manifest.status === 'FAILED' || manifest.status === 'CANCELLED') {
-      record.status = manifest.status;
-      record.phase = manifest.status === 'CANCELLED' ? REMOTE_PHASES.cancelled : 'Fehlgeschlagen (Worker)';
+      this.setState(record, {
+        status: manifest.status,
+        phase: manifest.status === 'CANCELLED' ? REMOTE_PHASES.cancelled : 'Fehlgeschlagen (Worker)',
+      });
       record.error = manifest.error
         ? { code: manifest.error.code, message: manifest.error.message }
         : { code: 'REMOTE_WORKER_FAILED', message: manifest.notes?.slice(-1)[0] ?? 'Worker hat den Job abgebrochen' };
       record.finishedAt = this.now();
+      this.addTrace(
+        record,
+        manifest.status === 'CANCELLED' ? 'editor.job_cancelled' : 'editor.job_failed',
+        manifest.status === 'CANCELLED' ? 'Worker hat den Abbruch bestätigt.' : 'Worker hat den Job als fehlgeschlagen gemeldet.',
+        manifest.status === 'CANCELLED' ? 'warning' : 'error',
+        { code: record.error.code }
+      );
       await this.persist(record);
       this.emitEvent(manifest.status === 'CANCELLED' ? 'cancelled' : 'failed', record);
       return;
@@ -682,9 +890,24 @@ export class RemoteStemJobService {
     // Laufend: Phase aus Worker-Sicht übersetzen (§13 – der Nutzer sieht
     // „Verarbeitung läuft – GPU/CPU“ statt einer technischen Zeile).
     const previous = record.status;
-    record.status = manifest.status;
-    record.phase = this.phaseTextFor(manifest);
-    record.percent = Math.max(record.percent, Math.min(99, typeof manifest.percent === 'number' ? manifest.percent : record.percent));
+    const previousPhase = record.phase;
+    const previousProgressBucket = Math.floor((record.workerPercent ?? record.percent) / 10);
+    const effectiveManifest = worker ? { ...manifest, worker } : manifest;
+    this.setState(record, {
+      status: manifest.status,
+      phase: this.phaseTextFor(effectiveManifest),
+      percent: typeof manifest.percent === 'number' ? Math.min(99, manifest.percent) : record.percent,
+      workerPercent: typeof manifest.percent === 'number' ? manifest.percent : undefined,
+    });
+    const currentProgress = record.workerPercent ?? record.percent;
+    const currentProgressBucket = Math.floor(currentProgress / 10);
+    if (record.status !== previous || record.phase !== previousPhase || currentProgressBucket !== previousProgressBucket) {
+      this.addTrace(record, 'editor.worker_progress', `Worker-Phase: ${record.phase}.`, 'info', {
+        workerId: worker?.id,
+        percent: currentProgress,
+        device: worker?.device,
+      });
+    }
     await this.persist(record);
     this.emitEvent('progress', record);
     if (previous !== record.status) {
@@ -700,13 +923,13 @@ export class RemoteStemJobService {
 
     // Zeitüberschreitung: kein Worker, kein Ergebnis, zu lange her (§21 E).
     if (this.now() - record.createdAt > this.jobTimeoutMs()) {
-      record.status = 'FAILED';
       record.error = {
         code: 'REMOTE_TIMEOUT',
         message: `Fern-Job ${record.jobId} hat nach ${Math.round(this.jobTimeoutMs() / 60_000)} Minuten kein Ergebnis geliefert.`,
       };
-      record.phase = 'Zeitüberschreitung – kein Worker-Ergebnis';
+      this.setState(record, { status: 'FAILED', phase: 'Zeitüberschreitung – kein Worker-Ergebnis' });
       record.finishedAt = this.now();
+      this.addTrace(record, 'editor.job_failed', 'Gesamtzeitlimit erreicht; Worker-Ergebnis fehlt.', 'error', { code: 'REMOTE_TIMEOUT' });
       await this.persist(record);
       await this.failRemote(transport, record).catch(() => undefined);
       this.emitEvent('failed', record);
@@ -715,10 +938,10 @@ export class RemoteStemJobService {
 
     // Beansprucht, aber kein Lebenszeichen mehr: nicht sofort aufgeben, nur
     // sichtbar machen. Erst der Gesamt-Timeout oben beendet den Job.
-    if (record.worker?.claimedAt && !manifest.worker?.heartbeatAt) {
+    if (record.worker?.claimedAt && !record.worker.heartbeatAt) {
       const age = this.now() - record.worker.claimedAt;
       if (age > this.workerLeaseMs()) {
-        record.phase = `Worker ohne Lebenszeichen seit ${Math.round(age / 60_000)} Minuten – neuer Versuch auf einem anderen Worker möglich`;
+        this.setState(record, { phase: `Worker ohne Lebenszeichen seit ${Math.round(age / 60_000)} Minuten – neuer Versuch auf einem anderen Worker möglich` });
       }
     }
   }
@@ -791,6 +1014,10 @@ export class RemoteStemJobService {
       )
     );
     record.uploadedAt = this.now();
+    const lastRepublish = [...(record.trace ?? [])].reverse().find((event) => event.step === 'editor.manifest_republished');
+    if (!lastRepublish || this.now() - lastRepublish.at >= 60_000) {
+      this.addTrace(record, 'editor.manifest_republished', 'Fehlendes Manifest mit derselben Job-ID erneut veröffentlicht.', 'warning');
+    }
     // Wer vorher abbrechen wollte, dessen Absicht gilt weiter: jetzt neu melden.
     if (record.cancelPending || (record.cancelRequestedAt && !isTerminalStatus(record.status))) {
       if (await this.deliverCancelFlag(record)) {
@@ -802,9 +1029,9 @@ export class RemoteStemJobService {
   /** Abbruch ist in der Ablage angekommen – lokal ebenso beenden (§37). */
   private async finalizeCancel(record: RemoteJobRecord, note: string): Promise<void> {
     record.cancelPending = false;
-    record.status = 'CANCELLED';
-    record.phase = REMOTE_PHASES.cancelled;
+    this.setState(record, { status: 'CANCELLED', phase: REMOTE_PHASES.cancelled });
     record.finishedAt = record.finishedAt ?? this.now();
+    this.addTrace(record, 'editor.job_cancelled', note, 'warning');
     await this.persist(record);
     this.options.logger?.warn?.('STEM-REMOTE', `jobId=${record.jobId} ${note}`, { jobId: record.jobId, status: 'CANCELLED' });
     this.emitEvent('cancelled', record);
@@ -824,9 +1051,8 @@ export class RemoteStemJobService {
    * des Workers genügt ausdrücklich nicht (§21 I/J/K).
    */
   private async importResult(record: RemoteJobRecord, manifest: RemoteJobManifest, transport: IRemoteTransport): Promise<void> {
-    record.status = 'VALIDATING';
-    record.phase = REMOTE_PHASES.downloading;
-    record.percent = 99;
+    this.setState(record, { status: 'VALIDATING', phase: REMOTE_PHASES.downloading, percent: 99 });
+    this.addTrace(record, 'editor.result_download_started', 'Worker hat das Ergebnis abgeschlossen; Dateien werden heruntergeladen und validiert.');
     await this.persist(record);
     this.emitEvent('progress', record);
 
@@ -887,6 +1113,7 @@ export class RemoteStemJobService {
       }
       const filePath = path.join(targetDir, stemFileName(stem.id));
       await writeFile(filePath, bytes);
+      this.addTrace(record, 'editor.output_validated', `Ergebnis ${stem.id} geprüft und lokal gespeichert.`, 'info', { percent: 99 });
       imported.push({ id: stem.id, filePath, bytes: bytes.byteLength, sha256: actualHash });
       descriptors.push({
         id: stem.id,
@@ -1012,11 +1239,10 @@ export class RemoteStemJobService {
 
     record.localJobId = record.jobId;
     record.importedStems = imported;
-    record.status = 'COMPLETED';
-    record.phase = REMOTE_PHASES.completed;
-    record.percent = 100;
+    this.setState(record, { status: 'COMPLETED', phase: REMOTE_PHASES.completed, percent: 100 });
     record.finishedAt = this.now();
     record.error = undefined;
+    this.addTrace(record, 'editor.result_imported', 'Alle Ergebnisse wurden geprüft und im Editor registriert.');
     await this.persist(record);
     await transport
       .writeText(`jobs/${record.jobId}/output/${'result.json'}`, buildResultDocument(manifest, { importedAtIso: new Date(this.now()).toISOString() }))
@@ -1064,7 +1290,8 @@ export class RemoteStemJobService {
     if (!delivered) {
       record.cancelPending = true;
       record.transportDegraded = true;
-      record.phase = REMOTE_PHASES.cancelPending;
+      this.setState(record, { phase: REMOTE_PHASES.cancelPending });
+      this.addTrace(record, 'editor.cancel_pending', 'Abbruch konnte noch nicht in die Jobablage geschrieben werden; wird wiederholt.', 'warning');
       await this.persist(record);
       this.options.logger?.warn?.('STEM-REMOTE', `jobId=${jobId} Abbruch in die Ablage nicht möglich – wird bei jedem Poll nachgeliefert`, {
         jobId,
@@ -1079,9 +1306,9 @@ export class RemoteStemJobService {
       };
     }
     record.cancelPending = false;
-    record.status = 'CANCELLED';
-    record.phase = `${REMOTE_PHASES.cancelled} – ${reason}`;
+    this.setState(record, { status: 'CANCELLED', phase: `${REMOTE_PHASES.cancelled} – ${reason}` });
     record.finishedAt = record.finishedAt ?? this.now();
+    this.addTrace(record, 'editor.job_cancelled', 'Abbruchflag wurde in die Jobablage geschrieben.', 'warning');
     await this.persist(record);
     this.options.logger?.warn?.('STEM-REMOTE', `jobId=${jobId} status=CANCELLED reason=${reason}`, { jobId, status: 'CANCELLED', reason });
     this.emitEvent('cancelled', record);
@@ -1192,6 +1419,8 @@ export class RemoteStemJobService {
       trackName: record.trackName,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      phaseUpdatedAt: record.phaseUpdatedAt,
+      trace: record.trace?.map((event) => ({ ...event })),
       finishedAt: record.finishedAt,
       localJobId: record.localJobId,
       device: record.device,

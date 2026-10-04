@@ -10,6 +10,23 @@
  */
 import type { ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from './types';
 
+/** Small serializable lifecycle event shared by the remote worker and UI. */
+export interface RemoteJobTraceEvent {
+  id: string;
+  source: 'editor' | 'worker';
+  jobId: string;
+  at: number;
+  step: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  workerId?: string;
+  status?: JobStatus;
+  phase?: string;
+  code?: string;
+  percent?: number;
+  device?: string;
+}
+
 /** Serializable per-stem result of a finished job. */
 export interface StemJobStemView {
   id: StemId;
@@ -262,6 +279,10 @@ export interface RemoteStemJobView {
   trackName: string;
   createdAt: number;
   updatedAt: number;
+  /** Letzte echte Status-/Phasenänderung; wird von unveränderten Polls nicht zurückgesetzt. */
+  phaseUpdatedAt?: number;
+  /** Letzte korrelierbare Editor-/Worker-Schritte (max. 120 Einträge). */
+  trace?: RemoteJobTraceEvent[];
   finishedAt?: number;
   /** lokaler Job, über den die Stems in den Editor kommen (nach COMPLETED). */
   localJobId?: string;

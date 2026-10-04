@@ -13,6 +13,10 @@ Protokoll (dieselbe Ablage wie ``scripts/stem-remote-worker.ts``)::
     <root>/jobs/<jobId>/input/<file>.wav  Arbeitskopie (nie das Original)
     <root>/jobs/<jobId>/claim.json        Lease: wer rechnet gerade
     <root>/jobs/<jobId>/cancel.flag       Editor: „brich ab“
+    <root>/jobs/<jobId>/logs/worker.jsonl strukturierte Schritte (max. 200)
+    <root>/jobs/<jobId>/logs/worker.log   lesbare Jobspur (max. 200 Zeilen)
+    <root>/worker.status.json             Worker-Lebenszeichen und aktive Phase
+    <root>/worker.log                     begrenztes zentrales Worker-Log
     <root>/jobs/<jobId>/output/<stem>.wav Ergebnisse
     <root>/jobs/<jobId>/output/result.json Ergebnisdokument
     <root>/jobs/<jobId>/error.json        letzter Fehler
@@ -51,6 +55,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections import deque
 import os
 import shutil
 import socket
@@ -70,6 +75,7 @@ JOB_ID_MIN = 8
 # der Nutzer sah „nichts passiert“, während Colab weiterrechnete.
 CANCEL_POLL_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_POLL_SECONDS", "5"))
 CANCEL_KILL_GRACE_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_GRACE_SECONDS", "10"))
+MAX_WORKER_TRACE_LINES = 200
 
 
 # --------------------------------------------------------------------------- #
@@ -167,6 +173,7 @@ class JobStore:
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.jobs_dir = os.path.join(self.root, "jobs")
+        self._log_lock = threading.Lock()
 
     # -- Pfade ------------------------------------------------------------- #
     def job_dir(self, job_id: str) -> str:
@@ -177,6 +184,9 @@ class JobStore:
 
     def claim_path(self, job_id: str) -> str:
         return os.path.join(self.job_dir(job_id), "claim.json")
+
+    def worker_trace_path(self, job_id: str) -> str:
+        return os.path.join(self.job_dir(job_id), "logs", "worker.jsonl")
 
     def input_path(self, job_id: str, file_name: str) -> str:
         return os.path.join(self.job_dir(job_id), "input", os.path.basename(file_name))
@@ -261,28 +271,66 @@ class JobStore:
             {"jobId": job_id, "code": code, "message": message, "at": int(time.time() * 1000), "worker": worker},
         )
 
-    def log(self, job_id: str, message: str) -> None:
-        ts = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        line = f"{ts} {message}\n"
-        # 1. Job-spezifisches Log (für Nachvollziehbarkeit pro Job)
-        if job_id:
-            path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "a", encoding="utf-8") as handle:
-                    handle.write(line)
-            except OSError:
-                pass
-        # 2. Zentrales Worker-Log im Root (für Debugging ohne in jeden Job
-        #    hineinschauen zu müssen – besonders hilfreich bei Startfehlern,
-        #    wenn noch gar kein Job beansprucht ist).
+    def _append_capped_line(self, path: str, line: str) -> None:
+        """Behält höchstens MAX_WORKER_TRACE_LINES und ersetzt die Datei atomar."""
+        safe_line = str(line).replace("\r", " ").replace("\n", " ")[:1200] + "\n"
         try:
-            os.makedirs(self.root, exist_ok=True)
-            with open(os.path.join(self.root, "worker.log"), "a", encoding="utf-8") as handle:
-                handle.write(f"{ts} [{self.worker_id}] {'' if not job_id else job_id + ' '}{message}\n")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with self._log_lock:
+                tail = deque(maxlen=MAX_WORKER_TRACE_LINES)
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                        tail.extend(handle)
+                except FileNotFoundError:
+                    pass
+                tail.append(safe_line)
+                tmp = path + f".{uuid.uuid4().hex}.tmp"
+                with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.writelines(tail)
+                os.replace(tmp, path)
         except OSError:
             pass
+
+    def log(self, job_id: str, message: str) -> None:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if job_id:
+            path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+            self._append_capped_line(path, f"{ts} {message}")
+        # Root-Log hilft auch bei Startfehlern, bevor ein Job beansprucht ist.
+        root_line = f"{ts} [{self.worker_id}] {'' if not job_id else job_id + ' '}{message}"
+        self._append_capped_line(os.path.join(self.root, "worker.log"), root_line)
         print(f"[STEM-REMOTE-WORKER] {self.worker_id} {job_id + ' ' if job_id else ''}{message}", flush=True)
+
+    def log_event(
+        self,
+        job_id: str,
+        step: str,
+        message: str,
+        *,
+        level: str = "info",
+        **fields: Any,
+    ) -> None:
+        """Schreibt begrenzte JSONL-Diagnose plus lesbare Zeile."""
+        event: Dict[str, Any] = {
+            "id": f"worker-{uuid.uuid4().hex}",
+            "source": "worker",
+            "jobId": job_id,
+            "at": int(time.time() * 1000),
+            "step": str(step)[:100],
+            "level": level if level in {"info", "warning", "error"} else "info",
+            "message": str(message)[:400],
+            "workerId": self.worker_id[:100],
+        }
+        # Nur kleine, nicht-sensitive Diagnosefelder; keine Pfade, Tokens oder Audiodaten.
+        for key in ("status", "phase", "code", "percent", "device"):
+            value = fields.get(key)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                event[key] = str(value)[:180] if key in {"status", "phase", "code", "device"} else value
+        self._append_capped_line(
+            self.worker_trace_path(job_id),
+            json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+        )
+        self.log(job_id, f"step={step} {message}")
 
     def write_worker_status(self, status: dict) -> None:
         """Schreibt einen Heartbeat in die Wurzel der Ablage.
@@ -389,6 +437,60 @@ class CancelWatchdog:
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=self._poll * 4 + 1)
+        self._thread = None
+
+
+class WorkerLeaseHeartbeat:
+    """Erneuert claim.json während langer Inferenz, unabhängig von Progress-Chunks."""
+
+    def __init__(self, store: JobStore, job_id: str, claim: Dict[str, Any], interval: float = 30.0) -> None:
+        self.store = store
+        self.job_id = job_id
+        self.claim = claim
+        self.interval = max(1.0, interval)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._write_worker_status()
+        self._thread = threading.Thread(target=self._run, name="airdox-worker-heartbeat", daemon=True)
+        self._thread.start()
+
+    def _write_worker_status(self) -> None:
+        path = os.path.join(self.store.root, "worker.status.json")
+        try:
+            status = read_json(path) or {}
+        except Exception:  # noqa: BLE001 – defekte Statusdatei darf keine Inferenz verhindern
+            status = {}
+        if not isinstance(status, dict):
+            status = {}
+        status.update({"phase": f"Verarbeite Job {self.job_id}", "activeJobId": self.job_id})
+        self.store.write_worker_status(status)
+
+    def _run(self) -> None:
+        warned = False
+        while not self._stop.wait(self.interval):
+            try:
+                self.store.heartbeat(self.job_id, self.claim)
+                self._write_worker_status()
+                warned = False
+            except Exception:  # noqa: BLE001 – ein Lease-Schreibfehler darf die Inferenz nicht beenden
+                if not warned:
+                    self.store.log_event(
+                        self.job_id,
+                        "worker.heartbeat_write_failed",
+                        "Worker-Lebenszeichen konnte nicht in die Jobablage geschrieben werden.",
+                        level="warning",
+                        code="REMOTE_HEARTBEAT_WRITE_FAILED",
+                    )
+                    warned = True
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
         self._thread = None
 
 
@@ -510,6 +612,14 @@ def _finish_cancelled(store: JobStore, job_id: str, manifest: dict, claim: Optio
     manifest["cancelRequested"] = True
     if claim:
         manifest["worker"] = {**claim, "heartbeatAt": int(time.time() * 1000)}
+    store.log_event(
+        job_id,
+        "worker.cancelled",
+        "Abbruchanforderung bestätigt; Ergebnis wird verworfen.",
+        level="warning",
+        status="CANCELLED",
+        phase="Vom Editor abgebrochen",
+    )
     store.write_manifest(job_id, manifest)
     store.consume_cancel_flag(job_id)
     store.log(job_id, f"abgebrochen (cancel.flag){' – ' + note if note else ''}")
@@ -545,18 +655,22 @@ def run_job(
 
     claim = store.claim(job_id, device=device, gpu=_gpu_name())
     manifest["status"] = "RUNNING"
-    manifest["phase"] = "Job beansprucht – Arbeitskopie wird geladen"
+    manifest["phase"] = "Arbeitskopie wird geladen"
     manifest["percent"] = 1
     manifest["attempts"] = int(manifest.get("attempts") or 0) + 1
     manifest["worker"] = claim
-    # Manifest sofort mit dem Worker-Eintrag zurückschreiben: der Editor
-    # pollt alle 5 s und erkennt so, dass der Job von *diesem* Worker
-    # aufgenommen wurde (Stufe „Extern verarbeiten"). Ohne diesen Schritt
-    # blieb die Phase minutenlang auf „Auf Worker warten" bis die
-    # Arbeitskopie (teilweise 100 MB+) komplett auf das Colab-Dateisystem
-    # kopiert war.
     store.write_manifest(job_id, manifest)
-    store.log(job_id, f"Job beansprucht (Versuch {manifest['attempts']}) – {claim['host']} ({claim.get('gpu', '?')})")
+    lease_heartbeat = WorkerLeaseHeartbeat(store, job_id, dict(claim))
+    lease_heartbeat.start()
+    store.log_event(
+        job_id,
+        "worker.claimed",
+        "Worker hat den Job beansprucht.",
+        status="RUNNING",
+        phase="Arbeitskopie wird geladen",
+        percent=1,
+        device=device,
+    )
 
     try:
         remote_input = os.path.join(store.root, manifest["input"]["relativePath"])
@@ -573,19 +687,51 @@ def run_job(
                 "REMOTE_INPUT_HASH_MISMATCH",
                 f"SHA256 der Arbeitskopie stimmt nicht ({actual[:12]}… statt {manifest['input']['sha256'][:12]}…)",
             )
-        store.log(job_id, f"Arbeitskopie verifiziert ({actual[:12]}…) – CPU/GPU: {device}")
+        store.log_event(
+            job_id,
+            "worker.input_verified",
+            "Arbeitskopie wurde per SHA-256 verifiziert.",
+            status="RUNNING",
+            phase="Eingabe verifiziert",
+            percent=2,
+            device=device,
+        )
 
         output_dir = store.output_dir(job_id)
         os.makedirs(output_dir, exist_ok=True)
 
+        last_progress_key: List[Optional[Tuple[str, int]]] = [None]
+
         def on_progress(fraction: float, phase: str) -> None:
-            manifest["percent"] = max(int(manifest.get("percent") or 0), min(99, int(fraction * 100)))
+            percent = max(0, min(99, int(fraction * 100)))
+            manifest["percent"] = max(int(manifest.get("percent") or 0), percent)
             manifest["phase"] = phase or "Inferenz läuft"
             manifest.setdefault("worker", claim)["heartbeatAt"] = int(time.time() * 1000)
             store.write_manifest(job_id, manifest)
+            progress_key = (manifest["phase"], manifest["percent"] // 10)
+            if progress_key != last_progress_key[0]:
+                last_progress_key[0] = progress_key
+                store.log_event(
+                    job_id,
+                    "worker.inference_progress",
+                    f"{manifest['phase']} ({manifest['percent']} %).",
+                    status="RUNNING",
+                    phase=manifest["phase"],
+                    percent=manifest["percent"],
+                    device=device,
+                )
 
         watchdog = CancelWatchdog(lambda: store.cancel_requested(job_id), poll_seconds=cancel_poll)
         runner = LocalAdapterRunner(adapter)
+        store.log_event(
+            job_id,
+            "worker.inference_started",
+            f"Inferenz mit {manifest['engine'].get('modelId')} gestartet.",
+            status="RUNNING",
+            phase="Inferenz läuft",
+            percent=3,
+            device=device,
+        )
         try:
             report = runner.run(
                 manifest=manifest,
@@ -599,7 +745,16 @@ def run_job(
         except ProtocolError as error:
             if device != "cpu" and error.code in {"GPU_UNAVAILABLE", "GPU_OUT_OF_MEMORY", "INFERENCE_FAILED"}:
                 # §21 F/G: GPU nicht nutzbar ⇒ CPU versuchen, nicht aufgeben.
-                store.log(job_id, f"GPU-Ausfall ({error.code}) – CPU-Rückfall")
+                store.log_event(
+                    job_id,
+                    "worker.cpu_fallback",
+                    "GPU nicht verfügbar; Verarbeitung wird auf CPU fortgesetzt.",
+                    level="warning",
+                    status="RUNNING",
+                    phase="Verarbeitung läuft – CPU-Fallback",
+                    code=error.code,
+                    device="cpu",
+                )
                 claim["cpuFallback"] = True
                 claim["fallbackReason"] = error.message[:300]
                 manifest["worker"] = claim
@@ -618,6 +773,16 @@ def run_job(
                 report["fallbackReason"] = error.message[:300]
             else:
                 raise
+
+        store.log_event(
+            job_id,
+            "worker.inference_completed",
+            "Inferenz wurde ohne Fehler abgeschlossen.",
+            status="RUNNING",
+            phase="Ergebnisse werden geschrieben",
+            percent=95,
+            device=str(report.get("device") or device),
+        )
 
         # Abbruch gewinnt – auch kurz vor der Abgabe der Stems (§37)
         if watchdog.triggered or store.cancel_requested(job_id):
@@ -648,6 +813,14 @@ def run_job(
                     "channels": channels,
                 }
             )
+            store.log_event(
+                job_id,
+                "worker.output_written",
+                f"Stem {stem_id} geschrieben und geprüft.",
+                status="RUNNING",
+                phase=f"Ergebnis {stem_id} geschrieben",
+                percent=96,
+            )
 
         manifest["output"] = {
             "stems": stems,
@@ -666,7 +839,6 @@ def run_job(
             "torch": report.get("torchVersion"),
             "gpu": _gpu_name(),
         }
-        store.write_manifest(job_id, manifest)
         write_json_atomic(
             os.path.join(output_dir, "result.json"),
             {
@@ -681,7 +853,18 @@ def run_job(
                 "report": {key: report.get(key) for key in ("device", "durationMs", "weights") if key in report},
             },
         )
-        store.log(job_id, f"COMPLETED – {len(stems)} Stems, Gerät {device_report}")
+        store.log_event(
+            job_id,
+            "worker.completed",
+            f"Job abgeschlossen; {len(stems)} geprüfte Stems liegen bereit.",
+            status="COMPLETED",
+            phase="Fertig",
+            percent=100,
+            device=str(device_report),
+        )
+        # Manifest als letzter Commit-Marker: beim ersten COMPLETED-Poll sind
+        # Stems, Ergebnisdokument und Ablaufspur bereits in der Ablage.
+        store.write_manifest(job_id, manifest)
         return "completed"
     except JobCancelled as cancelled:
         # „während der Rechnung“ ist der Nachweis, dass der Watchdog gegriffen
@@ -693,6 +876,7 @@ def run_job(
         manifest["phase"] = "Fehlgeschlagen"
         manifest["error"] = {"code": error.code, "message": error.message, "at": int(time.time() * 1000)}
         manifest["worker"] = {**claim, "heartbeatAt": int(time.time() * 1000)}
+        store.log_event(job_id, "worker.failed", f"Worker hat den Job mit Fehlercode {error.code} beendet.", level="error", status="FAILED", phase="Fehlgeschlagen", code=error.code)
         store.write_manifest(job_id, manifest)
         store.write_error(job_id, error.code, error.message, store.worker_id)
         store.log(job_id, f"FAILED – {error.code}: {error.message}")
@@ -701,10 +885,14 @@ def run_job(
         manifest["status"] = "FAILED"
         manifest["phase"] = "Fehlgeschlagen"
         manifest["error"] = {"code": "INFERENCE_FAILED", "message": str(error)[:500], "at": int(time.time() * 1000)}
+        manifest["worker"] = {**claim, "heartbeatAt": int(time.time() * 1000)}
+        store.log_event(job_id, "worker.failed", "Worker hat den Job wegen eines unerwarteten Fehlers beendet.", level="error", status="FAILED", phase="Fehlgeschlagen", code="INFERENCE_FAILED")
         store.write_manifest(job_id, manifest)
         store.write_error(job_id, "INFERENCE_FAILED", str(error)[:500], store.worker_id)
         store.log(job_id, f"FAILED – INFERENCE_FAILED: {error}")
         return "failed"
+    finally:
+        lease_heartbeat.stop()
 
 
 def _wav_geometry(path: str) -> Tuple[int, int, int]:
@@ -978,6 +1166,34 @@ def self_test() -> int:
         other.claim(job_id)
         assert store.claim_is_fresh(job_id) is True
         assert JobStore(tmp, "other-worker").claim_is_fresh(job_id) is False
+        # Lease und globaler Heartbeat laufen auch ohne Inferenz-Progress weiter.
+        heartbeat_job_id = str(uuid.uuid4())
+        os.makedirs(store.job_dir(heartbeat_job_id), exist_ok=True)
+        heartbeat_claim = store.claim(heartbeat_job_id)
+        heartbeat_claim["heartbeatAt"] = int(time.time() * 1000) - 60_000
+        write_json_atomic(store.claim_path(heartbeat_job_id), heartbeat_claim)
+        lease_heartbeat = WorkerLeaseHeartbeat(store, heartbeat_job_id, heartbeat_claim, interval=1.0)
+        lease_heartbeat.start()
+        time.sleep(1.1)
+        lease_heartbeat.stop()
+        assert other.claim_is_fresh(heartbeat_job_id) is True, "Lease muss während langer Inferenz regelmäßig erneuert werden"
+        assert read_json(store.claim_path(heartbeat_job_id))["heartbeatAt"] > int(time.time() * 1000) - 5_000
+        worker_status = read_json(os.path.join(store.root, "worker.status.json")) or {}
+        assert worker_status.get("activeJobId") == heartbeat_job_id, "Worker-Heartbeat muss den laufenden Job zeigen"
+        assert worker_status.get("heartbeatAt", 0) > int(time.time() * 1000) - 5_000
+        # Text- und JSONL-Diagnose bleiben auch nach vielen Ereignissen begrenzt.
+        bounded_job_id = str(uuid.uuid4())
+        trace_path = store.worker_trace_path(bounded_job_id)
+        log_path = os.path.join(store.job_dir(bounded_job_id), "logs", "worker.log")
+        for index in range(MAX_WORKER_TRACE_LINES + 9):
+            store._append_capped_line(trace_path, json.dumps({"index": index}))
+            store._append_capped_line(log_path, f"line-{index}")
+        with open(trace_path, "r", encoding="utf-8") as handle:
+            trace_lines = handle.readlines()
+        with open(log_path, "r", encoding="utf-8") as handle:
+            text_lines = handle.readlines()
+        assert len(trace_lines) == MAX_WORKER_TRACE_LINES and json.loads(trace_lines[0])["index"] == 9
+        assert len(text_lines) == MAX_WORKER_TRACE_LINES and text_lines[0].strip() == "line-9"
         # 5. cancel.flag gewinnt – und wird verbraucht, damit der Ordner
         #    für einen erneut veröffentlichten Lauf nicht verseucht bleibt
         with open(store.cancel_flag_path(job_id), "w", encoding="utf-8") as handle:
@@ -1076,6 +1292,10 @@ def self_test() -> int:
         assert store.read_manifest(live_id)["status"] == "CANCELLED"
         assert store.cancel_requested(live_id) is False, "Fahne muss nach dem Erfüllen verbraucht sein"
         assert not os.listdir(os.path.join(live_dir, "output")), "ein abgebrochener Lauf legt nichts ab"
+        with open(store.worker_trace_path(live_id), "r", encoding="utf-8") as handle:
+            trace_steps = {json.loads(line)["step"] for line in handle if line.strip()}
+        for step in ("worker.claimed", "worker.input_verified", "worker.inference_started", "worker.inference_progress", "worker.cancelled"):
+            assert step in trace_steps, f"Diagnoseprotokoll enthält {step} nicht"
         # 9. Kommandozeilen-Vertrag: die Zeile, die das Colab-Notebook baut
         #    (colab/airdox-stem-remote-worker.md, Zelle 5). Zwei echte Defekte
         #    sind hier festgenagelt:
@@ -1153,7 +1373,7 @@ def self_test() -> int:
 
         print(
             "[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, "
-            "Abbruch vor/während der Rechnung, Kommandozeile, Ablage-Diagnose)"
+            "Trace/Log-Begrenzung, Abbruch vor/während der Rechnung, Kommandozeile, Ablage-Diagnose)"
         )
     return 0
 
@@ -1221,6 +1441,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _console_event(worker_id: str, step: str, **fields: Any) -> None:
+    event = {
+        "source": "worker",
+        "at": int(time.time() * 1000),
+        "step": step,
+        "workerId": worker_id,
+        **fields,
+    }
+    print("[STEM-REMOTE-WORKER] " + json.dumps(event, sort_keys=True, ensure_ascii=True), flush=True)
+
+
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
     if args.self_test:
@@ -1262,6 +1493,7 @@ def main(argv: List[str]) -> int:
         "startedAt": int(time.time() * 1000),
     }
     store.write_worker_status({**startup, "phase": "startup"})
+    _console_event(args.worker, "worker.started", rootLabel=os.path.basename(os.path.normpath(store.root)), device=args.device, gpu=startup["gpu"])
     store.log("", f"Start – root={store.root} device={args.device} model-dir={args.model_dir} "
                   f"adapter={args.adapter} poll={args.poll}s cancel-poll={args.cancel_poll}s "
                   f"gpu={startup['gpu']} filter-model={args.model or '*'} "
@@ -1287,6 +1519,8 @@ def main(argv: List[str]) -> int:
         cycles += 1
         seen = 0
         considered = 0
+        pending = 0
+        cycle_processed = 0
         job_ids = store.list_job_ids()
         # Änderung der Jobliste sofort melden – im Notebook sieht man damit,
         # dass der Worker den Drive-Ordner wirklich liest (kein stummer Lauf).
@@ -1308,7 +1542,7 @@ def main(argv: List[str]) -> int:
             except ProtocolError as error:
                 # Ein unvollständig synchronisiertes Manifest ist kein Grund,
                 # den Job zu verwerfen: der Editor veröffentlicht erneut.
-                store.log(job_id, f"Manifest ungültig: {error.message}")
+                store.log_event(job_id, "worker.manifest_invalid", "Manifest konnte nicht validiert werden.", level="error", code=error.code)
                 continue
             if manifest.get("status") in TERMINAL_STATUSES:
                 seen += 1
@@ -1340,6 +1574,7 @@ def main(argv: List[str]) -> int:
                 if filtered_notices.get(f"{job_id}:profil") != notice:
                     filtered_notices[f"{job_id}:profil"] = notice
                     store.log(job_id, notice)
+            pending += 1
             idle = False
             outcome = run_job(
                 store,
@@ -1353,6 +1588,7 @@ def main(argv: List[str]) -> int:
             )
             if outcome in {"completed", "failed", "cancelled"}:
                 processed += 1
+                cycle_processed += 1
                 # Heartbeat nach jedem Job – sieht der Editor, dass hier
                 # jemand aktiv ist.
                 store.write_worker_status({**startup, "phase": f"nach {outcome} (job {job_id})", "processed": processed})
@@ -1365,16 +1601,26 @@ def main(argv: List[str]) -> int:
             "totalSeen": seen,
             "processed": processed,
         })
+        sleep_seconds = max(5, args.poll)
+        _console_event(
+            args.worker,
+            "worker.poll",
+            scanned=len(job_ids),
+            pending=pending,
+            processed=cycle_processed,
+            sleepSeconds=sleep_seconds,
+        )
         if args.once:
             store.log("", f"{processed} Job(s) bearbeitet – Ende (--once).")
+            _console_event(args.worker, "worker.stopped", processed=processed, reason="once")
             return 0
         if args.verbose:
-            store.log("", f"Zyklus {cycles}: {considered} offene Jobs, {seen} gesamt, schlafe {args.poll}s")
+            store.log("", f"Zyklus {cycles}: {considered} offene Jobs, {seen} gesamt, schlafe {sleep_seconds}s")
         if idle and args.idle_log_seconds > 0 and time.time() - last_idle_log >= args.idle_log_seconds:
             last_idle_log = time.time()
             store.log("", f"Warte auf Jobs – {len(job_ids)} in der Ablage, Stand {time.strftime('%H:%M:%S')} "
                           "(diese Zelle darf weiterlaufen).")
-        time.sleep(max(5, args.poll))
+        time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":

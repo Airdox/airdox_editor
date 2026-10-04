@@ -27,9 +27,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createTransport, type IRemoteTransport } from '../src/stems/remote/transport';
-import { jobCancelPath, jobClaimPath, jobOutputPath, jobResultPath, stemFileName } from '../src/stems/remote/layout';
+import { jobCancelPath, jobClaimPath, jobOutputPath, jobResultPath, jobWorkerLogPath, jobWorkerTracePath, stemFileName } from '../src/stems/remote/layout';
 import {
   buildResultDocument,
   isTerminalStatus,
@@ -37,7 +37,7 @@ import {
   serializeManifest,
   withStatus,
 } from '../src/stems/remote/manifest';
-import type { RemoteJobManifest } from '../src/stems/remote/types';
+import type { RemoteJobManifest, RemoteJobTraceEvent } from '../src/stems/remote/types';
 import { StemJobService } from '../src/stems/stemJobService';
 import { analyzeAudio, decodeWav, parseWavLayout } from '../src/stems/wavIo';
 import { QUALITY_PROFILES, type ComputeDevice, type QualityProfile } from '../src/stems/types';
@@ -153,6 +153,44 @@ function parseArgs(argv: string[]): WorkerOptions {
 
 function log(options: WorkerOptions, message: string): void {
   if (!options.quiet) console.log(`[STEM-REMOTE-WORKER] ${message}`);
+}
+
+async function appendCappedLine(transport: IRemoteTransport, relative: string, line: string): Promise<void> {
+  const current = (await transport.readText(relative)) ?? '';
+  const lines = current.split(/\r?\n/).filter(Boolean);
+  lines.push(line);
+  await transport.writeText(relative, `${lines.slice(-200).join('\n')}\n`);
+}
+
+async function logJobEvent(
+  options: WorkerOptions,
+  transport: IRemoteTransport,
+  jobId: string,
+  step: string,
+  message: string,
+  fields: Partial<Pick<RemoteJobTraceEvent, 'status' | 'phase' | 'code' | 'percent' | 'device'>> = {},
+  level: RemoteJobTraceEvent['level'] = 'info'
+): Promise<void> {
+  const at = Date.now();
+  const event: RemoteJobTraceEvent = {
+    id: randomUUID(),
+    source: 'worker',
+    jobId,
+    at,
+    step,
+    level,
+    message: message.slice(0, 400),
+    workerId: options.workerId,
+    ...fields,
+  };
+  try {
+    await appendCappedLine(transport, jobWorkerTracePath(jobId), JSON.stringify(event));
+    await appendCappedLine(transport, jobWorkerLogPath(jobId), `${new Date(at).toISOString()} step=${step} ${event.message}`);
+  } catch {
+    // Diagnose-Dateien dürfen den Rechenjob nicht stoppen.
+    log(options, `jobId=${jobId} step=worker.trace_write_failed`);
+  }
+  log(options, `jobId=${jobId} step=${step} ${event.message}`);
 }
 
 async function sha256Of(filePath: string): Promise<string> {
@@ -312,6 +350,12 @@ async function runOneJob(
       })
     )
   );
+  await logJobEvent(options, transport, jobId, 'worker.claimed', 'Worker hat den Job beansprucht.', {
+    status: 'RUNNING',
+    phase: 'Arbeitskopie wird geladen',
+    percent: 1,
+    device: claim.device,
+  });
 
   watch.start();
   const heartbeat = setInterval(() => {
@@ -334,6 +378,11 @@ async function runOneJob(
         code: 'REMOTE_INPUT_HASH_MISMATCH',
       });
     }
+    await logJobEvent(options, transport, jobId, 'worker.input_verified', 'Arbeitskopie wurde per SHA-256 verifiziert.', {
+      status: 'RUNNING',
+      phase: 'Eingabe verifiziert',
+      percent: 2,
+    });
 
     // ---- Separation über die vorhandene Engine (§42) ----------------------
     const requestedProfile = options.profile && (QUALITY_PROFILES as string[]).includes(options.profile)
@@ -362,12 +411,48 @@ async function runOneJob(
       device: requestedDevice,
     });
     log(options, `Job ${jobId}: Separation mit ${started.modelId} (${started.profile}) gestartet`);
-    const finished = await waitForSeparation(service, started.jobId, watch, cancelPollMs);
+    let progressQueue = Promise.resolve();
+    let lastProgressKey = '';
+    const stopProgressTrace = service.onEvent((event) => {
+      if (event.job.jobId !== started.jobId || event.type !== 'progress') return;
+      const percent = Math.max(0, Math.min(100, event.job.percent ?? 0));
+      const phase = event.job.phase || 'Inferenz läuft';
+      const key = `${phase}:${Math.floor(percent / 10)}`;
+      if (key === lastProgressKey) return;
+      lastProgressKey = key;
+      progressQueue = progressQueue
+        .then(() => logJobEvent(options, transport, jobId, 'worker.inference_progress', `${phase} (${Math.round(percent)} %).`, {
+          status: 'RUNNING',
+          phase,
+          percent,
+          device: event.job.device,
+        }))
+        .catch(() => undefined);
+    });
+    await logJobEvent(options, transport, jobId, 'worker.inference_started', `Inferenz mit ${started.modelId} (${started.profile}) gestartet.`, {
+      status: 'RUNNING',
+      phase: 'Inferenz läuft',
+      percent: 3,
+      device: requestedDevice,
+    });
+    let finished: Awaited<ReturnType<StemJobService['waitFor']>>;
+    try {
+      finished = await waitForSeparation(service, started.jobId, watch, cancelPollMs);
+    } finally {
+      stopProgressTrace();
+      await progressQueue;
+    }
     if (finished.status !== 'COMPLETED') {
       throw Object.assign(new Error(finished.error?.message ?? `Separation endete mit ${finished.status}`), {
         code: finished.error?.code ?? 'INFERENCE_FAILED',
       });
     }
+    await logJobEvent(options, transport, jobId, 'worker.inference_completed', 'Inferenz wurde ohne Fehler abgeschlossen.', {
+      status: 'RUNNING',
+      phase: 'Ergebnisse werden geschrieben',
+      percent: 95,
+      device: finished.device ?? requestedDevice,
+    });
 
     // ---- Ergebnisse hochladen, Hashes schreiben ---------------------------
     // Vor der Abgabe noch einmal nachsehen: wer während der Rechnung abbricht,
@@ -398,7 +483,11 @@ async function runOneJob(
         channels: stats.channels,
         peak: stats.peak,
       });
-      log(options, `Job ${jobId}: Stem ${stem.id} hochgeladen (${payload.byteLength} Bytes)`);
+      await logJobEvent(options, transport, jobId, 'worker.output_written', `Stem ${stem.id} geschrieben und geprüft.`, {
+        status: 'RUNNING',
+        phase: `Ergebnis ${stem.id} geschrieben`,
+        percent: 96,
+      });
     }
     if (stems.length === 0) {
       throw Object.assign(new Error('Die Separation hat keine Stems geliefert'), { code: 'REMOTE_OUTPUT_INCOMPLETE' });
@@ -417,8 +506,16 @@ async function runOneJob(
         fallbackReason: finished.fallbackReason,
       },
     });
-    await transport.writeText(`jobs/${jobId}/manifest.json`, serializeManifest(completed));
     await transport.writeText(jobResultPath(jobId), buildResultDocument(completed, { workerId: options.workerId }));
+    await logJobEvent(options, transport, jobId, 'worker.completed', `Job abgeschlossen; ${stems.length} geprüfte Stems liegen bereit.`, {
+      status: 'COMPLETED',
+      phase: 'Fertig',
+      percent: 100,
+      device: finished.device ?? options.device ?? 'cpu',
+    });
+    // Erst nach Ergebnissen und Ablaufprotokoll wird COMPLETED als Commit-Marker
+    // geschrieben. Der Editor findet so beim ersten erfolgreichen Poll die ganze Spur.
+    await transport.writeText(`jobs/${jobId}/manifest.json`, serializeManifest(completed));
     log(options, `Job ${jobId}: COMPLETED (${stems.map((stem) => stem.id).join(', ')})`);
     return 'completed';
   } catch (error) {
@@ -427,6 +524,11 @@ async function runOneJob(
     if (code === 'REMOTE_CANCELLED_BY_EDITOR' || code === 'INFERENCE_CANCELLED') {
       // Der Abbruch kommt vom Nutzer – kein Fehler, sondern CANCELLED, damit
       // der Editor die Antwort zuordnen kann und die Abbruchbitte verbraucht ist (§37).
+      await logJobEvent(options, transport, jobId, 'worker.cancelled', 'Abbruchanforderung erkannt; laufende Arbeit wird verworfen.', {
+        status: 'CANCELLED',
+        phase: 'Vom Editor abgebrochen',
+        code,
+      }, 'warning');
       await transport
         .writeText(
           manifestRel,
@@ -445,6 +547,11 @@ async function runOneJob(
       return 'cancelled';
     }
     log(options, `Job ${jobId}: FAILED – ${code}: ${message}`);
+    await logJobEvent(options, transport, jobId, 'worker.failed', `Worker hat den Job mit Fehlercode ${code} beendet.`, {
+      status: 'FAILED',
+      phase: 'Fehlgeschlagen',
+      code,
+    }, 'error');
     const failed = withStatus(manifest, {
       status: 'FAILED',
       phase: 'Fehlgeschlagen',
