@@ -37,6 +37,7 @@ import {
 import { SelectionRange } from '../../types/rekordbox';
 import { ZONE3_SECTIONS } from '../../ui/workspaceLayout';
 import type { Zone3SectionId } from '../../ui/workspaceLayout';
+import { UI_ACTION, UI_ACCENT } from '../../ui/theme';
 
 export interface Zone3FooterProps {
   /** Offene Sektion; `null` = eingeklappt (Standard). */
@@ -115,10 +116,10 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 onClick={() => onToggleSection(section.id)}
                 data-zone3-tab={section.id}
                 aria-controls={open ? `zone3-panel-${section.id}` : undefined}
-                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-t text-[10px] font-bold tracking-wider uppercase border transition-colors ${
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-t text-[10px] font-bold tracking-wider uppercase transition-colors ${
                   open
-                    ? 'bg-[#1e2028] border-[#0088ff]/60 border-b-transparent text-white'
-                    : 'bg-[#111217] border-[#24262f] text-neutral-400 hover:text-white hover:border-[#3a3f52]'
+                    ? `${UI_ACTION.secondarySelected} border-b-transparent`
+                    : `${UI_ACTION.ghost} bg-transparent`
                 }`}
                 title={`${section.hint} (Klick klappt die Palette auf)`}
               >
@@ -145,7 +146,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
             <span className="text-neutral-600 italic">Keine Auswahl – in der Wellenform ziehen oder Taste E drücken</span>
           )}
           {hasClipboard && (
-            <span className="text-[9.5px] text-[#00c853] bg-[#0c2214] border border-[#164426] px-1.5 py-[1px] rounded" title="Zwischenablage enthält kopiertes Audio">
+            <span className="text-[9.5px] bg-[#0c2214] border border-[#164426] px-1.5 py-[1px] rounded" style={{ color: UI_ACCENT.success }} title="Zwischenablage enthält kopiertes Audio">
               Zwischenablage bereit
             </span>
           )}
@@ -166,8 +167,9 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                   key={beats}
                   type="button"
                   onClick={() => onBeatSelect(beats)}
-                  className={`rb-button-grid flex flex-col items-center justify-center rounded-xs transition-all ${
-                    isCurrentMatch ? 'border-[#0088ff] text-[#00a2ff] bg-[#1a2130]' : 'text-neutral-300'
+                  aria-pressed={isCurrentMatch}
+                  className={`flex flex-col items-center justify-center rounded-xs transition-all ${
+                    isCurrentMatch ? UI_ACTION.secondarySelected : UI_ACTION.secondary
                   }`}
                   title={`Auswahl auf genau ${beats} Beats (${barLabel}) ab aktuellem Beatgrid-Startpunkt setzen`}
                 >
@@ -188,7 +190,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onHalfSelection}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Auswahllänge halbieren (1/2)"
             >
               <span className="text-[15px] font-bold leading-tight">1/2</span>
@@ -198,7 +200,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onDoubleSelection}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Auswahllänge verdoppeln (×2)"
             >
               <span className="text-[15px] font-bold leading-tight">× 2</span>
@@ -208,7 +210,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onCancelSelection}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Auswahl aufheben (Deselect)"
             >
               <XCircle size={16} strokeWidth={2} />
@@ -244,7 +246,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 type="button"
                 onClick={onReplace}
                 disabled={!hasSelection}
-                className="text-[#ff9500] hover:text-[#ffaa33] disabled:opacity-40 px-2 py-0.5 rounded bg-[#20180a] border border-[#3d2e15] flex items-center gap-1"
+                className={`${UI_ACTION.warning} px-2 py-0.5 rounded flex items-center gap-1`}
                 title="Replace: ersetzt den markierten Auswahlbereich exakt durch das Audio der Zwischenablage"
               >
                 <Repeat size={10} />
@@ -254,7 +256,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 type="button"
                 onClick={onOverdub}
                 disabled={!hasSelection}
-                className="text-[#00c853] hover:text-[#33d677] disabled:opacity-40 px-2 py-0.5 rounded bg-[#0a2012] border border-[#153d20] flex items-center gap-1"
+                className={`${UI_ACTION.secondary} px-2 py-0.5 rounded flex items-center gap-1`}
                 title="Overdub: mischt den Inhalt der Zwischenablage additiv über den aktuellen Auswahlbereich"
               >
                 <Layers size={10} />
@@ -264,10 +266,10 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 <button
                   type="button"
                   onClick={onOpenEditAssistant}
-                  className="text-[#00e5ff] hover:text-white px-2 py-0.5 rounded bg-[#0088ff]/15 border border-[#0088ff]/40 flex items-center gap-1 text-[9px] font-semibold"
+                  className={`${UI_ACTION.ghost} px-2 py-0.5 rounded flex items-center gap-1 text-[9px] font-semibold`}
                   title="Edit Assistant: Puffer- & Bereichs-Integrität prüfen"
                 >
-                  <ShieldCheck size={10} className="text-[#00e5ff]" />
+                  <ShieldCheck size={10} />
                   <span>ASSISTANT</span>
                 </button>
               )}
@@ -277,7 +279,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 <button
                   type="button"
                   onClick={onClearHistory}
-                  className="text-neutral-400 hover:text-[#ff6b62] px-1.5 py-0.5 rounded hover:bg-[#251315] border border-transparent hover:border-[#ff453a]/30 flex items-center gap-1 text-[9px] transition-colors"
+                  className={`${UI_ACTION.danger} px-1.5 py-0.5 rounded flex items-center gap-1 text-[9px] transition-colors`}
                   title="Verlauf leeren (Sicherheitsdialog zur Freigabe von Arbeitsspeicher)"
                 >
                   <Trash2 size={9} />
@@ -287,7 +289,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleSection('EDIT')}
-                className="text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-[#181a22] hover:bg-[#242838] flex items-center gap-1 border border-[#2d3040] transition-colors font-medium text-[9.5px]"
+                className={`${UI_ACTION.ghost} px-2 py-0.5 rounded flex items-center gap-1 font-medium text-[9.5px]`}
                 title="Bearbeitungs-Palette einklappen (für maximale Wellenform-Fläche) [Taste: E]"
               >
                 <ChevronDown size={11} className="text-[#00a2ff]" />
@@ -302,17 +304,17 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onClone}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Auswahl klonen und direkt als neuen Eintrag in die Clip-Palette legen"
             >
-              <PlusSquare size={16} strokeWidth={1.8} className="text-[#00a2ff]" />
+              <PlusSquare size={16} strokeWidth={1.8} />
               <span className="text-[9.5px] font-semibold tracking-wider mt-1">CLONE</span>
             </button>
             <button
               type="button"
               onClick={onCopy}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Auswahl in die verlustfreie Zwischenablage kopieren (Ctrl+C)"
             >
               <Copy size={16} strokeWidth={1.8} />
@@ -323,7 +325,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
                 type="button"
                 onClick={onCut}
                 disabled={!hasSelection}
-                className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+                className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
                 title="Auswahl ausschneiden und in die Zwischenablage legen (Ctrl+X)"
               >
                 <Scissors size={16} strokeWidth={1.8} />
@@ -334,7 +336,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onPaste}
               disabled={!hasClipboard}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Zwischenablage an aktueller Cursorposition einfügen (Ctrl+V)"
             >
               <ClipboardPaste size={16} strokeWidth={1.8} />
@@ -344,7 +346,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onInsert}
               disabled={!hasClipboard}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Insert: fügt Audio ein und verschiebt nachfolgendes Audio nach hinten (Ripple Insert)"
             >
               <ArrowRightLeft size={16} strokeWidth={1.8} />
@@ -354,7 +356,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onDelete}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs text-[#ff453a]"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.danger}`}
               title="Löschmenü öffnen: normales Löschen (Stille einfügen) oder Ripple Delete (Aufrücken)"
             >
               <Trash2 size={16} strokeWidth={1.8} />
@@ -364,7 +366,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onClear}
               disabled={!hasSelection}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Clear: Bereich stummschalten, ohne nachfolgendes Audio zu verschieben"
             >
               <Brush size={16} strokeWidth={1.8} />
@@ -374,7 +376,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onUndo}
               disabled={!canUndo}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Letzten Bearbeitungsschritt rückgängig machen (Ctrl+Z)"
             >
               <RotateCcw size={16} strokeWidth={1.8} />
@@ -384,7 +386,7 @@ export const Zone3Footer: React.FC<Zone3FooterProps> = ({
               type="button"
               onClick={onRedo}
               disabled={!canRedo}
-              className="rb-button-grid flex flex-col items-center justify-center rounded-xs"
+              className={`flex flex-col items-center justify-center rounded-xs ${UI_ACTION.secondary}`}
               title="Rückgängig gemachten Schritt wiederholen (Ctrl+Y)"
             >
               <RotateCw size={16} strokeWidth={1.8} />

@@ -172,15 +172,13 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
           type="button"
           onClick={onToggleChatbot}
           data-zone1-tool="ai-copilot"
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[10.5px] font-mono font-bold transition-all border ${
-            chatbotOpen
-              ? 'bg-gradient-to-r from-[#0088ff] to-[#7c3aed] text-white border-blue-400/50'
-              : 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#0088ff]/60 hover:text-white'
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[10.5px] font-mono font-bold transition-all ${
+            chatbotOpen ? UI_ACTION.toggleOn : UI_ACTION.secondary
           }`}
           title="KI-Copilot-Palette öffnen/schließen (Mix-Analysen, Cue- und Schnittvorschläge)"
           aria-pressed={chatbotOpen}
         >
-          <Sparkles size={11} className="text-[#00a2ff]" />
+          <Sparkles size={11} className={chatbotOpen ? 'text-[#00e5ff]' : 'text-[#00a2ff]'} />
           <span className="hidden xl:inline tracking-wider">AI COPILOT</span>
         </button>
 
@@ -188,7 +186,7 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
           type="button"
           onClick={onOpenDatabaseInspector}
           data-zone1-tool="db-extractor"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[10.5px] font-semibold transition-colors border bg-[#0088ff]/12 border-[#0088ff]/30 text-[#00a2ff] hover:bg-[#0088ff] hover:text-white"
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[10.5px] font-semibold transition-colors ${UI_ACTION.secondary}`}
           title="Rekordbox-Datenbank & ANLZ-Wellenform-Extraktor öffnen (read-only)"
         >
           <Database size={11} />
@@ -200,10 +198,8 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
             type="button"
             onClick={onOpenRecorder}
             data-zone1-tool="recorder"
-            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10.5px] font-bold tracking-wide border transition-colors ${
-              recorderActive
-                ? 'border-[#ff3b30] bg-[#3a1517] text-[#ff625b] animate-pulse'
-                : 'border-[#3b2830] bg-[#21151a] text-[#ff5147] hover:bg-[#3a1517] hover:text-white'
+            className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10.5px] font-bold tracking-wide ${
+              recorderActive ? UI_ACTION.recordActive : UI_ACTION.record
             }`}
             title="Pro-Recorder für DJ-Set- und Mikrofonaufnahmen öffnen (Taste: F9)"
           >
@@ -215,7 +211,7 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
           type="button"
           onClick={onOpenSettings}
           data-zone1-tool="settings"
-          className="w-7 h-7 flex items-center justify-center rounded text-neutral-400 hover:text-white hover:bg-[#1b1d26] transition-colors"
+          className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${UI_ACTION.ghost}`}
           title="Workspace-Einstellungen (Modelle, Pfade, Verhalten) öffnen"
           aria-label="Einstellungen"
         >
@@ -225,7 +221,7 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
         <button
           type="button"
           onClick={onShowInfo}
-          className="hidden xl:inline px-2 py-1 rounded text-[10.5px] text-neutral-400 hover:text-white hover:bg-[#1b1d26] transition-colors"
+          className={`hidden xl:inline px-2 py-1 rounded text-[10.5px] transition-colors ${UI_ACTION.ghost}`}
           title="Rekordbox-Datenquellen und Non-Destructive-Originalschutz erklären"
         >
           Hilfe
@@ -285,7 +281,7 @@ const WindowButton: React.FC<{ label: string; danger?: boolean; children: React.
     tabIndex={-1}
     aria-label={label}
     title={label}
-    className={`w-6 h-6 flex items-center justify-center rounded text-neutral-500 transition-colors ${
+    className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${UI_ACTION.ghost} ${
       danger ? 'hover:bg-[#e81123] hover:text-white' : 'hover:bg-[#202228] hover:text-white'
     }`}
   >

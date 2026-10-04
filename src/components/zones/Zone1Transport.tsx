@@ -68,7 +68,7 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
       <button
         type="button"
         onClick={onReturnToStart}
-        className="w-7 h-7 flex items-center justify-center rounded text-neutral-300 hover:text-white hover:bg-[#1b1d26] transition-colors"
+        className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${UI_ACTION.ghost}`}
         title="Zum Cue-Startpunkt zurückkehren (Taste: C)"
         aria-label="Zum Cue-Startpunkt zurückkehren"
       >
@@ -80,10 +80,8 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
         type="button"
         onClick={onTogglePlay}
         data-transport="play-pause"
-        className={`w-8 h-7 flex items-center justify-center rounded transition-all border ${
-          isPlaying
-            ? 'bg-[#00c853] border-transparent text-black shadow-[0_0_10px_rgba(0,200,83,0.35)]'
-            : 'bg-[#161922] border-[#232738] text-neutral-100 hover:border-[#00c853] hover:text-[#00e676]'
+        className={`w-8 h-7 flex items-center justify-center rounded transition-all ${
+          isPlaying ? UI_ACTION.successActive : UI_ACTION.primary
         }`}
         title={isPlaying ? 'Wiedergabe pausieren (Leertaste)' : 'Wiedergabe starten (Leertaste)'}
         aria-label={isPlaying ? 'Pause' : 'Play'}
@@ -96,7 +94,7 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
         type="button"
         onClick={onStop}
         data-transport="stop"
-        className="w-7 h-7 flex items-center justify-center rounded text-neutral-300 hover:text-white hover:bg-[#1b1d26] transition-colors"
+        className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${UI_ACTION.ghost}`}
         title="Wiedergabe stoppen und an den Cue-Start zurücksetzen (Taste: S)"
         aria-label="Stop"
       >
@@ -110,7 +108,7 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
         type="button"
         onClick={onToggleLoop}
         className={`w-7 h-7 flex items-center justify-center rounded transition-colors border ${
-          loopActive ? UI_ACTION.toggleOn : 'border-transparent text-neutral-400 hover:text-white hover:bg-[#1b1d26]'
+          loopActive ? UI_ACTION.toggleOn : UI_ACTION.ghost
         }`}
         title={loopActive ? 'Loop-Wiedergabe aktiv (Taste: L)' : 'Loop-Wiedergabe des Auswahlbereichs aktivieren (Taste: L)'}
         aria-pressed={loopActive}
@@ -125,7 +123,7 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
         className={`flex items-center gap-1 px-2 py-1 rounded text-[10.5px] font-mono border transition-colors ${
           quantizeActive
             ? UI_ACTION.toggleOn
-            : 'border-transparent text-neutral-500 hover:text-neutral-300 hover:bg-[#1b1d26]'
+            : UI_ACTION.ghost
         }`}
         title={
           quantizeActive
@@ -134,7 +132,7 @@ export const Zone1Transport: React.FC<Zone1TransportProps> = ({
         }
         aria-pressed={quantizeActive}
       >
-        <span className="text-[#ff3b30] font-bold">Q</span>
+        <span className="font-bold">Q</span>
         <span className="hidden xl:inline font-sans text-[10.5px]">: AUTO</span>
       </button>
 

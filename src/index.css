@@ -19,30 +19,6 @@
   clip-path: polygon(16px 0, 100% 0, 100% 100%, 0 100%);
 }
 
-.rb-button-grid {
-  background: linear-gradient(180deg, #222327 0%, #16171a 100%);
-  border: 1px solid #2f3137;
-  transition: all 0.1s ease;
-}
-
-.rb-button-grid:hover:not(:disabled) {
-  background: linear-gradient(180deg, #2c2e33 0%, #1c1d22 100%);
-  border-color: #43464e;
-  color: #ffffff;
-}
-
-.rb-button-grid:active:not(:disabled) {
-  background: linear-gradient(180deg, #121316 0%, #1e1f23 100%);
-  border-color: #0088ff;
-  color: #00a2ff;
-}
-
-.rb-button-grid:disabled {
-  opacity: 0.38;
-  cursor: not-allowed;
-  filter: grayscale(0.5);
-}
-
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
