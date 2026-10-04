@@ -74,10 +74,12 @@ REPO_ARCHIV = "airdox-stem-jobs/airdox-editor-src.tar.gz"  # optional: Repo-Arch
 REPO_URL = "https://github.com/Airdox/airdox_editor.git"    # benutzt, wenn kein Archiv
 BRANCH = "main"
 
-# ── Rechnen ──────────────────────────────────────────────────────────────────
+# ── Rechnen & Warteschlange ──────────────────────────────────────────────────
 GERAET = "auto"              # auto | cuda | cpu
 MODELL_ID = ""               # "" = Modell aus dem Job-Manifest; sonst Katalog-ID
 PROFIL = ""                  # "" = Profil aus dem Job-Manifest (HIGH_QUALITY)
+FEHLGESCHLAGENE_WIEDERHOLEN = True  # True = zuvor fehlgeschlagene Jobs erneut versuchen
+ALTE_JOBS_BEREINIGEN = False        # True = erledigte/abgebrochene Jobs aufräumen
 MAX_JOBS = 0                 # 0 = so lange arbeiten, bis abgebrochen wird
 POLL_SEKUNDEN = 15           # Pause zwischen zwei Durchläufen
 ABBRUCH_SEKUNDEN = 5         # alle N s wird cancel.flag AUCH während der Rechnung geprüft
@@ -86,18 +88,38 @@ VERBOSE = False              # True = ausführlicheres Logging (jede Poll-Runde)
 >>>
 
 <<<CELL py
-# 1 · Google Drive mounten – Transportmittel für Jobs, Inputs und Ergebnisse
+# 1 · Google Drive mounten & Warteschlange prüfen
 from google.colab import auth  # type: ignore
 auth.authenticate_user()
 
 from google.colab import drive  # type: ignore
 drive.mount("/content/drive")
 
-import os, pathlib
+import json, os, pathlib
 JOB_ROOT = str(pathlib.Path("/content/drive/MyDrive") / JOB_ORDNER)
-os.makedirs(os.path.join(JOB_ROOT, "jobs"), exist_ok=True)
+jobs_dir = os.path.join(JOB_ROOT, "jobs")
+os.makedirs(jobs_dir, exist_ok=True)
 print("Jobablage:", JOB_ROOT)
-print("Offene Jobs:", len(os.listdir(os.path.join(JOB_ROOT, "jobs"))) if os.path.isdir(os.path.join(JOB_ROOT, "jobs")) else 0)
+
+job_dirs = sorted([d for d in os.listdir(jobs_dir) if os.path.isdir(os.path.join(jobs_dir, d))])
+if not job_dirs:
+    print("\n✓ Warteschlange ist leer (0 Jobs). Neue Aufträge aus dem AirDox Editor erscheinen hier automatisch.")
+else:
+    print(f"\n▶ Warteschlange ({len(job_dirs)} Job(s)):")
+    for idx, name in enumerate(job_dirs, 1):
+        mpath = os.path.join(jobs_dir, name, "manifest.json")
+        status, track, phase = "unbekannt", name, ""
+        if os.path.isfile(mpath):
+            try:
+                with open(mpath, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                status = data.get("status", "unbekannt")
+                track = data.get("trackName") or (data.get("input") or {}).get("fileName") or name
+                phase = data.get("phase") or ""
+            except Exception:
+                pass
+        icon = "⏳" if status in ("PENDING", "PREPARING") else "⚙️" if status == "RUNNING" else "✓" if status == "COMPLETED" else "❌"
+        print(f"  {idx}. {icon} {track} [{status}] {f'– {phase}' if phase else ''} (ID: {name[:8]}…)")
 >>>
 
 <<<CELL py
@@ -269,6 +291,10 @@ kommando = [
     "--cancel-poll", str(ABBRUCH_SEKUNDEN),
     "--worker", f"colab-{os.getpid()}",
 ]
+if FEHLGESCHLAGENE_WIEDERHOLEN:
+    kommando += ["--retry-failed"]
+if ALTE_JOBS_BEREINIGEN:
+    kommando += ["--clean-finished"]
 if MODELL_ID:
     kommando += ["--model", MODELL_ID]
 if PROFIL:

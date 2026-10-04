@@ -368,6 +368,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Jobs pro Lauf; 0 bedeutet unbegrenzt")
     parser.add_argument("--idle-log-seconds", type=float, default=60,
                         help="Intervall für Lebenszeichen im Leerlauf; 0 deaktiviert")
+    parser.add_argument("--retry-failed", action="store_true",
+                        help="Fehlgeschlagene Jobs (FAILED) automatisch auf PENDING zurücksetzen und abarbeiten")
+    parser.add_argument("--clean-finished", action="store_true",
+                        help="Bereits abgeschlossene (COMPLETED) oder abgebrochene (CANCELLED) Jobs aus der Ablage entfernen")
     parser.add_argument("--verbose", action="store_true", help="Zusätzliche Diagnoseausgabe")
     return parser.parse_args(argv)
 
@@ -872,8 +876,17 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
 
         return_code, output = _run_adapter(command, options, root, job_dir, manifest, claim, local_output)
         if return_code != 0:
-            detail = output.strip().splitlines()[-1] if output.strip() else f"Adapter exit code {return_code}"
-            raise RuntimeError(f"Adapter fehlgeschlagen (Exit {return_code}): {detail}")
+            if "Numba needs NumPy 2.2 or less" in output or "No module named 'ml_collections'" in output:
+                _say("Fehlende oder inkompatible Abhängigkeit erkannt – installiere numpy<=2.2.0 / ml-collections automatisch …", force=True)
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-q", "numpy<=2.2.0", "ml-collections"],
+                    check=False
+                )
+                _say("Wiederhole Inferenz mit angepasster Python-Umgebung …", force=True)
+                return_code, output = _run_adapter(command, options, root, job_dir, manifest, claim, local_output)
+            if return_code != 0:
+                detail = output.strip().splitlines()[-1] if output.strip() else f"Adapter exit code {return_code}"
+                raise RuntimeError(f"Adapter fehlgeschlagen (Exit {return_code}): {detail}")
         if _cancel_requested(job_dir, manifest):
             raise WorkerCancelled("Der Editor hat den Abbruch nach der Separation angefordert")
 
@@ -929,7 +942,25 @@ def run_worker_cycle(options: argparse.Namespace, root: Path) -> dict[str, int]:
             _say(f"Job {job_dir.name}: Manifest unlesbar – übersprungen ({error})", bool(options.verbose))
             continue
         if manifest["status"] in TERMINAL_STATUSES:
-            continue
+            if getattr(options, "retry_failed", False) and manifest["status"] == "FAILED":
+                _say(f"Job {job_dir.name}: Status war FAILED – wird durch --retry-failed erneut auf PENDING gesetzt", force=True)
+                manifest = _set_manifest(
+                    job_dir,
+                    manifest,
+                    status="PENDING",
+                    phase="Wartet auf den externen Rechner",
+                    percent=0,
+                )
+                try:
+                    (job_dir / "claim.json").unlink(missing_ok=True)
+                    (job_dir / "error.json").unlink(missing_ok=True)
+                except OSError:
+                    pass
+            elif getattr(options, "clean_finished", False) and manifest["status"] in ("COMPLETED", "CANCELLED"):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                continue
+            else:
+                continue
         counts["pending"] += 1
         model_id = str(manifest["engine"].get("modelId") or "")
         profile = str(manifest["engine"].get("profile") or "")

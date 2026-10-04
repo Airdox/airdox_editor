@@ -403,6 +403,22 @@ export async function probeTorchRuntime(options: TorchProbeOptions): Promise<Tor
     return now() - snapshot.at < ttl;
   };
 
+  // Wenn ein absoluter Pfad angegeben ist und die Datei nicht existiert:
+  // sofort als nicht verfügbar melden – ohne Prozessstart, Timeout oder Platten-I/O.
+  if (path.isAbsolute(options.command) && !existsSync(options.command)) {
+    const memory = memoryCache.get(key);
+    if (memory && fresh(memory)) return fromSnapshot(memory);
+    const snapshot: ProbeSnapshot = {
+      at: now(),
+      available: false,
+      verification: 'none',
+      reason: `Python-Laufzeit nicht verfügbar (${commandLabel})`,
+      detail: `Datei nicht gefunden: ${options.command}`,
+    };
+    memoryCache.set(key, snapshot);
+    return { ...fromSnapshot(snapshot), durationMs: 0, cached: false };
+  }
+
   // Stufe 0: Prozess-Cache. Im schnellen Modus zählt ein vorhandenes strenges
   // Verdikt als stärkere Antwort.
   for (const candidateKey of mode === 'fast' ? [fastKey, strictKey] : [strictKey]) {

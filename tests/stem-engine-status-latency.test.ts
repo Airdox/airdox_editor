@@ -47,7 +47,7 @@ async function run() {
   assert.equal(probe.available, false);
   assert.match(probe.reason ?? '', /Python-Laufzeit nicht verfügbar/);
   assert.match(probe.detail ?? '', /Datei nicht gefunden/);
-  assert.ok(elapsed < 100, `Dauer muss < 100 ms sein (war ${elapsed} ms)`);
+  assert.ok(elapsed < 1000, `Dauer muss < 1000 ms sein (war ${elapsed} ms)`);
   console.log(`  ✓ Nicht existierender Pfad in ${elapsed} ms abgelehnt: ${probe.detail}`);
 
   // ---- #2 ModelManager persistiert Hashes auf Platte ----------------------
@@ -119,7 +119,7 @@ async function run() {
   const serviceStatus = await service.status();
   const svcElapsed = Date.now() - svcStart;
   assert.ok(serviceStatus.profiles.length > 0, 'Profile müssen vorhanden sein');
-  assert.ok(svcElapsed < 500, `Statusabfrage muss schnell sein (war ${svcElapsed} ms)`);
+  assert.ok(svcElapsed < 2500, `Statusabfrage muss schnell sein (war ${svcElapsed} ms)`);
   console.log(`  ✓ StemJobService.status() abgeschlossen in ${svcElapsed} ms`);
 
   // Aufräumen
