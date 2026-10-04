@@ -22,6 +22,9 @@ const files = [
   'tests/stem-remote-job-service.test.ts',
   'tests/stem-remote-manifest.test.ts',
   'tests/stem-remote-setup-config.test.ts',
+  // Nagelt die Kommandozeile fest, die das Notebook baut: `--model` darf den
+  // Modellordner nicht überschreiben, unbekannte Optionen müssen abbrechen.
+  'tests/stem-remote-worker-cli.test.mjs',
 ];
 const out = path.join(root, 'stem-gate-run', 'remote-evidence.json');
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');

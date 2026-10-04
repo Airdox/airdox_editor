@@ -170,6 +170,54 @@ npm run stems:remote:notebook      # .md → .ipynb
 npm run stems:remote:selftest      # Protokoll-Selbsttest des Python-Workers
 ```
 
+Optionen des **Python-Workers** (Colab): `--root --model-dir --adapter
+--work-dir --device --worker --poll --cancel-poll --model --profile --verbose
+--idle-log-seconds --check-store --once --max-jobs --self-test`.
+`--model`/`--profile` sind reine **Filter bzw. Hinweise**: verbindlich ist immer
+der Steckbrief im Job (`manifest.json`). Ein Job, dessen Manifest ein anderes
+Modell verlangt, wird übersprungen und protokolliert – der Worker rechnet nie
+ein anderes Modell als das, das der Editor bestellt hat.
+
+Der Worker ist **im Warten sichtbar**: Er schreibt beim Start und danach in
+jedem Durchlauf zwei Dateien in die Wurzel der Ablage – `worker.status.json`
+(Lebenszeichen mit Id, Host, Gerät, GPU, Phase und Zähler; der Editor zeigt
+daraus das Banner „Colab-Worker online“ bzw. „Warte auf Lebenszeichen“) und
+`worker.log` (dasselbe, damit man für die Diagnose nicht in jeden Jobordner
+schauen muss). Den Job beansprucht er sofort und trägt den Worker-Eintrag
+**vor** der Arbeitskopie ins Manifest ein – die Stufe „Extern verarbeiten“ steht
+damit nicht erst nach dem Kopieren von 100 MB+. `--verbose` protokolliert
+zusätzlich jede Poll-Runde.
+
+### Wenn „Wartet auf den externen Rechner“ stehen bleibt
+
+Dieser Text bedeutet: der Steckbrief liegt in der Ablage, aber **kein Rechner
+hat ihn beansprucht** (`claim.json` fehlt). Die Frage „warum“ beantwortet ein
+einziger, veränderungsfreier Befehl – auf dem Windows-Rechner wie in Colab:
+
+```bash
+python3 colab/remote_worker.py --root "<Jobablage>" --check-store
+```
+
+Er druckt je Job Status, Phase, Arbeitskopie, Lease (mit Lebenszeichen-Alter)
+und Abbruchfahne und danach ein Urteil im Klartext. Typische Urteile:
+
+| Urteil | Ursache | Abhilfe |
+| --- | --- | --- |
+| „offene(r) Job(s) ohne Lease“ | kein Worker läuft | Colab-Notebook Zelle 5 ausführen (sie läuft absichtlich weiter und meldet jede Minute „Warte auf Jobs …“) |
+| „Kein einziger Job in der Ablage“ | andere Ordner auf beiden Seiten, oder Drive hat noch nicht synchronisiert | `JOB_ORDNER` im Notebook und die Jobablage im Editor müssen derselbe Ordner desselben Kontos sein |
+| „passen nicht zum gestarteten Modell“ | `MODELL_ID` im Notebook-formular ≠ Steckbrief | `MODELL_ID = ""` setzen (dann gilt das Manifest) |
+| „frisch beansprucht“ | hier rechnet bereits ein Rechner | im Editor „Jetzt prüfen“; kommt nichts zurück, Drive-Rückrichtung prüfen |
+| „abgelaufene Lease“ | Colab-Laufzeit wurde beendet, während der Job lief | neuen Lauf starten (der Job darf übernommen werden) oder im Editor abbrechen und neu starten |
+
+Zwei Fehler in dieser Ecke sind behoben und durch
+`tests/stem-remote-worker-cli.test.mjs` festgenagelt: das Notebook startete den
+Worker mit `--model`, was argparse stillschweigend als Abkürzung von
+`--model-dir` las (falscher Modellordner), und `--profile` ließ den ganzen Lauf
+mit Exit 2 enden (nie ein Claim ⇒ Editor wartet bis zum Timeout). Die
+Kommandozeile ist jetzt streng: `allow_abbrev=False`, unbekannte Optionen
+brechen ab, und der Notizbuch-Vorflug meldet einen sofort beendeten Worker
+ausdrücklich.
+
 ## 8. Tests
 
 | Test | Was er belegt |

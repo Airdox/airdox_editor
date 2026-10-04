@@ -26,6 +26,26 @@ der Editor `COMPLETED` und importiert die Ergebnisse – der Benutzer muss Colab
 > verbraucht. Kein GPU-Betrieb geht weiter, kein Ergebnis wird noch importiert,
 > und derselbe Jobordner bleibt für einen neuen Lauf benutzbar. Takt:
 > `--cancel-poll` (Sekunden).
+>
+> **Wenn der Editor „Wartet auf den externen Rechner“ zeigt.** Das heißt: der
+> Steckbrief liegt in der Ablage, aber kein Rechner hat ihn beansprucht
+> (`claim.json` fehlt). Drei Ursachen, in dieser Reihenfolge prüfen:
+>
+> 1. **Anderer Ordner.** `JOB_ORDNER` (Zelle 1) und der im Editor gewählte
+>    Ordner müssen derselbe Ordner desselben Google-Kontos sein. Zelle 5 druckt
+>    vor dem Start `--check-store` – dort steht das Urteil im Klartext.
+> 2. **Worker läuft nicht.** Zelle 5 muss ausgeführt sein und darf nicht sofort
+>    mit einem Fehlercode enden. Sie läuft **absichtlich** weiter und meldet alle
+>    60 s „Warte auf Jobs …“ – das ist der Lebensbeweis, kein Hänger.
+> 3. **Modellfilter.** Steht `MODELL_ID` auf einem anderen Modell als im
+>    Steckbrief, überspringt der Worker den Job: Er rechnet **nie** ein anderes
+>    Modell als das im Manifest. `MODELL_ID = ""` lässt das Manifest
+>    entscheiden. Ein sofort beendeter Lauf (unbekannte Option, fehlender
+>    Adapter) wird in Zelle 5 als Fehlercode gemeldet.
+>
+> `python3 colab/remote_worker.py --root "<Jobablage>" --check-store` zeigt den
+> Zustand jederzeit an – auf dem Laptop wie in Colab und **ohne** etwas zu
+> verändern.
 
 <<<CELL md
 ### 0 · Was hier passiert
@@ -88,6 +108,11 @@ if os.path.isdir(os.path.join("/content/drive/MyDrive", os.path.dirname(REPO_ARC
     os.makedirs(REPO_DIR, exist_ok=True)
     subprocess.run(["tar", "-xzf", os.path.join("/content/drive/MyDrive", REPO_ARCHIV), "-C", REPO_DIR], check=True)
     print("Quellcode aus Drive-Archiv entpackt:", REPO_DIR)
+    print(
+        "Achtung: Ein Archiv in Drive ist ein eingefrorener Stand. Läuft der Editor mit einer neueren "
+        "Fassung, passen Kommandozeile und Jobprotokoll nicht zusammen – dann das Archiv neu bauen "
+        "(npm run stems:gate:archive) oder REPO_ARCHIV leeren und aus Git beziehen."
+    )
 else:
     if not os.path.isdir(os.path.join(REPO_DIR, ".git")):
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, REPO_DIR], check=True)
@@ -95,6 +120,11 @@ else:
         subprocess.run(["git", "-C", REPO_DIR, "fetch", "origin", BRANCH, "--depth", "1"], check=False)
         subprocess.run(["git", "-C", REPO_DIR, "checkout", "FETCH_HEAD"], check=False)
     print("Quellcode ausgecheckt:", REPO_DIR)
+
+# Welcher Stand rechnet hier? (Editor-Log und Colab-Ausgabe müssen denselben
+# Stand zeigen – sonst passen Worker und Jobprotokoll nicht zusammen.)
+stand = subprocess.run(["git", "-C", REPO_DIR, "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+print("Quellcode-Stand:", (stand.stdout or "").strip() or "unbekannt (kein Git)")
 
 ADAPTER = os.path.join(REPO_DIR, "python", "bsroformer_inference.py")
 WORKER = os.path.join(REPO_DIR, "colab", "remote_worker.py")
@@ -177,10 +207,31 @@ print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Ab
 >>>
 
 <<<CELL py
-# 5 · Worker starten. Läuft er endlos, einfach die Zelle stoppen –
-#    halbfertige Jobs bleiben in Google Drive und werden hier wieder aufgenommen.
-import subprocess, sys, os
+# 5 · Erst nachsehen, dann rechnen lassen.
+#
+#     Wichtig: Läuft der Worker, bleibt diese Zelle **absichtlich** offen – er
+#     wartet auf Jobs. Alle 60 s erscheint „Warte auf Jobs …“; das ist der
+#     Beweis, dass er lebt, kein Hänger. Zelle stoppen = Worker aus (ein
+#     halbfertiger Job wird beim nächsten Start wieder aufgenommen).
+import os, subprocess, sys, time
 
+def ablage_ansehen(zusatz=None):
+    """`--check-store`: Status, Lease, Abbruchfahne und ein Urteil – ohne Rechnen."""
+    return subprocess.run(
+        [sys.executable, WORKER, "--root", JOB_ROOT, "--check-store", *(zusatz or [])],
+        capture_output=True, text=True,
+    )
+
+# 5a) Vorflug: Sehen Notebook und Editor dieselbe Ablage, und wartet dort ein Job?
+vorflug_zusatz = []
+if MODELL_ID:
+    vorflug_zusatz += ["--model", MODELL_ID]
+vorflug = ablage_ansehen(vorflug_zusatz)
+print(vorflug.stdout.strip() or vorflug.stderr.strip())
+if vorflug.returncode != 0:
+    print("!! Die Ablage ist so nicht benutzbar – der Worker würde nichts finden. Bitte zuerst das Urteil oben klären.")
+
+# 5b) Worker starten
 kommando = [
     sys.executable, WORKER,
     "--root", JOB_ROOT,
@@ -204,12 +255,38 @@ if VERBOSE:
     kommando += ["--verbose"]
 
 print("Start:", " ".join(kommando))
-subprocess.run(kommando, check=False)
+gestartet = time.time()
+ergebnis = subprocess.run(kommando, check=False)
+laufzeit = time.time() - gestartet
+
+# 5c) Ein sofort beendeter Worker ist der klassische Grund, warum der Editor
+#     „Wartet auf den externen Rechner“ zeigt: nichts hat den Job beansprucht.
+if ergebnis.returncode != 0:
+    print(
+        f"!! Der Worker wurde nach {laufzeit:.0f} s mit Code {ergebnis.returncode} beendet. "
+        "Der Job bleibt in der Ablage und wird beim nächsten Start wieder aufgenommen – "
+        "aber nur, wenn die Ursache oben behoben ist (unbekannte Option, fehlender Adapter, keine Rechte am Ordner)."
+    )
+else:
+    print(f"Worker beendet (Laufzeit {laufzeit:.0f} s).")
+
+# 5d) Nach dem Lauf derselbe Blick wie vorher: was steht jetzt in der Ablage?
+nachher = ablage_ansehen()
+print(nachher.stdout.strip() or nachher.stderr.strip())
 >>>
 
 <<<CELL py
 # 6 · Übersicht: welche Jobs liegen in der Ablage, welcher Status?
-import json, os
+#     Diese Zelle kommt ohne den Worker aus (sie funktioniert also auch, wenn der
+#     Quellcode-Stand defekt ist) und beantwortet die Frage, die der Editor nicht
+#     beantworten kann: Hat der Rechner den Job überhaupt gesehen?
+import json, os, time
+
+def alter(stempel):
+    try:
+        return f"vor {int(max(0, time.time() - float(stempel) / 1000))} s"
+    except (TypeError, ValueError):
+        return "unbekannt"
 
 jobs_dir = os.path.join(JOB_ROOT, "jobs")
 zeilen = []
@@ -222,9 +299,33 @@ for name in sorted(os.listdir(jobs_dir)) if os.path.isdir(jobs_dir) else []:
             data = json.load(handle)
     except Exception:
         continue
-    zeilen.append((name, data.get("status"), data.get("phase"), data.get("engine", {}).get("modelId"), (data.get("worker") or {}).get("device")))
-for job_id, status, phase, model, device in zeilen:
-    print(f"{job_id}  {status:<10} {str(model):<36} {str(device or '-'):<8} {phase or ''}")
+    claim = {}
+    try:
+        with open(os.path.join(jobs_dir, name, "claim.json"), encoding="utf-8") as handle:
+            claim = json.load(handle)
+    except Exception:
+        claim = {}
+    input_datei = os.path.join(jobs_dir, name, "input", os.path.basename(str((data.get("input") or {}).get("fileName") or "")))
+    zeile = {
+        "job": name,
+        "status": data.get("status"),
+        "phase": data.get("phase"),
+        "model": (data.get("engine") or {}).get("modelId"),
+        "device": (data.get("worker") or {}).get("device"),
+        "lease": f"{claim.get('id')} ({alter(claim.get('heartbeatAt') or claim.get('claimedAt'))})" if claim else "keine",
+        "input": "da" if os.path.isfile(input_datei) else "fehlt/unterwegs",
+        "cancel": "JA" if os.path.isfile(os.path.join(jobs_dir, name, "cancel.flag")) else "nein",
+    }
+    zeilen.append(zeile)
+for z in zeilen:
+    print(
+        f"{z['job']}  {str(z['status']):<10} {str(z['model']):<36} {str(z['device'] or '-'):<8} "
+        f"Input {z['input']:<15} Lease {z['lease']:<28} Abbruch {z['cancel']}  {z['phase'] or ''}"
+    )
 print(f"\n{len(zeilen)} Job(s) in der Ablage.")
 print("Der Editor erkennt COMPLETED automatisch und importiert die Stems – Colab muss dafür nichts weiter tun.")
+
+# Und dieselbe Sicht noch einmal mit Urteil: was ist als Nächstes zu tun?
+if os.path.isfile(WORKER):
+    subprocess.run([sys.executable, WORKER, "--root", JOB_ROOT, "--check-store"], check=False)
 >>>
