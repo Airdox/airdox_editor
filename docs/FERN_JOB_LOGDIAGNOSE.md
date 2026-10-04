@@ -28,3 +28,45 @@ Form im aktuellen Stand nicht mehr gibt – `src/stems/errors.ts` rendert die Ur
 aus, der Abbruch protokolliert nur noch bestätigte (`accepted`) und abgelehnte Fälle
 getrennt. **Vor der nächsten Diagnose also prüfen, welches Build läuft**
 (Einstellungen → Systemprotokoll, bzw. neu bauen: `npm run build && npm run desktop`).
+
+## Nachtrag 2026-10-04: „Wartet auf den externen Rechner“ – zwei echte Ursachen gefunden
+
+Der Editor zeigt diese Zeile, solange **kein** Rechner den Job beansprucht hat
+(`jobs/<jobId>/claim.json` fehlt). Die Colab-Zelle 5 startet dafür den Worker –
+und tat es in zwei Fällen nicht wirksam. Beide Fehler sind behoben und durch
+`tests/stem-remote-worker-cli.test.mjs` sowie den Selbsttest des Workers
+(`npm run stems:remote:selftest`) abgesichert:
+
+1. **`--model` wurde stillschweigend zu `--model-dir`.** Das Notebook hängt
+   `--model <id>` an, sobald ein offener Job in der Ablage liegt. Der
+   Python-Worker kannte die Option nicht; `argparse` akzeptierte sie als
+   eindeutige **Abkürzung** von `--model-dir` und überschrieb damit den
+   Modellordner mit der Modell-Id. Folge: der Job wurde beansprucht und
+   scheiterte am fehlenden Checkpoint – bzw. wirkte im Statusbild wie „nichts
+   passiert“, weil der Editor nur den Steckbrief kennt. Jetzt ist die
+   Kommandozeile streng (`allow_abbrev=False`), `--model` ist ein dokumentierter
+   Filter (verbindlich bleibt das Manifest), und unbekannte Optionen brechen ab.
+2. **`--profile HIGH_QUALITY` beendete den ganzen Lauf mit Exit 2**
+   („unrecognized arguments“). Die Zelle war damit nach Sekunden vorbei; kein
+   Worker beanspruchte je einen Job, der Editor wartete bis zum Timeout
+   (`AIRODOX_STEM_REMOTE_TIMEOUT_MS`, Default 6 h) und meldete erst dann
+   `REMOTE_TIMEOUT`. `--profile` existiert jetzt (als Hinweis – gerechnet wird
+   nach dem Manifest), und Zelle 5 meldet einen sofort beendeten Worker
+   ausdrücklich samt Exit-Code.
+
+**Sofortdiagnose ohne Log-Raten** (verändert nichts, auch auf dem Windows-PC):
+
+```bash
+python3 colab/remote_worker.py --root "<Jobablage>" --check-store
+```
+
+Ausgabe je Job: Status, Phase, Arbeitskopie, Lease mit Lebenszeichen-Alter,
+Abbruchfahne – danach ein Urteil („offene(r) Job(s) ohne Lease“, „Kein einziger
+Job in der Ablage“, „passen nicht zum gestarteten Modell“, „frisch
+beansprucht“, „abgelaufene Lease“). Das Notebook führt denselben Befehl als
+Vorflug aus, bevor es den Worker startet, und wiederholt ihn danach.
+
+Der Worker selbst ist jetzt auch **im Warten sichtbar**: er meldet jede
+`--idle-log-seconds` (Default 60) „Warte auf Jobs – N in der Ablage“, und ein
+Wechsel der Jobliste wird sofort protokolliert. Eine weiterlaufende Colab-Zelle
+ist damit kein Rätsel mehr, sondern der erwartete Zustand.
