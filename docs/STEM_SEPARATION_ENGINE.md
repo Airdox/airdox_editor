@@ -485,7 +485,9 @@ Original anzufassen“.
   `HIGH_QUALITY`/`MAXIMUM_QUALITY` über den Kern, `PREVIEW` bleibt der
   Demucs-Pfad; die Stem-Liste kommt aus `stems.stemIds` (Deskriptor), die
   htdemucs-Namen des Vorschau-Pfads aus `modelCatalog.json` statt aus einer
-  Konstanten. Fortschritt und „Abbrechen“ sitzen im Deck (`DeckStemsControl`).
+  Konstanten. Fortschritt und „Abbrechen“ sitzen seit UI v2.0 in der flachen
+  Fortschrittszeile des Stem-Centers (`src/components/zones/StemCenter.tsx`,
+  Zone 2); der Deck-Mixer (`DeckStemsControl`) zeigt nur noch die fertigen Stems.
   Offen geblieben: Der Mischpult-Desk des Decks hat vier Slots
   (vocals/drums/bass/other). Modelle mit anderen Stem-Mengen laufen durch die
   Engine und werden als Job sauber validiert, aber `buildTrackStems` bricht mit

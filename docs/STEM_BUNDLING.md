@@ -19,8 +19,8 @@ Python noch Internet.
 Der Katalog (`src/stems/modelCatalog.json`) beschreibt Modelle, aber er enthält
 sie nicht. `resources/models/` und `resources/stem-runtime/` enthalten im Repo
 nur Platzhalter-READMEs. Ohne Dateien meldet die Engine für jedes Profil
-`available: false`; die UI schreibt dann an den Profil-Button **„keine Gewichte"**
-(`DeckStemsControl.tsx`) und nennt im Tooltip den konkreten Grund, z. B.
+`available: false`; die UI schreibt dann an die Modellzeile **„keine Gewichte"**
+(`src/components/zones/StemModelPicker.tsx`) und nennt im Tooltip den konkreten Grund, z. B.
 
 ```
 PREVIEW        htdemucs-ft-4stem          Checkpoint fehlt: htdemucs_ft | model_hash "unverified"

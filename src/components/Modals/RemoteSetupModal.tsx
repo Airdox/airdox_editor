@@ -4,8 +4,8 @@
  *
  * Der Dialog ist die einzige Stelle, an der der Nutzer den Transport
  * (Jobablage) einrichtet: Google-Drive-Sync-Ordner (empfohlen) oder
- * rclone-Remote. Danach ist der Button „Externe Zerlegung (Google Colab)"
- * in der Deck-Stem-Leiste aktiv und der komplette Ablauf läuft ohne weitere
+ * rclone-Remote. Danach ist das Verarbeitungsziel „Google Colab“ im
+ * Konfigurations-Panel des Stem-Centers aktiv und der komplette Ablauf läuft ohne weitere
  * Bedienung: Arbeitskopie → Drive → Colab-Worker → Ergebnisse zurück →
  * der Editor prüft, speichert dauerhaft und verknüpft mit dem Original-Track.
  *

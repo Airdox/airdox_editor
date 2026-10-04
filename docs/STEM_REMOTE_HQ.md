@@ -18,12 +18,27 @@ Editor ◀─Stems + result.json + Status─── Ablage ◀──────�
 Google Drive ist dabei reiner **Transport** (§16) – keine Audiodatenbank, keine
 zweite Quelle der Wahrheit. Der Editor bleibt die zentrale Anwendung.
 
-## Live-Statusfenster
+## Live-Datenfluss-Fenster
 
-Beim Start eines externen Jobs öffnet sich ein kompaktes Statusfenster. Es zeigt
-Arbeitskopie, Übergabe an den Drive-Sync-Ordner, Wartezeit auf den Worker,
-Verarbeitung und geprüften Rückimport. Job-ID, Modell-Phase, vom Worker
-**gemeldeter** Fortschritt, Rechenort und Transportzustand bleiben sichtbar.
+Beim Start eines externen Jobs steht der **Live-Datenfluss** zur Verfügung
+(schwebende Schaltfläche „↗ Live-Datenfluss · Status ansehen“, Fenster über
+„Schließen“ jederzeit wieder erreichbar). Er zeigt fünf Stationen und markiert
+jede erst dann als bestätigt, wenn ein echtes Ereignis sie belegt:
+
+| Station | Wird bestätigt durch |
+| --- | --- |
+| 1. Arbeitskopie im Editor | der Job existiert (`onRemoteJob`) |
+| 2. Google Drive · Ablage bestätigt | `editor.input_published` bzw. Status ≠ `PREPARING`/`PENDING`, mit Zeitstempel `uploadedAt` |
+| 3. Google Colab übernimmt | Worker-Heartbeat/`claim.json` bzw. `editor.worker_claim_observed` |
+| 4. KI-Trennung läuft | Worker-Fortschritt (`workerPercent`) bzw. `worker.inference_completed` |
+| 5. Geprüft zurück im Editor | `editor.result_imported`/Status `COMPLETED` |
+
+Der Prozentwert ist **ausschließlich** der vom Worker gemeldete
+Inferenzfortschritt: Vor dem Worker-Claim zeigt der Monitor „Worker meldet noch
+keinen Wert“ und erklärt, dass **0 % in dieser Phase korrekt** ist – Upload,
+Drive-Synchronisierung und Wartezeit werden nicht als Rechenfortschritt
+ausgegeben. Job-ID, Modell-Phase, Rechenort (GPU/CPU-Fallback), Worker-ID,
+letzter Heartbeat und Transportzustand bleiben sichtbar.
 Nach 120 Sekunden ohne Worker-Claim erscheint eine konkrete Diagnose; nach
 90 Sekunden ohne Worker-Lebenszeichen ein eigener Heartbeat-Hinweis. Die Uhr
 basiert auf `phaseUpdatedAt`/Worker-Heartbeat und wird von unveränderten
@@ -46,27 +61,32 @@ Fern-Stem-Workflow, nicht eine allgemeine Dateireparatur.
 
 ## 1. Was der Nutzer sieht
 
-In der Deck-Stem-Leiste steht nur noch:
+Seit UI v2.0 liegt die Bedienung im **Stem-Center** (Zone 2) und im
+**Live-Datenfluss-Fenster** – der Deck-Mixer darunter zeigt nur noch die
+fertigen Stems (Solo/Mute/Volume, Presets, Clip-Export):
 
-| Element | Bedeutung |
-| --- | --- |
-| **Schnell** | lokaler In-Process-Pfad (ONNX, GPU wenn vorhanden, sonst CPU) |
-| **High Quality** | höchste Trennung – lokal oder extern |
-| **Externe Zerlegung (Google Colab)** | der eindeutige Workflow-Button, immer sichtbar: nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → startet die Zerlegung sofort; grün markiert = extern gewählt, erneut klicken stellt „lokal“ wieder ein |
-| Statuszeile | „Arbeitskopie wird hochgeladen“, „Wartet auf den externen Rechner“, „Verarbeitung läuft – GPU/CPU“, „Stem-Separation abgeschlossen“ |
-| **Abbrechen** | legt `cancel.flag` in die Ablage und meldet das Ergebnis des Klicks sofort an der Leiste („Abbruch gemeldet…“ / Grund, wenn Drive nicht erreichbar war). Beide Worker prüfen die Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
+| Element | Ort | Bedeutung |
+| --- | --- | --- |
+| **Stem-Separation starten** | Stem-Center, Ruhezustand (A) | öffnet das Konfigurations-Panel |
+| **Schnell** / **High Quality** | Konfigurations-Panel (B) | lokaler In-Process-Pfad bzw. höchste Trennung (lokal oder extern) |
+| **Google Colab** | Konfigurations-Panel (B), Verarbeitungsziel | nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → wählt den externen Rechner |
+| **Job jetzt ausführen** | Konfigurations-Panel (B), einzige Primäraktion | startet den Lauf mit Qualität + Ziel |
+| Statuszeile | Stem-Center, Job-Monitor (C) | „Arbeitskopie wird vorbereitet…“, „Wartet auf externen Rechner (Google Drive)“, „Externer Rechner rechnet (GPU)“ … |
+| **Abbrechen** | Job-Monitor (C), dieselbe flache Zeile | legt `cancel.flag` in die Ablage und meldet das Ergebnis sofort („Abbruch läuft…“ / Grund, wenn Drive nicht erreichbar war). Während der Vorbereitung – vor dem ersten Job-Poll – merkt die App den Abbruch vor und stoppt vor dem Upload. Beide Worker prüfen die Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
+| **Live-Datenfluss** | schwebende Schaltfläche unten rechts | öffnet den Monitor mit fünf Stationen, Worker-Heartbeat, Ablaufprotokoll und Metadaten der Arbeitskopie |
 
 Es gibt keine Python-, Colab- oder Checkpoint-Bedienung in der UI und keine
 Tracebacks. Das Popup zeigt eine begrenzte, lesbare Ablaufspur; ausführlichere
 Technikdetails stehen im Log (`STEM-REMOTE`) und in den Jobdateien. Der Nutzer
 sieht eine Ursache in einem Satz („Google Drive ist gerade nicht erreichbar …“).
-Die übrigen Qualitätsprofile (`Vorschau`, `High`, `Max`) bleiben unter
-„Weitere Profile“ erhalten – nichts wurde entfernt.
+Die übrigen Qualitätsprofile (`Vorschau`, `High`, `Max`) bleiben erhalten: Sie
+liegen in der ausgelagerten Modell-Auswahl, die das Zahnrad im
+Konfigurations-Panel öffnet (`StemModelPicker`) – nichts wurde entfernt.
 
 ## 2. Ablage einrichten
 
-**Im Editor (empfohlen):** Button **„Externe Zerlegung (Google Colab)"** in der
-Deck-Stem-Leiste → Einrichtungs-Dialog:
+**Im Editor (empfohlen):** im Konfigurations-Panel des Stem-Centers das
+Verarbeitungsziel **„Google Colab“** wählen → Einrichtungs-Dialog:
 
 1. **Jobablage wählen** – Drive-Sync-Ordner (Empfehlung:
    `My Drive → airdox-stem-jobs`, per Systemdialog wählbar) oder rclone-Remote
@@ -282,7 +302,7 @@ gleichbedeutend mit „Colab rechnet“. Schritt für Schritt:
    `worker.input_verified`, `worker.inference_started`, Fortschritts- und
    Ergebnis-/Fehlerschritte; `worker.log` ist die lesbare Ergänzung.
    `error.json` enthält den Maschinenfehlercode. Die App übernimmt diese
-   Ereignisse in das Ablaufprotokoll des Statusfensters.
+   Ereignisse in das Ablaufprotokoll des Live-Datenfluss-Fensters.
 6. Nach `worker.completed` müssen Manifest und Ergebnisdateien `COMPLETED`
    melden; im Editor folgen `editor.output_validated` und
    `editor.result_imported`. Der lokale E2E-Test prüft die gleiche Kette mit

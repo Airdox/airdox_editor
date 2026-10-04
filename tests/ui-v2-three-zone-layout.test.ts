@@ -44,6 +44,7 @@ const zone1Source = `${zone1BarSource}\n${zone1TransportSource}`;
 const stemCenterSource = await read('src/components/zones/StemCenter.tsx');
 const pickerSource = await read('src/components/zones/StemModelPicker.tsx');
 const zone3Source = await read('src/components/zones/Zone3Footer.tsx');
+const deckMixerSource = await read('src/components/DeckStemsControl.tsx');
 const toastSource = await read('src/components/zones/TransientStatusToast.tsx');
 const menuSource = await read('src/components/MenuBar.tsx');
 const themeSource = await read('src/ui/theme.ts');
@@ -382,6 +383,47 @@ console.log('\n[ TEST ] B5 – Farb- und Button-Hierarchie ist zentral definiert
   assert.ok(segmentClass(false).includes('#161922'), 'nicht gewählte Segmente sind neutral');
   assert.ok(segmentClass(true, true).includes('cursor-not-allowed'), 'deaktivierte Segmente sind sichtbar gesperrt');
   console.log('  ✓ Sieben Ränge, ein Token-Satz – keine Farbe wird im Bauteil erfunden');
+}
+
+console.log('\n[ TEST ] B6 – Der Deck-Mixer zeigt nur Ergebnisse');
+{
+  /*
+   * Der Mixer unterhalb des Stem-Centers hat in UI v2.0 genau eine Aufgabe:
+   * fertige Stems mischen. Früher trug er zusätzlich Qualitätsprofile, einen
+   * Colab-Button, Expertenprofile und eine Fortschrittsbox. Diese Vorstufen
+   * liegen heute im Stem-Center (A/B/C) und im Live-Datenfluss-Fenster. Ein
+   * Merge hat genau diese Altlasten schon einmal zurück in die neue Datei
+   * geholt – der TypeScript-Bau ist daran gescheitert. Deshalb prüft der
+   * Vertrag die Trennung am Quelltext.
+   */
+  const mixer = stripComments(stripHoverTitles(deckMixerSource));
+  for (const forbidden of [
+    'Qualität',
+    'Fortschritt',
+    'STEM_MODES',
+    'PROFILE_LABELS',
+    'onRemoteEnabledChange',
+    'remoteStatus',
+    'separationProgress',
+  ]) {
+    assert.ok(
+      !mixer.includes(forbidden),
+      `Der Deck-Mixer darf "${forbidden}" nicht enthalten – das gehört in Stem-Center/StemModelPicker`
+    );
+  }
+  // Gegenprobe: die Ergebnis-Bedienung ist vollständig vorhanden.
+  for (const marker of [
+    'Acapella',
+    'Instrumental',
+    'Reset',
+    'onToggleStemSolo',
+    'onToggleStemMute',
+    'onExtractStemToClip',
+    'PAD {',
+  ]) {
+    assert.ok(mixer.includes(marker), `Der Deck-Mixer muss "${marker}" enthalten`);
+  }
+  console.log('  ✓ Deck-Mixer: Mischen und Export – Qualität, Ziel und Fortschritt bleiben draußen');
 }
 
 console.log('\n✔ UI v2.0: Drei-Zonen-Architektur hält');

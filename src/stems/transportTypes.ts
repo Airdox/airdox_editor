@@ -281,6 +281,13 @@ export interface RemoteStemJobView {
   updatedAt: number;
   /** Letzte echte Status-/Phasenänderung; wird von unveränderten Polls nicht zurückgesetzt. */
   phaseUpdatedAt?: number;
+  /** Zeitpunkt, an dem die Arbeitskopie in der Jobablage bestätigt wurde. */
+  uploadedAt?: number;
+  /** Fakten zur Arbeitskopie – dienen der Anzeige, nicht als zweiter Fortschrittswert. */
+  workingCopyBytes?: number;
+  durationSeconds?: number;
+  sampleRate?: number;
+  channels?: number;
   /** Letzte korrelierbare Editor-/Worker-Schritte (max. 120 Einträge). */
   trace?: RemoteJobTraceEvent[];
   finishedAt?: number;

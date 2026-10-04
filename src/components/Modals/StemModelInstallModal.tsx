@@ -5,7 +5,7 @@
  *
  * Wird geöffnet, wenn der Nutzer ein Modell im Einstellungsmenü ausgewählt
  * hat, das noch nicht installiert ist, und auf den Installations-Button
- * (Hauptfenster, Deck-Stem-Leiste oder Einstellungsmenü) drückt. Der Aufruf
+ * (Hauptfenster, Stem-Center oder Einstellungsmenü) drückt. Der Aufruf
  * übergibt die gewählte Modell-ID an den Installer – es wird nichts anderes
  * und nichts zusätzlich installiert. Fortschritt wird Schritt für Schritt
  * gemeldet (Python-Modelle: Runtime, Abhängigkeiten, Gewichte, Verifizierung;
