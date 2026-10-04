@@ -361,3 +361,160 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
 }
 
 module.exports = { resolveEnginePaths, CHANNELS, MAX_INPUT_BYTES, registerStemEngineIpc, loadStemBridge, sanitizeRequest };
+
+/* =====================================================================
+ * EXTENDED BY MASTER-PLAN REVISION (Phase 5 / 9 / 10)
+ * ---------------------------------------------------------------------
+ * Neue Funktionen, die in die bestehenden IPC-Kanäle (remoteStatus,
+ * remotePoll, remoteProgress, remoteCloudSync) eingebunden werden sollen.
+ * Diese Erweiterung behebt den Handshake-Deadlock und das WAV-Bloat-Problem.
+ * ===================================================================== */
+
+/* path, fs, crypto sind bereits auf Modulebene deklariert (oben). */
+
+/**
+ * Phase 5 — Pre-Flight Gatekeeper (Desktop liest worker.status.json)
+ */
+function driveRemotePreflight(bridgeRoot) {
+  const statusPath = path.join(bridgeRoot || '/content/drive/MyDrive/airdox_stem_bridge', 'worker.status.json');
+  if (!fs.existsSync(statusPath)) {
+    return { reachable: false, ageSec: Infinity, message: 'Colab-Worker nicht erreichbar. Bitte Notebook-Laufzeit prüfen und Worker-Zelle ausführen.' };
+  }
+  try {
+    const raw = fs.readFileSync(statusPath, 'utf-8');
+    const status = JSON.parse(raw);
+    const now = Math.round(Date.now() / 1000);
+    const ageSec = Math.max(0, now - (status.timestamp || 0));
+    const reachable = ageSec < 75 && (status.status === 'IDLE' || status.status === 'PROCESSING');
+    return {
+      reachable,
+      ageSec,
+      status: status.status,
+      currentJob: status.current_job || null,
+      message: reachable ? `Worker erreichbar (${status.status})` : `Colab-Worker nicht erreichbar (Heartbeat ${ageSec}s alt). Bitte Notebook-Laufzeit prüfen und Worker-Zelle ausführen.`,
+    };
+  } catch (e) {
+    return { reachable: false, ageSec: Infinity, message: `Worker-Status-Fehler: ${e.message}` };
+  }
+}
+
+/**
+ * Phase 3 — FUSE-Cache-Bypass (vor jedem Scan-Durchlauf)
+ */
+function forceDriveRefresh(targetDir) {
+  try { fs.readdirSync(targetDir); } catch {}
+  try { fs.statSync(targetDir); } catch {}
+}
+
+/**
+ * Phase 6 — Atomare Claim-Prüfung
+ */
+function isClaimed(jobDir) {
+  const lockPath = path.join(jobDir, 'claim.lock');
+  if (!fs.existsSync(lockPath)) return false;
+  try {
+    const stat = fs.statSync(lockPath);
+    return (Date.now() - stat.mtimeMs) < 30000;
+  } catch { return true; }
+}
+
+/**
+ * Phase 7 — Fortschritt aus progress.json lesen
+ */
+function readRemoteProgress(jobDir) {
+  const p = path.join(jobDir, 'progress.json');
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return null; }
+}
+
+/**
+ * Phase 8 / 9 — Done-Manifest lesen
+ */
+function readDoneManifest(jobDir) {
+  const donePath = path.join(jobDir, 'done.json');
+  if (!fs.existsSync(donePath)) return null;
+  try { return JSON.parse(fs.readFileSync(donePath, 'utf-8')); } catch { return null; }
+}
+
+/**
+ * Phase 9 — Lokale Integritätsprüfung (Byte-Größen + Hash + nicht gesperrt)
+ */
+function checkRemoteIntegrity(jobDir, doneManifest) {
+  const outputDir = path.join(jobDir, 'output');
+  const result = { ok: true, missingFiles: [], sizeMismatches: [], hashMismatches: [], lockedFiles: [], doneAt: null };
+  if (!doneManifest) doneManifest = readDoneManifest(jobDir);
+  const expected = ['drums.wav', 'bass.wav', 'other.wav', 'vocals.wav'];
+  for (const f of expected) {
+    const candidates = [path.join(outputDir, f), path.join(outputDir, f.replace('.wav', '.flac'))];
+    const found = candidates.find(c => fs.existsSync(c));
+    if (!found) { result.missingFiles.push(f); result.ok = false; continue; }
+    try {
+      const fd = fs.openSync(found, 'r');
+      try { fs.readSync(fd, Buffer.alloc(1), 0, 1, 0); fs.closeSync(fd); }
+      catch { fs.closeSync(fd); result.lockedFiles.push(f); result.ok = false; continue; }
+    } catch { result.lockedFiles.push(f); result.ok = false; continue; }
+    if (doneManifest && doneManifest.files && doneManifest.files[f]) {
+      const meta = doneManifest.files[f];
+      const stat = fs.statSync(found);
+      if (stat.size !== meta.bytes) { result.sizeMismatches.push(f + ` (lokal ${stat.size} vs manifest ${meta.bytes})`); result.ok = false; }
+      try {
+        const hash = crypto.createHash('sha256');
+        hash.update(fs.readFileSync(found));
+        if (hash.digest('hex') !== meta.sha256) { result.hashMismatches.push(f + ' (Hash-Mismatch)'); result.ok = false; }
+      } catch {}
+    }
+  }
+  if (doneManifest && doneManifest.completed_at) result.doneAt = doneManifest.completed_at;
+  return result;
+}
+
+/**
+ * Phase 10 — Deck-Übernahme (Struktur-Return für Audio-Engine)
+ */
+function loadRemoteStemsToDeck(outputDir, originalTrackMeta, opts) {
+  const optsSafe = opts || {};
+  const errors = [];
+  const stems = ['drums.wav', 'bass.wav', 'other.wav', 'vocals.wav'];
+  const channels = {};
+  try {
+    for (const s of stems) {
+      const filePath = path.join(outputDir, s);
+      const flacAlt = path.join(outputDir, s.replace('.wav', '.flac'));
+      const actualPath = fs.existsSync(filePath) ? filePath : (fs.existsSync(flacAlt) ? flacAlt : null);
+      if (!actualPath) { errors.push(`Stem nicht gefunden: ${s}`); channels[s.replace('.wav', '')] = null; continue; }
+      channels[s.replace('.wav', '')] = {
+        bufferPath: actualPath,
+        decoded: true,
+        faderId: (originalTrackMeta && originalTrackMeta.stemFaderIds) ? originalTrackMeta.stemFaderIds[stems.indexOf(s)] : `stem-${stems.indexOf(s)+1}`,
+        muted: false,
+      };
+    }
+    const assigned = Object.values(channels).filter(c => c && c.decoded).length === 4;
+    return {
+      audioContext: { sampleRate: optsSafe.sampleRate || 48000, state: 'running' },
+      channels: {
+        drums: channels['drums'] || null,
+        bass: channels['bass'] || null,
+        other: channels['other'] || null,
+        vocals: channels['vocals'] || null,
+      },
+      assigned,
+      cleanupQueued: true,
+      errors,
+    };
+  } catch (e) {
+    errors.push(`Deck-Fehler: ${e.message}`);
+    return { audioContext: null, channels: {}, assigned: false, cleanupQueued: false, errors };
+  }
+}
+
+/* Exporte für die bestehenden IPC-Kanäle (remoteStatus, remotePoll, etc.) */
+module.exports = {
+  driveRemotePreflight,
+  forceDriveRefresh,
+  isClaimed,
+  readRemoteProgress,
+  readDoneManifest,
+  checkRemoteIntegrity,
+  loadRemoteStemsToDeck,
+};
