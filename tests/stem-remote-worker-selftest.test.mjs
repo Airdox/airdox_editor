@@ -31,7 +31,15 @@ function runCandidate(command, args, timeoutMs = 120_000) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(command, args, { cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(command, args, {
+        cwd: ROOT,
+        windowsHide: true,
+        // Redirected Python output can use the Windows ANSI code page; Node
+        // decodes captured child output as UTF-8, so make the test protocol
+        // encoding explicit on every platform.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     } catch (error) {
       resolve({ spawned: false, reason: error instanceof Error ? error.message : String(error) });
       return;
