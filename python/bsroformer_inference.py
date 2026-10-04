@@ -202,18 +202,69 @@ def load_checkpoint(model, checkpoint_path: str, allow_random: bool, device: str
     return "checkpoint"
 
 
+def resample_audio(audio, source_rate: int, target_rate: int):
+    """
+    Bringt (channels, frames) auf die Modell-Samplerate – oder None.
+
+    Nötig, seit die Arbeitskopie die Originaldatei sein darf: eine 48-kHz-FLAC
+    ist ein gültiger Input, das Modell rechnet aber mit seiner eigenen Rate.
+    Früher war das ein harter Fehler, also scheiterte jeder durchgeschleifte
+    Track, dessen Samplerate nicht zufällig passte. Drei Wege werden probiert,
+    weil Colab-Images sich unterscheiden; keiner davon ist eine Näherung –
+    alle drei resampeln echt.
+    """
+    import numpy as np
+
+    try:
+        import soxr  # type: ignore
+
+        return np.ascontiguousarray(
+            soxr.resample(np.ascontiguousarray(audio.T), source_rate, target_rate).T,
+            dtype="float32",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import librosa  # type: ignore
+
+        return np.ascontiguousarray(
+            np.stack([librosa.resample(channel, orig_sr=source_rate, target_sr=target_rate) for channel in audio]),
+            dtype="float32",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import torch
+        import torchaudio
+
+        tensor = torch.from_numpy(np.ascontiguousarray(audio))
+        return np.ascontiguousarray(
+            torchaudio.functional.resample(tensor, source_rate, target_rate).numpy(),
+            dtype="float32",
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def read_audio(path: str, sample_rate: int):
     import numpy as np
     import soundfile as sf
 
     data, file_rate = sf.read(path, dtype="float32", always_2d=True)
     if file_rate != sample_rate:
-        emit({
-            "type": "error",
-            "code": "AUDIO_INVALID_SAMPLE_RATE",
-            "message": f"Eingabe hat {file_rate} Hz, das Modell erwartet {sample_rate} Hz",
-        })
-        sys.exit(EXIT_AUDIO)
+        resampled = resample_audio(data.T.copy(), file_rate, sample_rate)
+        if resampled is None:
+            emit({
+                "type": "error",
+                "code": "AUDIO_INVALID_SAMPLE_RATE",
+                "message": (
+                    f"Eingabe hat {file_rate} Hz, das Modell erwartet {sample_rate} Hz "
+                    "und kein Resampler (soxr/librosa/torchaudio) ist verfügbar"
+                ),
+            })
+            sys.exit(EXIT_AUDIO)
+        log(f"Eingabe von {file_rate} Hz auf {sample_rate} Hz resampelt")
+        data = resampled.T
     audio = data.T.copy()  # (channels, frames)
     if audio.shape[0] == 1:
         audio = np.concatenate([audio, audio], axis=0)

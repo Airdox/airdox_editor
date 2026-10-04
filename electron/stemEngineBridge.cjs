@@ -59,6 +59,25 @@ const FAMILIES = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_doub
 /** Rechengeräte und Validierungstiefe, die ein Job aus dem Renderer wählen darf. */
 const DEVICES = ['auto', 'cpu', 'cuda', 'vulkan', 'metal', 'directml', 'coreml'];
 const MODES = ['fast_dj', 'studio_master'];
+/**
+ * Container, die als Originaldatei durchgeschleift werden dürfen. Dieselbe
+ * Liste wie im Worker (`colab/remote_worker.py::load_input_track`) – eine
+ * Datei, die der Editor hochlädt, aber der Worker nicht laden kann, wäre ein
+ * Job, der erst auf Colab scheitert.
+ */
+const SOURCE_AUDIO_EXTENSIONS = ['.flac', '.wav', '.mp3', '.aif', '.aiff'];
+
+/** SHA-256 einer Datei per Stream – kein Vollpuffer im Main-Prozess. */
+function sha256OfFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const crypto = require('node:crypto');
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
 
 /** Shared by the desktop and HTTP hosts; directories alone are not models. */
 function resolveEnginePaths(repoRoot, stemsRoot) {
@@ -278,7 +297,57 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
       device: DEVICES.includes(input.device) ? input.device : undefined,
       mode: MODES.includes(input.mode) ? input.mode : undefined,
     };
-    if (bytes) {
+    /*
+     * Vorrang hat die Originaldatei (FLAC/MP3/…): sie wird bitgenau kopiert
+     * statt aus dem AudioBuffer neu gerendert – das ist der Unterschied
+     * zwischen ~130 MB 32-Bit-WAV und den echten ~40 MB der Quelle.
+     *
+     * Die Ausnahmeregel gegenüber `inputPath` ist bewusst eng:
+     *   · nur Audio-Endungen aus einer festen Liste,
+     *   · nur existierende Dateien (kein Ordner, kein Gerät),
+     *   · der Hash muss zum Import-Hash passen, wenn einer mitkommt,
+     *   · gelesen wird immer nur – geschrieben ausschließlich in den
+     *     Engine-Datenordner (Arbeitskopie) und in die Jobablage.
+     */
+    const sourceFile = input.sourceFile && typeof input.sourceFile === 'object' ? input.sourceFile : null;
+    if (!bytes && sourceFile && typeof sourceFile.path === 'string' && sourceFile.path.trim()) {
+      const resolved = path.resolve(sourceFile.path);
+      const extension = path.extname(resolved).toLowerCase();
+      if (!SOURCE_AUDIO_EXTENSIONS.includes(extension)) {
+        return {
+          ok: false,
+          code: 'AUDIO_UNSUPPORTED_FORMAT',
+          message: `Originaldatei ${extension || '(ohne Endung)'} wird nicht durchgeschleift (erlaubt: ${SOURCE_AUDIO_EXTENSIONS.join(', ')}).`,
+        };
+      }
+      let info;
+      try {
+        info = fs.statSync(resolved);
+      } catch (error) {
+        return { ok: false, code: 'AUDIO_MISSING', message: `Originaldatei nicht lesbar: ${resolved}` };
+      }
+      if (!info.isFile()) {
+        return { ok: false, code: 'AUDIO_MISSING', message: `Originaldatei ist keine Datei: ${resolved}` };
+      }
+      if (typeof sourceFile.bytes === 'number' && Number.isFinite(sourceFile.bytes) && sourceFile.bytes !== info.size) {
+        return {
+          ok: false,
+          code: 'ORIGINAL_MODIFIED',
+          message: `Originaldatei hat ${info.size} Bytes, erwartet ${sourceFile.bytes} – Datei wurde verändert.`,
+        };
+      }
+      if (typeof sourceFile.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(sourceFile.sha256)) {
+        const actual = await sha256OfFile(resolved);
+        if (actual.toLowerCase() !== sourceFile.sha256.toLowerCase()) {
+          return {
+            ok: false,
+            code: 'ORIGINAL_MODIFIED',
+            message: `Originaldatei passt nicht zum Import-Hash (${actual.slice(0, 12)}… statt ${sourceFile.sha256.slice(0, 12)}…).`,
+          };
+        }
+      }
+      request.sourceFile = { path: resolved, sha256: typeof sourceFile.sha256 === 'string' ? sourceFile.sha256 : undefined };
+    } else if (bytes) {
       if (bytes.byteLength > MAX_INPUT_BYTES) {
         return { ok: false, code: 'AUDIO_CORRUPT', message: `Mix zu groß (${bytes.byteLength} Bytes > ${MAX_INPUT_BYTES}).` };
       }
@@ -291,12 +360,14 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
       }
       request.inputPath = resolved;
     } else {
-      return { ok: false, code: 'AUDIO_MISSING', message: 'Fern-Job braucht bytes (Arbeitskopie) oder einen inputPath im Engine-Ordner.' };
+      return { ok: false, code: 'AUDIO_MISSING', message: 'Fern-Job braucht sourceFile (Originaldatei), bytes (Arbeitskopie) oder einen inputPath im Engine-Ordner.' };
     }
     log(logger, 'info', 'Fern-Job (High Quality extern) über IPC gestartet', {
       profile: request.profile,
       model: request.modelId,
       trackName: request.trackName,
+      source: request.sourceFile ? 'original-passthrough' : request.bytes ? 'rendered-wav' : 'engine-input-path',
+      sourceBytes: request.sourceFile ? undefined : request.bytes ? request.bytes.byteLength : undefined,
     });
     return bridge.startRemoteJob(request);
   });
@@ -508,8 +579,17 @@ function loadRemoteStemsToDeck(outputDir, originalTrackMeta, opts) {
   }
 }
 
-/* Exporte für die bestehenden IPC-Kanäle (remoteStatus, remotePoll, etc.) */
-module.exports = {
+/*
+ * Diagnose-Helfer zusätzlich exportieren – **nicht** als zweites
+ * `module.exports = {...}`.
+ *
+ * Ein zweites `module.exports` ersetzt in CommonJS das erste vollständig: die
+ * Brücke exportierte dadurch nur noch diese Helfer, und `electron/main.cjs`
+ * bekam für `registerStemEngineIpc` ein `undefined`. Die Folge war ein
+ * `TypeError` beim Start – die Stem-Engine war im Desktop schlicht nicht
+ * erreichbar, ohne dass der Renderer eine Ursache hätte zeigen können.
+ */
+Object.assign(module.exports, {
   driveRemotePreflight,
   forceDriveRefresh,
   isClaimed,
@@ -517,4 +597,4 @@ module.exports = {
   readDoneManifest,
   checkRemoteIntegrity,
   loadRemoteStemsToDeck,
-};
+});

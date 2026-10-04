@@ -976,6 +976,46 @@ export default function App() {
       setRemoteFlowRunning(true);
       remoteAbortRef.current = { aborted: false };
       setStemEngineUnavailableReason(null);
+      /*
+       * Quelle für den Fernpfad: die Originaldatei selbst, solange der Track im
+       * Deck unverändert ist. Dann kopiert der Dienst bitgenau die FLAC/MP3/WAV
+       * (~40 MB) statt eine 32-Bit-Float-WAV zu rendern (~130 MB) – dieselbe
+       * Musik, ein Drittel der Synchronisationszeit.
+       *
+       * „Unverändert“ wird doppelt abgesichert: genau ein ORIGINAL-Segment
+       * (dieselbe Prüfung wie beim Projekt-Export) **und** ein Deck-Puffer, der
+       * zeitlich das ganze Original abdeckt. Fehlt auch nur eines davon, wird
+       * gerendert – eine still verworfene Bearbeitung wäre schlimmer als ein
+       * großer Upload.
+       */
+      const segments = activeTrack.workingSegments ?? [];
+      const onlySegment = segments.length === 1 ? segments[0] : null;
+      // Dieselbe Definition von „unverändert“ wie beim Projekt-Export
+      // (`useProjectFiles.isUneditedOriginal`): genau ein ORIGINAL-Segment.
+      const segmentsUntouched = onlySegment?.type === 'ORIGINAL';
+      /*
+       * Zusätzlich muss der Deck-Puffer zeitlich dem **ganzen** Original
+       * entsprechen. Objektidentität taugt dafür nicht: Undo/Redo und das
+       * Laden eines Projekts rendern den Puffer neu (`renderWorkingAudio`),
+       * obwohl der Inhalt derselbe ist – die Durchleitung würde dann ohne
+       * Grund ausbleiben. Eine beschnittene Region hält ein einziges
+       * ORIGINAL-Segment, hätte aber eine kürzere Dauer als die Datei – und
+       * genau die fängt dieser Vergleich ab.
+       */
+      const coversWholeSource =
+        segmentsUntouched &&
+        onlySegment !== null &&
+        onlySegment.sourceStart <= 0.001 &&
+        Math.abs(onlySegment.sourceEnd - onlySegment.sourceStart - workingAudioBuffer.duration) < 0.05;
+      const mediaPath = activeTrack.originalMedia?.resolvedPath || activeTrack.originalMedia?.location || '';
+      const sourceFile = segmentsUntouched && coversWholeSource && mediaPath && activeTrack.originalMedia?.status !== 'MISSING'
+        ? {
+            path: mediaPath,
+            sha256: activeTrack.originalSha256,
+            bytes: activeTrack.originalMedia?.size,
+            unedited: true,
+          }
+        : undefined;
       try {
         const separated = await stemEngine.separateRemoteWithEngine(
           workingAudioBuffer,
@@ -983,6 +1023,7 @@ export default function App() {
           activeTrack.originalSha256,
           {
             profile,
+            sourceFile,
             signal: remoteAbortRef.current,
             onProgress: (prog) => setSeparationProgress(prog),
             onRemoteJob: (job) => { setRemoteFlowJob(job); setRemoteFlowJobId(job.jobId); },

@@ -145,8 +145,29 @@ export interface StemEngineInfo {
   };
 }
 
+/**
+ * Originaldatei eines Tracks als Quelle für den Fernpfad.
+ *
+ * Nur der Aufrufer (App) weiß, ob der Puffer im Deck **unverändert** ist – also
+ * ob die Datei dieselbe Musik enthält wie das, was der Nutzer hört. Deshalb
+ * muss `unedited` ausdrücklich gesetzt sein; ohne dieses Zeichen bleibt der
+ * Renderer-Pfad, damit Schnitte/Einfügungen niemals still verschwinden.
+ */
+export interface RemoteSourceFile {
+  /** Absoluter Pfad der Originaldatei auf der Platte. */
+  path: string;
+  /** SHA-256 der Originaldatei aus dem Import. */
+  sha256?: string;
+  /** Größe in Bytes – für die Plausibilitätsprüfung der Brücke. */
+  bytes?: number;
+  /** `true` = der Deck-Puffer ist bitgenau der Inhalt dieser Datei. */
+  unedited: boolean;
+}
+
 export interface EngineSeparationOptions {
   profile?: StemQualityProfile;
+  /** Originaldatei statt gerenderter WAV in die Jobablage legen (Fernpfad). */
+  sourceFile?: RemoteSourceFile;
   /** Fest gewählte Architektur (Modell-ID). Ohne Angabe entscheidet das Profil. */
   modelId?: string;
   /** Explicit architecture (model family) to use; ignored when `modelId` is set. */
@@ -163,6 +184,18 @@ export interface EngineSeparationOptions {
 }
 
 type StemCacheOrigin = 'local' | 'remote';
+
+/**
+ * Fehler, bei denen der Fernpfad vom Durchschleifen auf Rendern umsteigt.
+ * Nur Ursachen, die die **Quelle** betreffen – ein nicht erreichbarer
+ * Google-Drive-Ordner gehört ausdrücklich nicht dazu.
+ */
+const REMOTE_SOURCE_FALLBACK_CODES = new Set([
+  'AUDIO_MISSING',
+  'AUDIO_UNSUPPORTED_FORMAT',
+  'ORIGINAL_MODIFIED',
+  'WRITE_DENIED',
+]);
 
 /** AudioBuffers in the editor are treated as immutable working-copy revisions. */
 const inputFingerprintByBuffer = new WeakMap<AudioBuffer, string>();
@@ -1092,38 +1125,86 @@ class StemEngine {
         processedSeconds: 0,
         totalSeconds: duration,
       });
-      const preparedInput = await prepareStemInput(sourceBuffer);
-      inputFingerprintByBuffer.set(sourceBuffer, preparedInput.fingerprint);
-      const cached = this.getCachedStems(trackId, preparedInput.fingerprint, cacheVariant, originalSha256);
+      /*
+       * Quelle der Arbeitskopie. Solange der Track im Deck unverändert ist,
+       * muss der Editor **nichts rendern**: die Musik liegt bereits als FLAC /
+       * MP3 / WAV auf der Platte und wird vom Dienst bitgenau kopiert. Aus
+       * ~130 MB 32-Bit-Float-WAV werden so die echten Quellbytes (~40 MB) –
+       * derselbe Inhalt, ein Drittel der Synchronisationszeit.
+       *
+       * Ist der Puffer dagegen bearbeitet, bleibt der Renderer-Pfad: eine Kopie
+       * der Originaldatei könnte Schnitte und Einfügungen nicht enthalten, und
+       * still verworfene Bearbeitung wäre schlimmer als ein großer Upload.
+       */
+      const sourceSha256 = options.sourceFile?.sha256?.trim() || originalSha256?.trim() || '';
+      const passthrough = Boolean(
+        options.sourceFile?.unedited &&
+        options.sourceFile?.path?.trim() &&
+        /^[a-fA-F0-9]{64}$/.test(sourceSha256)
+      );
+      let wav: Uint8Array | null = null;
+      let inputFingerprint: string;
+      if (passthrough) {
+        // Identität der Quelle statt der gerenderten Bytes: dieselbe Datei mit
+        // demselben Hash bedeutet dieselbe Musik, also denselben Cache-Eintrag.
+        inputFingerprint = `stem-source-file-v1:sha256:${sourceSha256.toLowerCase()}`;
+        logger.info('STEM-REMOTE', `Originaldatei wird durchgeschleift: ${options.sourceFile!.path}`, {
+          trackId,
+          bytes: options.sourceFile?.bytes,
+          sha256: sourceSha256.slice(0, 16),
+        });
+        options.onProgress?.({
+          percent: 2,
+          phaseText: 'Originaldatei wird als Arbeitskopie übernommen (kein WAV-Rendering)…',
+          processedSeconds: 0,
+          totalSeconds: duration,
+        });
+      } else {
+        const preparedInput = await prepareStemInput(sourceBuffer);
+        inputFingerprint = preparedInput.fingerprint;
+        wav = preparedInput.wav;
+        if (options.sourceFile && !passthrough) {
+          logger.info('STEM-REMOTE', 'Track ist bearbeitet – Arbeitskopie wird gerendert statt durchgeschleift.', {
+            trackId,
+            renderedBytes: wav.byteLength,
+          });
+        }
+      }
+      inputFingerprintByBuffer.set(sourceBuffer, inputFingerprint);
+      const cached = this.getCachedStems(trackId, inputFingerprint, cacheVariant, originalSha256);
       if (cached) {
         options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
         return cached;
       }
-      const wav = preparedInput.wav;
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
       if (options.signal?.aborted) {
         throw Object.assign(new Error('Die Fern-Separation wurde vor dem Upload abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
       }
 
-      let job: RemoteStemJobView;
-      if (desktop?.startRemoteStemJob) {
-        const started = await desktop.startRemoteStemJob({
-          bytes: wav,
-          trackName,
-          profile,
-          modelId: options.modelId,
-          family: options.modelId ? undefined : options.family,
-          device: options.device,
-          mode: options.mode,
-        });
-        if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
-        job = started.data;
-      } else {
+      const startJob = async (withSourceFile: boolean): Promise<RemoteStemJobView> => {
+        const sourceFilePayload = withSourceFile && options.sourceFile
+          ? { path: options.sourceFile.path, sha256: sourceSha256, bytes: options.sourceFile.bytes }
+          : undefined;
+        if (desktop?.startRemoteStemJob) {
+          const started = await desktop.startRemoteStemJob({
+            bytes: wav ?? undefined,
+            sourceFile: sourceFilePayload,
+            trackName,
+            profile,
+            modelId: options.modelId,
+            family: options.modelId ? undefined : options.family,
+            device: options.device,
+            mode: options.mode,
+          });
+          if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
+          return started.data;
+        }
         const response = await fetch('/api/stems/remote/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            bytes: base64FromBytes(wav),
+            bytes: wav ? base64FromBytes(wav) : undefined,
+            sourceFile: sourceFilePayload,
             trackName,
             profile,
             modelId: options.modelId,
@@ -1138,7 +1219,38 @@ class StemEngine {
             code: payload.code ?? 'REMOTE_UNAVAILABLE',
           });
         }
-        job = payload.data;
+        return payload.data;
+      };
+
+      let job: RemoteStemJobView;
+      try {
+        job = await startJob(passthrough);
+      } catch (error) {
+        const code = (error as { code?: string })?.code;
+        // Fehlt die Datei, ist ihr Format nicht durchschleifbar oder wurde sie
+        // unter uns verändert, ist der Inhalt im Deck trotzdem gültig – dann
+        // lieber rendern als dem Nutzer die Separation zu verweigern. Der Grund
+        // wird geloggt, damit „warum plötzlich 130 MB?“ nachvollziehbar bleibt.
+        if (!passthrough || !code || !REMOTE_SOURCE_FALLBACK_CODES.has(code)) throw error;
+        logger.warn('STEM-REMOTE', `Originaldatei nicht durchschleifbar (${code}) – Arbeitskopie wird gerendert.`, {
+          trackId,
+          code,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        options.onProgress?.({
+          percent: 2,
+          phaseText: 'Originaldatei konnte nicht übernommen werden – Arbeitskopie wird gerendert…',
+          processedSeconds: 0,
+          totalSeconds: duration,
+        });
+        const preparedInput = await prepareStemInput(sourceBuffer);
+        inputFingerprint = preparedInput.fingerprint;
+        wav = preparedInput.wav;
+        inputFingerprintByBuffer.set(sourceBuffer, inputFingerprint);
+        if (options.signal?.aborted) {
+          throw Object.assign(new Error('Die Fern-Separation wurde vor dem Upload abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
+        }
+        job = await startJob(false);
       }
       this.activeRemoteJobId = job.jobId;
       options.onRemoteJob?.(job);
@@ -1207,7 +1319,7 @@ class StemEngine {
       const result = buildTrackStems({
         trackId,
         originalSha256,
-        inputFingerprint: preparedInput.fingerprint,
+        inputFingerprint,
         job: {
           jobId,
           status: 'COMPLETED',

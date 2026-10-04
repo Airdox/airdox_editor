@@ -343,6 +343,8 @@ async function startServer() {
       const body = (req.body ?? {}) as {
         bytes?: string;
         inputPath?: string;
+        /** Originaldatei (FLAC/MP3/WAV …) – wird bitgenau kopiert statt gerendert. */
+        sourceFile?: { path?: string; sha256?: string; bytes?: number };
         trackName?: string;
         profile?: 'PREVIEW' | 'BALANCED' | 'HIGH' | 'HIGH_QUALITY' | 'MAXIMUM_QUALITY';
         modelId?: string;
@@ -354,6 +356,16 @@ async function startServer() {
       const job = await remoteStemJobs.start({
         bytes,
         inputPath: typeof body.inputPath === 'string' ? body.inputPath : undefined,
+        // Der Dev-Server läuft auf demselben Rechner wie die Musikbibliothek,
+        // deshalb darf er dieselbe Quelle annehmen wie die Desktop-Brücke.
+        // Geprüft (Endung, Existenz, Hash) wird im Dienst selbst.
+        sourceFile: body.sourceFile?.path
+          ? {
+              path: body.sourceFile.path,
+              sha256: typeof body.sourceFile.sha256 === 'string' ? body.sourceFile.sha256 : undefined,
+              bytes: typeof body.sourceFile.bytes === 'number' ? body.sourceFile.bytes : undefined,
+            }
+          : undefined,
         trackName: typeof body.trackName === 'string' ? body.trackName.slice(0, 120) : undefined,
         profile: body.profile,
         modelId: body.modelId,

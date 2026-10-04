@@ -77,8 +77,15 @@ interface WavLayout {
   channelMask?: number;
 }
 
-/** Parses RIFF/WAVE headers, including `WAVE_FORMAT_EXTENSIBLE`. */
-export function parseWavLayout(bytes: Uint8Array): WavLayout {
+/**
+ * Parses RIFF/WAVE headers, including `WAVE_FORMAT_EXTENSIBLE`.
+ *
+ * `fileSize` erlaubt das Parsen eines **Kopf-Ausschnitts**: die Datenlänge wird
+ * dann gegen die echte Dateigröße gedeckelt statt gegen die Länge des
+ * gelesenen Ausschnitts. Ohne das wäre die Dauer einer 130-MB-Datei, von der
+ * nur die ersten 64 KiB gelesen wurden, um Faktor ~2000 zu klein.
+ */
+export function parseWavLayout(bytes: Uint8Array, fileSize: number = bytes.length): WavLayout {
   if (bytes.length < 44) throw new WavFormatError('Datei ist kleiner als ein WAV-Header.');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (readAscii(view, 0, 4) !== 'RIFF') throw new WavFormatError('Kein RIFF-Container (RIFF-Chunk fehlt).');
@@ -112,7 +119,7 @@ export function parseWavLayout(bytes: Uint8Array): WavLayout {
     } else if (chunkId === 'data') {
       dataOffset = body;
       // A truncated file is accepted; the real byte count wins over the header.
-      dataSize = Math.min(chunkSize, bytes.length - body);
+      dataSize = Math.min(chunkSize, Math.max(0, fileSize - body));
     }
     offset = body + chunkSize + (chunkSize % 2);
   }

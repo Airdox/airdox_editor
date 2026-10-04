@@ -27,14 +27,25 @@
  *    hochgeladen; vom Original werden nur Hash/Größe/mtime *gelesen* (§3, §31).
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ModelRegistry } from '../modelRegistry';
 import type { StemJobService, StemServiceLogger } from '../stemJobService';
 import type { ModelDescriptor, OriginalIntegrity, SeparationJobMetadata, StemId } from '../types';
 import { JOB_SCHEMA_VERSION } from '../types';
-import { analyzeAudio, decodeWav, sha256File, parseWavLayout } from '../wavIo';
+import { analyzeAudio, decodeWav, fileFingerprint, sha256File, parseWavLayout } from '../wavIo';
+import {
+  AUDIO_HEADER_READ_BYTES,
+  REMOTE_INPUT_EXTENSIONS,
+  ENGINE_OUTPUT_CHANNELS,
+  ENGINE_OUTPUT_SAMPLE_RATE,
+  containerLabel,
+  inputExtensionFor,
+  isSupportedInputExtension,
+  parseAudioGeometry,
+  type AudioGeometry,
+} from './audioSource';
 import { jobCancelPath, jobClaimPath, jobErrorPath, jobWorkerTracePath, stemFileName } from './layout';
 import {
   buildManifest,
@@ -90,8 +101,33 @@ import type {
 
 export { REMOTE_PHASES };
 
+/**
+ * Zeiger auf die **Originaldatei** des Tracks.
+ *
+ * Das ist der Weg, die 130-MB-WAV zu vermeiden: solange die Musik im Editor
+ * unverändert ist, muss nichts gerendert werden – die Datei liegt bereits
+ * komprimiert auf der Platte und wird bitgenau kopiert. Der Aufrufer muss
+ * deshalb ausdrücklich sagen, dass sie unverändert ist; sonst bleibt der
+ * Renderer-Pfad (er kennt dann Bearbeitungen, die die Datei nicht enthält).
+ */
+export interface RemoteSourceFileRef {
+  /** Absoluter Pfad der Originaldatei. Sie wird ausschließlich gelesen. */
+  path: string;
+  /** Erwarteter SHA-256 der Datei (aus dem Import). Passt er nicht ⇒ kein Job. */
+  sha256?: string;
+  /** Größe in Bytes – nur für eine frühe Plausibilitätsprüfung. */
+  bytes?: number;
+}
+
 export interface StartRemoteStemJobRequest extends Omit<StartRemoteStemJobPayload, 'bytes'> {
+  /** Arbeitskopie (WAV) – wird hochgeladen, das Original bleibt unberührt. */
   bytes?: Uint8Array | ArrayBuffer;
+  /**
+   * Originaldatei als Quelle (Vorzug vor `inputPath`/`bytes`). Nur zulässig,
+   * wenn der Inhalt im Editor **unverändert** ist: eine Kopie der Datei kann
+   * keine Schnitte, Einfügungen oder Pegeländerungen enthalten.
+   */
+  sourceFile?: RemoteSourceFileRef;
 }
 
 export interface RemoteStemJobServiceOptions {
@@ -130,6 +166,20 @@ function toBuffer(bytes: Uint8Array | ArrayBuffer): Buffer {
 function sha256Bytes(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
+
+/**
+ * Hash + Größe + mtime einer Datei, ohne sie in den Speicher zu laden.
+ * `fileFingerprint` aus `wavIo` streamt; bei einer 130-MB-WAV oder einer
+ * 40-MB-FLAC ist das der Unterschied zwischen „läuft“ und „Heap voll“.
+ */
+async function fileFingerprintOf(filePath: string): Promise<{ sha256: string; size: number; mtimeMs: number }> {
+  return fileFingerprint(filePath);
+}
+
+/** Quelle der Arbeitskopie, wie sie `start()` versteht. */
+type ResolvedInputSource =
+  | { kind: 'bytes'; bytes: Uint8Array | ArrayBuffer; extension: string }
+  | { kind: 'file'; path: string; expectedSha256?: string; extension: string };
 
 export class RemoteStemJobService {
   private readonly options: RemoteStemJobServiceOptions;
@@ -349,7 +399,17 @@ export class RemoteStemJobService {
       { label: 'SHA-256', value: shortFlowHash(record.workingCopySha256) },
       {
         label: 'Audio',
-        value: `${formatFlowDuration(record.durationSeconds)} · ${record.sampleRate} Hz · ${record.channels} Kan.`,
+        value:
+          `${formatFlowDuration(record.durationSeconds)} · ` +
+          `${record.inputSampleRate ?? record.sampleRate} Hz · ${record.inputChannels ?? record.channels} Kan. · ` +
+          `${record.inputFormat ?? containerLabel(path.extname(record.workingCopyPath))}`,
+      },
+      {
+        // Sichtbar machen, was der Nutzer wissen will: wurde gerendert oder
+        // durchgeschleift? Ohne diese Zeile ist nicht unterscheidbar, ob 130 MB
+        // oder 40 MB unterwegs sind und warum.
+        label: 'Quelle',
+        value: record.passthrough ? 'Originaldatei kopiert (bitgenau, kein Rendering)' : 'Arbeitskopie gerendert (WAV)',
       },
       { label: 'Modell', value: `${record.modelId} · ${record.profile}` },
     ];
@@ -471,38 +531,90 @@ export class RemoteStemJobService {
     const descriptor = this.resolveDescriptor(profile, request.modelId, request.family);
     const stems = [...descriptor.stemOrder];
 
-    if (!request.bytes && !request.inputPath) {
-      throw new RemoteProtocolError('AUDIO_MISSING', 'Fern-Job benötigt bytes (Arbeitskopie) oder inputPath als Mix-Quelle.');
-    }
+    // Quelle der Arbeitskopie: gerenderte Bytes, Datei im Engine-Ordner oder –
+    // der Normalfall bei unveränderter Musik – die Originaldatei selbst.
+    const source = this.resolveInputSource(request);
 
     const jobId = createRemoteJobId();
     const trackName = (request.trackName ?? 'mix').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80) || 'mix';
-    const fileName = `${trackName}.wav`;
+    // Die Endung der Quelle bleibt erhalten: `track_1.flac` statt `track_1.wav`.
+    // Ein umbenanntes FLAC wäre eine Lüge im Manifest und würde den Worker
+    // zwingen, einen Container zu raten, den er nicht vorfindet.
+    const fileName = `${trackName}${source.extension}`;
+    const inputFormat = containerLabel(source.extension);
 
     // ---- 1. Arbeitskopie: das Original wird nur GELESEN (§3) ---------------
     const workingPath = path.join(this.workingDir, jobId, fileName);
     await mkdir(path.dirname(workingPath), { recursive: true });
     let originalIntegrity: OriginalIntegrity | undefined;
-    if (request.bytes) {
-      await writeFile(workingPath, toBuffer(request.bytes));
+    if (source.kind === 'bytes') {
+      await writeFile(workingPath, toBuffer(source.bytes));
     } else {
-      // Aus einer Datei: Arbeitskopie ziehen, Original vorher/nachher messen.
-      const originalPath = path.resolve(request.inputPath!);
-      const before = await readFile(originalPath);
-      await writeFile(workingPath, before);
-      const info = await import('node:fs/promises').then((fs) => fs.stat(originalPath));
+      // Aus einer Datei: **kopieren, nicht rendern.** Genau hier entstanden
+      // vorher ~130 MB 32-Bit-WAV aus einer ~40-MB-FLAC; `copyFile` erhält
+      // stattdessen bitgenau die Quellbytes (und damit Größe und Qualität).
+      const originalPath = source.path;
+      let info;
+      let fingerprint;
+      try {
+        info = await stat(originalPath);
+        fingerprint = await fileFingerprintOf(originalPath);
+      } catch (error) {
+        // Über die Desktop-Brücke kommt die Datei geprüft herein, über HTTP
+        // nicht – deshalb hier dieselbe klare Ursache statt eines nackten
+        // ENOENT, mit dem die UI nichts anfangen kann.
+        throw new RemoteProtocolError(
+          'AUDIO_MISSING',
+          `Originaldatei nicht lesbar: ${originalPath} (${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+      await copyFile(originalPath, workingPath);
+      const copied = await stat(workingPath);
+      if (copied.size !== info.size) {
+        await rm(path.dirname(workingPath), { recursive: true, force: true });
+        throw new RemoteProtocolError(
+          'AUDIO_CORRUPT',
+          `Arbeitskopie unvollständig kopiert: ${copied.size} von ${info.size} Bytes (${originalPath}).`
+        );
+      }
+      // Die Kopie wird gegen das Original gehasht – beide Streaming, kein
+      // Puffer im Heap. Ein stiller Kopierfehler wäre sonst ein falscher
+      // Idempotenzschlüssel und ein falscher Input-Hash im Manifest (§22).
+      const copiedHash = await sha256File(workingPath);
+      if (copiedHash !== fingerprint.sha256) {
+        await rm(path.dirname(workingPath), { recursive: true, force: true });
+        throw new RemoteProtocolError(
+          'AUDIO_CORRUPT',
+          `Arbeitskopie weicht vom Original ab: SHA256 ${copiedHash.slice(0, 12)}… statt ${fingerprint.sha256.slice(0, 12)}…`
+        );
+      }
+      // Der Aufrufer (Desktop-Brücke) kennt den Hash des Originals bereits aus
+      // dem Import. Passt er nicht, ist die Datei unter uns ausgetauscht
+      // worden – dann darf kein Job loslaufen, der eine andere Musik rechnet.
+      if (source.expectedSha256 && source.expectedSha256.toLowerCase() !== fingerprint.sha256.toLowerCase()) {
+        await rm(path.dirname(workingPath), { recursive: true, force: true });
+        throw new RemoteProtocolError(
+          'ORIGINAL_MODIFIED',
+          `Originaldatei passt nicht zum erwarteten Hash: ${fingerprint.sha256.slice(0, 12)}… statt ${source.expectedSha256.slice(0, 12)}…`
+        );
+      }
       originalIntegrity = {
         path: originalPath,
-        sha256Before: sha256Bytes(before),
+        sha256Before: fingerprint.sha256,
         sizeBefore: info.size,
         mtimeMsBefore: info.mtimeMs,
         unchanged: true,
         checkedAt: this.now(),
       };
     }
-    const workingBytes = await readFile(workingPath);
-    const inputSha256 = sha256Bytes(workingBytes);
-    const header = this.inspectWav(workingBytes, fileName);
+    const workingInfo = await stat(workingPath);
+    const inputSha256 = originalIntegrity?.sha256Before ?? (await sha256File(workingPath));
+    const geometry = source.kind === 'bytes'
+      ? (() => {
+          const rendered = toBuffer(source.bytes);
+          return parseAudioGeometry(rendered, rendered.byteLength, fileName);
+        })()
+      : await this.inspectAudioFile(workingPath, workingInfo.size, fileName);
 
     const idempotencyKey = idempotencyKeyFor({ sha256: inputSha256, modelId: descriptor.id, profile, family: descriptor.family, stems });
     const existing = [...this.records.values()].find(
@@ -540,10 +652,16 @@ export class RemoteStemJobService {
       idempotencyKey,
       workingCopyPath: workingPath,
       workingCopySha256: inputSha256,
-      workingCopyBytes: workingBytes.byteLength,
-      durationSeconds: header.durationSeconds,
-      sampleRate: header.sampleRate,
-      channels: header.channels,
+      workingCopyBytes: workingInfo.size,
+      durationSeconds: geometry.durationSeconds,
+      // Erwartete Stem-Geometrie (44,1 kHz Stereo), unabhängig vom Container
+      // der Arbeitskopie – die Engine normalisiert vor der Inferenz.
+      sampleRate: ENGINE_OUTPUT_SAMPLE_RATE,
+      channels: ENGINE_OUTPUT_CHANNELS,
+      inputSampleRate: geometry.sampleRate,
+      inputChannels: geometry.channels,
+      inputFormat,
+      passthrough: source.kind === 'file',
       originalPath: originalIntegrity?.path,
       originalSha256: originalIntegrity?.sha256Before,
       originalBytes: originalIntegrity?.sizeBefore,
@@ -560,7 +678,9 @@ export class RemoteStemJobService {
     this.markFlow(record, {
       id: 'working_copy',
       at: now,
-      detail: 'Arbeitskopie im Engine-Datenordner; das Original wurde nur gelesen.',
+      detail: source.kind === 'file'
+        ? `Arbeitskopie ist eine bitgenaue Kopie der Quelle (${inputFormat}); das Original wurde nur gelesen.`
+        : 'Arbeitskopie im Engine-Datenordner; das Original wurde nur gelesen.',
       facts: this.workingCopyFacts(record),
     });
     this.addTrace(record, 'editor.job_created', 'Fern-Job angelegt; Arbeitskopie und Manifest werden vorbereitet.');
@@ -578,10 +698,11 @@ export class RemoteStemJobService {
         fileName,
         relativePath: `jobs/${jobId}/input/${fileName}`,
         sha256: inputSha256,
-        bytes: workingBytes.byteLength,
-        durationSeconds: header.durationSeconds,
-        sampleRate: header.sampleRate,
-        channels: header.channels,
+        bytes: workingInfo.size,
+        durationSeconds: geometry.durationSeconds,
+        sampleRate: geometry.sampleRate,
+        channels: geometry.channels,
+        format: inputFormat,
       },
       engine: {
         backend: 'bs_roformer',
@@ -615,7 +736,9 @@ export class RemoteStemJobService {
       const remoteHash = await transport.sha256(relative);
       let verifiedHash: string | null = remoteHash;
       if (remoteHash !== inputSha256) {
-        await transport.writeBytes(relative, workingBytes);
+        // Erst jetzt lesen: die Arbeitskopie bleibt nicht während der ganzen
+        // Vorbereitung als zweiter Vollpuffer im Heap liegen.
+        await transport.writeBytes(relative, await readFile(workingPath));
         await transport.writeText(`jobs/${jobId}/manifest.json`, serializeManifest(manifest));
         record.uploadedAt = this.now();
         // Zurücklesen statt glauben: liegt die Arbeitskopie wirklich so in der
@@ -641,7 +764,7 @@ export class RemoteStemJobService {
           { label: 'Ablage', value: transport.label },
           { label: 'Eingabe', value: relative },
           { label: 'Steckbrief', value: `jobs/${jobId}/manifest.json` },
-          { label: 'Größe', value: formatFlowBytes(workingBytes.byteLength) },
+          { label: 'Größe', value: formatFlowBytes(workingInfo.size) },
           {
             label: 'Hash in Ablage',
             value:
@@ -709,7 +832,7 @@ export class RemoteStemJobService {
       model: descriptor.id,
       profile,
       modelId: descriptor.id,
-      bytes: workingBytes.byteLength,
+      bytes: workingInfo.size,
       sha256: inputSha256,
     });
     this.emitEvent('progress', record);
@@ -732,30 +855,65 @@ export class RemoteStemJobService {
    * Liest Kopfdaten aus der Arbeitskopie. Für die Manifest-Angaben genügt das
    * WAV-Gerüst (Sample Rate, Kanäle, Frames) – es wird kein Audio dekodiert.
    */
-  private inspectWav(bytes: Uint8Array, fileName: string): { sampleRate: number; channels: number; frames: number; durationSeconds: number } {
+  /**
+   * Welche Quelle wird zur Arbeitskopie?
+   *
+   * Reihenfolge ist Absicht: eine ausdrücklich genannte Originaldatei gewinnt
+   * vor einem generischen `inputPath`, und gerenderte Bytes sind der Rückfall –
+   * nicht der Normalfall. Wer Bytes schickt, bekommt eine `.wav`; wer eine Datei
+   * nennt, behält deren Endung.
+   */
+  private resolveInputSource(request: StartRemoteStemJobRequest): ResolvedInputSource {
+    if (request.sourceFile?.path && String(request.sourceFile.path).trim()) {
+      const resolved = path.resolve(request.sourceFile.path);
+      const extension = inputExtensionFor(resolved);
+      // Keine stillschweigende Umbenennung: eine `.txt` als `.wav` hochzuladen
+      // wäre ein Job, der erst auf dem Worker scheitert – und ein Manifest, das
+      // einen Container behauptet, den niemand geschrieben hat.
+      if (!isSupportedInputExtension(extension)) {
+        throw new RemoteProtocolError(
+          'AUDIO_UNSUPPORTED_FORMAT',
+          `Originaldatei ${path.extname(resolved) || '(ohne Endung)'} wird nicht durchgeschleift (erlaubt: ${REMOTE_INPUT_EXTENSIONS.join(', ')}).`
+        );
+      }
+      return { kind: 'file', path: resolved, expectedSha256: request.sourceFile.sha256, extension };
+    }
+    if (request.inputPath && String(request.inputPath).trim()) {
+      const resolved = path.resolve(request.inputPath);
+      return { kind: 'file', path: resolved, extension: inputExtensionFor(resolved) };
+    }
+    if (request.bytes) {
+      return { kind: 'bytes', bytes: request.bytes, extension: '.wav' };
+    }
+    throw new RemoteProtocolError(
+      'AUDIO_MISSING',
+      'Fern-Job benötigt sourceFile (Originaldatei), inputPath oder bytes (Arbeitskopie) als Mix-Quelle.'
+    );
+  }
+
+  /**
+   * Geometrie der Arbeitskopie aus dem Container lesen.
+   *
+   * Nur Kopfbytes werden geladen: eine FLAC verrät ihre Dauer exakt in
+   * STREAMINFO, eine WAV im data-Chunk zusammen mit der echten Dateigröße.
+   * Eine Neukodierung oder ein Voll-Read ist dafür nicht nötig – und wäre bei
+   * einer durchgeschleiften Originaldatei auch der falsche Ort dafür.
+   */
+  private async inspectAudioFile(filePath: string, fileSize: number, fileName: string): Promise<AudioGeometry> {
+    const head = Buffer.alloc(Math.min(AUDIO_HEADER_READ_BYTES, Math.max(1, fileSize)));
+    let handle;
     try {
-      // Der volle Puffer wird geparst: `parseWavLayout` deckelt die
-      // daten-Chunk-Länge auf die tatsächlich vorhandene Dateigröße. Mit einem
-      // abgeschnittenen Kopf (nur die ersten 256 KiB) wäre die Dauer eines
-      // 4-Sekunden-Tracks um Faktor 3 zu klein – ein falsches Manifest.
-      const layout = parseWavLayout(bytes);
-      const bytesPerFrame = Math.max(1, layout.blockAlign);
-      // Die im Header deklarierte Länge kann bei abgeschnittenen Dateien
-      // lügen; deshalb gegen die echte Dateigröße deckeln.
-      const dataBytes = Math.min(layout.dataSize, Math.max(0, bytes.byteLength - layout.dataOffset));
-      const frames = Math.floor(dataBytes / bytesPerFrame);
-      return {
-        sampleRate: layout.sampleRate,
-        channels: layout.channels,
-        frames,
-        durationSeconds: layout.sampleRate > 0 ? frames / layout.sampleRate : 0,
-      };
+      handle = await open(filePath, 'r');
+      await handle.read(head, 0, head.length, 0);
     } catch (error) {
       throw new RemoteProtocolError(
         'AUDIO_CORRUPT',
-        `Arbeitskopie ${fileName} ist kein lesbares WAV: ${error instanceof Error ? error.message : String(error)}`
+        `Arbeitskopie ${fileName} ist nicht lesbar: ${error instanceof Error ? error.message : String(error)}`
       );
+    } finally {
+      await handle?.close().catch(() => undefined);
     }
+    return parseAudioGeometry(head, fileSize, fileName);
   }
 
   /* --------------------------------------------------------------------- *

@@ -56,7 +56,11 @@ export const REMOTE_PHASES = {
 } as const;
 
 export interface RemoteJobInput {
-  /** Dateiname der Arbeitskopie (nie der Originalpfad des Nutzers). */
+  /**
+   * Dateiname der Arbeitskopie (nie der Originalpfad des Nutzers). Die Endung
+   * ist die der Quelle: eine durchgeschleifte FLAC heißt `track_1.flac` und
+   * nicht `track_1.wav` – der Worker erkennt den Container an der Endung.
+   */
   fileName: string;
   /** Pfad **relativ** zur Job-Wurzel, posix-Schreibweise (Drive-tauglich). */
   relativePath: string;
@@ -66,6 +70,12 @@ export interface RemoteJobInput {
   durationSeconds: number;
   sampleRate: number;
   channels: number;
+  /**
+   * Container der Arbeitskopie (`FLAC`, `WAV`, `MP3`, …). Optional und rein
+   * beschreibend – Schema-Version 1 bleibt gültig, weil ältere Worker das Feld
+   * einfach nicht lesen. Es ersetzt keine Prüfung: maßgeblich bleibt `fileName`.
+   */
+  format?: string;
 }
 
 export interface RemoteJobEngineRef {
@@ -191,8 +201,24 @@ export interface RemoteJobRecord {
   workingCopySha256: string;
   workingCopyBytes: number;
   durationSeconds: number;
+  /**
+   * Erwartete Geometrie der **Ergebnisse** (44,1 kHz Stereo), nicht die der
+   * Arbeitskopie. Die Engine normalisiert jede Eingabe vor der Inferenz
+   * (`preprocessor.ts`), deshalb ist das der Maßstab für die Ergebnisprüfung
+   * (§34 J) – auch wenn die Arbeitskopie eine 48-kHz-FLAC ist.
+   */
   sampleRate: number;
   channels: number;
+  /** Echte Geometrie der Arbeitskopie, aus dem Container gelesen. */
+  inputSampleRate?: number;
+  inputChannels?: number;
+  /** Container der Arbeitskopie (`FLAC`, `WAV`, …) – Anzeige und Diagnose. */
+  inputFormat?: string;
+  /**
+   * `true`, wenn die Arbeitskopie bitgenau die Originaldatei ist (Kopie statt
+   * Neukodierung). Der Laufzettel zeigt dann, dass nichts gerendert wurde.
+   */
+  passthrough?: boolean;
   /** Original (falls der Job aus einer Datei kam) + Integritätsnachweis. */
   originalPath?: string;
   originalSha256?: string;

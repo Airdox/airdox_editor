@@ -389,6 +389,18 @@ export interface StartRemoteStemJobPayload {
   bytes?: Uint8Array;
   /** Alternative: Pfad im Engine-Datenordner (dann wird eine Arbeitskopie gezogen). */
   inputPath?: string;
+  /**
+   * Bevorzugte Alternative: die **Originaldatei** des Tracks (FLAC/MP3/WAV …).
+   * Sie wird bitgenau kopiert statt neu gerendert – aus ~130 MB 32-Bit-WAV
+   * werden so die echten ~40 MB der Quelle. Nur zulässig, solange der Track im
+   * Editor unverändert ist; die Desktop-Brücke prüft Pfad, Endung und Hash.
+   */
+  sourceFile?: {
+    path: string;
+    /** SHA-256 aus dem Import – die Brücke prüft die Datei dagegen. */
+    sha256?: string;
+    bytes?: number;
+  };
   trackName?: string;
   profile?: QualityProfile;
   modelId?: string;
