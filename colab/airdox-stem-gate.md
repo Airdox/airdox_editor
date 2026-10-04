@@ -106,6 +106,8 @@ src = pathlib.Path("/content/airdox/airdox-editor")
 if os.path.isdir(src) and any(os.scandir(src)):
     print(f"✓ {src} existiert bereits – Auschecken übersprungen (Ordner löschen für einen frischen Lauf)")
 elif ARCHIV_IN_DRIVE:
+    from google.colab import auth
+    auth.authenticate_user()
     from google.colab import drive
     drive.mount("/content/drive")
     kandidaten = [f"/content/drive/My Drive/{ARCHIV_IN_DRIVE}", f"/content/drive/MyDrive/{ARCHIV_IN_DRIVE}"]

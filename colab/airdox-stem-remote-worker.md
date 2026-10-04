@@ -87,6 +87,9 @@ VERBOSE = False              # True = ausführlicheres Logging (jede Poll-Runde)
 
 <<<CELL py
 # 1 · Google Drive mounten – Transportmittel für Jobs, Inputs und Ergebnisse
+from google.colab import auth  # type: ignore
+auth.authenticate_user()
+
 from google.colab import drive  # type: ignore
 drive.mount("/content/drive")
 
