@@ -114,6 +114,7 @@ import {
 import { startPlayheadDriver, type PlayheadDriverHandle } from './features/transport/playheadDriver';
 import { useTransportControls, DEFAULT_VIEW_DURATION_SEC } from './features/transport/useTransportControls';
 import { useMidiBridge } from './features/transport/useMidiBridge';
+import { useAppSettings } from './state/settingsStore';
 import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
@@ -441,6 +442,36 @@ export default function App() {
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
 
+  /*
+   * Aufnahme-Voreinstellungen und Bearbeitungsverhalten liegen in
+   * `state/settingsStore.ts` – samt Persistenz und Standardwerten.
+   * Die Setter behalten hier ihre Namen.
+   */
+  const {
+    recordingSource,
+    setRecordingSource,
+    recordingFormat,
+    setRecordingFormat,
+    recordingSampleRate,
+    setRecordingSampleRate,
+    recordingBitDepth,
+    setRecordingBitDepth,
+    recordingChannels,
+    setRecordingChannels,
+    recordingLimiter,
+    setRecordingLimiter,
+    confirmDestructiveEdits,
+    setConfirmDestructiveEdits,
+    autoSaveProject,
+    setAutoSaveProject,
+    autoScroll,
+    setAutoScroll,
+    highQualityRendering,
+    setHighQualityRendering,
+    snapToBeatgrid,
+    setSnapToBeatgrid,
+  } = useAppSettings();
+
   // Viewport & Timeline state
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
@@ -506,15 +537,6 @@ export default function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
   // Recording is configured here, not hard-coded: the eventual recorder can use
   // the editor master, a microphone/line input, or Windows/Rekordbox loopback.
-  const [recordingSource, setRecordingSource] = useState<'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK'>(() => {
-    if (typeof window === 'undefined') return 'EDITOR_MASTER';
-    return (window.localStorage.getItem('airdox.recordingSource') as 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK') || 'EDITOR_MASTER';
-  });
-  const [recordingFormat, setRecordingFormat] = useState<RecorderFormat>('WAV');
-  const [recordingSampleRate, setRecordingSampleRate] = useState<44100 | 48000>(48000);
-  const [recordingBitDepth, setRecordingBitDepth] = useState<16 | 24 | 32>(24);
-  const [recordingChannels, setRecordingChannels] = useState<'STEREO' | 'MONO'>('STEREO');
-  const [recordingLimiter, setRecordingLimiter] = useState<boolean>(true);
 
   // Dedicated set recorder state. The modal is intentionally independent from
   // the edit transport: Rekordbox can be captured while the editor remains
@@ -541,20 +563,7 @@ export default function App() {
     countdown: number | null;
     startedAt: number;
   }>({ mediaRecorder: null, chunks: [], inputStream: null, processedStream: null, dispose: null, timer: null, countdown: null, startedAt: 0 });
-  const [confirmDestructiveEdits, setConfirmDestructiveEdits] = useState<boolean>(true);
-  const [autoSaveProject, setAutoSaveProject] = useState<boolean>(false);
-  const [autoScroll, setAutoScroll] = useState<boolean>(true);
-  const [highQualityRendering, setHighQualityRendering] = useState<boolean>(true);
-  const [snapToBeatgrid, setSnapToBeatgrid] = useState<boolean>(true);
   const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
-
-  useEffect(() => {
-    window.localStorage?.setItem('airdox.recordingSource', recordingSource);
-    window.localStorage?.setItem('airdox.settings', JSON.stringify({
-      recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth,
-      recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject,
-    }));
-  }, [recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth, recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject]);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
   const [deleteModeModalOpen, setDeleteModeModalOpen] = useState<boolean>(false);
