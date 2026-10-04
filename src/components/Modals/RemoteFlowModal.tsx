@@ -41,6 +41,7 @@ import {
   Download,
   ExternalLink,
   FileAudio,
+  FolderOpen,
   HardDrive,
   HeartPulse,
   HelpCircle,
@@ -328,6 +329,39 @@ export const RemoteFlowModal: React.FC<Props> = ({
   const [now, setNow] = useState(Date.now());
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const [openFolderFeedback, setOpenFolderFeedback] = useState<string | null>(null);
+
+  const openLocalJobFolder = async () => {
+    const root = status?.root || job?.transportRoot;
+    if (!root || !job?.jobId) return;
+    const normalizedRoot = root.replace(/[\\/]+$/, '');
+    const target = `${normalizedRoot}/jobs/${job.jobId}/input`;
+    setOpeningFolder(true);
+    try {
+      const bridge = (window as unknown as {
+        rekordboxDesktop?: {
+          openPath?: (p: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+        };
+      }).rekordboxDesktop;
+      if (bridge?.openPath) {
+        const res = await bridge.openPath(target);
+        if (res.ok) {
+          setOpenFolderFeedback('Im Dateimanager geöffnet');
+        } else {
+          setOpenFolderFeedback(res.error || 'Ordner konnte nicht geöffnet werden');
+        }
+      } else {
+        await navigator.clipboard.writeText(target);
+        setOpenFolderFeedback('Pfad in Zwischenablage kopiert');
+      }
+    } catch {
+      setOpenFolderFeedback('Fehler beim Öffnen');
+    } finally {
+      setOpeningFolder(false);
+      window.setTimeout(() => setOpenFolderFeedback(null), 3000);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -660,35 +694,155 @@ export const RemoteFlowModal: React.FC<Props> = ({
                             </p>
                           ) : null}
 
-                          {station.id === 'worker_seen' && station.state !== 'done' ? (
+                          {/* Station 2: In der Jobablage abgelegt */}
+                          {station.id === 'published' && (status?.root || job?.transportRoot) ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void openLocalJobFolder()}
+                                disabled={openingFolder}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/20 hover:text-white disabled:opacity-60"
+                                title="Öffnet den lokalen Job-Ordner im Dateimanager"
+                              >
+                                <FolderOpen size={13} />
+                                <span>Lokalen Ablage-Ordner öffnen</span>
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {/* Station 3: In der Google-Cloud angekommen */}
+                          {station.id === 'cloud_sync' && job ? (
+                            <div className="mt-2.5 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {(status?.root || job.transportRoot) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void openLocalJobFolder()}
+                                    disabled={openingFolder}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/15 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/25 hover:text-white disabled:opacity-60"
+                                    title="Öffnet den lokalen Job-Eingabeordner in Windows Explorer / Dateimanager"
+                                  >
+                                    <FolderOpen size={13} />
+                                    <span>Lokalen Drive-Ordner öffnen</span>
+                                  </button>
+                                ) : null}
+
+                                <a
+                                  href={`https://drive.google.com/drive/u/0/search?q=${encodeURIComponent(job.jobId)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:bg-white/20 hover:text-white"
+                                  title="Öffnet Google Drive im Browser und sucht nach diesem Job-Ordner"
+                                >
+                                  <ExternalLink size={13} />
+                                  <span>In Google Drive (Web) öffnen</span>
+                                </a>
+
+                                {station.state === 'unknown' && onConfirmCloudSync ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void confirmCloud()}
+                                    disabled={confirming}
+                                    className="rounded-lg border border-amber-300/40 bg-amber-300/[.08] px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/[.16] disabled:opacity-60"
+                                  >
+                                    {confirming ? 'Wird vermerkt…' : 'In Drive gesehen'}
+                                  </button>
+                                ) : null}
+                              </div>
+
+                              {openFolderFeedback ? (
+                                <p className="text-[11px] font-medium text-cyan-300">{openFolderFeedback}</p>
+                              ) : null}
+
+                              {(status?.root || job.transportRoot) ? (
+                                <div className="flex items-center justify-between gap-2 rounded-lg bg-black/30 px-2.5 py-1.5 font-mono text-[10px] text-neutral-300">
+                                  <span
+                                    className="truncate"
+                                    title={`${(status?.root || job.transportRoot || '').replace(/[\\/]+$/, '')}/jobs/${job.jobId}/input/`}
+                                  >
+                                    Ablagepfad: {(status?.root || job.transportRoot || '').replace(/[\\/]+$/, '')}/jobs/{job.jobId}/input/
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const p = `${(status?.root || job.transportRoot || '').replace(/[\\/]+$/, '')}/jobs/${job.jobId}/input/`;
+                                      navigator.clipboard?.writeText(p);
+                                      setOpenFolderFeedback('Pfad in Zwischenablage kopiert');
+                                      window.setTimeout(() => setOpenFolderFeedback(null), 3000);
+                                    }}
+                                    className="shrink-0 text-neutral-400 hover:text-cyan-200"
+                                    title="Pfad in Zwischenablage kopieren"
+                                  >
+                                    <ClipboardCopy size={12} />
+                                  </button>
+                                </div>
+                              ) : null}
+
+                              {station.state === 'unknown' && onConfirmCloudSync ? (
+                                <span className="block text-[10px] text-neutral-500">
+                                  Nur ein Vermerk von Ihnen – der Editor kann die Cloud nicht prüfen.
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          {/* Station 4: Colab-Worker in der Ablage gesehen */}
+                          {station.id === 'worker_seen' ? (
                             <div className="mt-2.5 flex flex-wrap items-center gap-2">
                               <a
                                 href={COLAB_NOTEBOOK_URL}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/15 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/25 hover:text-white"
+                                title="Colab-Notebook direkt in Google Colab öffnen"
                               >
                                 <ExternalLink size={13} />
-                                <span>Colab-Notebook jetzt öffnen</span>
+                                <span>In Google Colab öffnen</span>
                               </a>
                               <span className="text-[10px] text-neutral-400">
-                                Öffnet das Notebook direkt in Google Colab zum Starten von Zelle #5.
+                                {station.state === 'done'
+                                  ? 'Worker-Lebenszeichen gesehen. Colab öffnen, falls der Worker neu gestartet werden muss.'
+                                  : 'Öffnet das Notebook direkt in Google Colab zum Starten von Zelle #5.'}
                               </span>
                             </div>
                           ) : null}
 
-                          {station.id === 'cloud_sync' && station.state === 'unknown' && onConfirmCloudSync && job ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void confirmCloud()}
-                                disabled={confirming}
-                                className="rounded-lg border border-amber-300/40 bg-amber-300/[.08] px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/[.16] disabled:opacity-60"
+                          {/* Station 5: Job vom Worker angenommen */}
+                          {station.id === 'claimed' && station.state !== 'done' ? (
+                            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                              <a
+                                href={COLAB_NOTEBOOK_URL}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/15 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/25 hover:text-white"
+                                title="Colab-Notebook direkt in Google Colab öffnen"
                               >
-                                {confirming ? 'Wird vermerkt…' : 'In Drive gesehen'}
-                              </button>
-                              <span className="text-[10px] text-neutral-500">
-                                Nur ein Vermerk von Ihnen – der Editor kann die Cloud nicht prüfen.
+                                <ExternalLink size={13} />
+                                <span>In Google Colab öffnen</span>
+                              </a>
+                              <span className="text-[10px] text-neutral-400">
+                                Wartet auf Claim. Colab öffnen, um zu prüfen, ob Zelle #5 im Notebook aktiv läuft.
+                              </span>
+                            </div>
+                          ) : null}
+
+                          {/* Station 6: Trennung gerechnet */}
+                          {station.id === 'compute' && station.state !== 'done' ? (
+                            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                              <a
+                                href={COLAB_NOTEBOOK_URL}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/15 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/25 hover:text-white"
+                                title="Colab-Notebook direkt in Google Colab öffnen"
+                              >
+                                <ExternalLink size={13} />
+                                <span>In Google Colab öffnen</span>
+                              </a>
+                              <span className="text-[10px] text-neutral-400">
+                                {station.state === 'failed'
+                                  ? 'Inferenz fehlgeschlagen. In Colab die Konsolenausgabe von Zelle #5 prüfen.'
+                                  : 'Inferenz läuft. Fortschritt und Rechenausgabe in Google Colab verfolgen.'}
                               </span>
                             </div>
                           ) : null}
