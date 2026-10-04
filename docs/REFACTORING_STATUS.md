@@ -80,6 +80,20 @@ zwei Dateien) und so aufgelöst, dass beide Beiträge erhalten bleiben:
 
 ---
 
+## 2b. Entscheidungen aus Kapitel 11 (geschlossen am 04.10.2026)
+
+| # | Frage | Entscheidung | Stand |
+|---|---|---|---|
+| 1 | Eigene Stores oder zustand? | **Eigene Stores** (`useSyncExternalStore`), keine neue Abhängigkeit | umgesetzt |
+| 2 | ESLint oder Biome? | **Biome** (Formatierung + Regeln in einem Werkzeug); ESLint bleibt als Alternative möglich | Phase 2 (WP-13) |
+| 3 | happy-dom oder jsdom? | **happy-dom**, nur in den Tests, die es brauchen; Testframework bleibt | Phase 2–4 (WP-14) |
+| 4 | HEAD bereinigen oder Historie umschreiben? | **Nur HEAD** – eine Umschreibung würde alle Klone und offenen PRs brechen | umgesetzt |
+| 5 | Performance-Harness: Electron oder Playwright? | **Electron** (echte Zielumgebung, keine neue Abhängigkeit); Playwright optional in Phase 4 | Phase 4 (WP-14) |
+| 6 | Phase 1: alle Quick Wins? | **Ja, alle drei** (Lazy-Modals, Budget, Split) | umgesetzt |
+| 7 | Code-Freeze für `App.tsx` in Phase 2? | **Kein harter Freeze, aber weiche Absprache:** während Phase 2 keine parallele Sitzung auf `App.tsx`/`DetailWaveform.tsx` | organisatorisch |
+
+Zur Begründung im Detail: [`REFACTORING_PLAN.md`](REFACTORING_PLAN.md), Kapitel 11.
+
 ## 3. Was umgesetzt ist (nach Arbeitspaket)
 
 ### WP-01 · Mess- und Sicherungsnetz (Phase 0) ✓

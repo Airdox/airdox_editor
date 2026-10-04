@@ -614,15 +614,66 @@ Keyboard, MIDI, Menü, Toolbar und Chatbot mappen nur noch `(CommandId, params)`
 
 ---
 
-## 11. Offene Entscheidungen (bitte vor Phase 1 klären)
+## 11. Entscheidungen (festgelegt am 04.10.2026)
 
-1. **Zustandsschicht:** Vorschlag ist **ohne neue Laufzeitabhängigkeit** (`useSyncExternalStore` + eigene Stores). Alternative: `zustand` (kleiner, vertraute API, ~1 kB). → Empfehlung: eigene Stores, `zustand` nur wenn Team-Präferenz.
-2. **Lint-Stack:** ESLint (typbewusst, mehr Regeln) **oder** Biome (schneller, weniger Ökosystem). → Empfehlung: ESLint + `typescript-eslint` wegen `react-hooks`/`no-floating-promises`; Prettier nur für Formatierung.
-3. **Testumgebung für Komponenten:** `happy-dom` (schnell) oder `jsdom` (kompatibler). → Empfehlung: `happy-dom` für Logik/Props, `jsdom` nur falls Canvas-APIs gebraucht werden (Canvas bleibt weiterhin Mock).
-4. **Repo-Historie:** Die beiden 13-MB-ZIPs und 5-MB-Artefakte **nur aus dem HEAD** entfernen (History bleibt, `.git` bleibt 26 MB) oder History umschreiben (`filter-repo`, Risiko für alle Klone)? → Empfehlung: HEAD-Bereinigung jetzt, History-Umschreibung nur mit ausdrücklicher Freigabe.
-5. **Performance-Harness:** im Electron-Renderer (keine neue Abhängigkeit) oder mit Playwright/Chromium (bessere Messwerte, neue devDependency + ~300 MB Browser)? → Empfehlung: Elektron zuerst, Playwright optional in Phase 4.
-6. **Umfang der Phase 1:** volle Quick-Win-Kombination (Q1–Q3) oder nur Q1/Q2 (reine Laufzeit), damit Phase 1 ohne Bundle-Umbau bleibt? → Empfehlung: alle drei, WP-16.1/2 ist klein und wirkt sofort auf den Start.
-7. **Feature-Fenster:** Ist ein Code-Freeze für `App.tsx` während Phase 2 (2–3 Wochen) organisatorisch möglich? Ohne Freeze steigt das Konfliktrisiko deutlich.
+Die sieben Punkte sind entschieden – bewusst in einfacher Sprache, damit sie ohne Vorwissen
+lesbar sind. Die ursprüngliche Fragestellung steht jeweils als Kursivzeile darunter.
+
+1. **Zustand: eigene Stores, kein zustand.** *Frage war: eigene Stores oder zustand?*
+   Der eigene Store (`useSyncExternalStore`) kann genau das, was hier gebraucht wird – die
+   Abspielposition ohne React-Neuzeichnung an den Canvas geben –, kostet keine Abhängigkeit und
+   keine Anpassung am Electron-Build. **Bereits umgesetzt** (`src/state/transportStore.ts`).
+
+2. **Lint: Biome.** *Frage war: ESLint oder Biome?*
+   Ein Werkzeug, ein Befehl, ein Bruchteil der Laufzeit; es prüft zusätzlich die Formatierung, die
+   bisher gar nicht geprüft wird. Die Regeln, auf die es hier ankommt, sind enthalten: fehlende
+   Effekt-Abhängigkeiten (die Ursache des Tastatur-Fehlers aus Phase 1), `noFloatingPromises`,
+   `noExplicitAny` und Importgrenzen zwischen den Schichten. Wird in Phase 2 (WP-13) eingeführt.
+   *Falls das Team ESLint bevorzugt:* jederzeit austauschbar, beide prüfen dieselben Regeln.
+
+3. **Komponententests: `happy-dom`.** *Frage war: happy-dom oder jsdom?*
+   Wird über `happy-dom/global-registrator` nur in den Tests geladen, die es brauchen. Kein Wechsel
+   des Testframeworks – die Suite bleibt bei `node:assert` und dem eigenen Runner. Canvas wird
+   weiterhin durch ein Double ersetzt; jsdom nur, wenn ein Test echte Canvas-APIs verlangt
+   (derzeit nicht nötig). Teil von WP-14.
+
+4. **Git-Historie: nur aus dem HEAD entfernen, nicht umschreiben.** *Frage war: HEAD bereinigen oder
+   Historie umschreiben (`filter-repo`)?*
+   Eine Umschreibung ändert jede Commit-Nummer, macht bestehende Klone unbrauchbar und trifft die
+   parallel laufenden Sitzungen und offenen Pull Requests. Die alten Stände bleiben zwar in der
+   Historie, aber ein flacher Klon lädt sie nicht. **Bereits umgesetzt** – 26,2 MB ZIPs, 5,3 MB
+   Validierungs-WAV und `bun.lock` sind aus dem HEAD entfernt, die Historie ist unangetastet.
+
+5. **Performance-Messung: Electron-Renderer**, kein Playwright. *Frage war: Electron oder
+   Playwright/Chromium?*
+   Misst genau die Umgebung, in der das Programm beim Nutzer läuft, ohne neue Abhängigkeit und ohne
+   zusätzlichen 300-MB-Browser-Download. Playwright bleibt eine Option für Phase 4, wenn Bilder und
+   Interaktionen automatisch verglichen werden sollen (der Optik-Abgleich gegen `reference/*.png`
+   ist bis heute manuell). Teil von WP-14.
+
+6. **Umfang Phase 1: alle drei Quick Wins.** *Frage war: volle Kombination oder nur die reinen
+   Laufzeit-Verbesserungen?*
+   **Bereits umgesetzt** – Lazy-Modals, Bundle-Budget und Split sind enthalten: Startbundle
+   361 → 199 kB gzip, 1334 → 669 kB roh.
+
+7. **Code-Freeze: kein harter Freeze, aber ein „weiches" Fenster für zwei Dateien.** *Frage war, ob
+   ein Code-Freeze für `App.tsx` während Phase 2 organisatorisch möglich ist.*
+   Nötig ist kein Stillstand des Projekts, sondern eine Absprache: Während Phase 2 soll keine
+   **andere** Sitzung `src/App.tsx` oder `src/components/DetailWaveform.tsx` umbauen. Alles andere
+   (Stems, Rekordbox, Electron, Dokumentation) läuft parallel weiter.
+   *Warum:* Genau diese zwei Dateien waren es, die der parallele Umbau aus PR #75 gleichzeitig
+   verändert hat – 18 Konflikte, die von Hand zusammengeführt werden mussten. Bei WP-06 (Zerlegung
+   von `App.tsx`) würde sich das ohne Absprache mehrfach wiederholen. Ich arbeite zusätzlich in
+   kleinen Schritten und führe `main` bei jedem Schritt sofort ein, damit ein Konflikt nie größer
+   wird als nötig.
+
+**Stand der Umsetzung:** Punkte 1, 4 und 6 sind erledigt (Phase 0 + 1, siehe
+[`REFACTORING_STATUS.md`](REFACTORING_STATUS.md)). Punkte 2, 3 und 5 gehören zu Phase 2–4
+(WP-13, WP-14). Punkt 7 ist eine Absprache, keine technische Änderung.
+
+**Ebenfalls erledigt:** Der Baseline-Tag `perf-baseline-2026-10-03` zeigt auf `main` @ `eea1a94`
+(Stand vor der Refaktorisierung) und existiert lokal. Er ist noch nicht zu GitHub übertragen –
+das ist der einzige offene Punkt der Phase-0-Checkliste.
 
 ---
 
@@ -803,8 +854,8 @@ jobs:
 
 ## Anhang D · Reihenfolge als Checkliste
 
-- [ ] Phase 0: `npm run verify`, Benchmarks, Budgets, Linux-CI, Baseline-Tag
-- [ ] Phase 1: Transport-Store + Treiber → Canvas-Layer/DPR/Memo → Logger-Batching → Code-Splitting/Budget → toten Code & Root-Clutter entfernen
+- [x] Phase 0: `npm run verify`, Benchmarks, Budgets, Linux-CI, Baseline-Tag  *(erledigt 04.10.2026; Tag lokal gesetzt, noch nicht zu GitHub übertragen)*
+- [x] Phase 1: Transport-Store + Treiber → Canvas-Layer/DPR → Logger-Batching → Code-Splitting/Budget → toten Code & Root-Clutter entfernen  *(erledigt 04.10.2026; `React.memo` bewusst nach WP-06 verschoben, siehe Statusbericht Abschnitt 3)*
 - [ ] Phase 2: Command-Registry + `App.tsx`-Dekomposition (Schritte 1–5, 8) → History ohne Audiokopien → ESLint + `strictNullChecks` → DOM-Testharness
 - [ ] Phase 3: `strict: true` → Engine-Zustandsmaschine + Mixdown → Analyse-Cache/Worker → Speicher-Budgets → IO-Entdopplung/XML-Worker → Server-Router
 - [ ] Phase 4: Electron-Modularisierung + IPC-Vertragstest → Perf-Harness/Budgets/Coverage in CI → Observability → Release-Bericht
