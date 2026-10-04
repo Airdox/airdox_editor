@@ -1,7 +1,7 @@
 # Refaktorisierung – Statusbericht
 
-**Stand:** 04.10.2026 · **Basis:** `main` @ `f7a0ef0` (v0.4.2, inkl. Merge `main` ← Branch) ·
-**Branch:** `arena/01a10410-airdox-editor`
+**Stand:** 04.10.2026 · **Basis:** `main` @ `c08e96f` (PR #76 gemergt) ·
+**Branch:** `arena/01a10410-airdox-editor` (auf `main` nachgezogen)
 **Plan:** [`docs/REFACTORING_PLAN.md`](REFACTORING_PLAN.md) (freigegebene Roadmap, Phase 0–4)
 **Freigaben des Auftraggebers:** eigene Stores statt zustand ✓ · ZIPs nur aus HEAD, keine History-Umschreibung ✓ · Phase 1 vollständig ✓
 
@@ -80,6 +80,23 @@ zwei Dateien) und so aufgelöst, dass beide Beiträge erhalten bleiben:
 | `docs/REFAKTORISIERUNGSPLAN.md` (Plan der Parallelsitzung) | bleibt liegen; **dieser** Bericht und `docs/REFACTORING_PLAN.md` sind die für diese Sitzung maßgebliche Roadmap |
 
 ---
+
+## 2a2. Merge-Stand
+
+| PR | Inhalt | Zustand |
+|---|---|---|
+| #76 | Phase 0 + 1 vollständig, Phase 2 begonnen (WP-06 Schritte 1–4, 7) | **gemergt** als `c08e96f` (04.10.2026) |
+
+Nach dem Merge auf `main`:
+
+- **Linux-CI („Qualität"): grün**, 1 m 32 s.
+- **Windows-Build: rot** – Ursache liegt **nicht** in diesem PR, sondern in
+  `tests/stem-remote-worker-selftest.test.mjs` aus dem parallelen PR #78: Der Test vergleicht die
+  Ausgabe des Python-Helfers (`colab/remote_worker.py`) mit dem Text „während der Rechnung". Auf
+  Windows kommt die Ausgabe falsch dekodiert an (`w�hrend`), die Zusicherung scheitert. Belegt:
+  schon der Merge von #78 (vor diesem Merge) fiel an derselben Stelle durch, während der Merge von
+  #75 noch grün war. Zu beheben ist das im Test (Ausgabe explizit als UTF-8 lesen) oder im Helfer
+  (Ausgabe erzwingt UTF-8) – ein eigener kleiner Folge-PR.
 
 ## 2b. Entscheidungen aus Kapitel 11 (geschlossen am 04.10.2026)
 
