@@ -11,6 +11,21 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
+/**
+ * REPARATUR: Kein WAV-Bloat mehr — Original-Datei 1:1 durchschleifen
+ */
+export async function prepareJobInputFile(track: any, jobInputDir: string): Promise<string> {
+  const sourcePath = track.filePath || track.path || track.fileLocation;
+  if (!sourcePath || !fs.existsSync(sourcePath)) {
+    throw new Error(`Originaldatei nicht gefunden: ${sourcePath}. Puffer-Rendering wird verweigert, um 130MB-Bloat zu verhindern.`);
+  }
+  const fileExt = path.extname(sourcePath).toLowerCase();
+  const targetFileName = `track_${track.id}${fileExt}`;
+  const targetPath = path.join(jobInputDir, targetFileName);
+  await fs.promises.copyFile(sourcePath, targetPath);
+  return targetFileName;
+}
+
 export interface BridgeRootConfig {
   bridgeRoot: string; // z.B. /home/user/Google Drive/airdox_stem_bridge
   maxWorkerAgeSec: number; // Phase 5 Gatekeeper: 75 s

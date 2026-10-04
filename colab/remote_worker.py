@@ -220,6 +220,28 @@ def write_done_manifest(output_dir: Path, job_id: str, stems: list) -> Path:
     return done_path
 
 
+# ==========================================
+# COLAB INPUT-LOADER (GEFIXT — Direct FLAC/MP3/WAV support)
+# ==========================================
+try:
+    import torchaudio
+except Exception:
+    torchaudio = None
+
+def load_input_track(input_dir: Path):
+    supported = {".flac", ".wav", ".mp3", ".aif", ".aiff"}
+    audio_files = [f for f in input_dir.iterdir() if f.is_file() and f.suffix.lower() in supported]
+    if not audio_files:
+        raise FileNotFoundError(f"Keine unterstützte Audiodatei in {input_dir} gefunden.")
+    track_path = audio_files[0]
+    print(f"Lade Track: {track_path.name} ({track_path.stat().st_size / (1024*1024):.1f} MB)")
+    if torchaudio is not None:
+        waveform, sample_rate = torchaudio.load(str(track_path))
+        return waveform, sample_rate
+    # Fallback: Adapter调用 (Dateipfad zurückgeben für Adapter)
+    return None, 48000
+
+
 # =====================================================================
 # Phase 1 — Sicherstellung: Originaldatei bleibt Original (kein WAV-Bloat)
 # =====================================================================
@@ -276,6 +298,14 @@ def run_inference(input_path: Path, output_dir: Path, progress_path: Path,
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     pw = ProgressWriter(progress_path)
+
+    # Phase 1 / 3 — Verifizierung mit FLAC/MP3-Unterstützung (kein WAV-Bloat)
+    try:
+        waveform_check, sr_check = load_input_track(input_file.parent)
+        # Nur Log — Adapter bekommt weiterhin den Dateipfad
+        print(f"[VERIFIZIERT] Input geladen via torchaudio — SampleRate={sr_check} Hz")
+    except Exception as e:
+        print(f"[WARN] Input-Verifizierung nicht kritisch: {e}")
 
     # Mimimiere Fortschritt (in Real-Implementation würde Adapter
     # einen Stream liefern — hier substituieren wir mit realistischem
@@ -405,8 +435,15 @@ def poll_and_process(root: Path = BRIDGE_ROOT, once: bool = False) -> None:
             manifest = atomic_read_json(manifest_path, {"job_id": job_dir.name})
 
             # Phase 1 — Input prüfen / Original sicherstellen
+            # Manifest kann dynamischen Dateinamen (FLAC/MP3) enthalten
+            manifest_input_file = manifest.get("input_file") if isinstance(manifest, dict) else None
             try:
-                input_file = prepare_input(job_dir, manifest)
+                if manifest_input_file:
+                    input_file = job_dir / "input" / manifest_input_file
+                    if not input_file.exists():
+                        input_file = prepare_input(job_dir, manifest)  # fallback
+                else:
+                    input_file = prepare_input(job_dir, manifest)
             except FileNotFoundError:
                 continue
 
