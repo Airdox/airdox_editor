@@ -33,8 +33,15 @@ const stages = [
 function stageFor(job: RemoteStemJobView | null, running: boolean): number {
   if (!job) return running ? 0 : 0;
   if (job.status === 'COMPLETED' || job.status === 'VALIDATING' || job.status === 'RECONSTRUCTING') return 4;
-  // RUNNING ohne Claim bedeutet: der Editor wartet noch auf den Worker.
+  // Ein Worker hat den Job beansprucht (claim.json in der Ablage) → Stufe 3.
+  // Ohne Worker bleibt der Job auf Stufe 2 – auch wenn der Editor den Status
+  // schon auf RUNNING gesetzt hat. RUNNING bedeutet nur „Steckbrief liegt in
+  // der Ablage", nicht „ein Rechner rechnet gerade". Ohne diese Unterscheidung
+  // wurde „Auf Worker warten" fälschlich als abgeschlossen markiert, während
+  // die Karte „Warte auf Lebenszeichen des Workers" gleichzeitig angezeigt
+  // wurde – ein Widerspruch, der den Nutzer verwirrte.
   if (job.worker) return 3;
+  if (job.status === 'PREPARING' || job.status === 'PENDING') return running ? 1 : 0;
   return 2;
 }
 
