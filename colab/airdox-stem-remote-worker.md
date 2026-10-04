@@ -107,7 +107,7 @@ import os, subprocess, sys
 # 2a) Python-Abhängigkeiten installieren ('msst' existiert nicht auf PyPI und würde pip abbrechen)
 subprocess.run([
     sys.executable, "-m", "pip", "install", "-q",
-    "soundfile", "pyyaml", "ml-collections", "einops", "rotary-embedding-torch", "beartype"
+    "numpy<=2.2.0", "soundfile", "pyyaml", "ml-collections", "einops", "rotary-embedding-torch", "beartype"
 ], check=True)
 
 # 2b) Referenz-Architektur (ZFTurbo/Music-Source-Separation-Training) bereitstellen
@@ -122,8 +122,11 @@ if not os.path.isfile(os.path.join(MSST_DIR, "models", "bs_roformer", "bs_roform
 os.environ["AIRODOX_MSST_DIR"] = MSST_DIR
 print("Referenz-Architektur bereit:", MSST_DIR)
 
-import ml_collections, soundfile, yaml  # Vorab-Prüfung
-print("Python-Abhängigkeiten erfolgreich geladen (ml_collections, soundfile, yaml).")
+if MSST_DIR not in sys.path:
+    sys.path.insert(0, MSST_DIR)
+import ml_collections, soundfile, yaml
+from models.bs_roformer.bs_roformer import BSRoformer
+print("Python-Abhängigkeiten & BS-RoFormer-Architektur erfolgreich geladen.")
 
 REPO_DIR = "/content/airdox"
 if os.path.isdir(os.path.join("/content/drive/MyDrive", os.path.dirname(REPO_ARCHIV))) and os.path.isfile(os.path.join("/content/drive/MyDrive", REPO_ARCHIV)):
