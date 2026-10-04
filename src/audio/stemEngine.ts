@@ -310,6 +310,8 @@ class StemEngine {
   private cachedStemBytes = 0;
   private isProcessing: boolean = false;
   private activeJobId?: string;
+  /** Remote jobs need the same immediate cancel affordance as local jobs. */
+  private activeRemoteJobId?: string;
 
   public getCachedStems(
     trackId: string,
@@ -1078,6 +1080,9 @@ class StemEngine {
       }
       const wav = preparedInput.wav;
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+      if (options.signal?.aborted) {
+        throw Object.assign(new Error('Die Fern-Separation wurde vor dem Upload abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
+      }
 
       let job: RemoteStemJobView;
       if (desktop?.startRemoteStemJob) {
@@ -1114,6 +1119,7 @@ class StemEngine {
         }
         job = payload.data;
       }
+      this.activeRemoteJobId = job.jobId;
       options.onRemoteJob?.(job);
       logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} bestätigt (Status ${job.status}; ${job.modelId}, ${profile}, ${job.trackName})`, {
         jobId: job.jobId,
@@ -1223,11 +1229,17 @@ class StemEngine {
       });
       return result;
     } finally {
+      this.activeRemoteJobId = undefined;
       this.isProcessing = false;
     }
   }
 
   public cancelActiveEngineJob(reason = 'Abbruch durch Benutzer'): boolean {
+    const remoteJobId = this.activeRemoteJobId;
+    if (remoteJobId) {
+      void this.cancelRemoteJob(remoteJobId, reason).catch(() => undefined);
+      return true;
+    }
     const jobId = this.activeJobId;
     if (!jobId) return false;
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;

@@ -383,6 +383,8 @@ export default function App() {
   const remoteCancelCooldownTimersRef = useRef(new Map<string, number>());
   const [remoteFlowRunning, setRemoteFlowRunning] = useState(false);
   const [remoteFlowTrack, setRemoteFlowTrack] = useState('');
+  /** Abbruchsignal für die kurze Vorbereitungsphase vor dem ersten Remote-Job. */
+  const remoteAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
   // Separationen und wird wie die übrigen Settings lokal persistiert.
   const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
@@ -972,6 +974,7 @@ export default function App() {
       setRemoteFlowJobId(null);
       setRemoteFlowError(null);
       setRemoteFlowRunning(true);
+      remoteAbortRef.current = { aborted: false };
       setStemEngineUnavailableReason(null);
       try {
         const separated = await stemEngine.separateRemoteWithEngine(
@@ -980,6 +983,7 @@ export default function App() {
           activeTrack.originalSha256,
           {
             profile,
+            signal: remoteAbortRef.current,
             onProgress: (prog) => setSeparationProgress(prog),
             onRemoteJob: (job) => { setRemoteFlowJob(job); setRemoteFlowJobId(job.jobId); },
           }
@@ -997,15 +1001,22 @@ export default function App() {
         logger.info('STEM-REMOTE', `Fern-Separation abgeschlossen: ${separated.modelId} (${separated.profile}) für \"${activeTrack.title}\".`);
       } catch (err: any) {
         const message = err?.message || String(err);
-        logger.error('STEM-REMOTE', `Fern-Separation fehlgeschlagen: ${message}`);
-        setRemoteFlowError(message);
-        // Kein Python-/Colab-Text in der UI (§13): der Nutzer bekommt eine
-        // verständliche Ursache und den Hinweis, lokal weiterzurechnen.
-        setStemQualityWarning(
-          `Externe Zerlegung (Google Colab) konnte nicht abgeschlossen werden: ${message}\n` +
-            'Die Arbeitskopie und das Original bleiben unverändert. Sie können den Colab-Button in der Deck-Leiste erneut klicken (lokal) und „Stems jetzt trennen“ oder „Schnell“ wählen.'
-        );
+        if (err?.code === 'INFERENCE_CANCELLED') {
+          logger.info('STEM-REMOTE', `Fern-Separation abgebrochen: ${message}`);
+          setRemoteFlowError(null);
+          setRemoteNotice({ tone: 'info', text: 'Abbruch vorgemerkt: Die Arbeitskopie wird verworfen, es werden keine Stems übernommen.' });
+        } else {
+          logger.error('STEM-REMOTE', `Fern-Separation fehlgeschlagen: ${message}`);
+          setRemoteFlowError(message);
+          // Kein Python-/Colab-Text in der UI (§13): der Nutzer bekommt eine
+          // verständliche Ursache und den Hinweis, lokal weiterzurechnen.
+          setStemQualityWarning(
+            `Externe Zerlegung (Google Colab) konnte nicht abgeschlossen werden: ${message}\n` +
+              'Die Arbeitskopie und das Original bleiben unverändert. Wählen Sie im Stem-Center „Stem-Separation starten“ und dort „Schnell“ (lokal) – oder starten Sie den externen Lauf erneut.'
+          );
+        }
       } finally {
+        remoteAbortRef.current = { aborted: false };
         setRemoteFlowRunning(false);
         setIsSeparatingStems(false);
         setSeparationProgress(null);
@@ -1177,6 +1188,20 @@ export default function App() {
       cancelRemoteFlowJob(remoteJob.jobId);
       return;
     }
+    if (remoteFlowJobId && remoteFlowRunning) {
+      cancelRemoteFlowJob(remoteFlowJobId);
+      return;
+    }
+    // The Remote Flow can still be creating the working copy before the first
+    // status poll sees a job. Mark that preparation as aborted instead of
+    // telling the user that nothing is running.
+    if (remoteFlowRunning) {
+      remoteAbortRef.current.aborted = true;
+      setRemoteNotice({ tone: 'info', text: 'Abbruch vorgemerkt: Der Editor stoppt vor dem Upload bzw. meldet den Abbruch direkt an den Worker.' });
+      setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird vorgemerkt…' } : prev));
+      logger.info('STEM-REMOTE', 'Abbruch während der Vorbereitung vorgemerkt.');
+      return;
+    }
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
     logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
@@ -1188,7 +1213,7 @@ export default function App() {
         ? { tone: 'info', text: 'Abbruch angefordert: Der laufende Chunk wird zu Ende gerechnet, dann stoppt die lokale Engine.' }
         : { tone: 'info', text: 'Es läuft gerade keine Stem-Separation – abgebrochen werden kann nichts.' }
     );
-  }, [stemRemoteStatus, cancelRemoteFlowJob]);
+  }, [stemRemoteStatus, remoteFlowJobId, remoteFlowRunning, cancelRemoteFlowJob]);
 
   const handleSeparateStems = useCallback(async () => {
     if (!activeTrack || !workingAudioBuffer) {
@@ -1234,7 +1259,7 @@ export default function App() {
         setStemEngineUnavailableReason(reason);
         setStemQualityWarning(
           `Architektur „${pinnedStemArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
-            'Installation: Button „Modell installieren" in der Deck-Stem-Leiste bzw. im Einstellungsmenü – oder auf „Automatisch" stellen.'
+            'Installation: Button „Modell installieren" im Konfigurations-Panel des Stem-Centers bzw. im Einstellungsmenü – oder auf „Automatisch" stellen.'
         );
         return;
       }
@@ -3229,14 +3254,14 @@ export default function App() {
         stats={recorderStats}
       />
       {!remoteFlowOpen && (remoteFlowRunning || remoteFlowJobId) && (
-        <button type="button" onClick={() => setRemoteFlowOpen(true)} className="fixed bottom-5 right-5 z-[105] rounded-xl border border-cyan-400/40 bg-[#10212b] px-4 py-3 text-sm font-semibold text-cyan-100 shadow-xl hover:bg-[#183745]" aria-label="Datenfluss der externen Zerlegung anzeigen">
-          {remoteFlowRunning ? '↗ Externer Job · Status ansehen' : '✓ Externer Job · Ergebnis ansehen'}
+        <button type="button" onClick={() => setRemoteFlowOpen(true)} className="fixed bottom-5 right-5 z-[105] rounded-xl border border-cyan-400/40 bg-[#10212b] px-4 py-3 text-sm font-semibold text-cyan-100 shadow-xl hover:bg-[#183745]" aria-label="Live-Datenfluss der externen Zerlegung anzeigen">
+          {remoteFlowRunning ? '↗ Live-Datenfluss · Status ansehen' : '✓ Datenfluss · Ergebnis ansehen'}
         </button>
       )}
       <LazyRemoteFlowModal
         open={remoteFlowOpen}
         onClose={() => setRemoteFlowOpen(false)}
-        onCancel={() => { if (remoteFlowJobId) cancelRemoteFlowJob(remoteFlowJobId); }}
+        onCancel={handleCancelStemSeparation}
         onRefresh={() => void stemEngine.pollRemoteJobs().then((status) => status && setStemRemoteStatus(status)).catch((error) => setRemoteFlowError(error?.message ?? 'Status konnte nicht abgefragt werden.'))}
         status={stemRemoteStatus}
         job={(remoteFlowJobId && stemRemoteStatus?.jobs.find((job) => job.jobId === remoteFlowJobId)) || remoteFlowJob}

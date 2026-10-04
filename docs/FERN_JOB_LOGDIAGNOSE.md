@@ -8,7 +8,7 @@ Die protokollierten Zeitstempel enthalten mehrere Sitzungen ohne Datum. Daraus l
 
 ## Sichere Schritte auf dem betroffenen Rechner
 
-1. In der App Statusfenster für den Job öffnen, „Jetzt prüfen“ betätigen. Ist der Status **CANCELLED**, keinen alten Job wiederverwenden; bei neuem Versuch neue Job-ID erwarten. Ist er **RUNNING** ohne Worker-ID, das Notebook und dessen `JOB_ORDNER` prüfen.
+1. In der App das Live-Datenfluss-Fenster für den Job öffnen, „Jetzt prüfen“ betätigen. Ist der Status **CANCELLED**, keinen alten Job wiederverwenden; bei neuem Versuch neue Job-ID erwarten. Ist er **RUNNING** ohne Worker-ID, das Notebook und dessen `JOB_ORDNER` prüfen.
 2. Im Drive-Desktop-Sync-Ordner `airdox-stem-jobs/jobs/915db325-a297-40a8-94e8-fa7137f14f94/` prüfen: `manifest.json` und `input/*.wav` vollständig vorhanden? `claim.json` oder `cancel.flag` vorhanden? In der Google-Drive-Webansicht denselben Ordner prüfen, um echte Synchronisierung zu bestätigen. Dateien nicht manuell überschreiben.
 3. Im Colab-Notebook `drive.mount` und Worker-Ausgabe prüfen; **nicht** Tokens oder private Audiodateien in öffentliche Logs/Issues kopieren. Der Worker löscht `cancel.flag` nach der Erfüllung selbst – an der Fahne ist also nichts von Hand zu drehen. Kein Abbruch eingetreten, obwohl die Fahne im Ordner liegt? Dann ist der Worker-Zyklus stehengeblieben (`--poll`, Laufzeit des Notebooks prüfen).
 4. Für eine genaue Ursachenanalyse nur redigierte Angaben weitergeben: Status, Phase, Job-ID, Zeit des letzten Worker-Lebenszeichens, Existenz der vier Dateien (keine Inhalte), und anonymisierte Colab-Fehlermeldung. Ohne diese Informationen ist „Reparatur erfolgreich“ nicht belegbar.
@@ -19,7 +19,7 @@ Die protokollierten Zeitstempel enthalten mehrere Sitzungen ohne Datum. Daraus l
 | --- | --- | --- |
 | Abbruch wurde nur vor dem Start eines Jobs geprüft | beide Worker prüfen `cancel.flag` während der Rechnung und beenden die Inferenz | `python3 colab/remote_worker.py --self-test` (Schritte 5–8), `npm run test:stems:remote` #11 |
 | Abbruch galt als erledigt, obwohl die Ablage (Drive-Sync) nicht erreichbar war | `cancel()` meldet `deferred` + Grund, Job bleibt in Verfolgung, Fahne wird bei jedem Poll nachgeliefert | `tests/stem-remote-job-service.test.ts` #10 |
-| Klick ohne sichtbare Reaktion | Stem-Leiste zeigt „Abbruch wird gemeldet…“, blockiert Doppelklicks und meldet Misserfolg mit Grund (Statusfenster öffnet sich) | `src/components/DeckStemsControl.tsx`, `cancelRemoteFlowJob` in `src/App.tsx` |
+| Klick ohne sichtbare Reaktion | Die Fortschrittszeile im Stem-Center zeigt „Abbruch läuft…“, blockiert Doppelklicks und meldet Misserfolg mit Grund (Live-Datenfluss-Fenster öffnet sich); während der Vorbereitung wird der Abbruch vorgemerkt | `src/components/zones/StemCenter.tsx`, `src/components/Modals/RemoteFlowModal.tsx`, `cancelRemoteFlowJob` in `src/App.tsx` |
 | Liegen gelassene `cancel.flag` erstickt künftige Läufe | Fahne wird nach Erfüllung verbraucht; `republish()` räumt alte Marker ab | Test #11 |
 
 Wichtig für die Einordnung künftiger Logs: Das gepostete Protokoll enthält Meldungen
@@ -77,7 +77,7 @@ ergänzen die Diagnose:
 3. **Kein Lebenszeichen vor dem ersten Job.** Der Worker schreibt jetzt schon
    beim Start `worker.status.json` (Id, Host, Gerät, GPU, Phase, Zähler) und
    aktualisiert sie in jedem Durchlauf; dazu ein zentrales `worker.log` in der
-   Ablage. Das Statusfenster des Editors zeigt daraus „Colab-Worker online“
+   Ablage. Das Live-Datenfluss-Fenster des Editors zeigt daraus „Colab-Worker online“
    bzw. „Warte auf Lebenszeichen“ – die Frage „sieht Colab meinen Drive-Ordner
    überhaupt?“ ist damit beantwortet, **bevor** der erste Job beansprucht wird.
 4. **Manifest-Race beim Beanspruchen.** Der Worker trug den Worker-Eintrag erst
