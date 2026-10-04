@@ -554,10 +554,11 @@ function makeDeps(overrides = {}) {
 
 // ─── 15. Renderer-Ladepfad: keine Ersatzanalyse, echter Nachweis ───────
 {
-  const appSource = await read('src/App.tsx');
+  // Der Auswahlpfad liegt seit der Zerlegung (WP-06, Schritt 3) im Import-Modul.
+  const appSource = await read('src/features/import/useTrackImport.ts');
   const select = appSource.slice(
     appSource.indexOf('const handleSelectTrackFromXml'),
-    appSource.indexOf('// ---- Phase 4')
+    appSource.indexOf('  return {')
   );
   const code = select
     .split('\n')

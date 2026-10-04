@@ -278,6 +278,13 @@ export interface RemoteStemJobView {
   transport?: string;
   /** True, wenn der letzte Poll den Transport nicht erreichen konnte (§21 C). */
   transportDegraded?: boolean;
+  /**
+   * Abbruch vom Nutzer verlangt, aber die Meldung liegt noch nicht in der
+   * Jobablage (Drive nicht erreichbar) – der Editor liefert sie nach (§37).
+   */
+  cancelPending?: boolean;
+  /** True, sobald ein Abbruch aufgezeichnet wurde – auch nach erfolgreichem Lauf. */
+  cancelRequested?: boolean;
   /** Lokal vorhandene Ergebnisse (nach Import), damit die UI nichts nachfragen muss. */
   importedStems?: { id: StemId; filePath: string; bytes: number; sha256: string }[];
 }
@@ -325,6 +332,21 @@ export interface StartRemoteStemJobPayload {
   /** Rechenort-Wunsch des Workers (`auto` = GPU wenn möglich, sonst CPU). */
   device?: StemComputeDevice;
   mode?: StemValidationMode;
+}
+
+/**
+ * Antwort auf einen Abbruchwunsch im Fernpfad (§37).
+ *
+ * `accepted` heißt: die Abbruchbitte liegt in der Jobablage, der Worker stoppt.
+ * `deferred` heißt: der Wunsch ist notiert, aber die Ablage war nicht
+ * erreichbar – der Editor liefert nach. Beides ist dem Nutzer zu sagen; ein
+ * bloßes „nicht angenommen“ ohne Grund ist das, was als „nichts passiert“
+ * ankommt.
+ */
+export interface RemoteCancelResult {
+  accepted: boolean;
+  deferred?: boolean;
+  message?: string;
 }
 
 export interface RemoteServiceEvent {

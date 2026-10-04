@@ -11,6 +11,9 @@
  */
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { createLayerScheduler } from '../waveform/layerScheduler';
+import { drawPlayhead, drawSelectionOverlay, drawSnapGuide } from '../waveform/canvasLayers';
+import { subscribeTransport } from '../state/transportStore';
 import {
   TrackModel,
   WaveformMode,
@@ -40,15 +43,22 @@ import {
   renderRekordboxWaveformColumn,
   sampleWaveformColumn,
 } from '../waveform/spectralColor';
-import { drawPlayhead, drawSelectionOverlay, drawSnapGuide } from '../waveform/canvasLayers';
 
 interface DetailWaveformProps {
   track: TrackModel | null;
-  /** UI time used to redraw a seeked playhead while transport is stopped. */
-  currentTime: number;
-  /** Live transport position, updated independently from React renders. */
-  currentTimeRef: React.RefObject<number>;
-  isPlaying: boolean;
+  /**
+   * Live-Zugriff auf die Wiedergabeposition (Transport-Store). Bevorzugt, weil
+   * die Position dann ohne React-Render in das Overlay fließen kann.
+   */
+  getPositionSec?: () => number;
+  /** Position zum Zeitpunkt des letzten React-Renders (Fallback/Tests). */
+  currentTime?: number;
+  /**
+   * Inkrement-Zähler des Elternbaums: steigt, wenn sich der Track geändert hat,
+   * auch wenn die `track`-Identität gleich bleibt (z. B. In-Place-Mutation des
+   * AudioBuffer nach einem Edit). Ohne diesen Wert bliebe die Basis-Ebene stehen.
+   */
+  trackRevision?: number;
   viewOffset: number;
   viewDuration: number;
   waveformMode: WaveformMode;
@@ -99,9 +109,9 @@ interface ContextMenuState {
 
 export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   track,
+  getPositionSec,
   currentTime,
-  currentTimeRef,
-  isPlaying,
+  trackRevision,
   viewOffset,
   viewDuration,
   waveformMode,
@@ -139,53 +149,84 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   onAnalyzeParts,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const selectionOverlayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const playheadCanvasRef = useRef<HTMLCanvasElement>(null);
+  /** Zweite Ebene über der Basis: Auswahl, Hover-Führung, Playhead. */
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+
+  /*
+   * Interaktionszustand, der nur die Zeichnung betrifft, liegt in Refs: ein
+   * `setState` pro Mausbewegung würde die Komponente (und über die Props auch
+   * die App) neu rendern, obwohl sich sichtbar nur eine Linie bewegt.
+   */
+  const isSelectingRef = useRef(false);
+  const dragStartSecRef = useRef<number | null>(null);
+  const hoveredTimeRef = useRef<number | null>(null);
+  /**
+   * Auswahl-Änderungen werden auf einen Frame gedrosselt: Ein Ziehen erzeugt
+   * sonst pro Mausereignis ein `onSelect` (React-Update von `App`). Der
+   * Ref-Spiegel hält dabei immer den aktuellen Track bzw. Callback.
+   */
   const currentTrackRef = useRef(track);
   currentTrackRef.current = track;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
-  const isSelectingRef = useRef(false);
-  const dragStartSecRef = useRef<number | null>(null);
-  const hoveredTimeRef = useRef<number | null>(null);
-  const overlayFrameRef = useRef<number | null>(null);
-  const selectionUpdateFrameRef = useRef<number | null>(null);
   const pendingSelectionRef = useRef<SelectionRange | null>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const selectionUpdateFrameRef = useRef<number | null>(null);
 
-  // Dynamic canvas sizing to respond to panel collapse/expand and container layout changes
+  /** Logische Canvas-Größe in CSS-Pixeln (die Backing-Store-Größe ist DPR-skaliert). */
+  const logicalSizeRef = useRef({ width: 0, height: 0 });
+  const schedulerRef = useRef(createLayerScheduler());
+  const frameRef = useRef(0);
+  const renderFrameRef = useRef<() => void>(() => {});
+  /** Plant genau einen Frame ein – weitere Aufrufe im selben Frame sind No-Ops. */
+  const scheduleFrameRef = useRef<() => void>(() => {});
+
+  /** Live-Position: Store-Zugriff, sonst der zuletzt gerenderte Prop-Wert. */
+  const readPosition = useCallback(
+    () => (getPositionSec ? getPositionSec() : currentTime ?? 0),
+    [getPositionSec, currentTime]
+  );
+
+  // Canvas-Größe folgt dem Container – inklusive devicePixelRatio.
+  // Vorher wurde `canvas.width = cssBreite` gesetzt; auf HiDPI-Displays war die
+  // Wellenform dadurch unscharf und 1-px-Rekordbox-Linien wurden zu 2-px-Bändern.
   useEffect(() => {
     const container = canvasContainerRef.current;
     if (!container) return;
 
     const updateCanvasSize = () => {
       const rect = container.getBoundingClientRect();
-      const w = Math.floor(rect.width);
-      const h = Math.floor(rect.height);
-      const canvases = [canvasRef.current, selectionOverlayCanvasRef.current, playheadCanvasRef.current].filter(
-        (canvas): canvas is HTMLCanvasElement => canvas !== null
-      );
-      if (w <= 10 || h <= 10 || canvases.length === 0) return;
+      const width = Math.floor(rect.width);
+      const height = Math.floor(rect.height);
+      if (width <= 10 || height <= 10) return;
 
-      let changed = false;
-      for (const canvas of canvases) {
-        if (canvas.width !== w || canvas.height !== h) {
-          canvas.width = w;
-          canvas.height = h;
-          changed = true;
+      const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+      const backingWidth = Math.round(width * dpr);
+      const backingHeight = Math.round(height * dpr);
+      const changed = logicalSizeRef.current.width !== width || logicalSizeRef.current.height !== height;
+
+      for (const canvas of [canvasRef.current, overlayCanvasRef.current]) {
+        if (!canvas) continue;
+        if (canvas.width !== backingWidth || canvas.height !== backingHeight) {
+          canvas.width = backingWidth;
+          canvas.height = backingHeight;
+          // Zeichnen in CSS-Pixeln, damit die Pfadangaben unverändert bleiben.
+          canvas.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
       }
-      if (changed) setCanvasSize({ width: w, height: h });
+
+      logicalSizeRef.current = { width, height };
+      if (changed) {
+        schedulerRef.current.markBase();
+        scheduleFrameRef.current();
+      }
     };
 
     updateCanvasSize();
-    const ro = new ResizeObserver(() => {
-      updateCanvasSize();
-    });
+    const ro = new ResizeObserver(updateCanvasSize);
     ro.observe(container);
 
     window.addEventListener('resize', updateCanvasSize);
@@ -222,17 +263,23 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     [quantize, track]
   );
 
-  // Draw the static waveform scene only when its inputs or canvas size change.
-  useEffect(() => {
-    const render = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+  // ---------------------------------------------------------------------------
+  // Zeichnung: zwei Ebenen, ein Frame-Budget.
+  //
+  //   Basis   – Hintergrund, Beatgrid, Wellenform-Spalten, Parts, Cues, Loops.
+  //             Teuer (~2,4–4,0 ms pro Bild, siehe `npm run bench`) und nur bei
+  //             Änderung von Track/Ansicht/Zoom fällig.
+  //   Overlay – Auswahl, Hover-Führung, Playhead. Günstig und pro Bewegung fällig.
+  //
+  // Die Zeichenfunktionen werden bei jedem Render neu gebildet und über Refs
+  // aufgerufen. So sieht der Frame-Callback immer die aktuellen Props, ohne
+  // dass ein Effekt neu registriert werden muss.
+  // ---------------------------------------------------------------------------
+  const basePaintRef = useRef<(ctx: CanvasRenderingContext2D, width: number, height: number) => void>(() => {});
+  const overlayPaintRef = useRef<(ctx: CanvasRenderingContext2D, width: number, height: number) => void>(() => {});
 
-      const width = canvas.width;
-      const height = canvas.height;
-      ctx.clearRect(0, 0, width, height);
+  basePaintRef.current = (ctx, width, height) => {
+    ctx.clearRect(0, 0, width, height);
 
       // 1. Dark background (Rekordbox EDIT #191919 on odd bars 1,3,5..., #000000 on even bars 2,4,6... and pre-track)
       const rulerBottom = 18;
@@ -581,97 +628,108 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         ctx.strokeRect(lx1, 18, lx2 - lx1, height - 18);
       });
 
+  };
 
+  overlayPaintRef.current = (ctx, width, height) => {
+    ctx.clearRect(0, 0, width, height);
 
-    };
+      // 6. Auswahlrahmen (Screenshots 01, 02, 03) inklusive Kennzahlen-Box.
+      //    Die Zeichnung liegt in `waveform/canvasLayers.ts`, damit die
+      //    Detail-Wellenform und die Tests dieselbe Implementierung nutzen.
+      drawSelectionOverlay(ctx, selection, viewOffset, viewDuration, width, height);
 
-    render();
-  }, [
-    track,
-    viewOffset,
-    viewDuration,
-    waveformMode,
-    timeToPixel,
-    canvasSize,
-  ]);
+      // 7. Hover-Führung auf der Rasterlinie (Beat/Takt) samt Badge.
+      drawSnapGuide(
+        ctx,
+        hoveredTimeRef.current,
+        track?.beatGrid ?? null,
+        snapTime,
+        viewOffset,
+        viewDuration,
+        width,
+        height
+      );
 
-  const drawDynamicOverlay = useCallback(() => {
-    const canvas = selectionOverlayCanvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawSelectionOverlay(ctx, selection, viewOffset, viewDuration, canvas.width, canvas.height);
-    drawSnapGuide(
-      ctx,
-      hoveredTimeRef.current,
-      track?.beatGrid ?? null,
-      snapTime,
-      viewOffset,
-      viewDuration,
-      canvas.width,
-      canvas.height
-    );
-  }, [track, selection, snapTime, viewOffset, viewDuration, canvasSize]);
+      // 8. Playhead (weiße Haarlinie + Dreieck oben). Die Zeichnung liegt in
+      //    `waveform/canvasLayers.ts` und wird hier ohne Leeren aufgerufen –
+      //    das Overlay wurde am Anfang dieses Frames bereits geleert.
+      drawPlayhead(ctx, readPosition(), viewOffset, viewDuration, width, height, { clear: false });
 
-  const drawDynamicOverlayRef = useRef(drawDynamicOverlay);
-  drawDynamicOverlayRef.current = drawDynamicOverlay;
+  };
 
-  const scheduleOverlayRender = useCallback(() => {
-    if (overlayFrameRef.current !== null) return;
-    overlayFrameRef.current = requestAnimationFrame(() => {
-      overlayFrameRef.current = null;
-      drawDynamicOverlayRef.current();
-    });
+  renderFrameRef.current = () => {
+    frameRef.current = 0;
+    const { width, height } = logicalSizeRef.current;
+    if (width <= 10 || height <= 10) return;
+
+    const plan = schedulerRef.current.take();
+    if (!plan.base && !plan.overlay) return;
+
+    if (plan.base) {
+      const ctx = canvasRef.current?.getContext('2d');
+      if (ctx) basePaintRef.current(ctx, width, height);
+    }
+    if (plan.overlay) {
+      const ctx = overlayCanvasRef.current?.getContext('2d');
+      if (ctx) overlayPaintRef.current(ctx, width, height);
+    }
+  };
+
+  scheduleFrameRef.current = () => {
+    if (frameRef.current) return;
+    frameRef.current = requestAnimationFrame(() => renderFrameRef.current());
+  };
+
+  /** Overlay-only-Repaint – für Playhead, Auswahl und Hover. */
+  const requestOverlayPaint = useCallback(() => {
+    schedulerRef.current.markOverlay();
+    scheduleFrameRef.current();
   }, []);
 
+  // Neue Basis: Track, Fenster, Zoom, Modus, Snap-Raster – und `trackRevision`,
+  // weil ein Edit den AudioBuffer an Ort und Stelle verändert, ohne dass sich
+  // die Track-Identität ändert.
   useEffect(() => {
-    drawDynamicOverlay();
-  }, [drawDynamicOverlay]);
+    schedulerRef.current.markBase();
+    scheduleFrameRef.current();
+  }, [track, trackRevision, viewOffset, viewDuration, waveformMode, snapTime, timeToPixel]);
 
-  useEffect(() => () => {
-    isSelectingRef.current = false;
-    dragStartSecRef.current = null;
-    hoveredTimeRef.current = null;
-    pendingSelectionRef.current = null;
-    if (overlayFrameRef.current !== null) cancelAnimationFrame(overlayFrameRef.current);
-    if (selectionUpdateFrameRef.current !== null) cancelAnimationFrame(selectionUpdateFrameRef.current);
-    overlayFrameRef.current = null;
-    selectionUpdateFrameRef.current = null;
-  }, [track?.id]);
-
-  // Playback ticks repaint only the transparent playhead layer, reading the live transport ref.
+  // Nur Overlay: Auswahl und Quantisierung.
   useEffect(() => {
-    const canvas = playheadCanvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    if (!track) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-    if (!isPlaying) return;
+    requestOverlayPaint();
+  }, [selection, quantize, requestOverlayPaint]);
 
-    let animationFrameId = 0;
-    const renderPlayhead = () => {
-      drawPlayhead(ctx, currentTimeRef.current, viewOffset, viewDuration, canvas.width, canvas.height);
-      animationFrameId = requestAnimationFrame(renderPlayhead);
+  // Playhead: der Treiber schreibt die Position in den Store; hier wird nur
+  // neu gezeichnet – ohne React-Render und ohne Dauer-rAF im Leerlauf.
+  useEffect(() => {
+    const unsubscribe = subscribeTransport(requestOverlayPaint);
+    return () => {
+      unsubscribe();
+      if (frameRef.current) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = 0;
+      }
     };
+  }, [requestOverlayPaint]);
 
-    renderPlayhead();
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [currentTimeRef, isPlaying, track, viewOffset, viewDuration, canvasSize]);
-
-  // While paused there is no RAF loop; redraw once for a seek, track or viewport change.
-  useEffect(() => {
-    if (isPlaying) return;
-    const canvas = playheadCanvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    if (!track) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-    drawPlayhead(ctx, currentTimeRef.current, viewOffset, viewDuration, canvas.width, canvas.height);
-  }, [currentTime, currentTimeRef, isPlaying, track, viewOffset, viewDuration, canvasSize]);
+  /*
+   * Beim Trackwechsel (und beim Abbau) werden Zeiger- und Auswahl-Zustand
+   * verworfen: Die Bezugszeiten eines alten Tracks dürfen nicht in den neuen
+   * übernommen werden, und geplante Frames wären für den falschen Track.
+   */
+  useEffect(
+    () => () => {
+      isSelectingRef.current = false;
+      dragStartSecRef.current = null;
+      hoveredTimeRef.current = null;
+      pendingSelectionRef.current = null;
+      if (selectionUpdateFrameRef.current !== null) {
+        cancelAnimationFrame(selectionUpdateFrameRef.current);
+        selectionUpdateFrameRef.current = null;
+      }
+    },
+    [track?.id]
+  );
 
   // Mouse interaction: Scrubbing / Selecting / Snap-to-beat hover tracking
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -705,7 +763,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       // Extend selection
       const newStart = Math.min(selection.start, clickedTime);
       const newEnd = Math.max(selection.start, clickedTime);
-      updateSelectionRange(newStart, newEnd);
+      scheduleSelectionRange(newStart, newEnd);
     } else {
       isSelectingRef.current = true;
       dragStartSecRef.current = clickedTime;
@@ -722,16 +780,15 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     const currX = e.clientX - rect.left;
     const rawTime = pixelToTime(currX, rect.width);
 
-    // Ref-driven dynamic layer: pointer movement does not rerender React or the static waveform.
+    // Hover-Führung nur zeichnen, nicht rendern.
     hoveredTimeRef.current = rawTime;
-    scheduleOverlayRender();
+    requestOverlayPaint();
 
-    const dragStartSec = dragStartSecRef.current;
-    if (!isSelectingRef.current || dragStartSec === null) return;
+    if (!isSelectingRef.current || dragStartSecRef.current === null) return;
     const currTime = snapTime(rawTime);
 
-    const start = Math.min(dragStartSec, currTime);
-    const end = Math.max(dragStartSec, currTime);
+    const start = Math.min(dragStartSecRef.current, currTime);
+    const end = Math.max(dragStartSecRef.current, currTime);
 
     if (end - start > 0.05) {
       scheduleSelectionRange(start, end);
@@ -741,9 +798,9 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   const handleMouseLeave = () => {
     flushSelectionUpdate();
     hoveredTimeRef.current = null;
+    requestOverlayPaint();
     isSelectingRef.current = false;
     dragStartSecRef.current = null;
-    scheduleOverlayRender();
   };
 
   const handleMouseUp = () => {
@@ -769,11 +826,6 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       barsCount: beatsCount / bg.meter,
       duration: end - start,
     };
-  };
-
-  const updateSelectionRange = (start: number, end: number) => {
-    const nextSelection = buildSelectionRange(start, end);
-    if (nextSelection) onSelectRef.current(nextSelection);
   };
 
   const flushSelectionUpdate = () => {
@@ -1057,28 +1109,23 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
 
       {/* Center Waveform Canvas */}
       <div ref={canvasContainerRef} className="flex-1 h-full relative overflow-hidden bg-[#0a0b0d]">
+        {/*
+          Zwei Ebenen: die untere trägt die teure Basis (Wellenform, Grid,
+          Parts, Cues), die obere nur Auswahl, Hover-Führung und Playhead.
+          Mausereignisse liegen auf der unteren Ebene; die obere ist
+          `pointer-events-none` und rein visuell.
+        */}
         <canvas
           ref={canvasRef}
-          width={1200}
-          height={320}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
           onContextMenu={handleContextMenu}
-          className={`w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
+          className={`absolute inset-0 w-full h-full block ${track ? 'cursor-crosshair' : 'cursor-default'}`}
         />
         <canvas
-          ref={selectionOverlayCanvasRef}
-          width={1200}
-          height={320}
-          aria-hidden="true"
-          className="absolute inset-0 w-full h-full block pointer-events-none"
-        />
-        <canvas
-          ref={playheadCanvasRef}
-          width={1200}
-          height={320}
+          ref={overlayCanvasRef}
           aria-hidden="true"
           className="absolute inset-0 w-full h-full block pointer-events-none"
         />

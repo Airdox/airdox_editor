@@ -1,0 +1,45 @@
+name: Qualität (Linux)
+
+# Warum dieser Job zusätzlich zum Windows-Build existiert:
+#   Der Windows-Job baut am Ende den Installer und ist deshalb langsam und
+#   schlecht als schnelle Rückmeldung. Dieser Job prüft jeden Push und Pull
+#   Request auf Typfehler, Tests, Build-Fähigkeit und Bundle-Budget – ohne
+#   native Module (SQLCipher/ONNX werden dafür nicht gebraucht, deshalb
+#   `npm ci --ignore-scripts`).
+on:
+  # Auf main, damit jeder Merge geprüft ist; Pull Requests aus allen Branches,
+  # damit die Arena-/Feature-Branches schnelle Rückmeldung bekommen, ohne dass
+  # jeder Zwischen-Push den Job mehrfach auslöst.
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Abhängigkeiten installieren (ohne native Builds)
+        run: npm ci --ignore-scripts
+
+      - name: Typprüfung
+        run: npm run lint
+
+      - name: Test-Suite
+        run: npm test
+
+      - name: Frontend bauen
+        run: npx vite build
+
+      - name: Bundle-Budget prüfen
+        run: npm run budget
+
+      - name: Benchmark gegen Budget
+        run: npm run bench:budget

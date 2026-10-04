@@ -48,10 +48,10 @@ async function run() {
   // hart neu gesetzt und dabei die Stem-Muster (stem-runtime, models, python,
   // node-bridge.cjs) gelöscht – der Build hätte die Python-Runtime und den
   // Node-Bridge-Aufruf nur noch aus dem app.asar heraus bedient. Die beiden
-  // historischen Skripte liegen deshalb unter legacy-tools/ und bleiben dort
+  // historischen Skripte liegen deshalb unter tools/legacy/ und bleiben dort
   // als Auditmaterial, nicht als Build-/CI-Werkzeuge.
   for (const scriptName of ['master-fix-and-push.cjs', 'fix.cjs']) {
-    const scriptPath = path.resolve('legacy-tools/one-off-repairs', scriptName);
+    const scriptPath = path.resolve('tools/legacy', scriptName);
     if (!existsSync(scriptPath)) continue;
     const script = await readFile(scriptPath, 'utf8');
     // Erlaubt bleibt `= []` (Initialisierung) und `= <variable>`; verboten ist

@@ -61,6 +61,20 @@ for (const [time, offset, duration, width, height] of [
   assert.deepEqual(calls, [{ name: 'clearRect', args: [0, 0, width, height] }]);
 }
 
+// Im zusammengesetzten Overlay der Detail-Wellenform darf die Funktion die
+// Ebene nicht leeren, sonst verschwinden Auswahl, Hover-Führung und Snap-Badge.
+{
+  const { context, calls } = createContext();
+  drawPlayhead(context, 5, 2, 6, 600, 300, { clear: false });
+
+  assert.equal(
+    calls.filter((call) => call.name === 'clearRect').length,
+    0,
+    'clear: false darf die Ebene nicht leeren'
+  );
+  assert.ok(calls.some((call) => call.name === 'stroke'), 'Playhead wird trotzdem gezeichnet');
+}
+
 const selection = {
   start: 2,
   end: 5,

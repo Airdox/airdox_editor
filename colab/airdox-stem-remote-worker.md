@@ -18,6 +18,14 @@ der Editor `COMPLETED` und importiert die Ergebnisse – der Benutzer muss Colab
 > **Idempotenz.** Ein Job mit Status `COMPLETED`/`FAILED`/`CANCELLED` wird nie
 > erneut gerechnet – auch nicht nach einem Colab-Neustart. Zwei Worker
 > gleichzeitig sind durch die Lease (`claim.json`) ausgeschlossen.
+>
+> **Abbruch im Lauf.** Klickt der Nutzer im Editor auf „Abbrechen“, landet
+> `cancel.flag` im Jobordner. Dieses Notebook schaut alle 5 Sekunden danach –
+> **auch mitten in der Rechnung**: Der Adapter-Prozess wird beendet (SIGTERM,
+> nach 10 s SIGKILL), das Manifest auf `CANCELLED` gesetzt und die Fahne
+> verbraucht. Kein GPU-Betrieb geht weiter, kein Ergebnis wird noch importiert,
+> und derselbe Jobordner bleibt für einen neuen Lauf benutzbar. Takt:
+> `--cancel-poll` (Sekunden).
 
 <<<CELL md
 ### 0 · Was hier passiert
@@ -52,6 +60,7 @@ MODELL_ID = ""               # "" = Modell aus dem Job-Manifest; sonst Katalog-I
 PROFIL = ""                  # "" = Profil aus dem Job-Manifest (HIGH_QUALITY)
 MAX_JOBS = 0                 # 0 = so lange arbeiten, bis abgebrochen wird
 POLL_SEKUNDEN = 15           # Pause zwischen zwei Durchläufen
+ABBRUCH_SEKUNDEN = 5         # alle N s wird cancel.flag AUCH während der Rechnung geprüft
 EINMALIG = False             # True = nur einen Durchlauf (für Tests)
 >>>
 
@@ -163,7 +172,7 @@ try:
     print(subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip() or "Keine NVIDIA-GPU sichtbar")
 except FileNotFoundError:
     print("nvidia-smi fehlt – CPU-Pfad")
-print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG)
+print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Abbruch alle:", ABBRUCH_SEKUNDEN, "s")
 >>>
 
 <<<CELL py
@@ -179,6 +188,7 @@ kommando = [
     "--work-dir", "/content/airdox-work",
     "--device", GERAET,
     "--poll", str(POLL_SEKUNDEN),
+    "--cancel-poll", str(ABBRUCH_SEKUNDEN),
     "--worker", f"colab-{os.getpid()}",
 ]
 if MODELL_ID:

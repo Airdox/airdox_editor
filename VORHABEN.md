@@ -173,7 +173,7 @@ nicht tut.
      (`**/stem-runtime/**/*`, `**/models/**/*`, `python/**/*`,
      `**/node-bridge.cjs`, `**/*.dll|.so|.dylib`) fehlten. Ursache war
      das historische `master-fix-and-push.cjs` (jetzt unter
-     `legacy-tools/one-off-repairs/` archiviert), das `build.asarUnpack` hart
+     `tools/legacy/` archiviert), das `build.asarUnpack` hart
      überschrieb. Die aktive Konfiguration in `package.json` enthält wieder die
      nötigen Muster; `tests/stem-asar-unpack.test.ts` prüft sie und bewahrt die
      archivierte Fassung als Auditmaterial gegen dieselbe Regression.

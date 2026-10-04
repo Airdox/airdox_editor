@@ -4,7 +4,7 @@
  * Authoritative Visual Lock implementation matching screenshots 01, 02, and 03.
  */
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   TrackModel,
   PartialTrackModel,
@@ -13,6 +13,7 @@ import {
   PaletteClip,
   EditSegment,
   DataOrigin,
+  EditHistoryEntry,
   CuePoint,
   AnalysisFileReference,
   RekordboxCueSource,
@@ -25,11 +26,7 @@ import {
   sliceWaveformAnalysis,
 } from './waveform/analysisComposer';
 import { audioEngine } from './audio/audioEngine';
-import {
-  AudioExportFormatUnavailableError,
-  exportAudioBuffer,
-  isAudioExportFormatSupported,
-} from './audio/audioExporter';
+import { exportAudioBuffer } from './audio/audioExporter';
 import { measureRecordingAudio, optimizeRecordingBuffer } from './audio/recordingProcessor';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
@@ -51,26 +48,31 @@ import { TrackHeader } from './components/TrackHeader';
 import { DeckStemsControl } from './components/DeckStemsControl';
 import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
 import { StemModelInstallModal } from './components/Modals/StemModelInstallModal';
+import {
+  LazyClearHistoryModal,
+  LazyDatabaseExtractionModal,
+  LazyDeleteModeModal,
+  LazyEditAssistantModal,
+  LazyExportModal,
+  LazyMidiControllerModal,
+  LazyRecorderModal,
+  LazyRekordboxXmlImportModal,
+  LazyRemoteFlowModal,
+  LazyRemoteSetupModal,
+  LazyStemModelInstallModal,
+  LazyStemQualityWarningModal,
+  LazySystemLogModal,
+  LazyWorkspaceSettingsModal,
+} from './components/Modals/lazyModals';
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
-import { ExportModal } from './components/Modals/ExportModal';
-import { DatabaseExtractionModal } from './components/Modals/DatabaseExtractionModal';
-import { RekordboxXmlImportModal } from './components/Modals/RekordboxXmlImportModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
-import { SystemLogModal } from './components/Modals/SystemLogModal';
-import { WorkspaceSettingsModal } from './components/Modals/WorkspaceSettingsModal';
 import { InitialSetupModal } from './components/Modals/InitialSetupModal';
-import { RemoteSetupModal } from './components/Modals/RemoteSetupModal';
-import { RemoteFlowModal } from './components/Modals/RemoteFlowModal';
-import { ClearHistoryModal } from './components/Modals/ClearHistoryModal';
-import { EditAssistantModal } from './components/Modals/EditAssistantModal';
-import { DeleteModeModal } from './components/Modals/DeleteModeModal';
-import { MidiControllerModal } from './components/Modals/MidiControllerModal';
-import { RecorderModal, RecorderSource, RecorderFormat, RecorderStage } from './components/Modals/RecorderModal';
+import { RecorderSource, RecorderFormat, RecorderStage } from './components/Modals/RecorderModal';
 import {
   stemEngine,
   StemType,
@@ -106,11 +108,23 @@ import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
 import { useEditHistory } from './hooks/useEditHistory';
-import { useProjectSession } from './hooks/useProjectSession';
-import { useTransport } from './hooks/useTransport';
-import { useMidiLifecycle } from './hooks/useMidiLifecycle';
 import { createEditHistoryEntry, restoreEditHistoryEntry } from './audio/editHistory';
+import { updateTrackById } from './state/trackUpdates';
 import { logger } from './utils/logger';
+import {
+  getPositionSec,
+  getTransport,
+  setPosition,
+  setTransport,
+  subscribeTransport,
+} from './state/transportStore';
+import { startPlayheadDriver, type PlayheadDriverHandle } from './features/transport/playheadDriver';
+import { useTransportControls, DEFAULT_VIEW_DURATION_SEC } from './features/transport/useTransportControls';
+import { useMidiBridge } from './features/transport/useMidiBridge';
+import { useTrackImport } from './features/import/useTrackImport';
+import { useProjectFiles } from './features/project/useProjectFiles';
+import { useRecorder } from './features/recorder/useRecorder';
+import { useAppSettings } from './state/settingsStore';
 import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
@@ -131,319 +145,93 @@ import {
   isExactSameSourceSlotRoundTrip,
 } from './audio/editingEngine';
 
-/**
- * Shared conversion of a compact collection entry (XML or Rekordbox DB)
- * into a complete TrackModel that the collection browser can render.
- */
-interface ClipboardProvenance {
-  sourceTrackId: string;
-  sourceStart: number;
-  sourceEnd: number;
-  duration: number;
-  analysis?: ReturnType<typeof sliceWaveformAnalysis>;
-  beatOffsets?: number[];
-  /** Native source coordinates only when this exact copied range is ANLZ-backed. */
-  analysisSource?: AnalysisFileReference;
-  analysisSourceTrackId?: string;
-  analysisSourceStart?: number;
-  analysisSourceEnd?: number;
-}
+import {
+  BUNDLED_REKORDBOX_XML_FILENAME,
+  type ClipboardProvenance,
+  areSameMediaPath,
+  beatOffsetsForRange,
+  buildCollectionTrackModel,
+  createEditContext,
+  decodeWavBase64,
+  nativeSourceCoordinatesForRange,
+  rebuildTrackFromSerialized,
+} from './features/project/projectModel';
+export default function App() {
+  /*
+   * Viewport & Timeline
+   *
+   * Die Wiedergabeposition liegt NICHT mehr im React-State: sie wird vom
+   * Playhead-Treiber pro Frame in den Transport-Store geschrieben
+   * (`src/state/transportStore.ts`). Wer sie braucht, holt sie dort ab –
+   * per `getPositionSec()` im Moment der Aktion (exakt) oder über einen
+   * gedrosselten Hook (Anzeige). Nur so kostet eine laufende Wiedergabe
+   * keinen einzigen Re-Render der Anwendung.
+   */
+  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
+  const [projectName, setProjectName] = useState<string>('New Project');
+  const [tracks, setTrackState] = useState<TrackModel[]>([]);
+  const [trackRevision, setTrackRevision] = useState(0);
+  const setTracks = useCallback(
+    (nextTracks: TrackModel[] | ((current: TrackModel[]) => TrackModel[])) => {
+      setTrackRevision((revision) => revision + 1);
+      setTrackState(nextTracks);
+    },
+    []
+  );
+  /**
+   * Ein Track wird ersetzt, nicht an Ort und Stelle verändert: In-Place-Mutation
+   * plus `setTracks([...tracks])` funktioniert nur, solange jede Änderung von
+   * einem Render gefolgt wird – und ein Edit, der den Arbeitspuffer verändert,
+   * würde sonst dieselbe Track-Identität behalten. `updateTrackById` erzeugt ein
+   * neues Track-Objekt und damit ein echtes Re-Render.
+   */
+  const updateTrack = useCallback(
+    (trackId: string, update: (track: TrackModel) => TrackModel) => {
+      setTracks((current) => updateTrackById(current, trackId, update));
+    },
+    [setTracks]
+  );
+  const [activeTrackId, setActiveTrackId] = useState<string>('');
+  const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
 
-const TIME_EPSILON = 1 / 44100 + 1e-6;
-
-function beatOffsetsForRange(track: TrackModel, start: number, end: number): number[] {
-  return track.beatGrid.beats
-    .filter((beat) => beat.time >= start - TIME_EPSILON && beat.time < end - TIME_EPSILON)
-    .map((beat) => Math.max(0, beat.time - start));
-}
-
-/**
- * Resolves a selected project range back to its unedited ANLZ timeline. The
- * result is deliberately omitted for a mixed/project-derived range, so a
- * reload never makes an unsupported native-origin claim.
- */
-function nativeSourceCoordinatesForRange(
-  track: TrackModel,
-  start: number,
-  end: number
-): Pick<ClipboardProvenance, 'analysisSource' | 'analysisSourceTrackId' | 'analysisSourceStart' | 'analysisSourceEnd'> {
-  if (!track.analysisSource || !isNativeRekordboxWaveform(track.analysis)) return {};
-  const segment = track.workingSegments
-    .filter((candidate) => candidate.type !== 'OVERDUB' && candidate.type !== 'SILENCE')
-    .find((candidate) => (
-      candidate.projectStart <= start + TIME_EPSILON &&
-      candidate.projectStart + candidate.projectDuration >= end - TIME_EPSILON
-    ));
-  if (!segment) return {};
-
-  const nativeStart = segment.analysisSourceStart ?? segment.sourceStart;
-  const nativeEnd = segment.analysisSourceEnd ?? segment.sourceEnd;
-  const sourceScale = (nativeEnd - nativeStart) / Math.max(TIME_EPSILON, segment.projectDuration);
-  return {
-    analysisSource: segment.analysisSource || track.analysisSource,
-    analysisSourceTrackId: segment.analysisSourceTrackId || track.id,
-    analysisSourceStart: nativeStart + (start - segment.projectStart) * sourceScale,
-    analysisSourceEnd: nativeStart + (end - segment.projectStart) * sourceScale,
-  };
-}
-
-function createEditContext(
-  track: TrackModel,
-  inserted?: {
-    analysis?: ReturnType<typeof sliceWaveformAnalysis>;
-    duration: number;
-    beatOffsets?: number[];
-    adaptedDuration?: number;
-    analysisSource?: AnalysisFileReference;
-    analysisSourceTrackId?: string;
-    analysisSourceStart?: number;
-    analysisSourceEnd?: number;
-    clipId?: string;
-  }
-): EditCommandContext {
-  const outputDuration = inserted?.adaptedDuration ?? inserted?.duration;
-  const beatScale = inserted?.duration && outputDuration
-    ? outputDuration / inserted.duration
-    : 1;
-  return {
-    trackId: track.id,
-    analysis: track.analysis,
-    analysisSource: track.analysisSource,
-    analysisSourceDuration: track.analysisSource?.sourceDuration,
-    loops: track.loops,
-    beatGrid: track.beatGrid,
-    phrases: track.phrases,
-    insertedAnalysis: inserted?.analysis,
-    insertedAnalysisDuration: inserted?.duration,
-    insertedBeatOffsets: inserted?.beatOffsets?.map((offset) => offset * beatScale),
-    insertedAnalysisSource: inserted?.analysisSource,
-    insertedAnalysisSourceTrackId: inserted?.analysisSourceTrackId,
-    insertedAnalysisSourceStart: inserted?.analysisSourceStart,
-    insertedAnalysisSourceEnd: inserted?.analysisSourceEnd,
-    insertedClipId: inserted?.clipId,
-  };
-}
-
-const BUNDLED_REKORDBOX_XML_FILENAME = 'rekordbox_export2.xml';
-
-function buildCollectionTrackModel(
-  pt: PartialTrackModel,
-  idx: number,
-  origin: DataOrigin
-): TrackModel {
-  const duration = pt.duration && !isNaN(pt.duration) ? pt.duration : 300.0;
-  const bpm = pt.bpm && !isNaN(pt.bpm) ? pt.bpm : 130.0;
-  const id = pt.id || `${origin === DataOrigin.REKORDBOX_DB ? 'rb-db' : 'rb-xml'}-${Date.now()}-${idx}`;
-  return {
-    id,
-    title: pt.title || 'Untitled Track',
-    artist: pt.artist || 'Unknown Artist',
-    album: pt.album || 'Rekordbox Collection',
-    genre: pt.genre,
-    label: pt.label,
-    rating: pt.rating,
-    playCount: pt.playCount,
-    year: pt.year,
-    comments: pt.comments,
-    dateAdded: pt.dateAdded,
-    remixer: pt.remixer,
-    isrc: pt.isrc,
-    bpm,
-    key: pt.key || '2A',
-    duration,
-    sampleRate: pt.sampleRate || 44100,
-    channels: pt.channels || 2,
-    originalSha256: pt.originalSha256 || `sha256-rb-${idx}`,
-    isOriginalUntouched: true,
-    audioBuffer: pt.audioBuffer || null,
-    beatGrid: pt.beatGrid || buildBeatGridFromTempo(0.0, bpm, duration),
-    cues: pt.cues || [],
-    loops: pt.loops || [],
-    analysis: pt.analysis || null,
-    phrases: pt.phrases || [],
-    rawXmlAttributes: pt.rawXmlAttributes,
-    originalMedia: pt.originalMedia,
-    analysisSource: pt.analysisSource,
-    origin,
-    workingSegments: [
-      {
-        id: `seg-${idx}`,
-        type: 'ORIGINAL',
-        trackId: id,
-        sourceStart: 0,
-        sourceEnd: duration,
-        projectStart: 0,
-        projectDuration: duration,
-        gain: 1.0,
-      },
-    ],
-  };
-}
-
-/**
- * Normalizes Rekordbox file:// URLs and Windows/POSIX paths for the strict
- * media-path-to-ANLZ provenance check used by the bundled collection.
- */
-function normalizeMediaPathForComparison(value?: string): string {
-  if (!value) return '';
-  let normalized = value.trim();
-  try {
-    if (/^file:/i.test(normalized)) {
-      const url = new URL(normalized);
-      let path = decodeURIComponent(url.pathname);
-      if (url.hostname && url.hostname.toLowerCase() !== 'localhost') {
-        path = `//${url.hostname}${path}`;
-      }
-      normalized = path;
-    }
-  } catch {
-    // A malformed URL cannot be a positive identity match; retain its text so
-    // the caller will fail closed if it differs from the source path.
-  }
-  normalized = normalized.replace(/^\/([A-Za-z]:\/)/, '$1');
-  return normalized.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase();
-}
-
-/**
- * Rekordbox schreibt in ANLZ-PPTH manchmal "?/Dateiname.mp3", wenn das Laufwerk
- * zum Analysezeitpunkt keinen Buchstaben hatte. Dann ist der Ordner-Prefix nicht
- * vertrauenswuerdig. Spiegelt isSameMediaPath() aus electron/masterDbGate.cjs.
- */
-function isUnknownDriveMediaPath(value?: string): boolean {
-  return typeof value === 'string' && /^\?[/\\]/.test(value.trim());
-}
-
-function mediaFileName(value?: string): string {
-  if (!value) return '';
-  return (value.replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
-}
-
-function areSameMediaPath(left?: string, right?: string): boolean {
-  const normalizedLeft = normalizeMediaPathForComparison(left);
-  const normalizedRight = normalizeMediaPathForComparison(right);
-  if (normalizedLeft && normalizedRight && normalizedLeft === normalizedRight) return true;
-  if (isUnknownDriveMediaPath(left) || isUnknownDriveMediaPath(right)) {
-    const leftName = mediaFileName(left);
-    const rightName = mediaFileName(right);
-    return Boolean(leftName && rightName && leftName === rightName);
-  }
-  return false;
-}
-
-/** Decodes embedded base64 WAV bytes back into an AudioBuffer. */
-async function decodeWavBase64(audioCtx: AudioContext, base64?: string): Promise<AudioBuffer | undefined> {
-  if (!base64) return undefined;
-  const bytes = base64ToBytes(base64);
-  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  return audioCtx.decodeAudioData(ab);
-}
-
-/**
- * Rebuilds a persisted project track into a playable TrackModel. The original
- * audio is NOT duplicated here for Rekordbox-sourced tracks (it is re-opened
- * from its read-only path); embedded clip/original audio is decoded on demand.
- */
-async function rebuildTrackFromSerialized(
-  st: SerializedTrack,
-  audioCtx: AudioContext
-): Promise<TrackModel> {
-  const segments: EditSegment[] = [];
-  for (const seg of st.workingSegments) {
-    const clipBuffer = await decodeWavBase64(audioCtx, seg.clipWavBase64);
-    segments.push({
-      id: seg.id,
-      type: seg.type,
-      trackId: seg.trackId,
-      sourceStart: seg.sourceStart,
-      sourceEnd: seg.sourceEnd,
-      projectStart: seg.projectStart,
-      projectDuration: seg.projectDuration,
-      clipId: seg.clipId,
-      analysisSource: seg.analysisSource,
-      analysisSourceTrackId: seg.analysisSourceTrackId,
-      analysisSourceStart: seg.analysisSourceStart,
-      analysisSourceEnd: seg.analysisSourceEnd,
-      clipBuffer,
-      gain: seg.gain,
-    });
-  }
-
-  const embeddedOriginal = st.originalAudioBase64
-    ? await decodeWavBase64(audioCtx, st.originalAudioBase64)
-    : undefined;
-
-  return {
-    id: st.id,
-    title: st.title,
-    artist: st.artist,
-    album: st.album,
-    genre: st.genre,
-    label: st.label,
-    rating: st.rating,
-    playCount: st.playCount,
-    year: st.year,
-    comments: st.comments,
-    dateAdded: st.dateAdded,
-    remixer: st.remixer,
-    isrc: st.isrc,
-    bpm: st.bpm,
-    key: st.key,
-    duration: st.duration,
-    sampleRate: st.sampleRate,
-    channels: st.channels,
-    originalSha256: st.originalSha256,
-    isOriginalUntouched: st.isOriginalUntouched,
-    audioBuffer: embeddedOriginal ?? null,
-    beatGrid: buildBeatGridFromTempo(
-      st.beatGrid.firstBeat,
-      st.beatGrid.bpm,
-      st.duration,
-      st.beatGrid.meter,
-      st.origin
-    ),
-    cues: st.cues,
-    loops: st.loops,
-    analysis: null,
-    origin: st.origin,
-    phrases: st.phrases,
-    rawXmlAttributes: st.rawXmlAttributes,
-    originalMedia: st.originalMedia,
-    analysisSource: st.analysisSource,
-    workingSegments: segments,
-  };
-}
-
-export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
+  /*
+   * Aufnahme-Voreinstellungen und Bearbeitungsverhalten liegen in
+   * `state/settingsStore.ts` – samt Persistenz und Standardwerten.
+   * Die Setter behalten hier ihre Namen.
+   */
   const {
-    projectName,
-    setProjectName,
-    tracks,
-    setTracks,
-    activeTrackId,
-    setActiveTrackId,
-    activeTrack,
-    workingAudioBuffer,
-    setWorkingAudioBuffer,
-    updateTrack,
-  } = useProjectSession();
+    recordingSource,
+    setRecordingSource,
+    recordingFormat,
+    setRecordingFormat,
+    recordingSampleRate,
+    setRecordingSampleRate,
+    recordingBitDepth,
+    setRecordingBitDepth,
+    recordingChannels,
+    setRecordingChannels,
+    recordingLimiter,
+    setRecordingLimiter,
+    confirmDestructiveEdits,
+    setConfirmDestructiveEdits,
+    autoSaveProject,
+    setAutoSaveProject,
+    autoScroll,
+    setAutoScroll,
+    highQualityRendering,
+    setHighQualityRendering,
+    snapToBeatgrid,
+    setSnapToBeatgrid,
+  } = useAppSettings();
 
-  // Viewport & timeline state
+  // Viewport & Timeline state
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
-  const {
-    currentTime,
-    currentTimeRef,
-    setCurrentTime,
-    isPlaying,
-    setIsPlaying,
-    masterVolume,
-    setMasterVolume: handleMasterVolumeChange,
-    meterL,
-    meterR,
-  } = useTransport({ viewOffset, viewDuration, setViewOffset });
   const [waveformMode, setWaveformMode] = useState<WaveformMode>('RGB');
   const [quantize, setQuantize] = useState<boolean>(true);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loopActive, setLoopActive] = useState<boolean>(false);
+  const [masterVolume, setMasterVolume] = useState<number>(0.9);
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -477,17 +265,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [clipboardBuffer, setClipboardBuffer] = useState<AudioBuffer | null>(null);
   const [clipboardProvenance, setClipboardProvenance] = useState<ClipboardProvenance | null>(null);
 
-  // Undo/redo is managed separately from project layout state.
-  const {
-    undoStack,
-    redoStack,
-    allUndoCount,
-    allRedoCount,
-    push: pushHistoryEntry,
-    undo: takeUndoEntry,
-    redo: takeRedoEntry,
-    clear: clearEditHistory,
-  } = useEditHistory(activeTrack?.id ?? null);
+  // History Stack for Undo / Redo
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
@@ -509,55 +287,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [settingsModalOpen, setSettingsModalOpen] = useState<boolean>(false);
   // Recording is configured here, not hard-coded: the eventual recorder can use
   // the editor master, a microphone/line input, or Windows/Rekordbox loopback.
-  const [recordingSource, setRecordingSource] = useState<'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK'>(() => {
-    if (typeof window === 'undefined') return 'EDITOR_MASTER';
-    return (window.localStorage.getItem('airdox.recordingSource') as 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK') || 'EDITOR_MASTER';
-  });
-  const [recordingFormat, setRecordingFormat] = useState<RecorderFormat>('WAV');
-  const [recordingSampleRate, setRecordingSampleRate] = useState<44100 | 48000>(48000);
-  const [recordingBitDepth, setRecordingBitDepth] = useState<16 | 24 | 32>(24);
-  const [recordingChannels, setRecordingChannels] = useState<'STEREO' | 'MONO'>('STEREO');
-  const [recordingLimiter, setRecordingLimiter] = useState<boolean>(true);
 
   // Dedicated set recorder state. The modal is intentionally independent from
   // the edit transport: Rekordbox can be captured while the editor remains
   // open, and the complete file is mastered only after Stop.
-  const [recorderOpen, setRecorderOpen] = useState<boolean>(false);
-  const [recorderStage, setRecorderStage] = useState<RecorderStage>('IDLE');
-  const [recorderElapsed, setRecorderElapsed] = useState<number>(0);
-  const [recorderSource, setRecorderSource] = useState<RecorderSource>(recordingSource);
-  const [recorderOptimize, setRecorderOptimize] = useState<boolean>(true);
-  const [recorderTargetLufs, setRecorderTargetLufs] = useState<-14 | -12 | -9>(-14);
-  const [recorderTruePeak, setRecorderTruePeak] = useState<-1 | -0.3>(-1);
-  const [recorderPreRoll, setRecorderPreRoll] = useState<0 | 3 | 5>(3);
-  const [recorderFileName, setRecorderFileName] = useState<string>('airdox_rekordbox_set');
-  const [recorderError, setRecorderError] = useState<string | null>(null);
-  const [recorderSavedPath, setRecorderSavedPath] = useState<string | null>(null);
-  const [recorderStats, setRecorderStats] = useState<{ beforeLufs: number; afterLufs: number; peak: number; duration: number } | null>(null);
-  const recorderSessionRef = useRef<{
-    mediaRecorder: MediaRecorder | null;
-    chunks: Blob[];
-    inputStream: MediaStream | null;
-    processedStream: MediaStream | null;
-    dispose: (() => void) | null;
-    timer: number | null;
-    countdown: number | null;
-    startedAt: number;
-  }>({ mediaRecorder: null, chunks: [], inputStream: null, processedStream: null, dispose: null, timer: null, countdown: null, startedAt: 0 });
-  const [confirmDestructiveEdits, setConfirmDestructiveEdits] = useState<boolean>(true);
-  const [autoSaveProject, setAutoSaveProject] = useState<boolean>(false);
-  const [autoScroll, setAutoScroll] = useState<boolean>(true);
-  const [highQualityRendering, setHighQualityRendering] = useState<boolean>(true);
-  const [snapToBeatgrid, setSnapToBeatgrid] = useState<boolean>(true);
-  const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
 
-  useEffect(() => {
-    window.localStorage?.setItem('airdox.recordingSource', recordingSource);
-    window.localStorage?.setItem('airdox.settings', JSON.stringify({
-      recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth,
-      recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject,
-    }));
-  }, [recordingSource, recordingFormat, recordingSampleRate, recordingBitDepth, recordingChannels, recordingLimiter, confirmDestructiveEdits, autoSaveProject]);
+  const [systemLogModalOpen, setSystemLogModalOpen] = useState<boolean>(false);
   const [clearHistoryModalOpen, setClearHistoryModalOpen] = useState<boolean>(false);
   const [editAssistantModalOpen, setEditAssistantModalOpen] = useState<boolean>(false);
   const [deleteModeModalOpen, setDeleteModeModalOpen] = useState<boolean>(false);
@@ -596,18 +331,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, []);
   const [stemRemoteStatus, setStemRemoteStatus] = useState<RemoteServiceStatus | null>(null);
-  // Keep remote cancellation idempotent across re-renders and rapid clicks.
-  // Rejected/failed requests get a short cooldown; accepted requests stay locked
-  // until the next status snapshot reports a terminal job state.
-  const remoteCancelRequestGuardRef = useRef(new RemoteCancelRequestGuard());
-  const [remoteCancelPendingJobId, setRemoteCancelPendingJobId] = useState<string | null>(null);
-  const [remoteCancelCooldownJobId, setRemoteCancelCooldownJobId] = useState<string | null>(null);
-  const remoteCancelCooldownTimersRef = useRef(new Map<string, number>());
   const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const [remoteFlowOpen, setRemoteFlowOpen] = useState(false);
   const [remoteFlowJobId, setRemoteFlowJobId] = useState<string | null>(null);
   const [remoteFlowJob, setRemoteFlowJob] = useState<import('./stems/transportTypes').RemoteStemJobView | null>(null);
   const [remoteFlowError, setRemoteFlowError] = useState<string | null>(null);
+  /**
+   * Rückmeldung für den Bediener, direkt an der Stem-Leiste: was ein Klick auf
+   * „Abbrechen“ tatsächlich ausgelöst hat. Ohne diese Zeile wirkt der Button
+   * tot, solange der externe Job noch antwortet.
+   */
+  const [remoteNotice, setRemoteNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  const [remoteCancelPendingJobId, setRemoteCancelPendingJobId] = useState<string | null>(null);
+  /**
+   * Abbruch-Sperre über den Guard statt über einen einzelnen Ref: eine
+   * angenommene Anfrage bleibt gesperrt, bis der Job einen Endzustand meldet,
+   * eine abgelehnte/fehlgeschlagene bekommt eine kurze Wartezeit (Cooldown).
+   * Ohne diesen zweiten Zustand konnte ein Klick auf „Abbrechen“ in einer
+   * Fehlschleife beliebig oft wiederholt werden.
+   */
+  const remoteCancelRequestGuardRef = useRef(new RemoteCancelRequestGuard());
+  const [remoteCancelCooldownJobId, setRemoteCancelCooldownJobId] = useState<string | null>(null);
+  const remoteCancelCooldownTimersRef = useRef(new Map<string, number>());
   const [remoteFlowRunning, setRemoteFlowRunning] = useState(false);
   const [remoteFlowTrack, setRemoteFlowTrack] = useState('');
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
@@ -650,6 +395,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
+  const [isMidiConnected, setIsMidiConnected] = useState<boolean>(false);
+  const [midiStatusLabel, setMidiStatusLabel] = useState<string>('MIDI bereit');
 
   // Edit Assistant State Manager (protects selection buffer & clipboard integrity)
   const { state: editAssistantState, summary: editAssistantSummary } = useEditAssistant(
@@ -678,248 +425,61 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Standalone audio file input. Rekordbox XML is bundled and has no file picker.
   const audioFileInputRef = useRef<HTMLInputElement>(null);
 
-  const commitEditExecution = useCallback((trackId: string, result: EditExecutionResult) => {
-    updateTrack(trackId, (track) => applyExecutionToTrack(track, result));
-    setWorkingAudioBuffer(result.newBuffer);
-  }, [updateTrack]);
+  // Active track helper (supports empty state)
+  const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
 
-  const clearRecorderResources = useCallback(() => {
-    const session = recorderSessionRef.current;
-    if (session.timer !== null) window.clearInterval(session.timer);
-    if (session.countdown !== null) window.clearTimeout(session.countdown);
-    session.timer = null;
-    session.countdown = null;
-    session.dispose?.();
-    session.dispose = null;
-    // Only device/display tracks are owned by the recorder. The editor master
-    // destination is an internal tap and has no hardware track to stop.
-    session.inputStream?.getTracks().forEach((track) => track.stop());
-    session.inputStream = null;
-    session.processedStream = null;
-    session.mediaRecorder = null;
-  }, []);
+  /**
+   * Ein Bearbeitungsschritt hat genau zwei Wirkungen: der Track bekommt seine
+   * neuen Segmente (unveränderlich ersetzt) und der Arbeitspuffer wird der neu
+   * gerenderte. Beides gehört zusammen – eine Stelle statt neun.
+   */
+  const commitEditExecution = useCallback(
+    (trackId: string, result: EditExecutionResult) => {
+      updateTrack(trackId, (track) => applyExecutionToTrack(track, result));
+      setWorkingAudioBuffer(result.newBuffer);
+    },
+    [updateTrack]
+  );
 
-  const openRecorder = useCallback(() => {
-    setRecorderError(null);
-    setRecorderSavedPath(null);
-    setRecorderStats(null);
-    if (recorderStage === 'DONE' || recorderStage === 'ERROR') setRecorderStage('IDLE');
-    setRecorderOpen(true);
-  }, [recorderStage]);
-
-  const saveRecorderBytes = useCallback(async (
-    bytes: Uint8Array,
-    extension: string,
-    mimeType: string,
-    defaultName: string
-  ): Promise<string | null> => {
-    const safeBase = (defaultName.trim() || 'airdox_rekordbox_set')
-      .replace(/[\\/:*?\"<>|]/g, '_')
-      .replace(/\.(wav|flac|mp3)$/i, '');
-    const fileName = `${safeBase}.${extension}`;
-
-    if (window.rekordboxDesktop) {
-      const result = await window.rekordboxDesktop.saveExportFile({
-        kind: 'AUDIO',
-        data: bytes,
-        defaultName: fileName,
-        protectedPaths,
-      });
-      if (!result.saved) return null;
-      return result.path || fileName;
-    }
-
-    const blob = new Blob([bytes as BlobPart], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    return fileName;
-  }, [protectedPaths]);
-
-  const handleRecorderStart = useCallback(async () => {
-    if (recorderStage === 'PREROLL' || recorderStage === 'RECORDING' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING') return;
-    if (!isAudioExportFormatSupported(recordingFormat)) {
-      setRecorderError(new AudioExportFormatUnavailableError(recordingFormat).message);
-      setRecorderStage('ERROR');
-      return;
-    }
-    if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
-      setRecorderError('Dieser Chromium/Electron-Build unterstützt keine Audioaufnahme. Bitte die Desktop-App aktualisieren.');
-      setRecorderStage('ERROR');
-      return;
-    }
-
-    clearRecorderResources();
-    setRecorderError(null);
-    setRecorderSavedPath(null);
-    setRecorderStats(null);
-    setRecorderElapsed(0);
-
-    const beginCapture = async () => {
-      try {
-        let capturedStream: MediaStream;
-        let ownedInput: MediaStream | null = null;
-        let dispose: (() => void) | null = null;
-
-        if (recorderSource === 'EDITOR_MASTER') {
-          // This is already post master-limiter and therefore the cleanest
-          // source when the set is played inside airdox.
-          capturedStream = audioEngine.getMasterRecordStream();
-        } else if (recorderSource === 'AUDIO_INPUT') {
-          ownedInput = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 2, echoCancellation: false, autoGainControl: false, noiseSuppression: false },
-            video: false,
-          });
-          const processed = audioEngine.createInputRecordingStream(ownedInput, recordingLimiter);
-          capturedStream = processed.stream;
-          dispose = processed.dispose;
-        } else {
-          // Electron/Chromium shows a native chooser. The user selects the
-          // display or output carrying Rekordbox and enables "Audio teilen".
-          ownedInput = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-          } as DisplayMediaStreamOptions);
-          if (ownedInput.getAudioTracks().length === 0) {
-            ownedInput.getTracks().forEach((track) => track.stop());
-            throw new Error('Kein Loopback-Audiosignal gewählt. Bitte in der Systemauswahl "Audio teilen" aktivieren.');
-          }
-          ownedInput.getVideoTracks().forEach((track) => track.stop());
-          const processed = audioEngine.createInputRecordingStream(ownedInput, recordingLimiter);
-          capturedStream = processed.stream;
-          dispose = processed.dispose;
-        }
-
-        const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
-        const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
-        const recorder = new MediaRecorder(capturedStream, {
-          ...(mimeType ? { mimeType } : {}),
-          audioBitsPerSecond: 320000,
-        });
-        const session = recorderSessionRef.current;
-        session.mediaRecorder = recorder;
-        session.chunks = [];
-        session.inputStream = ownedInput;
-        session.processedStream = capturedStream;
-        session.dispose = dispose;
-        session.startedAt = Date.now();
-        recorder.ondataavailable = (event) => {
-          if (event.data.size > 0) session.chunks.push(event.data);
-        };
-        recorder.start(1000);
-        setRecorderStage('RECORDING');
-        session.timer = window.setInterval(() => {
-          setRecorderElapsed((Date.now() - session.startedAt) / 1000);
-        }, 250);
-      } catch (error) {
-        clearRecorderResources();
-        setRecorderError(error instanceof Error ? error.message : String(error));
-        setRecorderStage('ERROR');
-        logger.error('RECORDER', `Aufnahme konnte nicht gestartet werden: ${error instanceof Error ? error.message : String(error)}`, error);
-      }
-    };
-
-    if (recorderPreRoll > 0) {
-      setRecorderStage('PREROLL');
-      recorderSessionRef.current.countdown = window.setTimeout(() => { void beginCapture(); }, recorderPreRoll * 1000);
-    } else {
-      await beginCapture();
-    }
-  }, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter, recordingFormat]);
-
-  const handleRecorderStop = useCallback(async () => {
-    const session = recorderSessionRef.current;
-    if (recorderStage === 'PREROLL') {
-      if (session.countdown !== null) window.clearTimeout(session.countdown);
-      session.countdown = null;
-      clearRecorderResources();
-      setRecorderStage('IDLE');
-      setRecorderElapsed(0);
-      return;
-    }
-    if (recorderStage !== 'RECORDING' || !session.mediaRecorder) return;
-
-    const mediaRecorder = session.mediaRecorder;
-    setRecorderStage('OPTIMIZING');
-    if (session.timer !== null) window.clearInterval(session.timer);
-    session.timer = null;
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        mediaRecorder.addEventListener('stop', () => resolve(), { once: true });
-        mediaRecorder.addEventListener('error', () => reject(new Error('MediaRecorder hat einen Fehler gemeldet.')), { once: true });
-        mediaRecorder.stop();
-      });
-      const captureBlob = new Blob(session.chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      const rawBytes = await captureBlob.arrayBuffer();
-      const audioContext = audioEngine.getContext();
-      const decoded = await audioContext.decodeAudioData(rawBytes.slice(0));
-      const before = measureRecordingAudio(decoded);
-
-      // Even when the optional loudness pass is disabled, a requested limiter
-      // still gets a final whole-file safety ceiling before encoding.
-      const shouldProcess = recorderOptimize || recordingLimiter;
-      const processed = shouldProcess
-        ? await optimizeRecordingBuffer(decoded, {
-            targetLufs: recorderOptimize ? recorderTargetLufs : before.estimatedLufs as -14 | -12 | -9,
-            truePeakDb: recorderTruePeak,
-            targetSampleRate: recordingSampleRate,
-            channels: recordingChannels,
-          })
-        : { buffer: decoded, before, after: { ...before, gainDb: 0 } };
-      const after = processed.after;
-      setRecorderStats({ beforeLufs: before.estimatedLufs, afterLufs: after.estimatedLufs, peak: after.peakDbtp, duration: after.duration });
-
-      setRecorderStage('SAVING');
-      const encoded = await exportAudioBuffer(processed.buffer, {
-        format: recordingFormat,
-        bitDepth: recordingBitDepth,
-        sampleRate: recordingSampleRate,
-        bitrateKbps: 320,
-      });
-      const saved = await saveRecorderBytes(encoded.bytes, encoded.extension, encoded.mimeType, recorderFileName);
-      setRecorderSavedPath(saved);
-      if (!saved) {
-        setRecorderError('Speichern abgebrochen. Die Aufnahme wurde verarbeitet, aber keine Zieldatei gewählt.');
-      }
-      setRecorderStage('DONE');
-      showOperationFeedback({
-        title: saved ? `Set aufgenommen und optimiert (${recordingFormat})` : 'Aufnahme verarbeitet',
-        operationType: 'EXPORT',
-        description: saved
-          ? `Die komplette Aufnahme wurde als ein zusammenhängendes Set auf ${recorderTargetLufs} LUFS (≈) und ${recorderTruePeak} dBTP begrenzt. Originalquellen bleiben unverändert.`
-          : 'Die Aufnahme wurde optimiert, das Speichern wurde jedoch abgebrochen.',
-        originalSha256: activeTrack?.originalSha256 || 'RECORDER_EXTERNAL_SOURCE',
-        timestamp: Date.now(),
-      });
-      logger.info('RECORDER', `Set-Aufnahme beendet: ${saved || 'nicht gespeichert'}`, {
-        source: recorderSource,
-        format: recordingFormat,
-        duration: after.duration,
-        beforeLufs: before.estimatedLufs,
-        afterLufs: after.estimatedLufs,
-        peakDbtp: after.peakDbtp,
-      });
-    } catch (error) {
-      setRecorderError(error instanceof Error ? error.message : String(error));
-      setRecorderStage('ERROR');
-      logger.error('RECORDER', `Set-Aufnahme konnte nicht verarbeitet werden: ${error instanceof Error ? error.message : String(error)}`, error);
-    } finally {
-      clearRecorderResources();
-    }
-  }, [activeTrack, clearRecorderResources, recorderFileName, recorderOptimize, recorderSource, recorderStage, recorderTargetLufs, recorderTruePeak, recordingBitDepth, recordingChannels, recordingFormat, recordingLimiter, recordingSampleRate, saveRecorderBytes, showOperationFeedback]);
-
-  useEffect(() => () => clearRecorderResources(), [clearRecorderResources]);
 
   // Chatbot Palette state
   const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
 
   /** Persist a compact, app-owned track ↔ ANLZ association (never DB/audio data). */
+  /*
+   * Set-Aufnahme: Zustand (12 Schalter) und Ablauf liegen in
+   * `features/recorder/useRecorder` – verschoben, nicht umgeschrieben.
+   */
+  const {
+    recorderOpen, setRecorderOpen,
+    recorderStage, setRecorderStage,
+    recorderElapsed, setRecorderElapsed,
+    recorderSource, setRecorderSource,
+    recorderOptimize, setRecorderOptimize,
+    recorderTargetLufs, setRecorderTargetLufs,
+    recorderTruePeak, setRecorderTruePeak,
+    recorderPreRoll, setRecorderPreRoll,
+    recorderFileName, setRecorderFileName,
+    recorderError, setRecorderError,
+    recorderSavedPath, setRecorderSavedPath,
+    recorderStats, setRecorderStats,
+    openRecorder, handleRecorderStart, handleRecorderStop, clearRecorderResources,
+  } = useRecorder({
+    activeTrack,
+    recordingSource,
+    protectedPaths,
+    showOperationFeedback,
+    setChatbotOpen,
+    recordingFormat,
+    recordingSampleRate,
+    recordingBitDepth,
+    recordingChannels,
+    recordingLimiter,
+  });
+
+  // Beim Verlassen der Seite laufende Aufnahme-Ressourcen freigeben.
+  useEffect(() => () => clearRecorderResources(), [clearRecorderResources]);
+
   const cacheAnalysisMapping = useCallback(async (
     track: TrackModel,
     analysisPath: string,
@@ -1065,8 +625,56 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [cacheAnalysisMapping]);
 
-  // Restore stems only when the current immutable working buffer has the exact
-  // PCM fingerprint used for separation; edits must not inherit source-track stems.
+  // Real-time animation loop for playhead progress and VU stereo meters
+  /*
+   * Playhead & Pegel: Der Treiber liest die Engine und schreibt in den
+   * Transport-Store. Dieses useEffect hält nur noch die *diskreten* Zustände
+   * der Anwendung synchron – es läuft einmal beim Start, nicht pro Frame.
+   *
+   * Die Ansicht (viewOffset) wird über `viewportRef` gelesen statt über die
+   * Effekt-Dependencies: vorher stand `viewOffset` in der Dependency-Liste des
+   * Loops, sodass sich der Loop beim Auto-Scroll jeden Frame neu registrierte.
+   */
+  const viewportRef = useRef({ offset: viewOffset, duration: viewDuration, trackDuration: 0 });
+  viewportRef.current = {
+    offset: viewOffset,
+    duration: viewDuration,
+    trackDuration: activeTrack?.duration ?? 0,
+  };
+
+  useEffect(() => {
+    const driver: PlayheadDriverHandle = startPlayheadDriver({
+      port: audioEngine,
+      getViewport: () => viewportRef.current,
+      onFollowOffset: (offset) => setViewOffset(offset),
+    });
+    return () => driver.stop();
+  }, []);
+
+  // „Läuft/läuft nicht" ist ein diskreter Zustand: nur ein echter Wechsel
+  // erzeugt einen React-Render (z. B. wenn die Wiedergabe natürlich endet).
+  useEffect(
+    () =>
+      subscribeTransport(() => {
+        const playing = getTransport().isPlaying;
+        setIsPlaying((previous) => (previous === playing ? previous : playing));
+      }),
+    []
+  );
+
+  // Master volume control
+  const handleMasterVolumeChange = useCallback((vol: number) => {
+    setMasterVolume(vol);
+    audioEngine.setMasterVolume(vol);
+  }, []);
+
+
+  /*
+   * Stems nur übernehmen, wenn der *aktuelle* Arbeitspuffer denselben
+   * PCM-Fingerabdruck hat wie bei der Trennung. Ein Edit erzeugt einen neuen
+   * Puffer; die Stems des Quelltracks dürfen dann nicht weiterlaufen, sonst
+   * passen Wellenform und Stem-Mischung nicht mehr zueinander.
+   */
   useEffect(() => {
     if (activeTrack && workingAudioBuffer) {
       const cached = stemEngine.getCachedStemsForBuffer(
@@ -1078,7 +686,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     } else {
       setActiveTrackStems(null);
     }
-  }, [activeTrack, workingAudioBuffer]);
+  }, [activeTrackId, activeTrack, workingAudioBuffer]);
 
   // Engine-Status beim Start abfragen: die UI baut daraus Profil-Auswahl UND
   // die Stem-Liste (die kommt aus dem Deskriptor, nicht aus einer Konstanten).
@@ -1202,28 +810,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setSeparationProgress(null);
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemArchitecture]);
-
-  // Keep cancellation guards only while the job is active; terminal or
-  // disappeared jobs must not leave stale locks in the renderer.
-  useEffect(() => {
-    if (!stemRemoteStatus) return;
-    for (const jobId of remoteCancelRequestGuardRef.current.trackedJobIds()) {
-      const job = stemRemoteStatus.jobs.find((entry) => entry.jobId === jobId);
-      if (!job || job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') {
-        remoteCancelRequestGuardRef.current.forget(jobId);
-        const timer = remoteCancelCooldownTimersRef.current.get(jobId);
-        if (timer !== undefined) window.clearTimeout(timer);
-        remoteCancelCooldownTimersRef.current.delete(jobId);
-        setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
-        setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
-      }
-    }
-  }, [stemRemoteStatus]);
-
-  useEffect(() => () => {
-    for (const timer of remoteCancelCooldownTimersRef.current.values()) window.clearTimeout(timer);
-    remoteCancelCooldownTimersRef.current.clear();
-  }, []);
 
   /**
    * Fernpfad (§15–§22): Status holen, offene Jobs nach einem Neustart
@@ -1352,65 +938,122 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     await runRemoteStemSeparation('HIGH_QUALITY');
   }, [activeTrack, workingAudioBuffer, stemRemoteStatus, remoteFlowRunning, runRemoteStemSeparation, setStemRemoteEnabled]);
 
+  useEffect(() => {
+    if (!remoteNotice) return;
+    const timer = window.setTimeout(() => setRemoteNotice(null), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [remoteNotice]);
+
+  /**
+   * Ein Klick auf „Abbrechen“ muss etwas bewirken **und** sichtbar sein:
+   *  1. Abbruchbitte in die Jobablage legen (der Worker beendet die Rechnung),
+   *  2. Jobstand sofort neu einlesen,
+   *  3. dem Nutzer in der Stem-Leiste sagen, was passiert ist – inklusive des
+   *     Grunds, wenn die Ablage gerade nicht erreichbar war.
+   * Doppelklicks werden über einen Ref geblockt, damit nicht elf Abbrüche im
+   * Protokoll stehen, während der erste noch läuft.
+   */
+  /**
+   * Kurzzeitige Sperre nach einer abgelehnten/fehlgeschlagenen Abbruchanfrage:
+   * Der Benutzer sieht „Kurz warten…“ statt eines Buttons, der sofort wieder
+   * denselben Fehler erzeugt.
+   */
+  const startRemoteCancelCooldown = useCallback((jobId: string) => {
+    const previousTimer = remoteCancelCooldownTimersRef.current.get(jobId);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+    setRemoteCancelCooldownJobId(jobId);
+    const timer = window.setTimeout(() => {
+      if (remoteCancelCooldownTimersRef.current.get(jobId) !== timer) return;
+      remoteCancelCooldownTimersRef.current.delete(jobId);
+      setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+      // Der Guard gibt denselben Job erst nach Ablauf der Wartezeit wieder frei.
+    }, REMOTE_CANCEL_RETRY_COOLDOWN_MS);
+    remoteCancelCooldownTimersRef.current.set(jobId, timer);
+  }, []);
+
   const cancelRemoteFlowJob = useCallback((jobId: string) => {
     const cancelGuard = remoteCancelRequestGuardRef.current;
-    if (!cancelGuard.begin(jobId)) return;
-
+    if (!cancelGuard.begin(jobId)) {
+      setRemoteNotice({
+        tone: 'info',
+        text: cancelGuard.isCoolingDown(jobId)
+          ? 'Die letzte Abbruchanfrage wurde nicht bestätigt – einen Moment warten, dann erneut versuchen.'
+          : 'Der erste Abbruch ist noch unterwegs – bitte einen Moment warten.',
+      });
+      return;
+    }
     setRemoteCancelCooldownJobId(null);
     setRemoteCancelPendingJobId(jobId);
-    setSeparationProgress((prev) => prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev);
-    logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angefordert.`, { jobId });
-
-    const scheduleRetryCooldown = () => {
-      const previousTimer = remoteCancelCooldownTimersRef.current.get(jobId);
-      if (previousTimer !== undefined) window.clearTimeout(previousTimer);
-      setRemoteCancelCooldownJobId(jobId);
-      const timer = window.setTimeout(() => {
-        if (remoteCancelCooldownTimersRef.current.get(jobId) !== timer) return;
-        remoteCancelCooldownTimersRef.current.delete(jobId);
-        setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
-      }, REMOTE_CANCEL_RETRY_COOLDOWN_MS);
-      remoteCancelCooldownTimersRef.current.set(jobId, timer);
-    };
-
-    void stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer')
-      .then(async (accepted) => {
-        const status = await stemEngine.pollRemoteJobs().catch(() => null);
+    setRemoteFlowError(null);
+    setRemoteNotice({ tone: 'info', text: 'Abbruch wird an den externen Rechner gemeldet…' });
+    setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev));
+    void (async () => {
+      try {
+        const result = await stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer');
+        const status = await stemEngine.pollRemoteJobs();
         if (status) setStemRemoteStatus(status);
-        cancelGuard.settle(jobId, accepted);
-        if (!accepted) {
-          setRemoteFlowError('Der Job konnte nicht mehr abgebrochen werden. Bitte Status aktualisieren.');
-          logger.warn(
-            'STEM-REMOTE',
-            `Abbruch des externen Jobs ${jobId} wurde vom Dienst nicht angenommen; erneuter Versuch nach ${REMOTE_CANCEL_RETRY_COOLDOWN_MS / 1000} s möglich.`,
-            { jobId, retryCooldownMs: REMOTE_CANCEL_RETRY_COOLDOWN_MS },
-          );
-          scheduleRetryCooldown();
-        } else {
-          const currentStatus = status?.jobs.find((entry) => entry.jobId === jobId)?.status ?? 'unbekannt';
-          logger.info('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} wurde angenommen (Status ${currentStatus}).`, {
-            jobId,
-            status: currentStatus,
-          });
+        cancelGuard.settle(jobId, result.accepted);
+        if (result.accepted) {
+          logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angenommen – der Worker verwirft die laufende Rechnung.`);
+          setRemoteFlowError(null);
+          setRemoteNotice({ tone: 'info', text: 'Abbruch gemeldet: Der externe Rechner stoppt die Rechnung, Ergebnisse werden nicht übernommen.' });
+          return;
         }
-      })
-      .catch((error) => {
-        cancelGuard.settle(jobId, false);
-        scheduleRetryCooldown();
+        const reason = result.message ?? 'Der Job konnte nicht abgebrochen werden.';
+        logger.error('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} ohne Wirkung: ${reason}`, { jobId, deferred: Boolean(result.deferred) });
+        setRemoteFlowError(reason);
+        setRemoteFlowOpen(true);
+        setRemoteNotice({ tone: 'error', text: result.deferred ? reason : `Abbruch nicht möglich: ${reason}` });
+        startRemoteCancelCooldown(jobId);
+      } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setRemoteFlowError(`Abbruch konnte nicht bestätigt werden: ${message}`);
-        logger.warn(
-          'STEM-REMOTE',
-          `Abbruch des externen Jobs ${jobId} konnte nicht bestätigt werden: ${message}`,
-          { jobId, retryCooldownMs: REMOTE_CANCEL_RETRY_COOLDOWN_MS },
-        );
-      })
-      .finally(() => {
+        cancelGuard.settle(jobId, false);
+        logger.error('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} fehlgeschlagen: ${message}`, { jobId });
+        setRemoteFlowError(`Abbruch fehlgeschlagen: ${message}`);
+        setRemoteFlowOpen(true);
+        setRemoteNotice({ tone: 'error', text: `Abbruch fehlgeschlagen: ${message}` });
+        startRemoteCancelCooldown(jobId);
+      } finally {
+        // Eine angenommene Anfrage bleibt gesperrt, bis der Job einen
+        // Endzustand meldet (die Statusabfrage räumt den Guard dort auf).
         if (!cancelGuard.isPending(jobId)) {
           setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
         }
-      });
-  }, []);
+      }
+    })();
+  }, [startRemoteCancelCooldown]);
+
+  /*
+   * Abbruch-Sperren nur so lange halten, wie der Job läuft: Jobs in einem
+   * Endzustand (oder verschwundene) dürfen keine Sperre im Renderer
+   * hinterlassen – sonst bliebe der Abbrechen-Button an einem längst
+   * beendeten Job hängen.
+   */
+  useEffect(() => {
+    if (!stemRemoteStatus) return;
+    for (const jobId of remoteCancelRequestGuardRef.current.trackedJobIds()) {
+      const job = stemRemoteStatus.jobs.find((entry) => entry.jobId === jobId);
+      if (job && job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED') continue;
+      remoteCancelRequestGuardRef.current.forget(jobId);
+      const timer = remoteCancelCooldownTimersRef.current.get(jobId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      remoteCancelCooldownTimersRef.current.delete(jobId);
+      setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
+      setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+    }
+  }, [stemRemoteStatus]);
+
+  // Beim Abbau dürfen keine Cooldown-Timer zurückbleiben: sie würden in einen
+  // bereits verworfenen Zustand schreiben.
+  useEffect(
+    () => () => {
+      for (const timer of remoteCancelCooldownTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      remoteCancelCooldownTimersRef.current.clear();
+    },
+    []
+  );
 
   const handleCancelStemSeparation = useCallback(() => {
     const remoteJob = (stemRemoteStatus?.jobs ?? []).find(
@@ -1423,6 +1066,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
     logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
+    // Auch lokal gilt: der Klick muss eine Antwort zeigen. „kein aktiver Job
+    // abbruchbar“ nur ins Protokoll zu schreiben, ist der Weg zu „ich drücke,
+    // es passiert nichts“.
+    setRemoteNotice(
+      accepted
+        ? { tone: 'info', text: 'Abbruch angefordert: Der laufende Chunk wird zu Ende gerechnet, dann stoppt die lokale Engine.' }
+        : { tone: 'info', text: 'Es läuft gerade keine Stem-Separation – abgebrochen werden kann nichts.' }
+    );
   }, [stemRemoteStatus, cancelRemoteFlowJob]);
 
   const handleSeparateStems = useCallback(async () => {
@@ -1680,130 +1331,49 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     [activeTrackStems, stemsMixerState]
   );
 
-  // Playback Toggle (supports both master working audio and isolated multi-stem playback)
-  const handleTogglePlay = useCallback(() => {
-    if (!activeTrack) {
-      alert('Bitte lade zuerst einen Track oder importiere eine Audiodatei (WAV, MP3, FLAC).');
-      return;
-    }
-
-    if (!workingAudioBuffer) {
-      if (
-        confirm(
-          `Für "${activeTrack.title}" ist noch keine Audiodatei verknüpft.\n\nMöchtest du jetzt die passende Originaldatei (WAV, MP3, FLAC, AIFF) auswählen?`
-        )
-      ) {
-        audioFileInputRef.current?.click();
-      }
-      return;
-    }
-
-    if (isPlaying) {
-      const pausedAt = audioEngine.pause();
-      setCurrentTime(pausedAt);
-      setIsPlaying(false);
-    } else {
-      let loopStart = 0;
-      let loopEnd = 0;
-      if (loopActive && selection) {
-        loopStart = selection.start;
-        loopEnd = selection.end;
-      }
-      if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, currentTimeRef.current, loopActive, loopStart, loopEnd);
-      } else {
-        audioEngine.play(workingAudioBuffer, currentTimeRef.current, loopActive, loopStart, loopEnd);
-      }
-      setIsPlaying(true);
-    }
-  }, [activeTrack, workingAudioBuffer, isPlaying, loopActive, selection, activeTrackStems, stemsMixerState, stemsMixIsCustom]);
-
-  const handleReturnToStart = useCallback(() => {
-    audioEngine.stop();
-    setIsPlaying(false);
-    currentTimeRef.current = 0;
-    setCurrentTime(0);
-    setViewOffset(0);
-  }, []);
-
-  const handleSeek = useCallback((targetTime: number) => {
-    const clamped = Math.max(0, Math.min(activeTrack?.duration || 0, targetTime));
-    currentTimeRef.current = clamped;
-    setCurrentTime(clamped);
-    if (isPlaying && workingAudioBuffer) {
-      if (activeTrackStems && stemsMixIsCustom) {
-        audioEngine.playWithStems(activeTrackStems, stemsMixerState, clamped, loopActive);
-      } else {
-        audioEngine.play(workingAudioBuffer, clamped, loopActive);
-      }
-    }
-  }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
-
-  // The MIDI hook reads transport time through a ref, so 60fps playhead updates
-  // never recreate controller subscriptions.
-  const { isMidiConnected, midiStatusLabel } = useMidiLifecycle({
-    currentTimeRef,
-    setLoopActive,
-    onToggleStemMute: handleToggleStemMute,
-    onToggleStemSolo: handleToggleStemSolo,
-    onTogglePlay: handleTogglePlay,
-    onReturnToStart: handleReturnToStart,
-    onSeek: handleSeek,
-    onMasterVolumeChange: handleMasterVolumeChange,
+  /*
+   * Transport, Zoom und Ansichtsfenster liegen in `features/transport`.
+   * Der Hook bekommt die Abhängigkeiten als Parameter und gibt dieselben
+   * Handler zurück wie zuvor – verschoben, nicht umgeschrieben.
+   */
+  const {
+    handleTogglePlay,
+    handleReturnToStart,
+    handleSeek,
+    handleZoomIn,
+    handleZoomOut,
+    handleResetZoom,
+    handleSelectZoomPreset,
+    handlePanView,
+  } = useTransportControls({
+    activeTrack,
+    workingAudioBuffer,
+    isPlaying,
+    setIsPlaying,
+    loopActive,
+    selection,
+    activeTrackStems,
+    stemsMixerState,
+    stemsMixIsCustom,
+    audioFileInputRef,
+    viewDuration,
+    setViewDuration,
+    setViewOffset,
   });
 
-  // Zoom controls
-  const handleZoomIn = () => {
-    setViewDuration((prev) => Math.max(3.0, prev * 0.7));
-  };
-  const handleZoomOut = () => {
-    setViewDuration((prev) => Math.min(activeTrack?.duration || 120, prev * 1.4));
-  };
-  const handleResetZoom = () => {
-    setViewDuration(18.0);
-  };
-  const handleSelectZoomPreset = useCallback(
-    (preset: '2_BARS' | '4_BARS' | '8_BARS' | '16_BARS' | '32_BARS' | '64_BARS' | 'FULL_TRACK') => {
-      const bpm = activeTrack?.bpm || 120.0;
-      const secPerBar = (60 / bpm) * 4;
-      let targetDuration = 16.0;
-
-      if (preset === 'FULL_TRACK') {
-        targetDuration = activeTrack ? activeTrack.duration : 60.0;
-        setViewOffset(0);
-        setViewDuration(targetDuration);
-        return;
-      }
-
-      const barMap: Record<string, number> = {
-        '2_BARS': 2,
-        '4_BARS': 4,
-        '8_BARS': 8,
-        '16_BARS': 16,
-        '32_BARS': 32,
-        '64_BARS': 64,
-      };
-      const bars = barMap[preset] || 16;
-      targetDuration = bars * secPerBar;
-
-      if (activeTrack && targetDuration > activeTrack.duration) {
-        targetDuration = activeTrack.duration;
-      }
-
-      const half = targetDuration / 2;
-      let newOffset = Math.max(0, currentTimeRef.current - half);
-      if (activeTrack && newOffset + targetDuration > activeTrack.duration) {
-        newOffset = Math.max(0, activeTrack.duration - targetDuration);
-      }
-      setViewDuration(targetDuration);
-      setViewOffset(newOffset);
-    },
-    [activeTrack]
-  );
-  const handlePanView = (newOffset: number) => {
-    const maxOffset = Math.max(0, (activeTrack?.duration || 120) - viewDuration);
-    setViewOffset(Math.max(0, Math.min(maxOffset, newOffset)));
-  };
+  // Hardware-Bedienung (Pioneer DDJ): Zuordnung Ereignis → Aktion in
+  // `features/transport/useMidiBridge`.
+  useMidiBridge({
+    handleTogglePlay,
+    handleReturnToStart,
+    handleSeek,
+    handleToggleStemMute,
+    handleToggleStemSolo,
+    handleMasterVolumeChange,
+    setLoopActive,
+    setMidiConnected: setIsMidiConnected,
+    setMidiStatusLabel,
+  });
 
   // Pioneer Memory Cue Jump Handlers (Memory Call < and >)
   const handlePrevMemoryCue = useCallback(() => {
@@ -1814,10 +1384,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately before current time (with small buffer)
-    const prevCues = memCues.filter((c) => c.position < currentTime - 0.08);
+    const prevCues = memCues.filter((c) => c.position < getPositionSec() - 0.08);
     const target = prevCues.length > 0 ? prevCues[prevCues.length - 1] : memCues[memCues.length - 1];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   const handleNextMemoryCue = useCallback(() => {
     if (!activeTrack) return;
@@ -1827,10 +1397,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (memCues.length === 0) return;
 
     // Find cue immediately after current time
-    const nextCues = memCues.filter((c) => c.position > currentTime + 0.08);
+    const nextCues = memCues.filter((c) => c.position > getPositionSec() + 0.08);
     const target = nextCues.length > 0 ? nextCues[0] : memCues[0];
     handleSeek(target.position);
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Set new Memory Cue with precise database millisecond timestamp and bar/beat calculation
   const handleAddMemoryCue = useCallback(() => {
@@ -1838,14 +1408,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const existingMems = activeTrack.cues.filter((c) => c.type === 'MEMORY');
     const nextIndex = existingMems.length + 1;
     const spb = 60.0 / activeTrack.bpm;
-    const beatIndex = Math.max(0, Math.round((currentTime - (activeTrack.beatGrid.firstBeat || 0)) / spb));
+    const cuePosition = getPositionSec();
+    const beatIndex = Math.max(0, Math.round((cuePosition - (activeTrack.beatGrid.firstBeat || 0)) / spb));
     const barNumber = Math.floor(beatIndex / 4) + 1;
     const beatNumber = (beatIndex % 4) + 1;
 
     const newCue: CuePoint = {
       id: `mem-${Date.now()}`,
-      position: currentTime,
-      inMsec: Math.round(currentTime * 1000),
+      position: cuePosition,
+      inMsec: Math.round(cuePosition * 1000),
       type: 'MEMORY',
       name: `MEM ${nextIndex}`,
       color: '#ff2222',
@@ -1866,12 +1437,12 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Set Beat 1.1 at current playhead position (Pioneer Rekordbox "Set 1.1 Here")
   const handleSetFirstBeatHere = useCallback(() => {
     if (!activeTrack) return;
-    const newFirstBeat = Math.max(0, currentTime);
+    const newFirstBeat = Math.max(0, getPositionSec());
     const spb = 60.0 / activeTrack.bpm;
 
     setTracks((prev) =>
@@ -1899,7 +1470,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         return t;
       })
     );
-  }, [activeTrack, currentTime]);
+  }, [activeTrack]);
 
   // Fine-tune Beatgrid offset (Pioneer Rekordbox Grid Shift: +/- 1ms or 10ms)
   const handleShiftBeatgrid = useCallback((deltaSeconds: number) => {
@@ -1942,7 +1513,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!analysis || analysis.peaks.length === 0) return;
 
     const secPerBucket = analysis.secPerBucket || (activeTrack.duration / analysis.length);
-    const searchCenterBucket = Math.round(currentTime / secPerBucket);
+    const searchCenterBucket = Math.round(getPositionSec() / secPerBucket);
     const searchRadius = Math.round(0.1 / secPerBucket); // search within +/- 100ms
     const minBucket = Math.max(0, searchCenterBucket - searchRadius);
     const maxBucket = Math.min(analysis.peaks.length - 1, searchCenterBucket + searchRadius);
@@ -1963,7 +1534,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const beatDistance = (alignedTime - currentFirst) % spb;
     const shift = beatDistance > spb / 2 ? beatDistance - spb : beatDistance;
     handleShiftBeatgrid(shift);
-  }, [activeTrack, currentTime, handleShiftBeatgrid]);
+  }, [activeTrack, handleShiftBeatgrid]);
 
   // Apply extracted track from Rekordbox Database / ANLZ
   const handleApplyExtractedTrack = (extractedTrack: TrackModel) => {
@@ -1982,10 +1553,27 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   };
 
-  // Capture the selected deck's causal state before every mutating edit.
-  const pushHistorySnapshot = (description: string) => {
+  /*
+   * Verlauf: `audio/editHistory*.ts` snapshotet nur kleine Metadaten und hält
+   * den unveränderlichen Arbeitspuffer per Referenz; der Hook führt je Track
+   * einen eigenen, auf 30 Schritte begrenzten Stapel. Ein neuer Edit verwirft
+   * damit nur den Redo-Zweig dieses Tracks, nicht den anderer Decks.
+   */
+  const {
+    undoStack,
+    redoStack,
+    allUndoCount,
+    allRedoCount,
+    push: pushHistoryEntry,
+    undo: takeUndoEntry,
+    redo: takeRedoEntry,
+    clear: clearEditHistory,
+  } = useEditHistory(activeTrackId || null);
+
+  // Snapshot current state for Undo (stores buffer, duration, analysis, cues, segments)
+  const pushHistorySnapshot = (desc: string) => {
     if (!activeTrack) return;
-    pushHistoryEntry(createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, description));
+    pushHistoryEntry(createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, desc));
   };
 
   // Undo / Redo
@@ -2114,7 +1702,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const spb = 60.0 / bg.bpm;
 
     // Start from either current playhead or snapped bar start
-    let startSec = currentTime;
+    let startSec = getPositionSec();
     if (quantize) {
       const beatIndex = Math.round((startSec - bg.firstBeat) / spb);
       startSec = Math.max(0, bg.firstBeat + beatIndex * spb);
@@ -2299,7 +1887,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Paste at playhead (validated by Edit Assistant)
   const handlePaste = () => {
-    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, currentTime);
+    const validation = editAssistant.validatePaste(clipboardBuffer, workingAudioBuffer, getPositionSec());
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2307,7 +1895,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Paste');
 
-    const insertTime = validation.sanitizedInsertionTime ?? currentTime;
+    const insertTime = validation.sanitizedInsertionTime ?? getPositionSec();
     const result = executePaste(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2341,7 +1929,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Insert (shifts timeline and subsequent markers, validated by Edit Assistant)
   const handleInsert = () => {
-    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, currentTime);
+    const validation = editAssistant.validateInsert(clipboardBuffer, workingAudioBuffer, getPositionSec());
     if (!validation.isValid) {
       setEditAssistantModalOpen(true);
       return;
@@ -2349,7 +1937,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     if (!clipboardBuffer || !activeTrack || !workingAudioBuffer) return;
     pushHistorySnapshot('Insert');
 
-    const insertPos = validation.sanitizedInsertionTime ?? currentTime;
+    const insertPos = validation.sanitizedInsertionTime ?? getPositionSec();
     const result = executeInsert(
       workingAudioBuffer,
       clipboardBuffer,
@@ -2382,7 +1970,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   };
 
   // Insert Clip into Deck A with Tempo & Harmonic Pitch Adaptation
-  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime = currentTime) => {
+  const handleInsertClipToDeckA = (clip: PaletteClip, requestedInsertTime: number = getPositionSec()) => {
     if (!activeTrack || !workingAudioBuffer) {
       alert('Bitte lade zuerst einen Track in Deck A.');
       return;
@@ -2474,7 +2062,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       return;
     }
     setSelectedClipId(clip.id);
-    setCurrentTime(dropTime);
+    setPosition(dropTime);
     handleInsertClipToDeckA(clip, dropTime);
   };
 
@@ -2725,15 +2313,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleAddCue = (pos: number) => {
     if (!activeTrack) return;
     pushHistorySnapshot('Add Cue');
-    const cueId = `cue-${Date.now()}`;
     updateTrack(activeTrack.id, (track) => ({
       ...track,
       cues: [
         ...track.cues,
         {
-          id: cueId,
+          id: `cue-${Date.now()}`,
           name: `Cue ${track.cues.length + 1}`,
-          type: 'MEMORY',
+          type: 'MEMORY' as const,
           position: pos,
           color: '#ff2a2a',
           origin: DataOrigin.USER_EDIT,
@@ -2745,1109 +2332,85 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // ANLZ belongs to the explicitly active XML/DB track. It is read-only input
   // and takes priority over XML values only for analysis fields it actually
   // holds. Desktop imports additionally remember the safe, read-only path.
-  const handleImportAnlzData = async (
-    data: ArrayBuffer,
-    fileName: string,
-    sourceDetails?: { path: string; size?: number; modifiedAt?: number }
-  ) => {
-    if (!activeTrack) return;
-
-    logger.info('XML_IMPORT', `ANLZ-Analyseimport gestartet: ${fileName}`, {
-      fileName,
-      sizeBytes: data.byteLength,
-      fromDesktop: Boolean(sourceDetails?.path),
-    });
-    try {
-      const extraction = parseAnlzBinary(data);
-      const sourceDuration = activeTrack.analysisSource?.sourceDuration || activeTrack.audioBuffer?.duration || workingAudioBuffer?.duration || activeTrack.duration;
-      const extracted = applyAnlzExtractionToTrack(activeTrack, extraction);
-      const nativeAnalysis = extraction.waveform
-        ? { ...extraction.waveform, secPerBucket: sourceDuration / Math.max(1, extraction.waveform.length) }
-        : extracted.analysis;
-      const hasProjectEdits = !(activeTrack.workingSegments.length === 1 && activeTrack.workingSegments[0]?.type === 'ORIGINAL');
-      // Importing an ANLZ into an edited deck supplies waveform provenance but
-      // must not replace the user's already causal cues/grid/phrases.
-      const appliedTrack: TrackModel = hasProjectEdits
-        ? { ...activeTrack, analysis: nativeAnalysis }
-        : { ...extracted, analysis: nativeAnalysis };
-      const enrichedTrack: TrackModel = sourceDetails
-        ? {
-            ...appliedTrack,
-            analysisSource: {
-              path: sourceDetails.path,
-              accessMode: 'READ_ONLY',
-              status: 'AVAILABLE',
-              size: sourceDetails.size,
-              modifiedAt: sourceDetails.modifiedAt,
-              sourceMediaPath: extraction.analysisPath,
-              sourceDuration,
-              format: (sourceDetails.path.split('.').pop() || 'ANLZ').toUpperCase() as 'DAT' | 'EXT' | '2EX' | 'ANLZ',
-            },
-            databaseRecord: appliedTrack.databaseRecord
-              ? { ...appliedTrack.databaseRecord, filePath: sourceDetails.path }
-              : appliedTrack.databaseRecord,
-          }
-        : appliedTrack;
-      setTracks((previous) => previous.map((track) => (
-        track.id === enrichedTrack.id ? enrichedTrack : track
-      )));
-      if (enrichedTrack.audioBuffer) setWorkingAudioBuffer(enrichedTrack.audioBuffer);
-
-      if (sourceDetails) {
-        await cacheAnalysisMapping(enrichedTrack, sourceDetails.path, 'MANUAL_ANLZ', {
-          size: sourceDetails.size,
-          modifiedAt: sourceDetails.modifiedAt,
-          sourceMediaPath: extraction.analysisPath,
-          sourceDuration,
-        });
-      }
-
-      const tags = extraction.tagsFound.join(', ');
-      showOperationFeedback({
-        title: 'Rekordbox ANLZ-Analyse übernommen (Read-Only)',
-        operationType: 'CUE',
-        description: `${fileName}: ${extraction.cues.length} Cues, ${extraction.loops.length} Loops, ${extraction.phrases.length} PSSI-Phrasen, ${extraction.waveform?.length || 0} originale Waveform-Buckets und ${extraction.beatGrid ? extraction.beatGrid.beats.length : 0} Beat-Einträge übernommen.${sourceDetails ? ' Die Track↔ANLZ-Pfadzuordnung wurde lokal gespeichert.' : ''}`,
-        timeRangeSec: { start: 0, end: enrichedTrack.duration, duration: enrichedTrack.duration },
-        originalSha256: enrichedTrack.originalSha256,
-        timestamp: Date.now(),
-      });
-      logger.info('XML_IMPORT', `[ANLZ Import] ${fileName} → Tags: ${tags}`, {
-        warnings: extraction.warnings,
-        cues: extraction.cues.length,
-        loops: extraction.loops.length,
-        phrases: extraction.phrases.length,
-        waveformBuckets: extraction.waveform?.length || 0,
-      });
-    } catch (error) {
-      logger.error('XML_IMPORT', `[ANLZ Import] Rekordbox-Analyse konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`, error);
-    }
-  };
-
-  const handleImportAnlzFile = async (file: File) => {
-    await handleImportAnlzData(await file.arrayBuffer(), file.name);
-  };
-
-  // Native Windows path: the bridge opens the analysis file strictly for
-  // reading; the renderer never writes to the ANLZ source.
-  const handleImportAnlzFromDesktop = async () => {
-    if (!activeTrack || !window.rekordboxDesktop) return;
-    try {
-      const chosen = await window.rekordboxDesktop.chooseAnalysisFile();
-      if (!chosen) return;
-      const source = await window.rekordboxDesktop.readAnalysisFile(chosen.path);
-      const fileName = chosen.path.split(/[\\/]/).pop() || 'ANLZ-Datei';
-      await handleImportAnlzData(source.data, fileName, source);
-    } catch (error) {
-      logger.error('XML_IMPORT', `[ANLZ Import] Windows-Lesepfad fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
-      alert(`ANLZ-Datei konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  // Rekordbox 6/7 database (master.db / OneLibrary exportLibrary.db).
-  // The desktop bridge opens the SQLCipher library strictly for reading and
-  // returns only rows; the renderer never touches the source file.
-  const handleLoadRekordboxDatabase = async (dbPath: string, sourceLabel?: string) => {
-    if (!window.rekordboxDesktop) return;
-    const dbStartedAt = Date.now();
-    logger.info('DATABASE', `Rekordbox-Datenbank-Import gestartet: ${sourceLabel || dbPath}`, { dbPath });
-    try {
-      const result = await window.rekordboxDesktop.readRekordboxDatabase(dbPath);
-      if (!result.available || !result.rows) {
-        throw new Error(result.reason || 'Die Rekordbox-Datenbank konnte nicht gelesen werden.');
-      }
-
-      const mapped = mapRekordboxDatabaseRows(
-        {
-          content: result.rows.content,
-          cues: result.rows.cues,
-          artists: result.rows.artists,
-          albums: result.rows.albums,
-          genres: result.rows.genres,
-          keys: result.rows.keys,
-          labels: result.rows.labels,
-          playlists: result.rows.playlists,
-          songPlaylists: result.rows.songPlaylists,
-        },
-        result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB'
-      );
-
-      const fullTrackModels = mapped.tracks.map((track, idx) =>
-        buildCollectionTrackModel(track, idx, DataOrigin.REKORDBOX_DB)
-      );
-
-      // master.db is used here only as a one-time discovery source. Persist all
-      // valid AnalysisDataPath associations in the app-owned path index so
-      // later track loads can open ANLZ directly.
-      const analysisMappings = fullTrackModels
-        .filter((track) => Boolean(track.analysisSource?.path))
-        .map((track) => ({
-          trackId: track.id,
-          mediaPath: track.originalMedia?.location,
-          sourceMediaPath: track.analysisSource?.sourceMediaPath,
-          analysisPath: track.analysisSource!.path,
-          title: track.title,
-          artist: track.artist,
-          format: track.analysisSource!.format,
-          sourceDuration: track.analysisSource!.sourceDuration,
-          source: result.dbType === 'ONE_LIBRARY' ? 'ONE_LIBRARY' : 'MASTER_DB',
-        }));
-      let indexedAnalysisMappings = 0;
-      if (analysisMappings.length > 0) {
-        try {
-          const cached = await window.rekordboxDesktop.cacheAnalysisMappings(analysisMappings);
-          indexedAnalysisMappings = cached.accepted;
-        } catch (cacheError) {
-          logger.warn('DATABASE', `[ANLZ-Pfadindex] DB-Zuordnungen konnten nicht gespeichert werden: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`, cacheError);
-        }
-      }
-      setAnalysisIndexStatus(
-        indexedAnalysisMappings > 0
-          ? `ANLZ-Pfadindex aktualisiert: ${indexedAnalysisMappings} read-only Zuordnungen.`
-          : 'Aus dieser Datenbank wurden keine nutzbaren ANLZ-Pfadzuordnungen gelesen.'
-      );
-
-      setXmlImportedTracks(fullTrackModels);
-      setXmlFileName(sourceLabel || result.fileName || 'Rekordbox Datenbank');
-      setXmlCollectionModalOpen(true);
-
-      showOperationFeedback({
-        title: 'Rekordbox-Datenbank importiert (Read-Only)',
-        operationType: 'CUE',
-        description: `${sourceLabel || result.fileName || dbPath}: ${mapped.stats.tracks} Tracks, ${mapped.stats.memoryCues} Memory Cues, ${mapped.stats.hotCues} Hot Cues, ${mapped.stats.loops} Loops aus der Datenbank übernommen.`,
-        timeRangeSec: { start: 0, end: 0, duration: 0 },
-        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        timestamp: Date.now(),
-      });
-
-      const warnings = [...(mapped.warnings || []), ...(result.warnings || [])];
-      if (warnings.length > 0) {
-        logger.warn('DATABASE', `[Rekordbox DB] ${warnings.length} Hinweis(e) beim Import`, { warnings });
-      }
-      logger.info('DATABASE', `Rekordbox-Datenbank importiert: ${mapped.stats.tracks} Tracks in ${Date.now() - dbStartedAt} ms`, {
-        dbPath,
-        sourceLabel,
-        stats: mapped.stats,
-        dbType: result.dbType,
-        durationMs: Date.now() - dbStartedAt,
-      });
-    } catch (error) {
-      logger.error('DATABASE', `[Rekordbox DB] Import fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
-      alert(`Rekordbox-Datenbank konnte nicht gelesen werden: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const handleOpenRekordboxDatabase = async () => {
-    if (!window.rekordboxDesktop) {
-      alert('Der Datenbank-Import ist nur in der Windows-Desktop-App verfügbar.');
-      return;
-    }
-    try {
-      const chosen = await window.rekordboxDesktop.chooseRekordboxDatabase();
-      if (!chosen) return;
-      await handleLoadRekordboxDatabase(chosen.path);
-    } catch (error) {
-      logger.error('DATABASE', `[Rekordbox DB] Dateiauswahl fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
-    }
-  };
-
-  const handleLocateRekordboxDatabases = async () => {
-    if (!window.rekordboxDesktop) return [];
-    try {
-      return await window.rekordboxDesktop.locateRekordboxDatabases();
-    } catch (error) {
-      logger.warn('DATABASE', `[Rekordbox DB] Automatische Suche fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`, error);
-      return [];
-    }
-  };
-
-  const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => {
-    if (!bundledCollectionPromiseRef.current) {
-      const loading = (async () => {
-        // Verbindliche Quelle in der Desktop-App: die app-eigene Ressource
-        // (resources/rekordbox/rekordbox_export2.xml bzw. Repo-Root im
-        // Entwicklungsmodus), ausschließlich lesend über den Main-Prozess.
-        // Kein Dateidialog, keine Benutzerdatei, keine zweite XML.
-        let xml = '';
-        let source: 'DESKTOP_RESOURCE' | 'BUNDLED_ASSET' = 'BUNDLED_ASSET';
-        const bridge = window.rekordboxDesktop;
-        if (bridge?.readBundledRekordboxXml) {
-          try {
-            const bundled = await bridge.readBundledRekordboxXml();
-            if (bundled.available && bundled.data) {
-              xml = bundled.data;
-              source = 'DESKTOP_RESOURCE';
-            } else {
-              logger.warn(
-                'XML_IMPORT',
-                `Eingebettete Rekordbox-Sammlung nicht als Ressource lesbar: ${bundled.reason || 'unbekannter Grund'}`,
-                { path: bundled.path }
-              );
-            }
-          } catch (error) {
-            logger.warn(
-              'XML_IMPORT',
-              `Eingebettete Rekordbox-Sammlung konnte nicht über die Desktop-Brücke gelesen werden: ${error instanceof Error ? error.message : String(error)}`,
-              error
-            );
-          }
-        }
-        if (!xml) {
-          // Browser-/Dev-Fallback ohne Electron-Brücke: dieselbe Datei,
-          // zur Laufzeit als Vite-Asset gebündelt (per Test auf denselben
-          // SHA-256 festgenagelt).
-          const bundled = await import('./rekordbox/bundledCollection');
-          xml = bundled.BUNDLED_REKORDBOX_XML;
-        }
-        const { tracks } = await parseRekordboxXmlAsync(xml);
-        if (tracks.length === 0) throw new Error('Die eingebettete Rekordbox-Sammlung enthält keine Tracks.');
-        logger.info('XML_IMPORT', `Eingebettete Sammlung dekodiert (${source}): ${tracks.length} Tracks`, {
-          source,
-          tracks: tracks.length,
-        });
-        return tracks.map((track, index) =>
-          buildCollectionTrackModel(track, index, DataOrigin.REKORDBOX_XML)
-        );
-      })();
-      bundledCollectionPromiseRef.current = loading;
-      void loading.catch(() => {
-        if (bundledCollectionPromiseRef.current === loading) bundledCollectionPromiseRef.current = null;
-      });
-    }
-    return bundledCollectionPromiseRef.current;
-  }, []);
-
-  // Opening the collection must stay lightweight: the master DB is not
-  // scanned or copied into memory here. Each selected TrackID is read through
-  // the targeted Master-DB gate in handleSelectTrackFromXml.
-
-  const handleTrackImport = useCallback(async () => {
-    if (trackImportLoading) return;
-    if (xmlFileName === BUNDLED_REKORDBOX_XML_FILENAME && xmlImportedTracks.length > 0) {
-      setXmlCollectionModalOpen(true);
-      return;
-    }
-
-    setTrackImportLoading(true);
-    try {
-      const tracks = await loadBundledRekordboxCollection();
-      setXmlImportedTracks(tracks);
-      setXmlFileName(BUNDLED_REKORDBOX_XML_FILENAME);
-      setAnalysisIndexStatus(
-        window.rekordboxDesktop
-          ? 'Die Master-Datenbank wird nach Auswahl gezielt nur für diese TrackID gelesen (read-only).'
-          : 'Zum Laden eines Tracks werden die Windows-Desktop-App und ihre read-only Rekordbox-Datenbank benötigt.'
-      );
-      setXmlCollectionModalOpen(true);
-      logger.info('XML_IMPORT', `Eingebettete Rekordbox-Sammlung bereit: ${tracks.length} Tracks`, {
-        fileName: BUNDLED_REKORDBOX_XML_FILENAME,
-        tracks: tracks.length,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('XML_IMPORT', `Eingebettete Rekordbox-Sammlung konnte nicht geladen werden: ${message}`, error);
-      alert(`Track-Import fehlgeschlagen: ${message}`);
-    } finally {
-      setTrackImportLoading(false);
-    }
-  }, [
+  /*
+   * Track-Import (ANLZ, Datenbank, eingebettete Sammlung, Originaldatei) liegt in
+   * `features/import/useTrackImport`. Abhängigkeiten kommen als Parameter herein,
+   * die Handler-Namen bleiben unverändert.
+   */
+  const {
+    handleImportAnlzData,
+    handleImportAnlzFile,
+    handleImportAnlzFromDesktop,
+    handleLoadRekordboxDatabase,
+    handleOpenRekordboxDatabase,
+    handleLocateRekordboxDatabases,
     loadBundledRekordboxCollection,
+    handleTrackImport,
+    handleSelectTrackFromXml,
+  } = useTrackImport({
+    activeTrack,
+    workingAudioBuffer,
+    tracks,
+    setTracks,
+    setWorkingAudioBuffer,
+    activeTrackId,
+    setActiveTrackId,
+    setAnalysisIndexStatus,
+    setIsPlaying,
+    setSelection,
+    clearEditHistory,
+    setViewOffset,
+    setXmlCollectionModalOpen,
+    setXmlFileName,
+    setXmlImportedTracks,
+    setTrackImportLoading,
     trackImportLoading,
     xmlFileName,
-    xmlImportedTracks.length,
-  ]);
+    xmlImportedTracks,
+    bundledCollectionPromiseRef,
+    cacheAnalysisMapping,
+    showOperationFeedback,
+  });
 
-  // Load a selected bundled-XML track only after the mandatory Master-DB-Gate
-  // approved TrackID → djmdContent → ANLZ → original audio. No local analysis,
-  // generated audio, or synthetic waveform is an allowed fallback.
-  const handleSelectTrackFromXml = async (track: TrackModel) => {
-    const loadStartedAt = Date.now();
-    try {
-      const bridge = window.rekordboxDesktop;
-      if (!bridge) {
-        throw new Error('[MASTER_DB_NOT_FOUND] Der Track-Import benötigt die Windows-Desktop-App mit Rekordbox-Datenbankzugriff.');
-      }
-
-      const trackId = String(track?.id ?? '').trim();
-      if (!trackId) {
-        throw new Error('[TRACK_NOT_FOUND_IN_MASTER_DB] Der ausgewählte XML-Track enthält keine Rekordbox-TrackID.');
-      }
-      const xmlLocation = track.originalMedia?.location || track.rawXmlAttributes?.Location;
-      logger.info('XML_IMPORT', `Track-Laden über den Master-DB-Gate gestartet: ${trackId}`, {
-        trackId,
-        title: track.title,
-        artist: track.artist,
-      });
-
-      // Die Track-Auswahl öffnet ausschließlich die gezielte djmdContent-Zeile.
-      // Die gesamte master.db wird nicht vorab in den Renderer kopiert.
-      const gate = await bridge.resolveTrackFromMasterDb({
-        trackId,
-        mediaPath: xmlLocation,
-        title: track.title,
-        artist: track.artist,
-      });
-      if (!gate.ok || gate.code !== 'OK') {
-        if (gate.code === 'REKORDBOX_WAVEFORM_MISSING') {
-          throw new Error(`[REKORDBOX_WAVEFORM_MISSING] ${gate.reason || 'Die ANLZ-Datei enthält keine Rekordbox-Waveform.'}`);
-        }
-        throw new Error(`[${gate.code}] ${gate.reason || 'Der Master-DB-Gate hat den Track nicht freigegeben.'}`);
-      }
-      if (!gate.content?.id || !gate.dbPath || !gate.dbType) {
-        throw new Error('[MASTER_DB_SCHEMA_INVALID] Der Gate lieferte keinen vollständigen Datenbanknachweis.');
-      }
-      if (!gate.analysis?.path) {
-        throw new Error('[ANLZ_NOT_FOUND] Der Gate lieferte keinen AnalysisDataPath.');
-      }
-      const gateWaveform = gate.analysis.waveform;
-      if (!gate.analysis.hasWaveform || !gateWaveform) {
-        throw new Error('[REKORDBOX_WAVEFORM_MISSING] Der Gate hat keine native Rekordbox-Waveform bestätigt.');
-      }
-      if (!gate.original?.path) {
-        throw new Error('[ORIGINAL_AUDIO_NOT_FOUND] Der Gate hat kein lokales Original-Audio bestätigt.');
-      }
-
-      // Read the exact ANLZ file approved by the gate. Both IPC reads are
-      // explicitly READ_ONLY and return their pre-read size/mtime fingerprints.
-      let analysisSource;
-      try {
-        analysisSource = await bridge.readAnalysisFile(gate.analysis.path);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          throw new Error(`[ANLZ_NOT_FOUND] ${detail}`);
-        }
-        throw new Error(`[ANLZ_READ_FAILED] ${detail}`);
-      }
-      if (analysisSource.accessMode !== 'READ_ONLY') {
-        throw new Error('[ANLZ_READ_FAILED] Die ANLZ-Datei wurde nicht mit READ_ONLY bestätigt.');
-      }
-      if (!areSameMediaPath(analysisSource.path, gate.analysis.path)) {
-        throw new Error('[ANLZ_SOURCE_MISMATCH] Der gelesene ANLZ-Pfad weicht vom Gate-Ergebnis ab.');
-      }
-      if (
-        analysisSource.size !== gate.analysis.size ||
-        analysisSource.modifiedAt !== gate.analysis.modifiedAt ||
-        analysisSource.size !== analysisSource.data.byteLength
-      ) {
-        throw new Error('[ANLZ_READ_FAILED] Größe oder mtime der ANLZ-Datei änderte sich zwischen Gate-Prüfung und Lesevorgang.');
-      }
-
-      let extraction;
-      try {
-        extraction = parseAnlzBinary(analysisSource.data);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`[ANLZ_INVALID] ${detail}`);
-      }
-      if (!extraction.waveform) {
-        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Der Renderer kann die vom Gate bestätigte ANLZ-Waveform nicht dekodieren.');
-      }
-      if (extraction.waveformTag !== gateWaveform.tag || extraction.waveform.length !== gateWaveform.buckets) {
-        throw new Error(
-          `[ANLZ_WAVEFORM_UNREADABLE] Waveform-Abschnitt oder Bucket-Anzahl weichen vom Gate-Nachweis ab. ` +
-            `Gate: ${gateWaveform.tag}/${gateWaveform.buckets} Buckets, Renderer: ${extraction.waveformTag ?? 'kein Tag'}/${extraction.waveform.length} Buckets, ` +
-            `ANLZ: ${gate.analysis.path} (${analysisSource.data.byteLength} Bytes)`
-        );
-      }
-      if (!isNativeRekordboxWaveform(extraction.waveform)) {
-        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die dekodierte Waveform trägt keine REKORDBOX_ANLZ-Herkunft.');
-      }
-
-      const ppthPath = extraction.analysisPath || gate.analysis.ppthPath;
-      if (
-        (gate.analysis.ppthPath &&
-          (!extraction.analysisPath || !areSameMediaPath(gate.analysis.ppthPath, extraction.analysisPath))) ||
-        (ppthPath && !areSameMediaPath(gate.original.path, ppthPath))
-      ) {
-        throw new Error(`[ANLZ_SOURCE_MISMATCH] PPTH (${ppthPath || 'nicht lesbar'}) und bestätigtes Original-Audio stimmen nicht überein.`);
-      }
-
-      let originalSource;
-      try {
-        // Use the gate-selected local file, not the raw XML URL. Rekordbox
-        // device URLs such as /contents_… are never opened as local media.
-        originalSource = await bridge.readOriginalAudio(gate.original.path);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`[ORIGINAL_AUDIO_NOT_FOUND] ${detail}`);
-      }
-      if (originalSource.accessMode !== 'READ_ONLY') {
-        throw new Error('[ORIGINAL_AUDIO_NOT_FOUND] Das Original-Audio wurde nicht mit READ_ONLY bestätigt.');
-      }
-      if (!areSameMediaPath(originalSource.path, gate.original.path)) {
-        throw new Error('[ANLZ_SOURCE_MISMATCH] Der gelesene Audio-Pfad weicht vom PPTH-/Gate-Nachweis ab.');
-      }
-      if (
-        originalSource.size !== gate.original.size ||
-        originalSource.modifiedAt !== gate.original.modifiedAt ||
-        originalSource.size !== originalSource.data.byteLength
-      ) {
-        throw new Error('[ANLZ_SOURCE_MISMATCH] Größe oder mtime des Original-Audios änderte sich zwischen Gate-Prüfung und Lesevorgang.');
-      }
-
-      let originalAudio: AudioBuffer;
-      try {
-        originalAudio = await audioEngine.getContext().decodeAudioData(originalSource.data.slice(0));
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new Error(`[ORIGINAL_AUDIO_NOT_FOUND] Original-Audio kann nicht dekodiert werden: ${detail}`);
-      }
-      if (!Number.isFinite(originalAudio.duration) || originalAudio.duration <= 0) {
-        throw new Error('[ORIGINAL_AUDIO_NOT_FOUND] Das dekodierte Original-Audio hat keine gültige Dauer.');
-      }
-
-      const originalMedia = {
-        // Store the usable local source path for project reopening. The original
-        // XML Location remains intact in rawXmlAttributes for diagnostics.
-        location: originalSource.path,
-        resolvedPath: originalSource.path,
-        accessMode: 'READ_ONLY' as const,
-        status: 'AVAILABLE' as const,
-        size: originalSource.size,
-        modifiedAt: originalSource.modifiedAt,
-      };
-      const sourceDuration = originalAudio.duration;
-      const sourceTrack: TrackModel = {
-        ...track,
-        duration: sourceDuration,
-        sampleRate: originalAudio.sampleRate,
-        channels: originalAudio.numberOfChannels,
-        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        isOriginalUntouched: true,
-        audioBuffer: originalAudio,
-        originalMedia,
-        workingSegments: [
-          {
-            id: `seg-rb-${trackId}`,
-            type: 'ORIGINAL',
-            trackId,
-            sourceStart: 0,
-            sourceEnd: sourceDuration,
-            projectStart: 0,
-            projectDuration: sourceDuration,
-            gain: 1,
-          },
-        ],
-      };
-
-      const extractedTrack = applyAnlzExtractionToTrack(sourceTrack, extraction);
-      const nativeAnalysis = {
-        ...extraction.waveform,
-        secPerBucket: sourceDuration / Math.max(1, extraction.waveform.length),
-      };
-      const dbCueModel = buildCues(
-        gate.content.id,
-        gate.cues,
-        extractedTrack.bpm,
-        extractedTrack.beatGrid.firstBeat
-      );
-      const hasAnlzCues = extraction.cues.length > 0;
-      const hasDatabaseCues = dbCueModel.cues.length > 0;
-      const cues = hasAnlzCues
-        ? extraction.cues
-        : hasDatabaseCues
-          ? dbCueModel.cues
-          : sourceTrack.cues;
-      const loops = extraction.loops.length > 0
-        ? extraction.loops
-        : dbCueModel.loops.length > 0
-          ? dbCueModel.loops
-          : sourceTrack.loops;
-      const cueSource: RekordboxCueSource = hasAnlzCues
-        ? extraction.tagsFound.includes('PCO2') ? 'ANLZ_PCO2' : 'ANLZ_PCOB'
-        : hasDatabaseCues
-          ? 'DJMD_CUE'
-          : sourceTrack.cues.length > 0
-            ? 'REKORDBOX_XML'
-            : 'NONE';
-      const gateProvenance = {
-        rekordboxTrackId: trackId,
-        contentId: gate.content.id,
-        databasePath: gate.dbPath,
-        databaseType: gate.dbType,
-        ppthPath,
-        originalPath: originalSource.path,
-        waveform: gateWaveform,
-        cueSource,
-        gateCode: 'OK' as const,
-        gateVerifiedAt: Date.now(),
-      };
-      const databaseRecord = {
-        ...(extractedTrack.databaseRecord || {}),
-        trackId: gate.content.id,
-        databaseSource: 'REKORDBOX_ANLZ' as const,
-        anlzTagsFound: extraction.tagsFound,
-        memoryCuesCount: cues.filter((cue) => cue.type === 'MEMORY').length,
-        hotCuesCount: cues.filter((cue) => cue.type === 'HOT_CUE').length,
-        loopsCount: loops.length,
-        waveformBuckets: nativeAnalysis.length,
-        waveformModeSupported: ['BLUE', 'RGB', '3BAND'] as Array<'BLUE' | 'RGB' | '3BAND'>,
-        sampleRate: originalAudio.sampleRate,
-        checksum: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        extractedAt: Date.now(),
-        filePath: analysisSource.path,
-        rekordboxTrackId: gateProvenance.rekordboxTrackId,
-        contentId: gateProvenance.contentId,
-        databasePath: gateProvenance.databasePath,
-        databaseType: gateProvenance.databaseType,
-        analysisPath: analysisSource.path,
-        waveformTag: gateWaveform.tag,
-        ppthPath: gateProvenance.ppthPath,
-        originalPath: gateProvenance.originalPath,
-        cueSource,
-        gateCode: 'OK' as const,
-      };
-      const resolvedDef = {
-        ...extractedTrack,
-        duration: sourceDuration,
-        sampleRate: originalAudio.sampleRate,
-        channels: originalAudio.numberOfChannels,
-        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        isOriginalUntouched: true,
-        audioBuffer: originalAudio,
-        originalMedia,
-        analysis: nativeAnalysis,
-        cues,
-        loops,
-        origin: DataOrigin.REKORDBOX_ANLZ,
-        analysisSource: {
-          path: analysisSource.path,
-          accessMode: 'READ_ONLY' as const,
-          status: 'AVAILABLE' as const,
-          size: analysisSource.size,
-          modifiedAt: analysisSource.modifiedAt,
-          sourceMediaPath: ppthPath,
-          sourceDuration,
-          format: (analysisSource.path.split('.').pop() || 'ANLZ').toUpperCase() as 'DAT' | 'EXT' | '2EX' | 'ANLZ',
-          ...gateProvenance,
-        },
-        databaseRecord,
-        workingSegments: sourceTrack.workingSegments,
-      };
-
-      if (!isNativeRekordboxWaveform(resolvedDef.analysis)) {
-        throw new Error('[ANLZ_WAVEFORM_UNREADABLE] Die Track-Waveform ist nicht als Rekordbox-ANLZ markiert.');
-      }
-      if (resolvedDef.analysis.length !== gateWaveform.buckets) {
-        throw new Error(
-          `[ANLZ_WAVEFORM_UNREADABLE] Die Renderer-Bucket-Anzahl stimmt nicht mit dem Gate-Nachweis überein. ` +
-            `Gate: ${gateWaveform.buckets}, Track: ${resolvedDef.analysis.length}`
-        );
-      }
-
-      setTracks((previous) => {
-        const existingIndex = previous.findIndex((candidate) => candidate.id === resolvedDef.id);
-        if (existingIndex < 0) return [...previous, resolvedDef];
-        const next = [...previous];
-        next[existingIndex] = resolvedDef;
-        return next;
-      });
-      setActiveTrackId(resolvedDef.id);
-      setWorkingAudioBuffer(originalAudio);
-      setCurrentTime(0);
-      setViewOffset(0);
-      setIsPlaying(false);
-      setSelection(null);
-      clearEditHistory();
-      audioEngine.stop();
-
-      await cacheAnalysisMapping(resolvedDef, analysisSource.path, 'MASTER_DB_GATE', {
-        size: analysisSource.size,
-        modifiedAt: analysisSource.modifiedAt,
-        sourceMediaPath: ppthPath,
-        sourceDuration,
-      });
-
-      const duration = originalAudio.duration;
-      const sourceStatus = `SOURCE    REKORDBOX ANLZ · DATABASE ${gate.dbType} · ANALYSIS ${gateWaveform.tag} · WAVEFORM ${gateWaveform.buckets} Buckets · CUES ${cueSource} · AUDIO READ ONLY`;
-      showOperationFeedback({
-        title: 'Rekordbox-Track geladen (READ ONLY)',
-        operationType: 'CUE',
-        description: `${resolvedDef.artist} — ${resolvedDef.title}\n${sourceStatus}`,
-        timeRangeSec: { start: 0, end: duration, duration },
-        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        timestamp: Date.now(),
-      });
-      logger.info('XML_IMPORT', `Track ${trackId} über REKORDBOX_ANLZ geladen (${Date.now() - loadStartedAt} ms)`, {
-        trackId,
-        contentId: gate.content.id,
-        databasePath: gate.dbPath,
-        databaseType: gate.dbType,
-        analysisPath: analysisSource.path,
-        waveform: gateWaveform,
-        cueSource,
-        originalPath: originalSource.path,
-        originalSize: originalSource.size,
-        originalModifiedAt: originalSource.modifiedAt,
-        duration,
-        durationMs: Date.now() - loadStartedAt,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('XML_IMPORT', `[Track-Import] ${message}`, error);
-      throw error;
-    }
-  };
-
-  // ---- Phase 4: Project persistence & desktop write path -----------------
-
-  const sanitizeFileName = (name: string) => name.replace(/[\\/:*?"<>|]/g, '_');
-
-  const handleSaveProject = useCallback(async () => {
-    const doc = serializeProject({
+  /*
+   * Projektdateien (speichern/öffnen) und das Laden von Audiodateien liegen in
+   * `features/project/useProjectFiles` – verschoben, nicht umgeschrieben.
+   */
+  const { handleSaveProject, handleOpenProject, loadAudioFile, handleImportAudioFile, handleDropFile } =
+    useProjectFiles({
       projectName,
-      activeTrackId,
-      selection,
+      setProjectName,
       tracks,
+      setTracks,
+      activeTrack,
+      activeTrackId,
+      setActiveTrackId,
+      selection,
+      setSelection,
       paletteClips,
+      setPaletteClips,
+      setWorkingAudioBuffer,
+      setIsPlaying,
+      setViewOffset,
+      protectedPaths,
+      hydrateNativeAnalysis,
+      showOperationFeedback,
+      handleImportAnlzFile,
     });
-    const defaultName = `${sanitizeFileName(projectName) || 'project'}.airdox.json`;
-    const data = new TextEncoder().encode(doc);
-    logger.info('PROJECT', `Projekt wird gespeichert: "${projectName}"`, {
-      defaultName,
-      bytes: data.length,
-      tracks: tracks.length,
-      paletteClips: paletteClips.length,
-    });
-
-    try {
-      if (window.rekordboxDesktop) {
-        const res = await window.rekordboxDesktop.saveExportFile({
-          kind: 'PROJECT',
-          data,
-          defaultName,
-          protectedPaths,
-        });
-        if (res.saved) {
-          logger.info('PROJECT', `Projekt gespeichert: ${res.path}`, {
-            bytes: res.bytes,
-            path: res.path,
-          });
-          showOperationFeedback({
-            title: 'Projekt gespeichert',
-            operationType: 'EXPORT',
-            description: `Projekt "${projectName}" als "${res.path?.split(/[\\\\/]/).pop() || defaultName}" gespeichert. Original-Rekordbox-Quellen bleiben unverändert.`,
-            originalSha256: activeTrack?.originalSha256 ?? 'NOT_COMPUTED_READ_ONLY_SOURCE',
-            timestamp: Date.now(),
-          });
-        } else {
-          logger.warn('PROJECT', 'Projektspeichern vom Benutzer abgebrochen (kein Ziel gewählt).');
-        }
-        return;
-      }
-
-      // Browser fallback: plain download of the project document.
-      const blob = new Blob([doc], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = defaultName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      logger.info('PROJECT', `Projekt als Browser-Download heruntergeladen: ${defaultName}`, {
-        bytes: data.length,
-      });
-      showOperationFeedback({
-        title: 'Projekt gespeichert',
-        operationType: 'EXPORT',
-        description: `Projekt "${projectName}" als "${defaultName}" heruntergeladen.`,
-        originalSha256: activeTrack?.originalSha256 ?? 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        timestamp: Date.now(),
-      });
-    } catch (err) {
-      logger.error('PROJECT', `[Projekt] Speichern fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
-      alert(`Projekt konnte nicht gespeichert werden: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [projectName, activeTrackId, selection, tracks, paletteClips, protectedPaths, activeTrack, showOperationFeedback]);
-
-  const handleOpenProject = useCallback(async () => {
-    if (!window.rekordboxDesktop) {
-      alert('Projekte öffnen ist nur in der Windows-Desktop-App verfügbar.');
-      return;
-    }
-
-    const openStartedAt = Date.now();
-    try {
-      const opened = await window.rekordboxDesktop.openProjectFile();
-      if (!opened) {
-        logger.info('PROJECT', 'Projekt-Öffnen vom Benutzer abgebrochen (keine Datei gewählt).');
-        return;
-      }
-      logger.info('PROJECT', `Projektdatei wird geöffnet: ${opened.path}`, {
-        path: opened.path,
-        size: opened.size,
-      });
-
-      const doc = deserializeProject(opened.data);
-      const audioCtx = audioEngine.getContext();
-
-      // Rebuild all deck tracks (metadata + embedded clip audio) first.
-      const rebuiltTracks: TrackModel[] = [];
-      for (const st of doc.tracks) {
-        rebuiltTracks.push(await rebuildTrackFromSerialized(st, audioCtx));
-      }
-
-      // Resolve the active source *before* hydrating its ANLZ data: ANLZ
-      // waveform chunks need the unedited source duration, not the persisted
-      // (possibly shorter/longer) project duration.
-      const persistedActiveId = doc.activeTrackId || rebuiltTracks[0]?.id;
-      const persistedActiveIndex = rebuiltTracks.findIndex((track) => track.id === persistedActiveId);
-      let activeWorkingAudio: AudioBuffer | null = null;
-
-      if (persistedActiveIndex >= 0) {
-        const persistedTrack = rebuiltTracks[persistedActiveIndex];
-        let originalAudio = persistedTrack.audioBuffer;
-        let originalMedia = persistedTrack.originalMedia;
-
-        if (!originalAudio && originalMedia?.location) {
-          try {
-            const source = await window.rekordboxDesktop.readOriginalAudio(originalMedia.location);
-            originalAudio = await audioCtx.decodeAudioData(source.data);
-            originalMedia = {
-              ...originalMedia,
-              resolvedPath: source.path,
-              size: source.size,
-              modifiedAt: source.modifiedAt,
-              status: 'AVAILABLE' as const,
-            };
-          } catch (error) {
-            logger.warn('PROJECT', `[Projekt] Originalaudio konnte nicht erneut geöffnet werden; Metadaten bleiben verfügbar: ${error instanceof Error ? error.message : String(error)}`, error);
-            originalMedia = { ...originalMedia, status: 'MISSING' as const };
-          }
-        }
-
-        const isUneditedOriginal = persistedTrack.workingSegments.length === 1 &&
-          persistedTrack.workingSegments[0]?.type === 'ORIGINAL';
-        const nativeSourceDuration = originalAudio?.duration ||
-          persistedTrack.analysisSource?.sourceDuration || persistedTrack.duration;
-        const hydrated = await hydrateNativeAnalysis(
-          { ...persistedTrack, audioBuffer: originalAudio || persistedTrack.audioBuffer, originalMedia },
-          {
-            preserveProjectMetadata: !isUneditedOriginal,
-            sourceDuration: nativeSourceDuration,
-          }
-        );
-
-        if (originalAudio) {
-          const working = audioEngine.renderWorkingAudio(originalAudio, hydrated.workingSegments);
-          const analysis = isNativeRekordboxWaveform(hydrated.analysis)
-            ? composeWaveformFromEditSegments(
-                working,
-                hydrated.analysis,
-                hydrated.analysisSource?.sourceDuration || nativeSourceDuration,
-                hydrated.workingSegments,
-                { path: hydrated.analysisSource?.path, trackId: hydrated.id }
-              )
-            : analyzeAudioBuffer(working, DataOrigin.PROJECT);
-          rebuiltTracks[persistedActiveIndex] = {
-            ...hydrated,
-            audioBuffer: originalAudio,
-            originalMedia,
-            // The decision list is authoritative; never let an original tail
-            // reappear as an apparent silent region after reopening.
-            duration: working.duration,
-            sampleRate: originalAudio.sampleRate,
-            channels: originalAudio.numberOfChannels,
-            analysis,
-          };
-          activeWorkingAudio = working;
-        } else {
-          rebuiltTracks[persistedActiveIndex] = { ...hydrated, originalMedia };
-        }
-      }
-
-      // Rebuild the palette after the active track was hydrated, so its stored
-      // source coordinates can reuse native ANLZ buckets on the next edit.
-      const rebuiltClips = [];
-      for (const clip of doc.paletteClips) {
-        const audioBuffer = await decodeWavBase64(audioCtx, clip.clipWavBase64);
-        const sourceTrack = rebuiltTracks.find((track) => track.id === clip.sourceTrackId);
-        const sourceDuration = sourceTrack?.analysisSource?.sourceDuration || sourceTrack?.duration || clip.duration;
-        rebuiltClips.push({
-          id: clip.id,
-          name: clip.name,
-          sourceTrackId: clip.sourceTrackId,
-          sourceTrackName: clip.sourceTrackName,
-          sourceStart: clip.sourceStart,
-          sourceEnd: clip.sourceEnd,
-          duration: clip.duration,
-          beats: clip.beats,
-          bars: clip.bars,
-          bpm: clip.bpm,
-          key: clip.key,
-          color: clip.color,
-          audioBuffer,
-          miniPeaks: clip.miniPeaks,
-          analysis: sliceWaveformAnalysis(sourceTrack?.analysis, sourceDuration, clip.analysisSourceStart ?? clip.sourceStart, clip.analysisSourceEnd ?? clip.sourceEnd),
-          beatOffsets: clip.beatOffsets || (sourceTrack ? beatOffsetsForRange(sourceTrack, clip.sourceStart, clip.sourceEnd) : undefined),
-          analysisSource: clip.analysisSource || sourceTrack?.analysisSource,
-          analysisSourceTrackId: clip.analysisSourceTrackId || sourceTrack?.id,
-          analysisSourceStart: clip.analysisSourceStart ?? clip.sourceStart,
-          analysisSourceEnd: clip.analysisSourceEnd ?? clip.sourceEnd,
-          origin: clip.origin,
-        });
-      }
-
-      setProjectName(doc.projectName);
-      setSelection(doc.selection);
-      setPaletteClips(rebuiltClips);
-      setTracks(rebuiltTracks);
-      setActiveTrackId(persistedActiveId || rebuiltTracks[0]?.id || '');
-      setWorkingAudioBuffer(activeWorkingAudio);
-      setCurrentTime(0);
-      setViewOffset(0);
-      setIsPlaying(false);
-      audioEngine.stop();
-
-      logger.info('PROJECT', `Projekt "${doc.projectName}" geöffnet: ${rebuiltTracks.length} Track(s), ${rebuiltClips.length} Clip(s) in ${Date.now() - openStartedAt} ms`, {
-        projectName: doc.projectName,
-        formatVersion: doc.version,
-        tracks: rebuiltTracks.length,
-        paletteClips: rebuiltClips.length,
-        durationMs: Date.now() - openStartedAt,
-      });
-      showOperationFeedback({
-        title: 'Projekt geladen',
-        operationType: 'EXPORT',
-        description: `Projekt "${doc.projectName}" mit ${rebuiltTracks.length} Track(s) und ${rebuiltClips.length} Palette-Clip(s) geladen. Originalquellen wurden nur lesend erneut geöffnet.`,
-        originalSha256: 'NOT_COMPUTED_READ_ONLY_SOURCE',
-        timestamp: Date.now(),
-      });
-    } catch (err) {
-      logger.error('PROJECT', `[Projekt] Öffnen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, err);
-      alert(`Projekt konnte nicht geöffnet werden: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [showOperationFeedback]);
-
-  // Audio file loading (WAV, MP3, FLAC, AIFF)
-  const loadAudioFile = async (file: File) => {
-    const loadStartedAt = Date.now();
-    logger.info('AUDIO_ENGINE', `Audiodatei wird geladen: ${file.name}`, {
-      fileName: file.name,
-      sizeBytes: file.size,
-      type: file.type,
-    });
-    try {
-      const audioCtx = audioEngine.getContext();
-      if (audioCtx.state === 'suspended') {
-        try {
-          await audioCtx.resume();
-        } catch (e) {
-          logger.warn('AUDIO_ENGINE', `AudioContext resume fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, e);
-        }
-      }
-
-      const arrayBuf = await file.arrayBuffer();
-      // Hash the complete source file bytes, not a sample of the decoded left channel.
-      const decodedPromise: Promise<AudioBuffer> = new Promise((resolve, reject) => {
-        const copy = arrayBuf.slice(0);
-        const res = audioCtx.decodeAudioData(copy, resolve, reject);
-        if (res && typeof (res as unknown as Promise<AudioBuffer>).then === 'function') {
-          (res as unknown as Promise<AudioBuffer>).then(resolve).catch(reject);
-        }
-      });
-      const [decoded, sha256] = await Promise.all([decodedPromise, sha256Hex(arrayBuf)]);
-      const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
-
-      // Check if the currently active deck track needs its audio file (or has matching name)
-      const currentActive = tracks.find((t) => t.id === activeTrackId);
-      const isMissingAudioOnActive = currentActive && !currentActive.audioBuffer;
-      const isMatchingName =
-        currentActive &&
-        (currentActive.title.toLowerCase().includes(file.name.toLowerCase().replace(/\.[^/.]+$/, '')) ||
-          file.name.toLowerCase().includes(currentActive.title.toLowerCase().replace(/\.[^/.]+$/, '')));
-
-      if (currentActive && (isMissingAudioOnActive || isMatchingName)) {
-        // Link this decoded audio to the active track
-        const updatedTrack: TrackModel = {
-          ...currentActive,
-          duration: decoded.duration,
-          sampleRate: decoded.sampleRate,
-          channels: decoded.numberOfChannels,
-          originalSha256: sha256,
-          isOriginalUntouched: true,
-          audioBuffer: decoded,
-          analysis,
-          originalMedia: {
-            location: file.name,
-            resolvedPath: file.name,
-            accessMode: 'READ_ONLY',
-            status: 'AVAILABLE',
-            size: file.size,
-            modifiedAt: file.lastModified,
-          },
-          beatGrid: buildBeatGridFromTempo(
-            currentActive.beatGrid?.firstBeat || 0.0,
-            currentActive.bpm || 130.0,
-            decoded.duration,
-            currentActive.beatGrid?.meter || 4,
-            currentActive.origin
-          ),
-          workingSegments: [
-            {
-              id: `seg-${Date.now()}`,
-              type: 'ORIGINAL',
-              trackId: currentActive.id,
-              sourceStart: 0,
-              sourceEnd: decoded.duration,
-              projectStart: 0,
-              projectDuration: decoded.duration,
-              gain: 1.0,
-            },
-          ],
-        };
-
-        setTracks((prev) => prev.map((t) => (t.id === updatedTrack.id ? updatedTrack : t)));
-        setWorkingAudioBuffer(decoded);
-        setCurrentTime(0);
-        setViewOffset(0);
-        setIsPlaying(false);
-        audioEngine.stop();
-
-        logger.info('AUDIO_ENGINE', `Audiodatei mit Track "${updatedTrack.title}" verknüpft (${Date.now() - loadStartedAt} ms)`, {
-          fileName: file.name,
-          duration: decoded.duration,
-          sampleRate: decoded.sampleRate,
-          channels: decoded.numberOfChannels,
-          sha256: sha256.slice(0, 16),
-        });
-        showOperationFeedback({
-          title: 'Audiodatei verknüpft',
-          operationType: 'CUE',
-          description: `Audiodatei "${file.name}" erfolgreich mit Track "${updatedTrack.title}" verknüpft (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz). Echte Audiodaten sind jetzt im Player aktiv.`,
-          timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
-          originalSha256: sha256,
-          timestamp: Date.now(),
-        });
-      } else {
-        // Create new track from imported audio
-        const detectedBpm = estimateBpm(decoded);
-        const newTrack: TrackModel = {
-          id: `track-${Date.now()}`,
-          title: file.name.replace(/\.[^/.]+$/, ''),
-          artist: 'User Import',
-          album: 'Single',
-          bpm: detectedBpm,
-          key: '2A',
-          duration: decoded.duration,
-          sampleRate: decoded.sampleRate,
-          channels: decoded.numberOfChannels,
-          originalSha256: sha256,
-          isOriginalUntouched: true,
-          audioBuffer: decoded,
-          beatGrid: buildBeatGridFromTempo(0.0, detectedBpm, decoded.duration),
-          cues: [
-            {
-              id: `cue-${Date.now()}`,
-              name: 'Cue 1',
-              type: 'MEMORY',
-              position: 0.0,
-              color: '#ff2a2a',
-              origin: DataOrigin.LOCAL_ANALYSIS,
-            },
-          ],
-          loops: [],
-          analysis,
-          phrases: generateRekordboxPhrases(detectedBpm, decoded.duration),
-          origin: DataOrigin.LOCAL_ANALYSIS,
-          originalMedia: {
-            location: file.name,
-            resolvedPath: file.name,
-            accessMode: 'READ_ONLY',
-            status: 'AVAILABLE',
-            size: file.size,
-            modifiedAt: file.lastModified,
-          },
-          workingSegments: [
-            {
-              id: `seg-${Date.now()}`,
-              type: 'ORIGINAL',
-              trackId: `track-${Date.now()}`,
-              sourceStart: 0,
-              sourceEnd: decoded.duration,
-              projectStart: 0,
-              projectDuration: decoded.duration,
-              gain: 1.0,
-            },
-          ],
-        };
-
-        // If the only track was the synthetic default demo, replace it
-        setTracks((prev) => {
-          const nonDemo = prev.filter((t) => t.id !== 'track-default-quicksand');
-          return [newTrack, ...nonDemo];
-        });
-        setActiveTrackId(newTrack.id);
-        setWorkingAudioBuffer(decoded);
-        setCurrentTime(0);
-        setViewOffset(0);
-        setIsPlaying(false);
-        audioEngine.stop();
-
-        logger.info('AUDIO_ENGINE', `Audiodatei importiert: "${newTrack.title}" (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz, ${detectedBpm.toFixed(1)} BPM, ${Date.now() - loadStartedAt} ms)`, {
-          fileName: file.name,
-          duration: decoded.duration,
-          sampleRate: decoded.sampleRate,
-          channels: decoded.numberOfChannels,
-          detectedBpm,
-          sizeBytes: file.size,
-        });
-        showOperationFeedback({
-          title: 'Audiodatei importiert',
-          operationType: 'CUE',
-          description: `Track "${newTrack.title}" erfolgreich decodiert (${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz, ${decoded.numberOfChannels} Kanäle, ${detectedBpm} BPM). Echte Audiodaten geladen.`,
-          timeRangeSec: { start: 0, end: decoded.duration, duration: decoded.duration },
-          originalSha256: sha256,
-          timestamp: Date.now(),
-        });
-      }
-    } catch (err) {
-      logger.error('AUDIO_ENGINE', `Fehler beim Laden der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
-      alert(`Audiodatei konnte nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const handleImportAudioFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    loadAudioFile(file);
-    e.target.value = '';
-  };
-
-  // Drag & drop accepts read-only ANLZ files and standalone original audio.
-  // The bundled XML is opened only through the Track-Import action.
-  const handleDropFile = (file: File) => {
-    const nameLower = file.name.toLowerCase();
-    if (nameLower.endsWith('.xml')) {
-      alert('Ein externer XML-Import ist deaktiviert. Verwende „Track-Import“ für die eingebettete Rekordbox-Sammlung.');
-    } else if (
-      nameLower.endsWith('.dat') ||
-      nameLower.endsWith('.ext') ||
-      nameLower.endsWith('.2ex') ||
-      nameLower.endsWith('.anlz')
-    ) {
-      handleImportAnlzFile(file);
-    } else if (
-      nameLower.endsWith('.mp3') ||
-      nameLower.endsWith('.wav') ||
-      nameLower.endsWith('.aiff') ||
-      nameLower.endsWith('.aif') ||
-      nameLower.endsWith('.flac') ||
-      nameLower.endsWith('.m4a') ||
-      nameLower.endsWith('.ogg') ||
-      file.type.startsWith('audio/')
-    ) {
-      loadAudioFile(file);
-    } else {
-      alert(`Dateityp "${file.name}" wird nicht unterstützt. Bitte ANLZ (.dat, .ext, .2ex) oder Audio (.wav, .mp3, .flac) verwenden.`);
-    }
-  };
 
   // Global keyboard shortcuts (Space=Play, Ctrl+Z=Undo, Ctrl+Y=Redo, Ctrl+C=Copy, Ctrl+V=Paste, Esc=Cancel)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+  /*
+   * Tastaturbindung: Der Listener wird genau EINMAL registriert.
+   *
+   * Vorher stand dieser Effekt ohne Dependency-Array da – `addEventListener`
+   * und `removeEventListener` liefen also bei jedem Render, und das bei ~60
+   * Renders pro Sekunde während der Wiedergabe. Der Ref hält trotzdem immer
+   * den neuesten Handler (kein veralteter Abschluss).
+   */
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    {
       if (deleteModeModalOpen) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
@@ -3906,9 +2469,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+  };
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keyHandlerRef.current(event);
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, []);
 
   // Action: Open a completely clean, empty project
   const handleNewProject = useCallback(() => {
@@ -3918,20 +2485,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setWorkingAudioBuffer(null);
     setPaletteClips([]);
     setSelection(null);
-    setCurrentTime(0);
+    setPosition(0);
     setViewOffset(0);
     setViewDuration(16.0);
     clearEditHistory();
     audioEngine.stop();
     setIsPlaying(false);
-  }, []);
+  }, [clearEditHistory]);
 
   // Track context exposed to AI Copilot
   const chatbotTrackContext: TrackEditorContext = useMemo(() => {
     const secPerBeat = activeTrack?.bpm ? 60 / activeTrack.bpm : 0.5;
     const secPerBar = secPerBeat * 4;
-    const currentBar = Math.floor(currentTime / secPerBar) + 1;
-    const currentBeat = Math.floor(currentTime / secPerBeat) + 1;
+    const currentPosition = getPositionSec();
+    const currentBar = Math.floor(currentPosition / secPerBar) + 1;
+    const currentBeat = Math.floor(currentPosition / secPerBeat) + 1;
 
     // Automated Rekordbox-compatible Mix-In & phrase energy analysis
     const mixInAnalysis = activeTrack ? analyzeTrackForMixIn(activeTrack) : undefined;
@@ -3942,7 +2510,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       bpm: activeTrack?.bpm,
       key: activeTrack?.key,
       duration: activeTrack?.duration,
-      currentTime,
+      currentTime: currentPosition,
       currentBar,
       hasSelection: selection !== null && selection.duration > 0,
       selectionStart: selection?.start,
@@ -3953,21 +2521,35 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       quantize,
       waveformMode,
       paletteClipsCount: paletteClips.length,
-      undoCount: undoStack.length,
-      redoCount: redoStack.length,
+      undoCount: allUndoCount,
+      redoCount: allRedoCount,
       mixInAnalysis,
     };
   }, [
     activeTrack,
-    currentTime,
     selection,
     clipboardBuffer,
     quantize,
     waveformMode,
     paletteClips.length,
-    undoStack.length,
-    redoStack.length,
+    allUndoCount,
+    allRedoCount,
   ]);
+
+  /*
+   * Der Chatbot braucht die *aktuelle* Position im Moment des Absendens. Der
+   * gemerkte Kontext enthält die teure Mix-In-Analyse und wird nur bei
+   * Inhaltsänderungen neu gebaut; die Position wird erst hier eingesetzt.
+   */
+  const resolveChatbotTrackContext = useCallback((): TrackEditorContext => {
+    const position = getPositionSec();
+    const secPerBar = activeTrack?.bpm ? (60 / activeTrack.bpm) * 4 : 2;
+    return {
+      ...chatbotTrackContext,
+      currentTime: position,
+      currentBar: Math.floor(position / secPerBar) + 1,
+    };
+  }, [chatbotTrackContext, activeTrack]);
 
   // Execute AI Copilot proposed actions
   const handleExecuteChatbotAction = useCallback(
@@ -3988,7 +2570,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           } else if (typeof mixTime === 'number' && typeof mixBar !== 'number') {
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           } else if (typeof mixTime !== 'number' && typeof mixBar !== 'number') {
-            mixTime = currentTimeRef.current;
+            mixTime = getPositionSec();
             mixBar = Math.floor(mixTime / secPerBar) + 1;
           }
 
@@ -4002,6 +2584,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           pushHistorySnapshot('Set Mix-In Point');
 
           // 2. Set or update Hot Cue
+
           const hotCueNumber =
             cueSlot === 'A' ? 0 : cueSlot === 'B' ? 1 : cueSlot === 'C' ? 2 : cueSlot === 'D' ? 3 : 0;
 
@@ -4081,7 +2664,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             const secPerBeat = 60 / activeTrack.bpm;
             const beats = action.params.beats || 16;
             const dur = beats * secPerBeat;
-            const start = action.params.start ?? currentTimeRef.current;
+            const start = action.params.start ?? getPositionSec();
             const end = Math.min(activeTrack.duration, start + dur);
             setSelection({
               start,
@@ -4095,7 +2678,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           }
           break;
         case 'ADD_CUE':
-          handleAddCue(action.params.time ?? currentTimeRef.current);
+          handleAddCue(action.params.time ?? getPositionSec());
           break;
         case 'ADD_MEMORY_CUE':
           handleAddMemoryCue();
@@ -4230,8 +2813,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenSettings={() => setSettingsModalOpen(true)}
         masterVolume={masterVolume}
         onMasterVolumeChange={handleMasterVolumeChange}
-        meterL={meterL}
-        meterR={meterR}
         paletteViewMode={paletteViewMode}
         onTogglePaletteViewMode={() =>
           setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
@@ -4249,7 +2830,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
       <TrackHeader
         track={activeTrack}
-        currentTime={currentTime}
         viewOffset={viewOffset}
         viewDuration={viewDuration}
         onSeek={handleSeek}
@@ -4268,9 +2848,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         selectedProfile={resolvedStemProfile}
         onProfileChange={setStemProfile}
         remoteStatus={stemRemoteStatus}
+        remoteEnabled={stemRemoteEnabled}
         remoteCancelPendingJobId={remoteCancelPendingJobId}
         remoteCancelCooldownJobId={remoteCancelCooldownJobId}
-        remoteEnabled={stemRemoteEnabled}
+        remoteNotice={remoteNotice}
+        onDismissRemoteNotice={() => setRemoteNotice(null)}
         onRemoteEnabledChange={setStemRemoteEnabled}
         onStartExternalSeparation={() => { void handleStartExternalSeparation(); }}
         onOpenRemoteSetup={() => setRemoteSetupOpen(true)}
@@ -4312,9 +2894,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
           track={activeTrack}
-          currentTime={currentTime}
-          currentTimeRef={currentTimeRef}
-          isPlaying={isPlaying}
+          trackRevision={trackRevision}
+          getPositionSec={getPositionSec}
           viewOffset={viewOffset}
           viewDuration={viewDuration}
           waveformMode={waveformMode}
@@ -4379,6 +2960,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           isOpen={chatbotOpen}
           onClose={() => setChatbotOpen(false)}
           trackContext={chatbotTrackContext}
+          getTrackContext={resolveChatbotTrackContext}
           onExecuteAction={handleExecuteChatbotAction}
           onSelectZoomPreset={handleSelectZoomPreset}
         />
@@ -4450,7 +3032,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           const t = tracks.find((tr) => tr.id === id);
           if (t && t.audioBuffer) {
             setWorkingAudioBuffer(t.audioBuffer);
-            setCurrentTime(0);
+            setPosition(0);
             setViewOffset(0);
             setIsPlaying(false);
             audioEngine.stop();
@@ -4462,7 +3044,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Modals */}
-      <RecorderModal
+      {/*
+        Nur Dialoge, die der Nutzer aktiv öffnet, liegen hinter React.lazy
+        (siehe src/components/Modals/lazyModals.ts). Der Fallback ist bewusst
+        `null`: die Chunks sind klein und nach dem ersten Öffnen im Cache.
+      */}
+      <Suspense fallback={null}>
+      <LazyRecorderModal
         isOpen={recorderOpen}
         onClose={() => setRecorderOpen(false)}
         stage={recorderStage}
@@ -4500,7 +3088,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           {remoteFlowRunning ? '↗ Externer Job · Status ansehen' : '✓ Externer Job · Ergebnis ansehen'}
         </button>
       )}
-      <RemoteFlowModal
+      <LazyRemoteFlowModal
         open={remoteFlowOpen}
         onClose={() => setRemoteFlowOpen(false)}
         onCancel={() => { if (remoteFlowJobId) cancelRemoteFlowJob(remoteFlowJobId); }}
@@ -4511,14 +3099,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         running={remoteFlowRunning || Boolean(remoteFlowJobId && stemRemoteStatus?.jobs.some((job) => job.jobId === remoteFlowJobId && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)))}
         error={remoteFlowError}
         phaseText={separationProgress?.phaseText}
+        cancelPending={Boolean(remoteFlowJobId && remoteCancelPendingJobId === remoteFlowJobId)}
       />
-      <RemoteSetupModal
+      <LazyRemoteSetupModal
         isOpen={remoteSetupOpen}
         onClose={() => setRemoteSetupOpen(false)}
         remoteStatus={stemRemoteStatus}
         onStatus={(status) => setStemRemoteStatus(status)}
       />
-      <WorkspaceSettingsModal
+      <LazyWorkspaceSettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
         onShowInfo={() => setInfoModalOpen(true)}
@@ -4579,7 +3168,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             onClose={() => setInfoModalOpen(false)}
             track={activeTrack}
           />
-          <ExportModal
+          <LazyExportModal
             isOpen={exportModalOpen}
             onClose={() => setExportModalOpen(false)}
             track={activeTrack}
@@ -4588,7 +3177,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             protectedPaths={protectedPaths}
             onExportComplete={showOperationFeedback}
           />
-          <DatabaseExtractionModal
+          <LazyDatabaseExtractionModal
             isOpen={dbExtractionModalOpen}
             onClose={() => setDbExtractionModalOpen(false)}
             activeTrack={activeTrack}
@@ -4604,7 +3193,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       )}
 
       {/* Rekordbox XML Track-Auswahl Modal with Search Bar */}
-      <RekordboxXmlImportModal
+      <LazyRekordboxXmlImportModal
         isOpen={xmlCollectionModalOpen}
         onClose={() => setXmlCollectionModalOpen(false)}
         xmlTracks={xmlImportedTracks}
@@ -4622,14 +3211,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* System-Protokoll Modal (Hilfe → System-Protokoll...) */}
-      <SystemLogModal
+      <LazySystemLogModal
         isOpen={systemLogModalOpen}
         onClose={() => setSystemLogModalOpen(false)}
       />
 
       {/* Explicit Normal Delete / Ripple Delete choice */}
       {deleteModeModalOpen && selection && (
-        <DeleteModeModal
+        <LazyDeleteModeModal
           selection={selection}
           onNormalDelete={handleNormalDelete}
           onRippleDelete={handleRippleDelete}
@@ -4638,7 +3227,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       )}
 
       {/* Clear History Confirmation Modal (Data Loss Prevention) */}
-      <ClearHistoryModal
+      <LazyClearHistoryModal
         isOpen={clearHistoryModalOpen}
         onClose={() => setClearHistoryModalOpen(false)}
         onConfirm={handleClearHistoryConfirm}
@@ -4648,7 +3237,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* STEM AI UNAVAILABLE – no fake stems, clear status per §25 */}
-      <StemQualityWarningModal
+      <LazyStemQualityWarningModal
         isOpen={stemQualityWarning !== null}
         reason={stemQualityWarning || stemEngineUnavailableReason || 'STEM AI UNAVAILABLE'}
         installModel={missingStemModel}
@@ -4707,7 +3296,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Installiert exakt das im Einstellungsmenü gewählte, noch fehlende Modell. */}
-      <StemModelInstallModal
+      <LazyStemModelInstallModal
         isOpen={stemInstallOpen}
         model={missingStemModel}
         onClose={() => setStemInstallOpen(false)}
@@ -4732,7 +3321,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Edit Assistant Diagnostic & Buffer Integrity Modal */}
-      <EditAssistantModal
+      <LazyEditAssistantModal
         isOpen={editAssistantModalOpen}
         onClose={() => setEditAssistantModalOpen(false)}
         lastValidation={editAssistantState.lastValidation}
@@ -4742,13 +3331,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       />
 
       {/* Pioneer Hardware Controller & MIDI Mapping Modal */}
-      <MidiControllerModal
+      <LazyMidiControllerModal
         isOpen={midiModalOpen}
         onClose={() => setMidiModalOpen(false)}
         stemsMixerState={stemsMixerState}
         onToggleStemMute={handleToggleStemMute}
         onToggleStemSolo={handleToggleStemSolo}
       />
+      </Suspense>
     </div>
   );
 }
