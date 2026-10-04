@@ -114,8 +114,29 @@ async function run() {
     console.log('\n[ TEST ] #4 Transportvertrag ist browser-sicher (keine Node-Importe)');
     const imports = contract.match(/^import[ \t].*$/gm) ?? [];
     assert.ok(imports.length > 0, 'der Vertrag importiert seine Basistypen');
+    /*
+     * Erlaubt sind Typen aus `./types` – und seit dem Laufzettel (§40) Typen
+     * aus `./remote/dataFlow`. Entscheidend ist nicht der Pfad, sondern dass
+     * **kein** Node-Code in den Renderer wandert: `dataFlow.ts` ist ein reines
+     * Abbildungsmodul (Record + Uhrzeit → Anzeige) und wird deshalb unten
+     * genauso streng geprüft wie der Vertrag selbst.
+     */
     for (const line of imports) {
-      assert.match(line, /from '\.\/types';$/, `transportTypes.ts darf nur Typen aus ./types importieren, Fund: ${line}`);
+      assert.match(line, /^import type /, `transportTypes.ts darf nur Typen importieren, Fund: ${line}`);
+      assert.match(
+        line,
+        /from '\.\/(types|remote\/dataFlow)';$/,
+        `transportTypes.ts darf nur Typen aus ./types und ./remote/dataFlow importieren, Fund: ${line}`
+      );
+    }
+    const dataFlowSource = await read('src/stems/remote/dataFlow.ts');
+    assert.equal(
+      /\bfrom 'node:/.test(dataFlowSource),
+      false,
+      'dataFlow.ts darf keine Node-Module importieren – es landet über den Vertrag im Renderer'
+    );
+    for (const line of dataFlowSource.match(/^import[ \t].*$/gm) ?? []) {
+      assert.match(line, /^import type /, `dataFlow.ts darf nur Typen importieren, Fund: ${line}`);
     }
     const rendererSource = await read('src/audio/stemEngine.ts');
     assert.match(

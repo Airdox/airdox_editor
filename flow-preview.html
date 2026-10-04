@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  Entwicklungsharness für das Statusfenster des Fernpfads (Laufzettel).
+
+  Diese Seite existiert nur für den Dev-Server (`npm run dev` → /flow-preview.html).
+  Sie ist **nicht** Teil des Produktions-Builds (Vite baut ausschließlich
+  index.html) und zeigt dieselbe Komponente mit Testdatensätzen, damit die
+  Anzeige begutachtet werden kann, ohne einen echten Colab-Lauf abzuwarten.
+  Die Zustände werden aus echten Datensätzen berechnet
+  (`buildRemoteDataFlow`) – es wird nichts gezeichnet, was die Logik nicht
+  auch im Betrieb liefern würde.
+-->
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Laufzettel-Vorschau – Fernpfad</title>
+    <style>
+      html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; background-color: #0a0b0d; color: #c8c9ce; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/flowPreview.tsx"></script>
+  </body>
+</html>

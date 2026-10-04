@@ -653,6 +653,16 @@ def run_job(
         store.log(job_id, "wird bereits von einem anderen Worker gerechnet – übersprungen")
         return "skipped"
 
+    # Sichtbarkeit vor dem Rechnen: der Editor sieht am Laufzettel sonst nur
+    # „Wartet auf Worker“, obwohl der Worker den Job längst in der Hand hat.
+    store.log_event(
+        job_id,
+        "worker.job_seen",
+        f"Job in der Ablage gefunden (Status {manifest.get('status')}, Arbeitskopie vorhanden).",
+        status="RUNNING",
+        phase="Job gefunden – Worker übernimmt",
+        device=device,
+    )
     claim = store.claim(job_id, device=device, gpu=_gpu_name())
     manifest["status"] = "RUNNING"
     manifest["phase"] = "Arbeitskopie wird geladen"
@@ -699,6 +709,38 @@ def run_job(
 
         output_dir = store.output_dir(job_id)
         os.makedirs(output_dir, exist_ok=True)
+
+        # Gewichte prüfen, bevor die Rechnung startet: „Modell lädt“ ist der
+        # am häufigsten unterschätzte Abschnitt – er dauert auf einer frischen
+        # Colab-Laufzeit Minuten und meldet bisher keinen einzigen Schritt.
+        declared = str(manifest["engine"].get("checkpoint", {}).get("file") or "")
+        checkpoint_path = os.path.join(model_dir, os.path.basename(declared)) if declared else ""
+        if checkpoint_path and os.path.isfile(checkpoint_path):
+            try:
+                weight_bytes = os.path.getsize(checkpoint_path)
+            except OSError:
+                weight_bytes = 0
+            store.log_event(
+                job_id,
+                "worker.weights_ready",
+                f"Gewichte liegen bereit: {os.path.basename(checkpoint_path)} ({weight_bytes} Bytes) – werden geladen.",
+                status="RUNNING",
+                phase="Gewichte werden geladen",
+                percent=3,
+                device=device,
+            )
+        else:
+            store.log_event(
+                job_id,
+                "worker.weights_missing",
+                f"Gewichte fehlen im Modellordner ({declared or 'kein Eintrag im Manifest'}) – "
+                "die Inferenz wird das gleich melden. Im Notebook MODELL laden oder MODELL_URL setzen.",
+                level="warning",
+                status="RUNNING",
+                phase="Gewichte fehlen",
+                code="MODEL_MISSING",
+                device=device,
+            )
 
         last_progress_key: List[Optional[Tuple[str, int]]] = [None]
 
@@ -774,10 +816,17 @@ def run_job(
             else:
                 raise
 
+        inference_ms = 0
+        try:
+            inference_ms = int(report.get("durationMs") or 0)
+        except (TypeError, ValueError):
+            inference_ms = 0
         store.log_event(
             job_id,
             "worker.inference_completed",
-            "Inferenz wurde ohne Fehler abgeschlossen.",
+            "Inferenz wurde ohne Fehler abgeschlossen"
+            + (f" (Rechenzeit {inference_ms / 1000:.1f} s)" if inference_ms > 0 else "")
+            + ". Ergebnisse werden in die Ablage geschrieben.",
             status="RUNNING",
             phase="Ergebnisse werden geschrieben",
             percent=95,

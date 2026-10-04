@@ -29,7 +29,7 @@ Für die Windows-Desktop-App stehen `npm run desktop` und die Paketziele `npm ru
 
 ## Optionale Stem-Separation
 
-Stem-Modelle und Python-/ONNX-Runtimes sind groß und werden nicht ins Git-Repository eingecheckt. Diagnose, Installation, Offline-Bundling und Release-Gates sind in [`docs/STEM_BUNDLING.md`](docs/STEM_BUNDLING.md), [`docs/STEM_SEPARATION.md`](docs/STEM_SEPARATION.md) und [`docs/STEM_SEPARATION_ENGINE.md`](docs/STEM_SEPARATION_ENGINE.md) beschrieben. Ein übersprungener Qualitäts- oder Plattformtest gilt nicht als Freigabe.
+Stem-Modelle und Python-/ONNX-Runtimes sind groß und werden nicht ins Git-Repository eingecheckt. Diagnose, Installation, Offline-Bundling und Release-Gates sind in [`docs/STEM_BUNDLING.md`](docs/STEM_BUNDLING.md), [`docs/STEM_SEPARATION.md`](docs/STEM_SEPARATION.md) und [`docs/STEM_SEPARATION_ENGINE.md`](docs/STEM_SEPARATION_ENGINE.md) beschrieben. Ein übersprungener Qualitäts- oder Plattformtest gilt nicht als Freigabe. Wer die externe Zerlegung (Google Drive + Google Colab) nutzt, findet den Datenfluss Station für Station – inklusive der einen nicht messbaren Station – in [`docs/FERN_JOB_DATENFLUSS.md`](docs/FERN_JOB_DATENFLUSS.md) beschrieben.
 
 ## Oberfläche (UI v2.0 – Drei-Zonen-Architektur)
 
@@ -46,4 +46,5 @@ Layout-Regeln, die Farb- und Button-Hierarchie und die Modell-Isolation des Stem
 - [`docs/UI_V2_DREI_ZONEN.md`](docs/UI_V2_DREI_ZONEN.md) – Master-Layout & Workflow der Drei-Zonen-Oberfläche
 - [`docs/REFAKTORISIERUNGSPLAN.md`](docs/REFAKTORISIERUNGSPLAN.md) – Befunde, priorisierte Umsetzung und offene Gates
 - [`docs/REKORDBOX_DATABASE_FORMAT.md`](docs/REKORDBOX_DATABASE_FORMAT.md) – Rekordbox-Datenbank/ANLZ-Verträge
+- [`docs/FERN_JOB_DATENFLUSS.md`](docs/FERN_JOB_DATENFLUSS.md) – Laufzettel der externen Zerlegung: Stationen, Belege, nicht messbare Schritte
 - [`docs/LOGGING.md`](docs/LOGGING.md) – Logging und Diagnose

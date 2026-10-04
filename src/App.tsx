@@ -3263,6 +3263,21 @@ export default function App() {
         onClose={() => setRemoteFlowOpen(false)}
         onCancel={handleCancelStemSeparation}
         onRefresh={() => void stemEngine.pollRemoteJobs().then((status) => status && setStemRemoteStatus(status)).catch((error) => setRemoteFlowError(error?.message ?? 'Status konnte nicht abgefragt werden.'))}
+        onConfirmCloudSync={async (jobId) => {
+          try {
+            const updated = await stemEngine.confirmRemoteCloudSync(jobId);
+            if (updated) {
+              setRemoteFlowJob(updated);
+              setRemoteFlowJobId(updated.jobId);
+            }
+            await stemEngine.pollRemoteJobs().then((status) => status && setStemRemoteStatus(status)).catch(() => undefined);
+          } catch (error) {
+            setRemoteNotice({
+              tone: 'error',
+              text: `Die Bestätigung konnte nicht gespeichert werden: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
+        }}
         status={stemRemoteStatus}
         job={(remoteFlowJobId && stemRemoteStatus?.jobs.find((job) => job.jobId === remoteFlowJobId)) || remoteFlowJob}
         trackName={remoteFlowTrack}

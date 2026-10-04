@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
     cancelRemoteStemJob: (jobId, reason) => ipcRenderer.invoke('stems:remote-cancel', jobId, reason),
     resumeRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-resume'),
     configureRemoteStemJobs: (settings) => ipcRenderer.invoke('stems:remote-configure', settings),
+    confirmRemoteCloudSync: (jobId) => ipcRenderer.invoke('stems:remote-cloud-sync', jobId),
     onRemoteStemJobProgress: (callback) => {
       const listener = (_event, progress) => callback(progress);
       ipcRenderer.on('stems:remote-progress', listener);

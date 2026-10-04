@@ -71,6 +71,16 @@ import {
   type RemoteJobStatus,
   type RemoteJobTraceEvent,
 } from './types';
+import {
+  buildRemoteDataFlow,
+  flowBaseName,
+  formatFlowBytes,
+  formatFlowDuration,
+  shortFlowHash,
+  upsertFlowCheckpoint,
+  type RemoteFlowCheckpoint,
+  type RemoteFlowFact,
+} from './dataFlow';
 import type {
   RemoteServiceStatus,
   RemoteSettings,
@@ -320,6 +330,31 @@ export class RemoteStemJobService {
     this.logTraceEvent(event);
   }
 
+  /**
+   * Schreibt einen Beleg des Datenflusses an den Datensatz (§40).
+   *
+   * Bewusst **kein** eigener Trace-Eintrag: die Ablaufspur bleibt dem Ablauf
+   * vorbehalten, der Laufzettel braucht dagegen genau einen Eintrag je
+   * Station – sonst steht „Arbeitskopie erstellt“ fünfmal im Fenster.
+   */
+  private markFlow(record: RemoteJobRecord, checkpoint: RemoteFlowCheckpoint): void {
+    record.flow = upsertFlowCheckpoint(record.flow, checkpoint);
+  }
+
+  /** Belege einer Station, die sich aus den Stammdaten des Jobs ableiten. */
+  private workingCopyFacts(record: RemoteJobRecord): RemoteFlowFact[] {
+    return [
+      { label: 'Datei', value: flowBaseName(record.workingCopyPath) },
+      { label: 'Größe', value: formatFlowBytes(record.workingCopyBytes) },
+      { label: 'SHA-256', value: shortFlowHash(record.workingCopySha256) },
+      {
+        label: 'Audio',
+        value: `${formatFlowDuration(record.durationSeconds)} · ${record.sampleRate} Hz · ${record.channels} Kan.`,
+      },
+      { label: 'Modell', value: `${record.modelId} · ${record.profile}` },
+    ];
+  }
+
   /** Worker-JSONL aus der Jobablage wird inkrementell in die lokale Ablaufspur übernommen. */
   private async syncWorkerTrace(record: RemoteJobRecord, transport: IRemoteTransport): Promise<void> {
     let raw: string | null;
@@ -395,6 +430,12 @@ export class RemoteStemJobService {
         host: manifestWorker?.host ?? (typeof claim.host === 'string' ? claim.host : undefined),
         device: manifestWorker?.device ?? (typeof claim.device === 'string' ? claim.device : undefined),
         version: manifestWorker?.version ?? (typeof claim.version === 'string' ? claim.version : undefined),
+        // GPU-Name und Rückfall stehen im Lease (§21 F/G). Ohne sie wüsste der
+        // Laufzettel nur „cuda“ statt „Tesla T4“ – und ob der Worker auf CPU
+        // zurückgefallen ist, obwohl der Steckbrief es noch nicht meldet.
+        gpu: manifestWorker?.gpu ?? (typeof claim.gpu === 'string' ? claim.gpu : undefined),
+        cpuFallback: manifestWorker?.cpuFallback ?? (claim.cpuFallback === true ? true : undefined),
+        fallbackReason: manifestWorker?.fallbackReason ?? (typeof claim.fallbackReason === 'string' ? claim.fallbackReason : undefined),
       };
     } catch {
       return manifestWorker;
@@ -511,6 +552,17 @@ export class RemoteStemJobService {
       attempts: 0,
     };
     this.records.set(jobId, record);
+    // Beleg 1 – Arbeitskopie: sie liegt im Engine-Datenordner, das Original
+    // wurde ausschließlich gelesen (§3). Ohne diesen Beleg stünde der Laufzettel
+    // später bei 0 %, obwohl längst Bytes unterwegs sind.
+    record.transportLabel = transport.label;
+    record.transportRoot = transport.target;
+    this.markFlow(record, {
+      id: 'working_copy',
+      at: now,
+      detail: 'Arbeitskopie im Engine-Datenordner; das Original wurde nur gelesen.',
+      facts: this.workingCopyFacts(record),
+    });
     this.addTrace(record, 'editor.job_created', 'Fern-Job angelegt; Arbeitskopie und Manifest werden vorbereitet.');
     await this.persist(record);
 
@@ -561,16 +613,46 @@ export class RemoteStemJobService {
       await transport.probe();
       const relative = manifest.input.relativePath;
       const remoteHash = await transport.sha256(relative);
+      let verifiedHash: string | null = remoteHash;
       if (remoteHash !== inputSha256) {
         await transport.writeBytes(relative, workingBytes);
         await transport.writeText(`jobs/${jobId}/manifest.json`, serializeManifest(manifest));
         record.uploadedAt = this.now();
+        // Zurücklesen statt glauben: liegt die Arbeitskopie wirklich so in der
+        // Ablage, wie der Steckbrief es behauptet? Das ist der erste Beleg,
+        // der nicht vom Editor selbst stammt.
+        verifiedHash = await transport.sha256(relative).catch(() => null);
       } else {
         // Schon da (z. B. nach einem Absturz mitten im Upload) – erneut
         // hochladen wäre bei 100 MB pro Track reine Verschwendung.
         await transport.writeText(`jobs/${jobId}/manifest.json`, serializeManifest(manifest));
         record.uploadedAt = this.now();
       }
+      record.transportLabel = transport.label;
+      record.transportRoot = transport.target;
+      this.markFlow(record, {
+        id: 'published',
+        at: record.uploadedAt,
+        detail:
+          verifiedHash === inputSha256
+            ? 'Arbeitskopie liegt in der Ablage und wurde dort zurückgelesen – Hash stimmt.'
+            : 'Arbeitskopie und Steckbrief wurden in die Ablage geschrieben.',
+        facts: [
+          { label: 'Ablage', value: transport.label },
+          { label: 'Eingabe', value: relative },
+          { label: 'Steckbrief', value: `jobs/${jobId}/manifest.json` },
+          { label: 'Größe', value: formatFlowBytes(workingBytes.byteLength) },
+          {
+            label: 'Hash in Ablage',
+            value:
+              verifiedHash === inputSha256
+                ? `${shortFlowHash(verifiedHash)} (identisch)`
+                : verifiedHash
+                  ? `${shortFlowHash(verifiedHash)} (abweichend – wird vom Worker geprüft)`
+                  : 'nicht prüfbar',
+          },
+        ],
+      });
     } catch (error) {
       const unreachable = error instanceof RemoteUnreachableError;
       this.setState(record, {
@@ -838,6 +920,74 @@ export class RemoteStemJobService {
       record.fallbackReason = worker.fallbackReason;
     }
     await this.syncWorkerTrace(record, transport);
+    /*
+     * Beleg 4 – der Worker ist überhaupt da. Das ist die Station, an der der
+     * Nutzer am häufigsten steht und nichts sieht: ohne Lebenszeichen rechnet
+     * niemand, ganz egal was der Status sagt.
+     *
+     * Das globale Lebenszeichen (`worker.status.json`) zählt **schon vor dem
+     * Claim**: „der Worker sieht den Ordner“ ist eine andere – und für den
+     * Nutzer wichtigere – Aussage als „der Worker hat diesen Job“. Wer nur auf
+     * den Claim schaut, lässt die Station im Ungewissen, obwohl der Worker
+     * längst da ist.
+     */
+    const globalHeartbeat = this.lastWorkerHeartbeat;
+    if (globalHeartbeat?.heartbeatAt) {
+      this.markFlow(record, {
+        id: 'worker_seen',
+        at: globalHeartbeat.heartbeatAt,
+        updatedAt: globalHeartbeat.heartbeatAt,
+        detail: 'Der Worker schreibt ein Lebenszeichen in die Ablage.',
+        facts: [
+          { label: 'Worker', value: globalHeartbeat.id },
+          { label: 'Host', value: globalHeartbeat.host ?? '–' },
+          {
+            label: 'Gerät',
+            value: globalHeartbeat.gpu ? `${globalHeartbeat.device ?? '?'} (${globalHeartbeat.gpu})` : (globalHeartbeat.device ?? '–'),
+          },
+          { label: 'Quelle', value: 'worker.status.json' },
+          { label: 'Zyklus', value: globalHeartbeat.pollSeconds ? `${globalHeartbeat.pollSeconds} s` : '–' },
+        ],
+      });
+    }
+    if (worker) {
+      const heartbeatAt = worker.heartbeatAt ?? worker.claimedAt;
+      if (typeof heartbeatAt === 'number') {
+        this.markFlow(record, {
+          id: 'worker_seen',
+          at: heartbeatAt,
+          updatedAt: heartbeatAt,
+          detail: 'Der Worker schreibt ein Lebenszeichen in die Ablage.',
+          facts: [
+            { label: 'Worker', value: worker.id },
+            { label: 'Host', value: worker.host ?? globalHeartbeat?.host ?? '–' },
+            {
+              label: 'Gerät',
+              value: worker.gpu
+                ? `${worker.device ?? '?'} (${worker.gpu})`
+                : globalHeartbeat?.gpu
+                  ? `${worker.device ?? globalHeartbeat.device ?? '?'} (${globalHeartbeat.gpu})`
+                  : (worker.device ?? globalHeartbeat?.device ?? '–'),
+            },
+            { label: 'Quelle', value: 'worker.status.json / claim.json' },
+            { label: 'Zyklus', value: globalHeartbeat?.pollSeconds ? `${globalHeartbeat.pollSeconds} s` : '–' },
+          ],
+        });
+      }
+      if (worker.claimedAt) {
+        this.markFlow(record, {
+          id: 'claimed',
+          at: worker.claimedAt,
+          detail: 'Der Worker hat den Job für sich reserviert.',
+          facts: [
+            { label: 'Worker', value: worker.id },
+            { label: 'Host', value: worker.host ?? '–' },
+            { label: 'Gerät', value: worker.gpu ? `${worker.device ?? '?'} (${worker.gpu})` : (worker.device ?? '–') },
+            { label: 'Versuche', value: `${record.attempts ?? manifest.attempts ?? 1}` },
+          ],
+        });
+      }
+    }
     if (worker && previousWorkerId !== worker.id) {
       this.addTrace(record, 'editor.worker_claim_observed', `Worker ${worker.id} hat den Job beansprucht.`, 'info', {
         workerId: worker.id,
@@ -899,6 +1049,45 @@ export class RemoteStemJobService {
       percent: typeof manifest.percent === 'number' ? Math.min(99, manifest.percent) : record.percent,
       workerPercent: typeof manifest.percent === 'number' ? manifest.percent : undefined,
     });
+    /*
+     * Beleg 6 – die Rechnung. Wird bei jedem Poll **fortgeschrieben** (`at`
+     * bleibt der erste Fortschritt, `updatedAt` wandert): so sieht man im
+     * Fenster sowohl „seit wann gerechnet wird“ als auch „letzte Meldung vor
+     * X“ – und damit, ob der Worker nur langsam ist oder verstummt.
+     */
+    if (typeof manifest.percent === 'number' || (worker && manifest.status === 'RUNNING')) {
+      const device = worker?.device ?? record.device;
+      this.markFlow(record, {
+        id: 'compute',
+        at: this.now(),
+        updatedAt: this.now(),
+        detail: 'Der Worker rechnet und schreibt seinen Fortschritt in den Steckbrief.',
+        facts: [
+          { label: 'Fortschritt', value: `${Math.round(record.workerPercent ?? record.percent ?? 0)} %` },
+          { label: 'Phase', value: record.phase || manifest.phase || '–' },
+          { label: 'Gerät', value: worker?.gpu ? `${device ?? '?'} (${worker.gpu})` : (device ?? '–') },
+          { label: 'Modell', value: record.modelId },
+          ...(record.cpuFallback
+            ? ([{ label: 'Rückfall', value: record.fallbackReason ? `CPU – ${record.fallbackReason}` : 'CPU' }] as RemoteFlowFact[])
+            : []),
+        ],
+      });
+    }
+    // Beleg 7 – Ergebnisse liegen in der Ablage, noch vor dem Herunterladen.
+    if (manifest.output?.stems?.length) {
+      this.markFlow(record, {
+        id: 'results_ready',
+        at: this.now(),
+        detail: 'Der Worker hat die Stems in die Ablage zurückgeschrieben.',
+        facts: [
+          { label: 'Ordner', value: `jobs/${record.jobId}/output/` },
+          ...manifest.output.stems.map((stem) => ({
+            label: stem.id,
+            value: `${flowBaseName(stem.fileName)} · ${formatFlowBytes(stem.bytes)} · ${shortFlowHash(stem.sha256, 12)}`,
+          })),
+        ],
+      });
+    }
     const currentProgress = record.workerPercent ?? record.percent;
     const currentProgressBucket = Math.floor(currentProgress / 10);
     if (record.status !== previous || record.phase !== previousPhase || currentProgressBucket !== previousProgressBucket) {
@@ -1127,6 +1316,32 @@ export class RemoteStemJobService {
       });
     }
 
+    /*
+     * Belege 8 und 9 – geholt und geprüft. Beides fällt im selben Durchgang
+     * an: jede Datei wird gelesen, gehasht, auf Geometrie und Pegel geprüft und
+     * erst danach geschrieben. Deshalb stehen beide Stationen auf denselben
+     * Zeitpunkt; eine halbe Datei kann dazwischen nicht durchrutschen (§34).
+     */
+    this.markFlow(record, {
+      id: 'downloaded',
+      at: this.now(),
+      detail: `${imported.length} Ergebnisdatei(en) aus der Ablage gelesen.`,
+      facts: [
+        { label: 'Dateien', value: `${imported.length}` },
+        { label: 'Bytes', value: formatFlowBytes(imported.reduce((sum, stem) => sum + stem.bytes, 0)) },
+        { label: 'Zielordner', value: flowBaseName(targetDir) },
+      ],
+    });
+    this.markFlow(record, {
+      id: 'validated',
+      at: this.now(),
+      detail: 'SHA-256, Abtastrate, Kanäle, Länge und Pegel geprüft.',
+      facts: imported.map((stem) => ({
+        label: stem.id,
+        value: `${shortFlowHash(stem.sha256, 12)} · ${formatFlowBytes(stem.bytes)}`,
+      })),
+    });
+
     // Original-Integrität nachweisen: nur Hash/Größe/mtime lesen, nie schreiben
     // (§31). Ändert der Nutzer die Datei parallel, wird das *vermerkt* und der
     // fertige Lauf nicht weggeworfen – unser Pfad hat sie nie angefasst.
@@ -1242,6 +1457,19 @@ export class RemoteStemJobService {
     this.setState(record, { status: 'COMPLETED', phase: REMOTE_PHASES.completed, percent: 100 });
     record.finishedAt = this.now();
     record.error = undefined;
+    // Beleg 10 – und damit der Beweis für Station 3: der Rückweg kam aus
+    // derselben Cloud, in die der Editor nie hineinsehen konnte.
+    this.markFlow(record, {
+      id: 'imported',
+      at: record.finishedAt,
+      detail: 'Die Stems sind im Editor verfügbar und mit dem Original-Track verknüpft.',
+      facts: [
+        { label: 'Job', value: record.localJobId },
+        { label: 'Stems', value: imported.map((stem) => stem.id).join(', ') || '–' },
+        { label: 'Laufzeit', value: `${Math.max(1, Math.round((record.finishedAt - record.createdAt) / 1000))} s` },
+        { label: 'Original', value: record.originalUnchanged === false ? 'während des Laufs verändert' : 'unverändert' },
+      ],
+    });
     this.addTrace(record, 'editor.result_imported', 'Alle Ergebnisse wurden geprüft und im Editor registriert.');
     await this.persist(record);
     await transport
@@ -1442,7 +1670,41 @@ export class RemoteStemJobService {
       cancelPending: Boolean(record.cancelPending),
       cancelRequested: Boolean(record.cancelRequestedAt),
       importedStems: record.importedStems,
+      flow: buildRemoteDataFlow(record, {
+        now: this.now(),
+        worker: this.lastWorkerHeartbeat,
+        transportLabel: record.transportLabel,
+        transportRoot: record.transportRoot,
+      }),
+      transportLabel: record.transportLabel,
+      transportRoot: record.transportRoot,
     };
+  }
+
+  /**
+   * Der Nutzer hat den Job im Google-Drive-Ordner gesehen (Browser) und
+   * bestätigt damit die einzige Station, die der Editor nicht prüfen kann.
+   *
+   * Das ist ausdrücklich **kein** technischer Nachweis und wird auch so
+   * gespeichert: im Ablaufprotokoll steht der Schritt mit dem Vermerk
+   * „manuelle Bestätigung“. Ein falscher Klick kostet nichts außer einem
+   * Häkchen zu viel – die harte Prüfung bleibt der Rückweg der Ergebnisse.
+   */
+  async confirmCloudSync(jobId: string): Promise<RemoteStemJobView | null> {
+    await this.ensureLoaded();
+    const record = this.records.get(jobId);
+    if (!record) return null;
+    const at = this.now();
+    record.flow = { ...(record.flow ?? { checkpoints: [] }), cloudSyncConfirmedAt: at };
+    this.addTrace(
+      record,
+      'editor.cloud_sync_confirmed',
+      'Der Nutzer hat die Arbeitskopie im Google-Drive-Ordner gesehen (manuelle Bestätigung, keine technische Prüfung).',
+      'info'
+    );
+    await this.persist(record);
+    this.emitEvent('progress', record);
+    return this.toView(record);
   }
 
   /* --------------------------------------------------------------------- *
