@@ -116,6 +116,7 @@ declare global {
       }>;
       readLogTail(maxBytes?: number): Promise<{ file: string | null; text: string }>;
       openLogFolder(): Promise<{ opened: boolean; target: string; logDirectory: string }>;
+      openPath?(targetPath: string): Promise<{ ok: boolean; path?: string; error?: string }>;
       getStemDiagnostics(): Promise<Record<string, unknown>>;
       getStemPreflight(): Promise<Record<string, unknown>>;
       /**

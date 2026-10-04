@@ -876,6 +876,32 @@ ipcMain.handle('logs:open-log-folder', async () => {
   return { opened: true, target, logDirectory: logger.getLogDirectory() };
 });
 
+ipcMain.handle('system:open-path', async (_event, targetPath) => {
+  if (typeof targetPath !== 'string' || !targetPath.trim()) {
+    return { ok: false, error: 'Kein Pfad übergeben' };
+  }
+  const resolved = path.resolve(targetPath.trim());
+  try {
+    if (fs.existsSync(resolved)) {
+      const stat = fs.statSync(resolved);
+      if (stat.isDirectory()) {
+        const err = await shell.openPath(resolved);
+        return { ok: !err, error: err || undefined, path: resolved };
+      }
+      shell.showItemInFolder(resolved);
+      return { ok: true, path: resolved };
+    }
+    const parent = path.dirname(resolved);
+    if (fs.existsSync(parent)) {
+      const err = await shell.openPath(parent);
+      return { ok: !err, error: err || undefined, path: parent };
+    }
+    return { ok: false, error: 'Pfad existiert lokal nicht' };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 app.whenReady().then(() => {
   // Offizielles userData-Logverzeichnis übernehmen, falls es beim Boot noch
   // nicht zur Verfügung stand (Normalfall: beide Pfade sind identisch).

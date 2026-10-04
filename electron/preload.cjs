@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   getLogInfo: () => ipcRenderer.invoke('logs:get-info'),
   readLogTail: (maxBytes) => ipcRenderer.invoke('logs:read-tail', maxBytes),
   openLogFolder: () => ipcRenderer.invoke('logs:open-log-folder'),
+  openPath: (targetPath) => ipcRenderer.invoke('system:open-path', targetPath),
   // One-click installation of the real AI engine. Installs exactly the model
   // chosen in the settings menu (options.modelId); without a modelId the
   // primary BS-RoFormer model is installed. Progress arrives via
