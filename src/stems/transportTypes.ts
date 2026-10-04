@@ -310,6 +310,29 @@ export interface RemoteStemJobView {
   importedStems?: { id: StemId; filePath: string; bytes: number; sha256: string }[];
 }
 
+/** Herzschlag eines laufenden Workers (Colab/rclone/Folder-Worker). */
+export interface RemoteWorkerHeartbeat {
+  /** Worker-Id, wie in claim.json. */
+  id: string;
+  host?: string;
+  /** Gerät, das der Worker benutzen wird. */
+  device?: string;
+  gpu?: string;
+  /** Version des Workers (colab-worker/2). */
+  version?: string;
+  /** Menschenlesbare Phase. */
+  phase?: string;
+  /** Zahl der bisher erledigten Jobs in diesem Lauf. */
+  processed?: number;
+  openJobs?: number;
+  /** Zeitpunkt des letzten Heartbeats (ms seit Epoch). */
+  heartbeatAt?: number;
+  /** ISO-Zeitstempel. */
+  heartbeatAtIso?: string;
+  /** Sekunden zwischen den Poll-Zyklen. */
+  pollSeconds?: number;
+}
+
 export interface RemoteServiceStatus {
   /** True, wenn ein Transport konfiguriert ist (Ordner oder rclone-Remote). */
   configured: boolean;
@@ -328,6 +351,8 @@ export interface RemoteServiceStatus {
   failed: number;
   /** Empfohlenes Polling-Intervall (ms) – der Editor fragt nicht schneller. */
   pollIntervalMs: number;
+  /** Wenn ein Worker gerade läuft und einen Heartbeat in der Ablage hinterlassen hat. */
+  worker?: RemoteWorkerHeartbeat | null;
 }
 
 export interface RemoteSettings {

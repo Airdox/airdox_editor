@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CloudUpload, Cpu, Download, FolderCheck, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CloudUpload, Cpu, Download, FolderCheck, HeartPulse, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import type { RemoteServiceStatus, RemoteStemJobView } from '../../stems/transportTypes';
 import { remoteJobStallWarning } from '../../stems/remote/diagnostics';
 
@@ -17,6 +17,9 @@ interface Props {
   /** True, während der Abbruch gerade an den externen Rechner gemeldet wird. */
   cancelPending?: boolean;
 }
+
+/** Alter des Heartbeats in Sekunden – darüber gilt der Worker als „nicht mehr sichtbar". */
+const WORKER_LIVENESS_SECONDS = 90;
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
 const stages = [
@@ -65,6 +68,35 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
             {job && <div className="mt-3 text-xs text-neutral-300">Job {job.jobId} · Status {job.status} · gemeldeter Fortschritt {Math.round(job.percent ?? 0)} %</div>}
           </div>
           {warning && !failed && <div role="alert" className="flex gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100"><AlertTriangle size={18} className="shrink-0" />{warning}</div>}
+          {status?.worker ? (() => {
+            const ageMs = now - (status.worker.heartbeatAt ?? now);
+            const ageSec = Math.max(0, Math.floor(ageMs / 1000));
+            const alive = ageSec < WORKER_LIVENESS_SECONDS;
+            return (
+              <div className={`flex gap-2 rounded-xl border p-3 text-xs ${alive ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/40 bg-amber-500/10 text-amber-100'}`}>
+                <HeartPulse size={16} className="shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">
+                  <div className="font-semibold">
+                    {alive ? 'Colab-Worker online' : 'Colab-Worker gesehen, aber kein aktuelles Lebenszeichen'}
+                  </div>
+                  <div className="mt-0.5 opacity-90">
+                    {status.worker.id} · Host {status.worker.host ?? '?'} · Gerät {status.worker.device ?? '?'}
+                    {status.worker.gpu && status.worker.gpu !== 'cpu' ? ` (${status.worker.gpu})` : ''}
+                    {status.worker.phase ? ` · ${status.worker.phase}` : ''}
+                    {' · zuletzt gesehen vor '}{Math.floor(ageSec / 60)}:{String(ageSec % 60).padStart(2, '0')}
+                  </div>
+                </div>
+              </div>
+            );
+          })() : !failed && !done ? (
+            <div className="flex gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs text-cyan-100">
+              <HeartPulse size={16} className="shrink-0 mt-0.5 opacity-70" />
+              <div className="leading-relaxed">
+                <div className="font-semibold">Warte auf Lebenszeichen des Workers …</div>
+                <div className="mt-0.5 opacity-80">Bis ein gestartetes Colab-Notebook den Drive-Ordner erreicht, steht hier noch nichts. Prüfe: (1) Drive ist gemountet, (2) derselbe Jobordner ist gewählt, (3) die Worker-Zelle läuft. In der Ablage erscheint nach dem Start die Datei <code className="font-mono">worker.status.json</code>.</div>
+              </div>
+            </div>
+          ) : null}
           <ol className="space-y-1" aria-label="Stationen des Datenflusses">{stages.map((item, index) => {
             const Icon = item.icon;
             const complete = index < stage || (done && index === 4);

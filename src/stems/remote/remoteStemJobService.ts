@@ -136,6 +136,8 @@ export class RemoteStemJobService {
   private timer?: NodeJS.Timeout;
   private polling?: Promise<RemoteServiceStatus>;
   private loaded = false;
+  /** Zuletzt gelesener Worker-Heartbeat aus worker.status.json. */
+  private lastWorkerHeartbeat: RemoteServiceStatus['worker'] = null;
 
   constructor(options: RemoteStemJobServiceOptions) {
     this.options = options;
@@ -629,7 +631,18 @@ export class RemoteStemJobService {
       sha256: inputSha256,
     });
     this.emitEvent('progress', record);
-    if (this.records.size > 0 && !this.options.disableBackgroundPolling) this.schedulePolling();
+    if (this.records.size > 0 && !this.options.disableBackgroundPolling) {
+      this.schedulePolling();
+      // Sofortiger erster Poll nach 2 s: ohne diesen wartet der Nutzer ein
+      // ganzes Poll-Intervall (Voreinstellung 15 s), bis er sieht, dass der
+      // Worker den Job beansprucht hat – das war ein Teil des „ewig warte"-
+      // Gefühls im Pop-up.
+      setTimeout(() => {
+        void this.poll().catch((error) => {
+          this.options.logger?.warn?.('STEM-REMOTE', `Erster Poll nach Start fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }, 2_000).unref?.();
+    }
     return this.toView(record);
   }
 
@@ -706,6 +719,26 @@ export class RemoteStemJobService {
         transport: transport.label,
       });
       return this.statusFromSettings(settings, false, message, transport);
+    }
+
+    // Worker-Heartbeat lesen (wenn vorhanden) – damit das UI schon vor dem
+    // ersten Claim zeigen kann, dass *irgendein* Colab-Worker läuft und den
+    // Ordner sieht (statt endlos „warte auf Reaktion vom externen Rechner").
+    try {
+      const raw = await transport.readText('worker.status.json');
+      if (raw) {
+        const parsed = JSON.parse(raw) as RemoteServiceStatus['worker'];
+        if (parsed && typeof parsed === 'object' && parsed.id) {
+          this.lastWorkerHeartbeat = parsed;
+        } else {
+          this.lastWorkerHeartbeat = null;
+        }
+      } else {
+        this.lastWorkerHeartbeat = null;
+      }
+    } catch (error) {
+      this.lastWorkerHeartbeat = null;
+      // Kaputte/fehlende Status-Datei ist kein Jobfehler – still weitermachen.
     }
 
     for (const record of [...this.records.values()]) {
@@ -1368,6 +1401,7 @@ export class RemoteStemJobService {
       completed: jobs.filter((job) => job.status === 'COMPLETED').length,
       failed: jobs.filter((job) => job.status === 'FAILED').length,
       pollIntervalMs: this.pollIntervalMs(),
+      worker: this.lastWorkerHeartbeat,
     };
   }
 

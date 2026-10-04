@@ -14,7 +14,9 @@ Protokoll (dieselbe Ablage wie ``scripts/stem-remote-worker.ts``)::
     <root>/jobs/<jobId>/claim.json        Lease: wer rechnet gerade
     <root>/jobs/<jobId>/cancel.flag       Editor: „brich ab“
     <root>/jobs/<jobId>/logs/worker.jsonl strukturierte Schritte (max. 200)
-    <root>/jobs/<jobId>/logs/worker.log   lesbares Protokoll (max. 200 Zeilen)
+    <root>/jobs/<jobId>/logs/worker.log   lesbare Jobspur (max. 200 Zeilen)
+    <root>/worker.status.json             Worker-Lebenszeichen und aktive Phase
+    <root>/worker.log                     begrenztes zentrales Worker-Log
     <root>/jobs/<jobId>/output/<stem>.wav Ergebnisse
     <root>/jobs/<jobId>/output/result.json Ergebnisdokument
     <root>/jobs/<jobId>/error.json        letzter Fehler
@@ -61,7 +63,6 @@ JOB_ID_MIN = 8
 CANCEL_POLL_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_POLL_SECONDS", "5"))
 CANCEL_KILL_GRACE_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_GRACE_SECONDS", "10"))
 MAX_WORKER_TRACE_LINES = 200
-
 
 
 # --------------------------------------------------------------------------- #
@@ -278,10 +279,14 @@ class JobStore:
             pass
 
     def log(self, job_id: str, message: str) -> None:
-        path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self._append_capped_line(path, f"{timestamp} {message}")
-        print(f"[STEM-REMOTE-WORKER] {job_id} {message}", flush=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if job_id:
+            path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+            self._append_capped_line(path, f"{ts} {message}")
+        # Root-Log hilft auch bei Startfehlern, bevor ein Job beansprucht ist.
+        root_line = f"{ts} [{self.worker_id}] {'' if not job_id else job_id + ' '}{message}"
+        self._append_capped_line(os.path.join(self.root, "worker.log"), root_line)
+        print(f"[STEM-REMOTE-WORKER] {self.worker_id} {job_id + ' ' if job_id else ''}{message}", flush=True)
 
     def log_event(
         self,
@@ -292,13 +297,12 @@ class JobStore:
         level: str = "info",
         **fields: Any,
     ) -> None:
-        """Schreibt einen begrenzten JSONL-Diagnoseschritt plus lesbare Logzeile."""
-        at = int(time.time() * 1000)
+        """Schreibt begrenzte JSONL-Diagnose plus lesbare Zeile."""
         event: Dict[str, Any] = {
             "id": f"worker-{uuid.uuid4().hex}",
             "source": "worker",
             "jobId": job_id,
-            "at": at,
+            "at": int(time.time() * 1000),
             "step": str(step)[:100],
             "level": level if level in {"info", "warning", "error"} else "info",
             "message": str(message)[:400],
@@ -307,15 +311,33 @@ class JobStore:
         # Nur kleine, nicht-sensitive Diagnosefelder; keine Pfade, Tokens oder Audiodaten.
         for key in ("status", "phase", "code", "percent", "device"):
             value = fields.get(key)
-            if isinstance(value, (str, int, float, bool)) and not isinstance(value, bool):
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
                 event[key] = str(value)[:180] if key in {"status", "phase", "code", "device"} else value
-
-        trace_path = self.worker_trace_path(job_id)
         self._append_capped_line(
-            trace_path,
+            self.worker_trace_path(job_id),
             json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
         )
         self.log(job_id, f"step={step} {message}")
+
+    def write_worker_status(self, status: dict) -> None:
+        """Schreibt einen Heartbeat in die Wurzel der Ablage.
+
+        Die Datei `worker.status.json` zeigt sofort (ohne in einzelne Jobs
+        zu schauen), ob der Worker läuft, welche Version, welches Gerät und
+        auf welchem Host. So lässt sich die Frage „sieht Colab meinen
+        Drive-Ordner überhaupt?" mit einem Blick beantworten – statt ewig
+        auf eine Reaktion zu warten.
+        """
+        status = dict(status)
+        status["id"] = self.worker_id
+        status["host"] = socket.gethostname()
+        status["heartbeatAt"] = int(time.time() * 1000)
+        status["heartbeatAtIso"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            os.makedirs(self.root, exist_ok=True)
+            write_json_atomic(os.path.join(self.root, "worker.status.json"), status)
+        except OSError as error:
+            print(f"[STEM-REMOTE-WORKER] Heartbeat konnte nicht geschrieben werden: {error}", flush=True)
 
 
 class JobCancelled(Exception):
@@ -419,14 +441,27 @@ class WorkerLeaseHeartbeat:
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._write_worker_status()
         self._thread = threading.Thread(target=self._run, name="airdox-worker-heartbeat", daemon=True)
         self._thread.start()
+
+    def _write_worker_status(self) -> None:
+        path = os.path.join(self.store.root, "worker.status.json")
+        try:
+            status = read_json(path) or {}
+        except Exception:  # noqa: BLE001 – defekte Statusdatei darf keine Inferenz verhindern
+            status = {}
+        if not isinstance(status, dict):
+            status = {}
+        status.update({"phase": f"Verarbeite Job {self.job_id}", "activeJobId": self.job_id})
+        self.store.write_worker_status(status)
 
     def _run(self) -> None:
         warned = False
         while not self._stop.wait(self.interval):
             try:
                 self.store.heartbeat(self.job_id, self.claim)
+                self._write_worker_status()
                 warned = False
             except Exception:  # noqa: BLE001 – ein Lease-Schreibfehler darf die Inferenz nicht beenden
                 if not warned:
@@ -879,6 +914,9 @@ def self_test() -> int:
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
+        parsed = parse_args(["--root", tmp, "--model", "test-model", "--profile", "HIGH_QUALITY", "--once"])
+        assert parsed.root == tmp and parsed.model_dir == "/content/models"
+        assert parsed.only_model == "test-model" and parsed.only_profile == "HIGH_QUALITY"
         store = JobStore(tmp, "self-test-worker")
         job_id = str(uuid.uuid4())
         os.makedirs(store.job_dir(job_id), exist_ok=True)
@@ -923,6 +961,9 @@ def self_test() -> int:
         lease_heartbeat.stop()
         assert other.claim_is_fresh(heartbeat_job_id) is True, "Lease muss während langer Inferenz regelmäßig erneuert werden"
         assert read_json(store.claim_path(heartbeat_job_id))["heartbeatAt"] > int(time.time() * 1000) - 5_000
+        worker_status = read_json(os.path.join(store.root, "worker.status.json")) or {}
+        assert worker_status.get("activeJobId") == heartbeat_job_id, "Worker-Heartbeat muss den laufenden Job zeigen"
+        assert worker_status.get("heartbeatAt", 0) > int(time.time() * 1000) - 5_000
         # Text- und JSONL-Diagnose bleiben auch nach vielen Ereignissen begrenzt.
         bounded_job_id = str(uuid.uuid4())
         trace_path = store.worker_trace_path(bounded_job_id)
@@ -1043,22 +1084,34 @@ def self_test() -> int:
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)")
+    # allow_abbrev=False verhindert, dass `--model` fälschlicherweise als
+    # Abkürzung für `--model-dir` interpretiert wird (argparse-Standard ist
+    # True). Das war der Hauptgrund dafür, dass der Worker in Colab mit einem
+    # falschen Modell-Pfad lief oder gleich bei `--profile` abstürzte – der
+    # Nutzer sah daraufhin ewig „warte auf Reaktion vom externen Rechner".
+    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)", allow_abbrev=False)
     parser.add_argument("--root", default=os.environ.get("AIRODOX_STEM_REMOTE_DIR", ""), help="Jobablage (Drive-Ordner)")
-    parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"))
-    parser.add_argument("--adapter", default=os.environ.get("AIRODOX_STEM_ADAPTER", "/content/airdox/python/bsroformer_inference.py"))
-    parser.add_argument("--work-dir", default="/content/airdox-work")
+    parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"),
+                        help="Ordner mit den Modell-Checkpoints")
+    parser.add_argument("--adapter", default=os.environ.get("AIRODOX_STEM_ADAPTER", "/content/airdox/python/bsroformer_inference.py"),
+                        help="Pfad zu python/bsroformer_inference.py")
+    parser.add_argument("--work-dir", default="/content/airdox-work", help="Lokaler Arbeitsordner (Arbeitskopien)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--worker", default=f"colab-{socket.gethostname()}-{os.getpid()}")
-    parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument("--poll", type=int, default=15, help="Sekunden zwischen zwei Poll-Durchläufen")
     parser.add_argument(
         "--cancel-poll",
         type=float,
         default=CANCEL_POLL_SECONDS,
         help="Sekunden zwischen Abbruch-Prüfungen während der Inferenz (0 = nur vor dem Start)",
     )
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--max-jobs", type=int, default=0, help="0 = unbegrenzt")
+    parser.add_argument("--once", action="store_true", help="Nur einen Poll-Durchlauf, dann beenden")
+    parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Anzahl Jobs, dann beenden (0 = unbegrenzt)")
+    parser.add_argument("--model", default="", dest="only_model",
+                        help="Nur Jobs mit dieser modelId bearbeiten (leer = alle)")
+    parser.add_argument("--profile", default="", dest="only_profile",
+                        help="Nur Jobs mit diesem Profil bearbeiten (leer = alle)")
+    parser.add_argument("--verbose", action="store_true", help="Mehr Diagnose-Ausgabe (jede Poll-Runde)")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -1083,10 +1136,47 @@ def main(argv: List[str]) -> int:
         return 2
     store = JobStore(args.root, args.worker)
     os.makedirs(args.work_dir, exist_ok=True)
-    _console_event(args.worker, "worker.started", rootLabel=os.path.basename(os.path.normpath(store.root)), device=args.device)
+    # Startup-Heartbeat **vor** dem ersten Poll: der Editor (und der Nutzer)
+    # sehen so sofort, dass der Worker die Ablage erreicht hat – statt ewig
+    # auf eine Reaktion zu warten (§21).
+    startup = {
+        "version": "colab-worker/2",
+        "root": store.root,
+        "device": args.device,
+        "adapter": args.adapter,
+        "modelDir": args.model_dir,
+        "workDir": args.work_dir,
+        "pollSeconds": args.poll,
+        "cancelPollSeconds": args.cancel_poll,
+        "onlyModel": args.only_model or None,
+        "onlyProfile": args.only_profile or None,
+        "gpu": _gpu_name(),
+        "pid": os.getpid(),
+        "python": sys.executable,
+        "startedAt": int(time.time() * 1000),
+    }
+    store.write_worker_status({**startup, "phase": "startup"})
+    _console_event(args.worker, "worker.started", rootLabel=os.path.basename(os.path.normpath(store.root)), device=args.device, gpu=startup["gpu"])
+    store.log("", f"Start – root={store.root} device={args.device} model-dir={args.model_dir} "
+                  f"adapter={args.adapter} poll={args.poll}s cancel-poll={args.cancel_poll}s "
+                  f"gpu={startup['gpu']} filter-model={args.only_model or '*'} "
+                  f"filter-profile={args.only_profile or '*'}")
+    # Adapter und Modelldir prüfen – Fehler sofort ins Log, statt still zu
+    # warten bis der erste Job kommt und dann kryptisch zu scheitern.
+    if not os.path.isfile(args.adapter):
+        store.log("", f"WARNUNG: Adapter nicht gefunden unter {args.adapter}")
+    if not os.path.isdir(args.model_dir):
+        store.log("", f"HINWEIS: Modell-Ordner {args.model_dir} existiert noch nicht (wird ggf. vom Notebook geladen)")
+    else:
+        models_present = [f for f in os.listdir(args.model_dir) if f.endswith((".ckpt", ".pt", ".pth", ".onnx", ".yaml", ".yml"))]
+        store.log("", f"Modelle im Ordner: {', '.join(models_present) if models_present else '(keine)'}")
     processed = 0
+    cycles = 0
     while True:
+        cycles += 1
         job_ids = store.list_job_ids()
+        seen = 0
+        considered = 0
         pending = 0
         cycle_processed = 0
         for job_id in job_ids:
@@ -1101,6 +1191,19 @@ def main(argv: List[str]) -> int:
                 store.log_event(job_id, "worker.manifest_invalid", "Manifest konnte nicht validiert werden.", level="error", code=error.code)
                 continue
             if manifest.get("status") in TERMINAL_STATUSES:
+                seen += 1
+                continue
+            seen += 1
+            considered += 1
+            # Filter aus dem Colab-Formular (--model / --profile): nur Jobs
+            # bearbeiten, die zum ausgewählten Modell/Profil passen.
+            if args.only_model and manifest.get("engine", {}).get("modelId") != args.only_model:
+                if args.verbose:
+                    store.log(job_id, f"übersprungen – anderes Modell ({manifest.get('engine', {}).get('modelId')} != {args.only_model})")
+                continue
+            if args.only_profile and manifest.get("engine", {}).get("profile") != args.only_profile:
+                if args.verbose:
+                    store.log(job_id, f"übersprungen – anderes Profil ({manifest.get('engine', {}).get('profile')} != {args.only_profile})")
                 continue
             pending += 1
             outcome = run_job(
@@ -1116,6 +1219,18 @@ def main(argv: List[str]) -> int:
             if outcome in {"completed", "failed", "cancelled"}:
                 processed += 1
                 cycle_processed += 1
+                # Heartbeat nach jedem Job – sieht der Editor, dass hier
+                # jemand aktiv ist.
+                store.write_worker_status({**startup, "phase": f"nach {outcome} (job {job_id})", "processed": processed})
+        # Zyklus-Heartbeat: auch wenn nichts zu tun war, zeigen, dass der
+        # Worker noch lebt. Der Editor/Wartende muss nicht raten.
+        store.write_worker_status({
+            **startup,
+            "phase": f"polling (zyklus {cycles}, {considered} offen, {processed} erledigt)",
+            "openJobs": considered,
+            "totalSeen": seen,
+            "processed": processed,
+        })
         sleep_seconds = max(5, args.poll)
         _console_event(
             args.worker,
@@ -1126,8 +1241,11 @@ def main(argv: List[str]) -> int:
             sleepSeconds=sleep_seconds,
         )
         if args.once:
+            store.log("", f"{processed} Job(s) bearbeitet – Ende (--once).")
             _console_event(args.worker, "worker.stopped", processed=processed, reason="once")
             return 0
+        if args.verbose:
+            store.log("", f"Zyklus {cycles}: {considered} offene Jobs, {seen} gesamt, schlafe {sleep_seconds}s")
         time.sleep(sleep_seconds)
 
 

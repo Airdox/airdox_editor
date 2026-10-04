@@ -37,8 +37,8 @@ oder weckt Colab **nicht**. Nach Ende/Abbruch einer Laufzeit die Zelle erneut st
    keine erfundene URL, `sha256` wird geprüft, sobald der Katalog ihn nennt
 4. `colab/remote_worker.py` starten: Jobs finden, beanspruchen, verifizieren,
    rechnen (GPU, sonst CPU), Ergebnisse + Hashes zurückschreiben
-5. Im Leerlauf zeigt `worker.poll` alle `POLL_SEKUNDEN`, wie viele Jobordner geprüft wurden; pro Job schreibt der Worker korrelierbare Schritte nach `jobs/<jobId>/logs/worker.jsonl` und `worker.log`.
-6. Nach einem Worker-Claim zeigt der Editor `claim.json`-Lebenszeichen und übernimmt die Worker-Schritte ins Statusfenster.
+5. Im Leerlauf zeigt `worker.poll` alle `POLL_SEKUNDEN`, wie viele Jobordner geprüft wurden; pro Job schreibt der Worker korrelierbare Schritte nach `jobs/<jobId>/logs/worker.jsonl` und `worker.log` (jeweils auf 200 Zeilen begrenzt). Im Ablage-Root zeigen `worker.status.json` und `worker.log`, ob der Worker den Ordner erreicht und welche Phase er bearbeitet.
+6. Nach einem Worker-Claim zeigt der Editor `claim.json`-Lebenszeichen und übernimmt die Worker-Schritte ins Statusfenster. Die CLI-Optionen `--model` und `--profile` werden ausdrücklich erkannt; Abkürzungen von `--model-dir` sind deaktiviert, damit Colab-Argumente nicht falsch zugeordnet werden.
 
 Der Worker ruft den **vorhandenen** Adapter `python/bsroformer_inference.py` auf –
 dieselbe Kette, die der Editor lokal für den HQ-Pfad benutzt. Es wird kein
@@ -64,6 +64,7 @@ MAX_JOBS = 0                 # 0 = so lange arbeiten, bis abgebrochen wird
 POLL_SEKUNDEN = 15           # Pause zwischen zwei Durchläufen
 ABBRUCH_SEKUNDEN = 5         # alle N s wird cancel.flag AUCH während der Rechnung geprüft
 EINMALIG = False             # True = nur einen Durchlauf (für Tests)
+VERBOSE = False              # True = ausführlicheres Logging (jede Poll-Runde)
 >>>
 
 <<<CELL py
@@ -202,6 +203,8 @@ if MAX_JOBS:
     kommando += ["--max-jobs", str(MAX_JOBS)]
 if EINMALIG:
     kommando += ["--once"]
+if VERBOSE:
+    kommando += ["--verbose"]
 
 print("Start:", " ".join(kommando))
 subprocess.run(kommando, check=False)
@@ -243,7 +246,7 @@ print("Der Editor importiert COMPLETED automatisch. Für weitere Jobs muss die W
 
 1. Job-ID im Editor notieren. Unter `jobs/<jobId>/` müssen `manifest.json` und `input/*.wav` im selben Drive-Konto/Jobordner sichtbar sein. Mit der Drive-Webansicht prüfen, dass Windows tatsächlich synchronisiert hat.
 2. Die Ausgabe der laufenden Worker-Zelle muss regelmäßig eine Zeile `worker.poll` mit `scanned`, `pending` und `processed` zeigen. Fehlt die Zeile, ist Zelle #5 noch nicht gestartet (z. B. weil Setup/Modelldownload noch läuft) oder die Laufzeit steht. `scanned: 0` trotz offenem Editor-Job spricht für einen falschen `JOB_ORDNER`, falschen Drive-Mount oder noch nicht synchronisierte Datei.
-3. Sobald der Worker den Job sieht, erscheint `claim.json`; `heartbeatAt` muss während der Rechnung weiterlaufen. Der Editor übernimmt Claim und Worker-Protokoll beim nächsten Poll.
+3. Sobald der Worker den Job sieht, erscheint `claim.json`; `heartbeatAt` muss während der Rechnung weiterlaufen. Im Ablage-Root aktualisiert `worker.status.json` zusätzlich den Worker-Heartbeat und die aktive Jobphase. Der Editor übernimmt Claim und Worker-Protokoll beim nächsten Poll.
 4. `jobs/<jobId>/logs/worker.jsonl` enthält strukturierte Ereignisse (`worker.claimed`, `worker.input_verified`, `worker.inference_started`, `worker.inference_progress`, `worker.output_written`, `worker.completed` oder `worker.failed`). `worker.log` ist die menschenlesbare Ergänzung; bei Fehlern außerdem `error.json` prüfen.
 5. Bei `COMPLETED` muss `manifest.json` alle Outputs aufführen. Danach zeigt der Editor `editor.output_validated` und `editor.result_imported`. Die Ablaufspur wird auch im Statusfenster angezeigt.
 
