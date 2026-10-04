@@ -17,6 +17,7 @@ import queue
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -524,13 +525,46 @@ def _remove_partial_outputs(output_dir: Path, stems: list[str]) -> None:
 
 
 def _wav_info(path: Path) -> tuple[int, int, int]:
-    with wave.open(str(path), "rb") as audio:
-        channels = audio.getnchannels()
-        rate = audio.getframerate()
-        frames = audio.getnframes()
-    if channels < 1 or rate < 1 or frames < 1:
-        raise ValueError(f"WAV-Datei ist leer oder ungültig: {path.name}")
-    return frames, rate, channels
+    try:
+        with wave.open(str(path), "rb") as audio:
+            channels = audio.getnchannels()
+            rate = audio.getframerate()
+            frames = audio.getnframes()
+            if channels >= 1 and rate >= 1 and frames >= 1:
+                return frames, rate, channels
+    except Exception:
+        pass
+
+    # Robust RIFF/WAV parser supporting IEEE Float (format 3) and extended headers
+    with open(path, "rb") as handle:
+        riff_header = handle.read(12)
+        if len(riff_header) < 12 or riff_header[:4] != b"RIFF" or riff_header[8:12] != b"WAVE":
+            raise ValueError(f"Keine gültige WAV-Datei: {path.name}")
+        channels = None
+        rate = None
+        block_align = None
+        data_frames = None
+        while True:
+            chunk_header = handle.read(8)
+            if len(chunk_header) < 8:
+                break
+            chunk_id, chunk_size = struct.unpack("<4sI", chunk_header)
+            if chunk_id == b"fmt " and chunk_size >= 16:
+                fmt_data = handle.read(chunk_size)
+                _tag, channels, rate, _byte_rate, block_align, _bits = struct.unpack("<HHIIHH", fmt_data[:16])
+            elif chunk_id == b"data":
+                if block_align and block_align > 0:
+                    data_frames = chunk_size // block_align
+                handle.seek(chunk_size, os.SEEK_CUR)
+            else:
+                handle.seek(chunk_size, os.SEEK_CUR)
+            if chunk_size % 2 == 1:
+                handle.seek(1, os.SEEK_CUR)
+
+        if channels and rate and data_frames is not None and channels >= 1 and rate >= 1 and data_frames >= 1:
+            return data_frames, rate, channels
+
+    raise ValueError(f"WAV-Datei ist leer oder ungültig: {path.name}")
 
 
 class WorkerCancelled(Exception):

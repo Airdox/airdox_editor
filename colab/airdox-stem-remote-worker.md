@@ -265,7 +265,7 @@ import os, subprocess, sys, time
 
 # Neuesten Quellcode aus Git abrufen
 if os.path.isdir(os.path.join(REPO_DIR, ".git")):
-    subprocess.run(["git", "-C", REPO_DIR, "pull", "--quiet"], check=False)
+    subprocess.run(["git", "-C", REPO_DIR, "pull", "-q"], check=False)
 
 def ablage_ansehen(zusatz=None):
     """`--check-store`: Status, Lease, Abbruchfahne und ein Urteil – ohne Rechnen."""
