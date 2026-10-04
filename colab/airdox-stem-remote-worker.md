@@ -263,6 +263,10 @@ print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Ab
 #     halbfertiger Job wird beim nächsten Start wieder aufgenommen).
 import os, subprocess, sys, time
 
+# Neuesten Quellcode aus Git abrufen
+if os.path.isdir(os.path.join(REPO_DIR, ".git")):
+    subprocess.run(["git", "-C", REPO_DIR, "pull", "--quiet"], check=False)
+
 def ablage_ansehen(zusatz=None):
     """`--check-store`: Status, Lease, Abbruchfahne und ein Urteil – ohne Rechnen."""
     return subprocess.run(
