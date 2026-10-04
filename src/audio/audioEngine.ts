@@ -61,6 +61,15 @@ class AudioEngine {
   private loopActive: boolean = false;
   private loopStart: number = 0;
   private loopEnd: number = 0;
+  /**
+   * Zielposition eines gebündelten Sprungs (siehe `seekScheduler`).
+   *
+   * Während der Nutzer springt, zeigt der Editor bereits die neue Position,
+   * der Audiograph wird aber höchstens alle 150 ms neu aufgesetzt. Ohne dieses
+   * Feld würde der Playhead-Treiber die Anzeige in der Zwischenzeit wieder auf
+   * die alte Tonposition zurückreißen – der Klick wäre sichtbar „verschluckt“.
+   */
+  private pendingSeekAt: number | null = null;
 
   // Analyser buffers
   private dataArrayL: Uint8Array = new Uint8Array(32);
@@ -392,9 +401,33 @@ class AudioEngine {
 
     this.isPlaying = false;
     this.isPlayingStems = false;
+    // Ein offenes Sprungziel gehört zu dem Graphen, der gerade abgerissen
+    // wurde: `play`/`playWithStems` setzen gleich einen neuen `startTime`.
+    this.pendingSeekAt = null;
+  }
+
+  /**
+   * Zielposition eines laufenden Sprungs vormerken: Die Anzeige (und
+   * `getCurrentTime()`) folgt sofort, der Audiograph wird vom `seekScheduler`
+   * kurz danach neu aufgesetzt.
+   *
+   * Bewusst nur für die **laufende** Wiedergabe: Im Pausenzustand ist die
+   * Position im Transport-Store maßgeblich, und ein späteres `play()` bekommt
+   * sie als Offsets übergeben. Würde hier auch im Pausenzustand geschrieben,
+   * könnte ein Sprung im Hauptdeck die Zeit eines parallel laufenden Clip-Decks
+   * verschieben – das Clip-Deck liest denselben `getCurrentTime()`.
+   */
+  public setSeekTarget(seconds: number): void {
+    this.pendingSeekAt = Math.max(0, seconds);
+  }
+
+  /** Zielanzeige freigeben, ohne den Graphen neu aufzusetzen. */
+  public clearSeekTarget(): void {
+    this.pendingSeekAt = null;
   }
 
   public getCurrentTime(): number {
+    if (this.pendingSeekAt !== null) return this.pendingSeekAt;
     if (!this.isPlaying || !this.ctx || !this.activeBuffer) {
       return this.pauseOffset;
     }

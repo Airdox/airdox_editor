@@ -53,8 +53,8 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
     ? `Die Jobablage ist derzeit nicht erreichbar. ${status?.reason ?? 'Bitte Drive für Desktop, Anmeldung, Internetverbindung und den gewählten Ordner prüfen.'} Der Job wird nicht automatisch als fehlgeschlagen gewertet.`
     : waiting
       ? job?.worker
-        ? `Seit ${Math.floor(age / 60)} Minuten kein neues Worker-Lebenszeichen. Bitte die Colab-Laufzeit und den Drive-Mount prüfen; der Job bleibt vorerst aktiv.`
-        : `Seit ${Math.floor(age / 60)} Minuten keine Statusänderung. Bitte prüfen, ob Drive für Desktop synchronisiert und das Colab-Notebook mit demselben Jobordner läuft.`
+        ? `Seit ${Math.floor(age / 60)} Minuten kein neues Worker-Lebenszeichen. Bitte die Colab-Laufzeit und den Drive-Mount prüfen; der Job bleibt aktiv. Ein Neustart von Zelle 5 genügt – der Job wird weiterverfolgt.`
+        : `Seit ${Math.floor(age / 60)} Minuten keine Statusänderung – der Job ist noch von keinem Rechner beansprucht. Bitte drei Dinge prüfen: (1) Läuft im Colab-Notebook Zelle 5, und ist dort derselbe JOB_ORDNER wie hier eingestellt? (2) Ist Drive für Desktop angemeldet und synchronisiert? (3) MODELL_ID im Notebook leer lassen – ein anderes Modell als im Steckbrief lässt den Worker den Job überspringen. Auf dem Rechner der Jobablage zeigt \`--check-store\` den Grund im Klartext.`
       : null;
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-4" role="presentation">
