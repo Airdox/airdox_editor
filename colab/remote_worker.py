@@ -249,14 +249,47 @@ class JobStore:
         )
 
     def log(self, job_id: str, message: str) -> None:
-        path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+        ts = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        line = f"{ts} {message}\n"
+        # 1. Job-spezifisches Log (für Nachvollziehbarkeit pro Job)
+        if job_id:
+            path = os.path.join(self.job_dir(job_id), "logs", "worker.log")
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "a", encoding="utf-8") as handle:
+                    handle.write(line)
+            except OSError:
+                pass
+        # 2. Zentrales Worker-Log im Root (für Debugging ohne in jeden Job
+        #    hineinschauen zu müssen – besonders hilfreich bei Startfehlern,
+        #    wenn noch gar kein Job beansprucht ist).
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as handle:
-                handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {message}\n")
+            os.makedirs(self.root, exist_ok=True)
+            with open(os.path.join(self.root, "worker.log"), "a", encoding="utf-8") as handle:
+                handle.write(f"{ts} [{self.worker_id}] {'' if not job_id else job_id + ' '}{message}\n")
         except OSError:
             pass
-        print(f"[STEM-REMOTE-WORKER] {job_id} {message}", flush=True)
+        print(f"[STEM-REMOTE-WORKER] {self.worker_id} {job_id + ' ' if job_id else ''}{message}", flush=True)
+
+    def write_worker_status(self, status: dict) -> None:
+        """Schreibt einen Heartbeat in die Wurzel der Ablage.
+
+        Die Datei `worker.status.json` zeigt sofort (ohne in einzelne Jobs
+        zu schauen), ob der Worker läuft, welche Version, welches Gerät und
+        auf welchem Host. So lässt sich die Frage „sieht Colab meinen
+        Drive-Ordner überhaupt?" mit einem Blick beantworten – statt ewig
+        auf eine Reaktion zu warten.
+        """
+        status = dict(status)
+        status["id"] = self.worker_id
+        status["host"] = socket.gethostname()
+        status["heartbeatAt"] = int(time.time() * 1000)
+        status["heartbeatAtIso"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            os.makedirs(self.root, exist_ok=True)
+            write_json_atomic(os.path.join(self.root, "worker.status.json"), status)
+        except OSError as error:
+            print(f"[STEM-REMOTE-WORKER] Heartbeat konnte nicht geschrieben werden: {error}", flush=True)
 
 
 class JobCancelled(Exception):
@@ -499,11 +532,18 @@ def run_job(
 
     claim = store.claim(job_id, device=device, gpu=_gpu_name())
     manifest["status"] = "RUNNING"
-    manifest["phase"] = "Arbeitskopie wird geladen"
+    manifest["phase"] = "Job beansprucht – Arbeitskopie wird geladen"
     manifest["percent"] = 1
     manifest["attempts"] = int(manifest.get("attempts") or 0) + 1
     manifest["worker"] = claim
+    # Manifest sofort mit dem Worker-Eintrag zurückschreiben: der Editor
+    # pollt alle 5 s und erkennt so, dass der Job von *diesem* Worker
+    # aufgenommen wurde (Stufe „Extern verarbeiten"). Ohne diesen Schritt
+    # blieb die Phase minutenlang auf „Auf Worker warten" bis die
+    # Arbeitskopie (teilweise 100 MB+) komplett auf das Colab-Dateisystem
+    # kopiert war.
     store.write_manifest(job_id, manifest)
+    store.log(job_id, f"Job beansprucht (Versuch {manifest['attempts']}) – {claim['host']} ({claim.get('gpu', '?')})")
 
     try:
         remote_input = os.path.join(store.root, manifest["input"]["relativePath"])
@@ -821,22 +861,34 @@ def self_test() -> int:
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)")
+    # allow_abbrev=False verhindert, dass `--model` fälschlicherweise als
+    # Abkürzung für `--model-dir` interpretiert wird (argparse-Standard ist
+    # True). Das war der Hauptgrund dafür, dass der Worker in Colab mit einem
+    # falschen Modell-Pfad lief oder gleich bei `--profile` abstürzte – der
+    # Nutzer sah daraufhin ewig „warte auf Reaktion vom externen Rechner".
+    parser = argparse.ArgumentParser(description="airdox High-Quality-Fernworker (Colab)", allow_abbrev=False)
     parser.add_argument("--root", default=os.environ.get("AIRODOX_STEM_REMOTE_DIR", ""), help="Jobablage (Drive-Ordner)")
-    parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"))
-    parser.add_argument("--adapter", default=os.environ.get("AIRODOX_STEM_ADAPTER", "/content/airdox/python/bsroformer_inference.py"))
-    parser.add_argument("--work-dir", default="/content/airdox-work")
+    parser.add_argument("--model-dir", default=os.environ.get("AIRODOX_STEM_MODEL_DIR", "/content/models"),
+                        help="Ordner mit den Modell-Checkpoints")
+    parser.add_argument("--adapter", default=os.environ.get("AIRODOX_STEM_ADAPTER", "/content/airdox/python/bsroformer_inference.py"),
+                        help="Pfad zu python/bsroformer_inference.py")
+    parser.add_argument("--work-dir", default="/content/airdox-work", help="Lokaler Arbeitsordner (Arbeitskopien)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--worker", default=f"colab-{socket.gethostname()}-{os.getpid()}")
-    parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument("--poll", type=int, default=15, help="Sekunden zwischen zwei Poll-Durchläufen")
     parser.add_argument(
         "--cancel-poll",
         type=float,
         default=CANCEL_POLL_SECONDS,
         help="Sekunden zwischen Abbruch-Prüfungen während der Inferenz (0 = nur vor dem Start)",
     )
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--max-jobs", type=int, default=0, help="0 = unbegrenzt")
+    parser.add_argument("--once", action="store_true", help="Nur einen Poll-Durchlauf, dann beenden")
+    parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Anzahl Jobs, dann beenden (0 = unbegrenzt)")
+    parser.add_argument("--model", default="", dest="only_model",
+                        help="Nur Jobs mit dieser modelId bearbeiten (leer = alle)")
+    parser.add_argument("--profile", default="", dest="only_profile",
+                        help="Nur Jobs mit diesem Profil bearbeiten (leer = alle)")
+    parser.add_argument("--verbose", action="store_true", help="Mehr Diagnose-Ausgabe (jede Poll-Runde)")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -850,9 +902,46 @@ def main(argv: List[str]) -> int:
         return 2
     store = JobStore(args.root, args.worker)
     os.makedirs(args.work_dir, exist_ok=True)
-    print(f"[STEM-REMOTE-WORKER] Start: worker={args.worker} root={store.root} device={args.device}", flush=True)
+    # Startup-Heartbeat **vor** dem ersten Poll: der Editor (und der Nutzer)
+    # sehen so sofort, dass der Worker die Ablage erreicht hat – statt ewig
+    # auf eine Reaktion zu warten (§21).
+    startup = {
+        "version": "colab-worker/2",
+        "root": store.root,
+        "device": args.device,
+        "adapter": args.adapter,
+        "modelDir": args.model_dir,
+        "workDir": args.work_dir,
+        "pollSeconds": args.poll,
+        "cancelPollSeconds": args.cancel_poll,
+        "onlyModel": args.only_model or None,
+        "onlyProfile": args.only_profile or None,
+        "gpu": _gpu_name(),
+        "pid": os.getpid(),
+        "python": sys.executable,
+        "startedAt": int(time.time() * 1000),
+    }
+    store.write_worker_status({**startup, "phase": "startup"})
+    store.log("", f"Start – root={store.root} device={args.device} model-dir={args.model_dir} "
+                  f"adapter={args.adapter} poll={args.poll}s cancel-poll={args.cancel_poll}s "
+                  f"gpu={startup['gpu']} filter-model={args.only_model or '*'} "
+                  f"filter-profile={args.only_profile or '*'}")
+    # Adapter und Modelldir prüfen – Fehler sofort ins Log, statt still zu
+    # warten bis der erste Job kommt und dann kryptisch zu scheitern.
+    if not os.path.isfile(args.adapter):
+        store.log("", f"WARNUNG: Adapter nicht gefunden unter {args.adapter}")
+    if not os.path.isdir(args.model_dir):
+        store.log("", f"HINWEIS: Modell-Ordner {args.model_dir} existiert noch nicht (wird ggf. vom Notebook geladen)")
+    else:
+        models_present = [f for f in os.listdir(args.model_dir) if f.endswith((".ckpt", ".pt", ".pth", ".onnx", ".yaml", ".yml"))]
+        store.log("", f"Modelle im Ordner: {', '.join(models_present) if models_present else '(keine)'}")
     processed = 0
+    cycles = 0
     while True:
+        cycles += 1
+        cycle_started = time.time()
+        seen = 0
+        considered = 0
         for job_id in store.list_job_ids():
             if args.max_jobs and processed >= args.max_jobs:
                 break
@@ -865,6 +954,19 @@ def main(argv: List[str]) -> int:
                 store.log(job_id, f"Manifest ungültig: {error.message}")
                 continue
             if manifest.get("status") in TERMINAL_STATUSES:
+                seen += 1
+                continue
+            seen += 1
+            considered += 1
+            # Filter aus dem Colab-Formular (--model / --profile): nur Jobs
+            # bearbeiten, die zum ausgewählten Modell/Profil passen.
+            if args.only_model and manifest.get("engine", {}).get("modelId") != args.only_model:
+                if args.verbose:
+                    store.log(job_id, f"übersprungen – anderes Modell ({manifest.get('engine', {}).get('modelId')} != {args.only_model})")
+                continue
+            if args.only_profile and manifest.get("engine", {}).get("profile") != args.only_profile:
+                if args.verbose:
+                    store.log(job_id, f"übersprungen – anderes Profil ({manifest.get('engine', {}).get('profile')} != {args.only_profile})")
                 continue
             outcome = run_job(
                 store,
@@ -878,9 +980,23 @@ def main(argv: List[str]) -> int:
             )
             if outcome in {"completed", "failed", "cancelled"}:
                 processed += 1
+                # Heartbeat nach jedem Job – sieht der Editor, dass hier
+                # jemand aktiv ist.
+                store.write_worker_status({**startup, "phase": f"nach {outcome} (job {job_id})", "processed": processed})
+        # Zyklus-Heartbeat: auch wenn nichts zu tun war, zeigen, dass der
+        # Worker noch lebt. Der Editor/Wartende muss nicht raten.
+        store.write_worker_status({
+            **startup,
+            "phase": f"polling (zyklus {cycles}, {considered} offen, {processed} erledigt)",
+            "openJobs": considered,
+            "totalSeen": seen,
+            "processed": processed,
+        })
         if args.once:
-            print(f"[STEM-REMOTE-WORKER] {processed} Job(s) bearbeitet – Ende (--once).", flush=True)
+            store.log("", f"{processed} Job(s) bearbeitet – Ende (--once).")
             return 0
+        if args.verbose:
+            store.log("", f"Zyklus {cycles}: {considered} of fen(e) Jobs, {seen} gesamt, schlafe {args.poll}s")
         time.sleep(max(5, args.poll))
 
 

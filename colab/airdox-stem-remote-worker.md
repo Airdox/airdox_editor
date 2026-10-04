@@ -62,6 +62,7 @@ MAX_JOBS = 0                 # 0 = so lange arbeiten, bis abgebrochen wird
 POLL_SEKUNDEN = 15           # Pause zwischen zwei Durchläufen
 ABBRUCH_SEKUNDEN = 5         # alle N s wird cancel.flag AUCH während der Rechnung geprüft
 EINMALIG = False             # True = nur einen Durchlauf (für Tests)
+VERBOSE = False              # True = ausführlicheres Logging (jede Poll-Runde)
 >>>
 
 <<<CELL py
@@ -199,6 +200,8 @@ if MAX_JOBS:
     kommando += ["--max-jobs", str(MAX_JOBS)]
 if EINMALIG:
     kommando += ["--once"]
+if VERBOSE:
+    kommando += ["--verbose"]
 
 print("Start:", " ".join(kommando))
 subprocess.run(kommando, check=False)
