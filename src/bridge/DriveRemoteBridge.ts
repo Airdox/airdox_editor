@@ -357,7 +357,12 @@ export function loadStemsToDeck(
     errors.push(`Deck-Fehler: ${e.message}`);
     return {
       audioContext: null,
-      channels: {},
+      channels: {
+        drums: null,
+        bass: null,
+        other: null,
+        vocals: null,
+      },
       assigned: false,
       cleanupQueued: false,
       errors,
