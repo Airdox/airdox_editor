@@ -38,6 +38,9 @@ const appSource = await read('src/App.tsx');
 const trackImportSource = await read('src/features/import/useTrackImport.ts');
 // Die Sammlungsdatei-Konstante liegt im Projektmodell.
 const projectModelSource = await read('src/features/project/projectModel.ts');
+// Projektdateien und das Laden von Audiodateien liegen in diesem Modul
+// (WP-06, Schritt 4); inklusive der Ablehnung externer XML-Dateien beim Ziehen.
+const projectFilesSource = await read('src/features/project/useProjectFiles.ts');
 const menuBarSource = await read('src/components/MenuBar.tsx');
 const preloadSource = await read('electron/preload.cjs');
 const mainSource = await read('electron/main.cjs');
@@ -88,7 +91,7 @@ assert.ok(
   'the single authoritative collection file is rekordbox_export2.xml'
 );
 assert.ok(
-  appSource.includes('Ein externer XML-Import ist deaktiviert'),
+  projectFilesSource.includes('Ein externer XML-Import ist deaktiviert'),
   'drag & drop of external XML files stays refused'
 );
 assert.ok(
