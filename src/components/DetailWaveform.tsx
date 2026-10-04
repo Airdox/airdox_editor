@@ -64,6 +64,14 @@ interface DetailWaveformProps {
   waveformMode: WaveformMode;
   selection: SelectionRange | null;
   quantize: boolean;
+  /**
+   * Skalierungsfaktor der Wellenform-Amplitude (1 = Normalansicht).
+   * Der Fokus-Modus („Max. Platz / Alles einklappen") setzt 1,25: nachdem alle
+   * Panels geschlossen sind, wächst die Zeichenfläche bereits über die freie
+   * Höhe; die Amplitude skaliert zusätzlich mit, damit die Wellenform die
+   * maximale vertikale Bildfläche wirklich ausnutzt.
+   */
+  verticalScale?: number;
   onSeek: (time: number) => void;
   onSelect: (sel: SelectionRange | null) => void;
   onZoomIn: () => void;
@@ -117,6 +125,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   waveformMode,
   selection,
   quantize,
+  verticalScale = 1,
   onSeek,
   onSelect,
   onZoomIn,
@@ -287,7 +296,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
       const waveBottom = hasPhraseLane ? Math.max(rulerBottom + 20, height - PHRASE_LANE_HEIGHT) : height;
       const waveLaneHeight = Math.max(20, waveBottom - rulerBottom);
       const centerY = rulerBottom + waveLaneHeight / 2;
-      const maxHalfHeight = waveLaneHeight * 0.44;
+      const maxHalfHeight = waveLaneHeight * 0.44 * verticalScale;
 
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, width, height);

@@ -1,34 +1,48 @@
 /**
  * @license
- * Rekordbox MenuBar Component
- * German/English standard menu bar matching the authoritative reference with comprehensive tooltips.
+ * airdox_SMART_Editor – Menüleiste (Teil von ZONE 1).
+ *
+ * Seit UI v2.0 ist dies KEINE eigene Zeile mehr: die vier Menüs
+ * (Datei, Bearbeiten, Betrachten, Hilfe) sitzen als Cluster in der globalen
+ * Top-Bar (Zone1TopBar). Damit gibt es keine dritte Leiste zwischen
+ * Fenstertitelleiste und Wellenform – Zone 1 ist genau eine Leiste.
+ *
+ * Was hier bewusst NICHT mehr steht:
+ *   - der frühere rechte Schnellzugriff (AI COPILOT / TRACK-IMPORT /
+ *     DB-Extraktor): „TRACK-IMPORT" war die redundante Import-Schaltfläche, die
+ *     das Ausschlusskriterium von Zone 1 verbietet. Track-Import liegt im Menü
+ *     „Datei"; Copilot und DB-Extraktor sind globale Werkzeuge und stehen
+ *     rechts in Zone1TopBar.
+ *   - ein Prozessstatus im Menüpunkt („Sammlung wird geladen…"): Zone 1 kennt
+ *     keinen temporären Status. Ist die Sammlung am Laden, bleibt der Eintrag
+ *     schlicht deaktiviert; den Fortschritt meldet die flüchtige Statuskarte
+ *     (TransientStatusToast) außerhalb der Zonen.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Disc,
   Trash2,
   ShieldCheck,
   Scissors,
   Copy,
   ClipboardPaste,
   Sparkles,
-  Bot,
   Radio,
-  FileAudio,
-  FolderOpen,
-  Save,
   Plus,
   Wand2,
-  Sliders,
+  FolderOpen,
+  Save,
+  BrainCircuit,
 } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
+import type { Zone3SectionId } from '../ui/workspaceLayout';
 
-interface MenuBarProps {
+export interface MenuBarProps {
   onNewProject: () => void;
   onSaveProject: () => void;
   onOpenProject: () => void;
   onImportTracks: () => void;
+  /** Nur zum Deaktivieren des Menüpunkts – kein Status in Zone 1. */
   trackImportLoading?: boolean;
   onImportAudio: () => void;
   onExportWav: () => void;
@@ -41,9 +55,12 @@ interface MenuBarProps {
   onSetWaveformMode: (mode: WaveformMode) => void;
   paletteOpen: boolean;
   onTogglePalette: () => void;
-  editPaletteOpen?: boolean;
-  onToggleEditPalette?: () => void;
-  onMaximizeWaveform?: () => void;
+  /** Offene Sektion in Zone 3 (Reiter). `null` = alles eingeklappt. */
+  zone3Section?: Zone3SectionId | null;
+  onToggleZone3Section?: (section: Zone3SectionId) => void;
+  /** Fokus-Modus „Max. Platz / Alles einklappen". */
+  focusMode?: boolean;
+  onToggleFocusMode?: () => void;
   browserOpen: boolean;
   onToggleBrowser: () => void;
   chatbotOpen?: boolean;
@@ -65,7 +82,12 @@ interface MenuBarProps {
   onSeparateStems?: () => void;
   onOpenRecorder?: () => void;
   onOpenInitialSetup?: () => void;
+  /** Modell-Editor öffnen („Modelle & Architekturen"). */
+  onOpenStemModels?: () => void;
 }
+
+const MENU_ITEM =
+  'w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 disabled:hover:bg-transparent flex justify-between items-center gap-3';
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
@@ -84,9 +106,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSetWaveformMode,
   paletteOpen,
   onTogglePalette,
-  editPaletteOpen = true,
-  onToggleEditPalette,
-  onMaximizeWaveform,
+  zone3Section = null,
+  onToggleZone3Section,
+  focusMode = false,
+  onToggleFocusMode,
   browserOpen,
   onToggleBrowser,
   chatbotOpen,
@@ -108,13 +131,14 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSeparateStems,
   onOpenRecorder,
   onOpenInitialSetup,
+  onOpenStemModels,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setActiveMenu(null);
       }
     };
@@ -122,449 +146,235 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     return () => window.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const toggleMenu = (name: string) => {
-    setActiveMenu(activeMenu === name ? null : name);
+  const toggleMenu = (name: string) => setActiveMenu(activeMenu === name ? null : name);
+  const runAndClose = (action: () => void) => () => {
+    action();
+    setActiveMenu(null);
   };
+  const triggerClass = (name: string) =>
+    `px-2.5 py-1 rounded text-[11.5px] transition-colors ${
+      activeMenu === name ? 'bg-[#25272e] text-white' : 'text-neutral-300 hover:bg-[#1b1d26] hover:text-white'
+    }`;
+  const dropdownClass = 'absolute left-0 top-full mt-1 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]';
 
   return (
-    <div
-      ref={menuRef}
-      className="h-6 bg-[#0a0b0d] border-b border-[#18191d] flex items-center justify-between px-2 text-xs select-none z-40 relative"
-    >
-      <div className="flex items-center space-x-1 text-neutral-300">
-        {/* Datei */}
-        <div className="relative">
-          <button
-            onClick={() => toggleMenu('datei')}
-            className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
-              activeMenu === 'datei' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
-            }`}
-            title="Projekt- und Dateioperationen (Neu, Öffnen, Speichern, Import, Export)"
-          >
-            Datei
-          </button>
-          {activeMenu === 'datei' && (
-            <div className="absolute left-0 top-6 w-64 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
-              <button
-                onClick={() => { onNewProject(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Erstellt ein neues, leeres Editor-Projekt"
-              >
-                <span>Neues Projekt</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+N</span>
+    <div ref={menuRef} className="flex items-center gap-0.5 text-xs select-none relative flex-shrink-0" data-zone1-cluster="menu">
+      {/* ── Datei ─────────────────────────────────────────────────────────── */}
+      <div className="relative">
+        <button type="button" onClick={() => toggleMenu('datei')} className={triggerClass('datei')} title="Projekt- und Dateioperationen (Neu, Öffnen, Speichern, Import, Export)">
+          Datei
+        </button>
+        {activeMenu === 'datei' && (
+          <div className={`${dropdownClass} w-64`}>
+            <button type="button" onClick={runAndClose(onNewProject)} className={MENU_ITEM} title="Erstellt ein neues, leeres Editor-Projekt">
+              <span className="flex items-center gap-1.5"><Plus size={11} /><span>Neues Projekt</span></span>
+              <span className="text-neutral-500">Ctrl+N</span>
+            </button>
+            <button type="button" onClick={runAndClose(onOpenProject)} className={MENU_ITEM} title="Öffnet ein bestehendes .airdox.json Projekt">
+              <span className="flex items-center gap-1.5"><FolderOpen size={11} /><span>Projekt öffnen…</span></span>
+              <span className="text-neutral-500">Ctrl+Shift+O</span>
+            </button>
+            <button type="button" onClick={runAndClose(onSaveProject)} className={MENU_ITEM} title="Speichert den aktuellen Bearbeitungsstand nicht-destruktiv">
+              <span className="flex items-center gap-1.5"><Save size={11} /><span>Projekt speichern…</span></span>
+              <span className="text-neutral-500">Ctrl+S</span>
+            </button>
+            <div className="h-px bg-[#262830] my-1" />
+            {onOpenDatabaseInspector && (
+              <button type="button" onClick={runAndClose(onOpenDatabaseInspector)} className={`${MENU_ITEM} text-[#00a2ff] font-medium`} title="Rekordbox SQLite-Datenbank & ANLZ-Wellenformen direkt analysieren">
+                <span>Daten- &amp; Waveform-Extraktor (DB/ANLZ)…</span>
               </button>
-              <button
-                onClick={() => { onOpenProject(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Öffnet ein bestehendes .airdox.json Projekt"
-              >
-                <span>Projekt öffnen...</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Shift+O</span>
+            )}
+            <button type="button" onClick={runAndClose(onImportTracks)} disabled={trackImportLoading} className={MENU_ITEM} title="Die eingebettete Rekordbox-Sammlung öffnen und einen Originaltrack auswählen">
+              <span>Track-Import…</span>
+              <span className="text-neutral-500">Ctrl+O</span>
+            </button>
+            <button type="button" onClick={runAndClose(onImportAudio)} className={MENU_ITEM} title="Eigenständige Audiodatei (WAV, MP3, FLAC, AIFF) in Deck A laden">
+              <span>Audiodatei laden (WAV, MP3, FLAC)…</span>
+            </button>
+            {onOpenRecorder && (
+              <button type="button" onClick={runAndClose(onOpenRecorder)} className={`${MENU_ITEM} text-[#ff5147] font-semibold`} title="Professionellen DJ-Set- und Mikrofon-Recorder öffnen">
+                <span className="flex items-center gap-1.5"><Radio size={12} /><span>Pro Recorder öffnen…</span></span>
+                <span className="text-neutral-500">F9</span>
               </button>
-              <button
-                onClick={() => { onSaveProject(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Speichert den aktuellen Bearbeitungsstand nicht-destruktiv"
-              >
-                <span>Projekt speichern...</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+S</span>
-              </button>
-              <div className="h-px bg-[#262830] my-1" />
-              {onOpenDatabaseInspector && (
-                <button
-                  onClick={() => { onOpenDatabaseInspector(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#00a2ff] font-medium"
-                  title="Rekordbox SQLite-Datenbank & ANLZ-Wellenformen direkt analysieren"
-                >
-                  <span>Daten- &amp; Waveform-Extraktor (DB/ANLZ)...</span>
-                </button>
-              )}
-              <button
-                onClick={() => { onImportTracks(); setActiveMenu(null); }}
-                disabled={trackImportLoading}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-50 flex justify-between"
-                title="Die eingebettete Rekordbox-Sammlung öffnen und einen Originaltrack auswählen"
-              >
-                <span>{trackImportLoading ? 'Rekordbox-Sammlung wird geladen…' : 'Track-Import…'}</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+O</span>
-              </button>
-              <button
-                onClick={() => { onImportAudio(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Eigenständige Audiodatei (WAV, MP3, FLAC, AIFF) in Deck A laden"
-              >
-                <span>Audiodatei laden (WAV, MP3, FLAC)...</span>
-              </button>
-              {onOpenRecorder && (
-                <button
-                  onClick={() => { onOpenRecorder(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between text-[#ff5147] font-semibold"
-                  title="Professionellen DJ-Set- und Mikrofon-Recorder öffnen"
-                >
-                  <span className="flex items-center gap-2"><Radio size={13} /> Pro Recorder öffnen…</span>
-                  <span className="text-neutral-500">F9</span>
-                </button>
-              )}
-              <div className="h-px bg-[#262830] my-1" />
-              <button
-                onClick={() => { onExportWav(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Gemasterte WAV-Audiodatei in voller 24-Bit/32-Bit Qualität exportieren"
-              >
-                <span>Master als WAV exportieren...</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+E</span>
-              </button>
-              <button
-                onClick={() => { onExportXml(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Aktualisierte XML-Metadaten für Pioneer Rekordbox exportieren"
-              >
-                <span>Rekordbox XML exportieren...</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Bearbeiten */}
-        <div className="relative">
-          <button
-            onClick={() => toggleMenu('bearbeiten')}
-            className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
-              activeMenu === 'bearbeiten' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
-            }`}
-            title="Schnitt- und Bearbeitungsoperationen (Undo, Redo, Cut, Copy, Paste, Stems)"
-          >
-            Bearbeiten
-          </button>
-          {activeMenu === 'bearbeiten' && (
-            <div className="absolute left-0 top-6 w-56 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
-              <button
-                onClick={() => { onUndo(); setActiveMenu(null); }}
-                disabled={!canUndo}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
-                title="Macht die letzte Audio-Bearbeitung rückgängig"
-              >
-                <span>Rückgängig (Undo)</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Z</span>
-              </button>
-              <button
-                onClick={() => { onRedo(); setActiveMenu(null); }}
-                disabled={!canRedo}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
-                title="Wiederholt den zuletzt rückgängig gemachten Schritt"
-              >
-                <span>Wiederholen (Redo)</span>
-                <span className="text-neutral-500 hover:text-neutral-200">Ctrl+Y</span>
-              </button>
-
-              <div className="h-px bg-[#262830] my-1" />
-
-              {onCopy && (
-                <button
-                  onClick={() => { onCopy(); setActiveMenu(null); }}
-                  disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
-                  title="Kopiert den markierten Wellenformbereich in die verlustfreie Zwischenablage"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Copy size={11} />
-                    <span>Kopieren (Copy)</span>
-                  </span>
-                  <span className="text-neutral-500">Ctrl+C</span>
-                </button>
-              )}
-
-              {onCut && (
-                <button
-                  onClick={() => { onCut(); setActiveMenu(null); }}
-                  disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
-                  title="Schneidet die Auswahl aus und legt sie in der Zwischenablage ab"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Scissors size={11} />
-                    <span>Ausschneiden (Cut)</span>
-                  </span>
-                  <span className="text-neutral-500">Ctrl+X</span>
-                </button>
-              )}
-
-              {onPaste && (
-                <button
-                  onClick={() => { onPaste(); setActiveMenu(null); }}
-                  disabled={!hasClipboard}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between"
-                  title="Fügt den Clip an der aktuellen Cursorposition ein"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <ClipboardPaste size={11} />
-                    <span>Einfügen (Paste)</span>
-                  </span>
-                  <span className="text-neutral-500">Ctrl+V</span>
-                </button>
-              )}
-
-              {onDelete && (
-                <button
-                  onClick={() => { onDelete(); setActiveMenu(null); }}
-                  disabled={!hasSelection}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 flex justify-between text-[#ff5549]"
-                  title="Auswahl löschen (Standard-Löschen oder Ripple Delete)"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Trash2 size={11} />
-                    <span>Löschen (Delete)…</span>
-                  </span>
-                  <span className="text-neutral-500">Del</span>
-                </button>
-              )}
-
-              <div className="h-px bg-[#262830] my-1" />
-
-              {onSeparateStems && (
-                <button
-                  onClick={() => { onSeparateStems(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00c8ff] font-medium"
-                  title="Startet die KI-Stem-Separation mit dem in den Einstellungen konfigurierten Modell"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Sparkles size={12} className="text-[#00c8ff]" />
-                    <span>Stems jetzt trennen...</span>
-                  </span>
-                  <span className="text-[9px] bg-[#0088ff]/30 text-[#00c8ff] px-1 rounded font-mono">KI</span>
-                </button>
-              )}
-
-              {onOpenEditAssistant && (
-                <button
-                  onClick={() => { onOpenEditAssistant(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e5ff]"
-                  title="Prüft die Integrität von Zwischenablage und Auswahlbereich"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <ShieldCheck size={12} className="text-[#00e5ff]" />
-                    <span>Edit Assistant prüfen...</span>
-                  </span>
-                </button>
-              )}
-
-              {onClearHistory && hasHistory && (
-                <button
-                  onClick={() => { onClearHistory(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#ff3b30] hover:text-white flex justify-between items-center text-[#ff8a80]"
-                  title="Löscht den Undo/Redo-Verlauf zur Freigabe von Arbeitsspeicher"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Trash2 size={11} />
-                    <span>Bearbeitungsverlauf leeren...</span>
-                  </span>
-                </button>
-              )}
-
-              {onOpenMidiModal && (
-                <button
-                  onClick={() => { onOpenMidiModal(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00e676]"
-                  title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Action Pad Mapping öffnen"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Radio size={12} className="text-[#00e676]" />
-                    <span>Pioneer MIDI Controller (DDJ-FLX4 / 1000)...</span>
-                  </span>
-                  <span className="text-[9px] bg-emerald-500/20 text-[#00e676] px-1 rounded font-mono">PADS</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Betrachten */}
-        <div className="relative">
-          <button
-            onClick={() => toggleMenu('betrachten')}
-            className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
-              activeMenu === 'betrachten' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
-            }`}
-            title="Ansichten, Farbpaletten und Wellenform-Modi einstellen"
-          >
-            Betrachten
-          </button>
-          {activeMenu === 'betrachten' && (
-            <div className="absolute left-0 top-6 w-52 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
-              <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">
-                Waveform-Modus
-              </div>
-              <button
-                onClick={() => { onSetWaveformMode('BLUE'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === 'BLUE' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-                title="Monochrome blaue Rekordbox-Wellenform"
-              >
-                <span>BLUE (Monochrom)</span>
-                {waveformMode === 'BLUE' && <span>✓</span>}
-              </button>
-              <button
-                onClick={() => { onSetWaveformMode('RGB'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === 'RGB' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-                title="RGB-Farben nach Frequenzbändern (Rot=Bass, Grün=Mitten, Blau=Höhen)"
-              >
-                <span>RGB (Frequenzfarben)</span>
-                {waveformMode === 'RGB' && <span>✓</span>}
-              </button>
-              <button
-                onClick={() => { onSetWaveformMode('3BAND'); setActiveMenu(null); }}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === '3BAND' ? 'text-[#00a2ff] font-medium' : ''
-                }`}
-                title="3 getrennte Frequenzbänder (Pioneer 3-Band Waveform)"
-              >
-                <span>3BAND (Low / Mid / High)</span>
-                {waveformMode === '3BAND' && <span>✓</span>}
-              </button>
-              <div className="h-px bg-[#262830] my-1" />
-              {onToggleEditPalette && (
-                <button
-                  onClick={() => { onToggleEditPalette(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
-                  title="Untere Palette für Beat Select, Auswahl und Schnittoperationen ein-/ausblenden"
-                >
-                  <span>Editierpalette (Unten)</span>
-                  <span className="flex items-center space-x-2">
-                    <span className="text-neutral-500 text-[10px]">E</span>
-                    <span>{editPaletteOpen ? '✓' : ''}</span>
-                  </span>
-                </button>
-              )}
-              <button
-                onClick={() => { onTogglePalette(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center"
-                title="Rechte Clip-Palette für geschnittene Audioschnipsel ein-/ausblenden"
-              >
-                <span>Clip-Palette (Rechts)</span>
-                <span className="flex items-center space-x-2">
-                  <span className="text-neutral-500 text-[10px]">P</span>
-                  <span>{paletteOpen ? '✓' : ''}</span>
-                </span>
-              </button>
-              {onMaximizeWaveform && (
-                <button
-                  onClick={() => { onMaximizeWaveform(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between items-center text-[#00c8ff]"
-                  title="Maximiert den Wellenformbereich über die volle Fensterhöhe"
-                >
-                  <span>Wellenform maximieren (Zen)</span>
-                  <span className="text-neutral-400 text-[10px]">M</span>
-                </button>
-              )}
-              <button
-                onClick={() => { onToggleBrowser(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex justify-between"
-                title="Browser & Multi-Track Leiste ein-/ausblenden"
-              >
-                <span>Browser &amp; Multi-Track</span>
-                <span>{browserOpen ? '✓' : ''}</span>
-              </button>
-              {onToggleChatbot && (
-                <button
-                  onClick={() => { onToggleChatbot(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between text-[#00a2ff] hover:text-white font-medium"
-                  title="KI-gestützten DJ-Copiloten für Mix-Analysen und Cue-Vorschläge öffnen"
-                >
-                  <span className="flex items-center space-x-1.5">
-                    <Sparkles size={11} />
-                    <span>AI Smart Copilot Palette</span>
-                  </span>
-                  <span>{chatbotOpen ? '✓' : ''}</span>
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Hilfe */}
-        <div className="relative">
-          <button
-            onClick={() => toggleMenu('hilfe')}
-            className={`px-2.5 py-0.5 rounded text-[11.5px] hover:bg-[#202228] transition-colors ${
-              activeMenu === 'hilfe' ? 'bg-[#25272e] text-white' : 'text-neutral-300'
-            }`}
-            title="Hilfe, Ersteinrichtung und System-Diagnose"
-          >
-            Hilfe
-          </button>
-          {activeMenu === 'hilfe' && (
-            <div className="absolute left-0 top-6 w-64 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]">
-              {onOpenInitialSetup && (
-                <button
-                  onClick={() => { onOpenInitialSetup(); setActiveMenu(null); }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white text-[#00c8ff] font-semibold flex items-center justify-between"
-                  title="Ersteinrichtungs- und Installationsassistenten öffnen"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Wand2 size={12} />
-                    <span>Ersteinrichtung &amp; KI-Installer…</span>
-                  </span>
-                  <span className="text-[9px] bg-[#0088ff]/20 text-[#00c8ff] px-1 rounded font-mono">SETUP</span>
-                </button>
-              )}
-              <button
-                onClick={() => { onShowInfo(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
-                title="Informationen zu Rekordbox-Datenquellen und Non-Destructive Originalschutz"
-              >
-                Rekordbox Daten &amp; Originalschutz...
-              </button>
-              <div className="border-t border-[#2b2d35] my-1" />
-              <button
-                onClick={() => { onOpenSystemLogs?.(); setActiveMenu(null); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white"
-                title="System-Diagnoseprotokoll für Fehler und Inferenzzeiten öffnen"
-              >
-                System-Protokoll...
-              </button>
-            </div>
-          )}
-        </div>
+            )}
+            <div className="h-px bg-[#262830] my-1" />
+            <button type="button" onClick={runAndClose(onExportWav)} className={MENU_ITEM} title="Gemasterte WAV-Audiodatei in voller 24-Bit/32-Bit-Qualität exportieren">
+              <span>Master als WAV exportieren…</span>
+              <span className="text-neutral-500">Ctrl+E</span>
+            </button>
+            <button type="button" onClick={runAndClose(onExportXml)} className={MENU_ITEM} title="Aktualisierte XML-Metadaten für Pioneer Rekordbox exportieren">
+              <span>Rekordbox XML exportieren…</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Right side: Quick access triggers */}
-      <div className="flex items-center space-x-1.5">
-        {onToggleChatbot && (
-          <button
-            onClick={onToggleChatbot}
-            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded text-[10.5px] font-mono font-bold transition-all shadow-sm cursor-pointer ${
-              chatbotOpen
-                ? 'bg-gradient-to-r from-[#0088ff] to-[#7c3aed] text-white border border-blue-400/50 shadow-blue-500/20'
-                : 'bg-[#181a24] hover:bg-[#202330] text-neutral-200 border border-[#2d3144] hover:border-[#0088ff]/50'
-            }`}
-            title="AI Smart Copilot Palette öffnen / schließen (Mix-Analysen &amp; DJ-Tipps)"
-          >
-            <Sparkles size={11} className={chatbotOpen ? 'text-amber-300 animate-spin' : 'text-[#00a2ff]'} />
-            <span className="tracking-wider">AI COPILOT</span>
-            <span className={`w-1.5 h-1.5 rounded-full ${chatbotOpen ? 'bg-emerald-400 animate-ping' : 'bg-[#00a2ff]'}`} />
-          </button>
-        )}
-        <button
-          onClick={onImportTracks}
-          disabled={trackImportLoading}
-          className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#181a24] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2c2f3f] text-[10px] transition-colors disabled:opacity-50"
-          title="Eingebettete Rekordbox-Sammlung durchsuchen und Originaltrack laden"
-        >
-          <Disc size={11} className="text-[#00e5ff]" />
-          <span className="font-semibold tracking-wide">{trackImportLoading ? 'SAMMLUNG…' : 'TRACK-IMPORT'}</span>
+      {/* ── Bearbeiten ────────────────────────────────────────────────────── */}
+      <div className="relative">
+        <button type="button" onClick={() => toggleMenu('bearbeiten')} className={triggerClass('bearbeiten')} title="Schnitt- und Bearbeitungsoperationen (Undo, Redo, Cut, Copy, Paste, Stems)">
+          Bearbeiten
         </button>
-        {onOpenDatabaseInspector && (
-          <button
-            onClick={onOpenDatabaseInspector}
-            className="flex items-center space-x-1 px-2 py-0.5 rounded bg-[#0088ff]/15 hover:bg-[#0088ff] text-[#00a2ff] hover:text-white border border-[#0088ff]/30 text-[10px] transition-colors"
-            title="Rekordbox Datenbank &amp; ANLZ Wellenform-Extraktor öffnen"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] inline-block animate-pulse" />
-            <span className="font-semibold tracking-wide">DB-Extraktor</span>
-          </button>
+        {activeMenu === 'bearbeiten' && (
+          <div className={`${dropdownClass} w-60`}>
+            <button type="button" onClick={runAndClose(onUndo)} disabled={!canUndo} className={MENU_ITEM} title="Macht die letzte Audio-Bearbeitung rückgängig">
+              <span>Rückgängig (Undo)</span>
+              <span className="text-neutral-500">Ctrl+Z</span>
+            </button>
+            <button type="button" onClick={runAndClose(onRedo)} disabled={!canRedo} className={MENU_ITEM} title="Wiederholt den zuletzt rückgängig gemachten Schritt">
+              <span>Wiederholen (Redo)</span>
+              <span className="text-neutral-500">Ctrl+Y</span>
+            </button>
+            <div className="h-px bg-[#262830] my-1" />
+            {onCopy && (
+              <button type="button" onClick={runAndClose(onCopy)} disabled={!hasSelection} className={MENU_ITEM} title="Kopiert den markierten Wellenformbereich in die verlustfreie Zwischenablage">
+                <span className="flex items-center gap-1.5"><Copy size={11} /><span>Kopieren (Copy)</span></span>
+                <span className="text-neutral-500">Ctrl+C</span>
+              </button>
+            )}
+            {onCut && (
+              <button type="button" onClick={runAndClose(onCut)} disabled={!hasSelection} className={MENU_ITEM} title="Schneidet die Auswahl aus und legt sie in der Zwischenablage ab">
+                <span className="flex items-center gap-1.5"><Scissors size={11} /><span>Ausschneiden (Cut)</span></span>
+                <span className="text-neutral-500">Ctrl+X</span>
+              </button>
+            )}
+            {onPaste && (
+              <button type="button" onClick={runAndClose(onPaste)} disabled={!hasClipboard} className={MENU_ITEM} title="Fügt den Clip an der aktuellen Cursorposition ein">
+                <span className="flex items-center gap-1.5"><ClipboardPaste size={11} /><span>Einfügen (Paste)</span></span>
+                <span className="text-neutral-500">Ctrl+V</span>
+              </button>
+            )}
+            {onDelete && (
+              <button type="button" onClick={runAndClose(onDelete)} disabled={!hasSelection} className={`${MENU_ITEM} text-[#ff5549]`} title="Auswahl löschen (Standard-Löschen oder Ripple Delete)">
+                <span className="flex items-center gap-1.5"><Trash2 size={11} /><span>Löschen (Delete)…</span></span>
+                <span className="text-neutral-500">Del</span>
+              </button>
+            )}
+            <div className="h-px bg-[#262830] my-1" />
+            {onOpenStemModels && (
+              <button type="button" onClick={runAndClose(onOpenStemModels)} className={`${MENU_ITEM} text-[#00c8ff]`} title="Modelle und Architekturen der Stem-Separation verwalten (ausgelagerte Modell-Auswahl)">
+                <span className="flex items-center gap-1.5"><BrainCircuit size={12} /><span>Stem-Modelle &amp; Architekturen…</span></span>
+              </button>
+            )}
+            {onSeparateStems && (
+              <button type="button" onClick={runAndClose(onSeparateStems)} className={`${MENU_ITEM} text-[#00c8ff] font-medium`} title="Öffnet das Stem-Center in Zone 2 und startet die Separation mit dem gewählten Modell">
+                <span className="flex items-center gap-1.5"><Sparkles size={12} /><span>Stem-Separation starten…</span></span>
+                <span className="text-[9px] bg-[#0088ff]/30 text-[#00c8ff] px-1 rounded font-mono">KI</span>
+              </button>
+            )}
+            {onOpenEditAssistant && (
+              <button type="button" onClick={runAndClose(onOpenEditAssistant)} className={`${MENU_ITEM} text-[#00e5ff]`} title="Prüft die Integrität von Zwischenablage und Auswahlbereich">
+                <span className="flex items-center gap-1.5"><ShieldCheck size={12} /><span>Edit Assistant prüfen…</span></span>
+              </button>
+            )}
+            {onClearHistory && hasHistory && (
+              <button type="button" onClick={runAndClose(onClearHistory)} className={`${MENU_ITEM} text-[#ff8a80] hover:!bg-[#ff3b30] hover:!text-white`} title="Löscht den Undo/Redo-Verlauf zur Freigabe von Arbeitsspeicher">
+                <span className="flex items-center gap-1.5"><Trash2 size={11} /><span>Bearbeitungsverlauf leeren…</span></span>
+              </button>
+            )}
+            {onOpenMidiModal && (
+              <button type="button" onClick={runAndClose(onOpenMidiModal)} className={`${MENU_ITEM} text-[#00e676]`} title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Action-Pad-Mapping öffnen">
+                <span className="flex items-center gap-1.5"><Radio size={12} /><span>Pioneer MIDI Controller (DDJ-FLX4 / 1000)…</span></span>
+                <span className="text-[9px] bg-emerald-500/20 text-[#00e676] px-1 rounded font-mono">PADS</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Betrachten ────────────────────────────────────────────────────── */}
+      <div className="relative">
+        <button type="button" onClick={() => toggleMenu('betrachten')} className={triggerClass('betrachten')} title="Ansichten, Farbpaletten, Wellenform-Modi und Fokus-Modus einstellen">
+          Betrachten
+        </button>
+        {activeMenu === 'betrachten' && (
+          <div className={`${dropdownClass} w-60`}>
+            <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">Waveform-Modus</div>
+            {(
+              [
+                ['BLUE', 'BLUE (Monochrom)', 'Monochrome blaue Rekordbox-Wellenform'],
+                ['RGB', 'RGB (Frequenzfarben)', 'RGB-Farben nach Frequenzbändern (Rot=Bass, Grün=Mitten, Blau=Höhen)'],
+                ['3BAND', '3BAND (Low / Mid / High)', '3 getrennte Frequenzbänder (Pioneer 3-Band Waveform)'],
+              ] as const
+            ).map(([mode, label, hint]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={runAndClose(() => onSetWaveformMode(mode as WaveformMode))}
+                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
+                  waveformMode === mode ? 'text-[#00a2ff] font-medium' : ''
+                }`}
+                title={hint}
+              >
+                <span>{label}</span>
+                {waveformMode === mode && <span>✓</span>}
+              </button>
+            ))}
+            <div className="h-px bg-[#262830] my-1" />
+            {onToggleFocusMode && (
+              <button type="button" onClick={runAndClose(onToggleFocusMode)} className={`${MENU_ITEM} ${focusMode ? 'text-[#00e5ff]' : ''}`} title="Max. Platz: alle Panels in Zone 2 und Zone 3 schließen und die Wellenform auf die volle Höhe skalieren">
+                <span>Max. Platz / Alles einklappen</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-neutral-500 text-[10px]">M</span>
+                  <span>{focusMode ? '✓' : ''}</span>
+                </span>
+              </button>
+            )}
+            {onToggleZone3Section && (
+              <button type="button" onClick={runAndClose(() => onToggleZone3Section('EDIT'))} className={MENU_ITEM} title="Untere Bearbeitungs-Palette (BEAT SELECT, SELECT, EDIT) ein-/ausklappen">
+                <span>Editierpalette (Unten)</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-neutral-500 text-[10px]">E</span>
+                  <span>{zone3Section === 'EDIT' ? '✓' : ''}</span>
+                </span>
+              </button>
+            )}
+            <button type="button" onClick={runAndClose(onTogglePalette)} className={MENU_ITEM} title="Rechte Clip-Palette für geschnittene Audioschnipsel ein-/ausblenden">
+              <span>Clip-Palette (Rechts)</span>
+              <span className="flex items-center gap-2">
+                <span className="text-neutral-500 text-[10px]">P</span>
+                <span>{paletteOpen ? '✓' : ''}</span>
+              </span>
+            </button>
+            <button type="button" onClick={runAndClose(onToggleBrowser)} className={MENU_ITEM} title="Sammlungsleiste (Browser) am unteren Rand ein-/ausblenden">
+              <span>Browser &amp; Multi-Track</span>
+              <span>{browserOpen ? '✓' : ''}</span>
+            </button>
+            {onToggleChatbot && (
+              <button type="button" onClick={runAndClose(onToggleChatbot)} className={`${MENU_ITEM} text-[#00a2ff] font-medium`} title="KI-gestützten DJ-Copiloten für Mix-Analysen und Cue-Vorschläge öffnen">
+                <span className="flex items-center gap-1.5"><Sparkles size={11} /><span>AI Smart Copilot Palette</span></span>
+                <span>{chatbotOpen ? '✓' : ''}</span>
+              </button>
+            )}
+            {onAnalyzeMixIn && (
+              <button type="button" onClick={runAndClose(onAnalyzeMixIn)} className={MENU_ITEM} title="Mix-In-Analyse mit dem Copiloten starten">
+                <span>Mix-In-Analyse starten…</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Hilfe ─────────────────────────────────────────────────────────── */}
+      <div className="relative">
+        <button type="button" onClick={() => toggleMenu('hilfe')} className={triggerClass('hilfe')} title="Hilfe, Ersteinrichtung und System-Diagnose">
+          Hilfe
+        </button>
+        {activeMenu === 'hilfe' && (
+          <div className={`${dropdownClass} w-64`}>
+            {onOpenInitialSetup && (
+              <button type="button" onClick={runAndClose(onOpenInitialSetup)} className={`${MENU_ITEM} text-[#00c8ff] font-semibold`} title="Ersteinrichtungs- und Installationsassistenten öffnen">
+                <span className="flex items-center gap-1.5"><Wand2 size={12} /><span>Ersteinrichtung &amp; KI-Installer…</span></span>
+                <span className="text-[9px] bg-[#0088ff]/20 text-[#00c8ff] px-1 rounded font-mono">SETUP</span>
+              </button>
+            )}
+            <button type="button" onClick={runAndClose(onShowInfo)} className={MENU_ITEM} title="Informationen zu Rekordbox-Datenquellen und Non-Destructive-Originalschutz">
+              <span>Rekordbox-Daten &amp; Originalschutz…</span>
+            </button>
+            <div className="h-px bg-[#262830] my-1" />
+            <button type="button" onClick={runAndClose(() => onOpenSystemLogs?.())} className={MENU_ITEM} title="System-Diagnoseprotokoll für Fehler und Inferenzzeiten öffnen">
+              <span>System-Protokoll…</span>
+            </button>
+          </div>
         )}
       </div>
     </div>

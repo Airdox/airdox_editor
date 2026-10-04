@@ -245,7 +245,16 @@ async function run() {
     const deck = await read('src/components/DeckStemsControl.tsx');
     assert.match(deck, /stems\?\.stemIds \?\? STEM_TYPES/, 'Buttons folgen stems.stemIds (Deskriptor), STEM_TYPES nur als Default');
     assert.match(deck, /repeat\(\$\{visibleConfigs\.length\}/, 'Grid folgt der Anzahl der Deskriptor-Stems');
-    assert.match(deck, /onCancelSeparation/, 'Abbruch ist verdrahtet');
+    /*
+     * UI v2.0: Der Mixer zeigt nur noch das Ergebnis (fertige Stems). Die
+     * Vorstufen – Modell, Qualität, Ziel und der Abbruch – liegen in der
+     * Fortschrittszeile des Stem-Centers in Zone 2. Die Forderung bleibt
+     * dieselbe („Abbruch ist verdrahtet"), nur der Ablageort hat sich geändert.
+     */
+    const stemCenter = await read('src/components/zones/StemCenter.tsx');
+    assert.match(stemCenter, /onCancelSeparation/, 'Abbruch ist verdrahtet (Fortschrittszeile in Zone 2)');
+    assert.match(stemCenter, /data-stem-action="cancel-job"/, 'Abbruch-Button existiert in der Fortschrittszeile');
+    assert.match(stemCenter, /data-stem-action="run-job"/, 'Primäraktion „Job jetzt ausführen" ist vorhanden');
     const app = await read('src/App.tsx');
     assert.match(app, /stemEngine\.cancelActiveEngineJob\(/, 'App ruft den echten Engine-Abbruch auf');
     assert.match(app, /separateWithEngine\(/, 'HQ-Profile laufen über den Engine-Kern');

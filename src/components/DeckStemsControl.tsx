@@ -1,49 +1,36 @@
 /**
  * @license
- * Rekordbox Deck Stems Control Component – REFACTORED per §25
- * - Echte modellbasierte AI-Separation (BS-RoFormer primär, HT-Demucs ONNX für Live)
- * - Bei nicht installierter Engine: Öffnet Installations-Popup mit Install-Button
- * - Bei installierter Engine: Führt direkt den im Einstellungsmenü ausgewählten Architekturmodus aus
- * - Zeigt ausgewählten Architekturmodus und 5-Minuten-Referenzzeiten
- * - Vollständige deutsche Tooltips für alle Bedienelemente
+ * airdox_SMART_Editor – Deck-Mixer der fertigen Stems (Zustand „STEMS", Zone 2).
+ *
+ * Was dieser Bauteil seit UI v2.0 NICHT mehr ist:
+ *   Er war früher ein Alles-Könner – Start-Button, Qualitätsprofile, externe
+ *   Zerlegung, Expertenprofile, Fortschrittsbox und Installationshinweis lagen
+ *   alle in ihm, teils doppelt. Genau daraus entstand der überladene Zustand mit
+ *   übereinanderliegenden Infoboxen.
+ *
+ *   Jetzt zeigt er ausschließlich das Ergebnis: vier Kanalzüge (Vocals, Drums,
+ *   Bass, Other) mit Solo/Mute/Volume, Pad-Zuordnung, Acapella-/Instrumental-
+ *   Presets und den Export eines isolierten Stems in die Clip-Palette. Die
+ *   Vorstufen (Modell, Qualität, Verarbeitungsziel, Fortschritt) liegen im
+ *   Stem-Center (src/components/zones/StemCenter.tsx).
+ *
+ * Der Dateiname bleibt bewusst erhalten: Vertragstests und Dokumentation
+ * referenzieren diesen Pfad (tests/stem-engine-ipc-contract.test.ts).
  */
 
 import React from 'react';
+import { Mic, Disc, Activity, Music, Volume2, VolumeX, Plus, Layers, Cpu, Radio } from 'lucide-react';
 import {
-  Mic,
-  Disc,
-  Activity,
-  Music,
-  Volume2,
-  VolumeX,
-  Plus,
-  Sparkles,
-  Layers,
-  Cpu,
-  Radio,
-  AlertTriangle,
-  Download,
-  Timer,
-  Cloud,
-} from 'lucide-react';
-import {
-  StemEngineProfileInfo,
-  StemQualityProfile,
-  type RemoteServiceStatus,
   StemType,
   StemsMixerState,
   TrackStems,
-  StemSeparationProgress,
   STEM_TYPES,
 } from '../audio/stemEngine';
-import { Tooltip, HelpBadge } from './Tooltip';
 
-interface DeckStemsControlProps {
+export interface DeckStemsControlProps {
+  /** Fertige Stems des aktiven Tracks (null = nichts zu mischen). */
   stems: TrackStems | null;
   mixerState: StemsMixerState;
-  isSeparating: boolean;
-  separationProgress: StemSeparationProgress | null;
-  onSeparateStems: () => void;
   onToggleStemMute: (stem: StemType) => void;
   onToggleStemSolo: (stem: StemType) => void;
   onStemVolumeChange: (stem: StemType, vol: number) => void;
@@ -54,93 +41,14 @@ interface DeckStemsControlProps {
   onOpenMidiModal?: () => void;
   midiStatusLabel?: string;
   isMidiConnected?: boolean;
-  onCancelSeparation?: () => void;
-  profiles?: StemEngineProfileInfo[];
-  selectedProfile?: StemQualityProfile;
-  onProfileChange?: (profile: StemQualityProfile) => void;
-  /** Engine unavailable reason */
-  engineUnavailableReason?: string | null;
-  /** Show diagnostics button */
-  onShowDiagnostics?: () => void;
-  /** Active architecture mode label from settings */
+  /** Aktives Modell, mit dem diese Stems gerechnet wurden. */
   activeArchitectureLabel?: string;
-  /** Active architecture 5-min benchmark info */
-  activeArchitectureBenchmark?: string;
-  /** Direct trigger to open installer modal */
-  onOpenInstaller?: () => void;
-  /**
-   * Das im Einstellungsmenü gewählte Modell, wenn es noch nicht installiert
-   * ist. Dann zeigt die Leiste den Button, um genau dieses Modell zu installieren.
-   */
-  missingModel?: { id: string; label: string } | null;
-  /** Öffnet den Installations-Dialog für `missingModel`. */
-  onInstallModel?: () => void;
-  /**
-   * Fern-Ziel (Google Drive) für die externe Zerlegung auf Colab: Status von
-   * Machbarkeit/Erreichbarkeit – Pfade und Intervalle, niemals Zugangsdaten (§23).
-   */
-  remoteStatus?: RemoteServiceStatus | null;
-  /**
-   * Job, dessen Abbruch gerade gemeldet wird. Der Button zeigt diesen Zustand
-   * und ist blockiert – ohne ihn wirkt ein Klick auf „Abbrechen" wie ins Leere.
-   */
-  remoteCancelPendingJobId?: string | null;
-  /** Kurzzeitige Sperre nach einer abgelehnten/fehlgeschlagenen Fern-Abbruchanfrage. */
-  remoteCancelCooldownJobId?: string | null;
-  /** True, wenn die externe Zerlegung (Google Colab) als Zielmodus gewählt ist. */
-  remoteEnabled?: boolean;
-  onRemoteEnabledChange?: (enabled: boolean) => void;
-  /** Kurze Rückmeldung an der Leiste: was der letzte Klick tatsächlich getan hat. */
-  remoteNotice?: { tone: 'info' | 'error'; text: string } | null;
-  onDismissRemoteNotice?: () => void;
-  /**
-   * Startet die externe Zerlegung sofort (Arbeitskopie → Drive → Colab →
-   * Rückimport). Der eindeutige Button in der Qualitätszeile ruft diese an.
-   */
-  onStartExternalSeparation: () => void;
-  /**
-   * Öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker),
-   * wenn noch kein Transport eingerichtet ist oder der Nutzer nachschauen will.
-   */
-  onOpenRemoteSetup: () => void;
 }
-
-/**
- * Die zwei Betriebsarten, die der Nutzer sieht (§13): „Schnell" rechnet lokal
- * (ONNX, GPU wenn vorhanden, sonst CPU) und „High Quality" rechnet lokal oder –
- * wenn eingerichtet – auf dem externen Rechner. Die übrigen Profile bleiben als
- * Expertenauswahl erhalten; nichts ist entfernt, nur der Normalfall ist
- * einfacher.
- */
-const STEM_MODES: { id: 'fast' | 'hq'; label: string; hint: string; profiles: StemQualityProfile[] }[] = [
-  {
-    id: 'fast',
-    label: 'Schnell',
-    hint: 'Rechnet lokal – in-process, GPU wenn vorhanden, sonst CPU.',
-    profiles: ['BALANCED', 'PREVIEW', 'HIGH'],
-  },
-  {
-    id: 'hq',
-    label: 'High Quality',
-    hint: 'Höchste Trennung – lokal oder (wenn eingerichtet) auf dem externen Rechner.',
-    profiles: ['HIGH_QUALITY', 'MAXIMUM_QUALITY'],
-  },
-];
-
-const PROFILE_LABELS: Record<StemQualityProfile, string> = {
-  PREVIEW: 'Vorschau',
-  BALANCED: 'Balanced',
-  HIGH: 'High',
-  HIGH_QUALITY: 'HQ',
-  MAXIMUM_QUALITY: 'Max',
-};
 
 interface StemVisualConfig {
   id: StemType;
   label: string;
-  sublabel: string;
   tooltipText: string;
-  color: string;
   activeBg: string;
   activeBorder: string;
   activeText: string;
@@ -153,9 +61,7 @@ const STEM_CONFIGS: StemVisualConfig[] = [
   {
     id: 'vocals',
     label: 'VOCALS',
-    sublabel: 'Gesang – echte AI Separation via BS-RoFormer',
-    tooltipText: 'Vocals (Gesangsspur): Haupt- und Hintergrundgesang, isoliert mit höchster spektraler Reinheit (9.65 dB SDR).',
-    color: '#00c8ff',
+    tooltipText: 'Vocals (Gesangsspur): Haupt- und Hintergrundgesang, isoliert mit höchster spektraler Reinheit.',
     activeBg: 'bg-[#002844]',
     activeBorder: 'border-[#00a2ff]',
     activeText: 'text-[#00e5ff]',
@@ -166,9 +72,7 @@ const STEM_CONFIGS: StemVisualConfig[] = [
   {
     id: 'drums',
     label: 'DRUMS',
-    sublabel: 'Drums – echte AI Separation',
-    tooltipText: 'Drums (Schlagzeug & Percussion): Kick-Drum, Snare, Claps, Hi-Hats und perkussive Transienten.',
-    color: '#ffaa00',
+    tooltipText: 'Drums (Schlagzeug & Percussion): Kick, Snare, Claps, Hi-Hats und perkussive Transienten.',
     activeBg: 'bg-[#3b2700]',
     activeBorder: 'border-[#ffaa00]',
     activeText: 'text-[#ffbb33]',
@@ -179,9 +83,7 @@ const STEM_CONFIGS: StemVisualConfig[] = [
   {
     id: 'bass',
     label: 'BASS',
-    sublabel: 'Bass – echte AI Separation',
     tooltipText: 'Bass (Tieftonfundament): Sub-Bass, Bassgitarren, Synth-Bässe und tieffrequente Oszillationen.',
-    color: '#ff3b30',
     activeBg: 'bg-[#3b0d10]',
     activeBorder: 'border-[#ff3b30]',
     activeText: 'text-[#ff5549]',
@@ -192,9 +94,7 @@ const STEM_CONFIGS: StemVisualConfig[] = [
   {
     id: 'other',
     label: 'OTHER',
-    sublabel: 'Other/Instruments – echte AI Separation',
-    tooltipText: 'Other (Melodie & Begleitung): Synthesizer, Klaviere, Gitarren, Streicher, Bläser und Hall-/Delay-Fahnen.',
-    color: '#00e676',
+    tooltipText: 'Other (Melodie & Begleitung): Synthesizer, Klaviere, Gitarren, Streicher, Bläser und Fahnen.',
     activeBg: 'bg-[#003319]',
     activeBorder: 'border-[#00e676]',
     activeText: 'text-[#33ff99]',
@@ -207,9 +107,6 @@ const STEM_CONFIGS: StemVisualConfig[] = [
 export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   stems,
   mixerState,
-  isSeparating,
-  separationProgress,
-  onSeparateStems,
   onToggleStemMute,
   onToggleStemSolo,
   onStemVolumeChange,
@@ -220,52 +117,21 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   onOpenMidiModal,
   midiStatusLabel = 'MIDI bereit',
   isMidiConnected = false,
-  onCancelSeparation,
-  profiles = [],
-  selectedProfile = 'HIGH',
-  onProfileChange,
-  engineUnavailableReason,
-  onShowDiagnostics,
-  activeArchitectureLabel = 'BS-RoFormer (Studio Master)',
-  activeArchitectureBenchmark = '5-Min. Track: GPU ~45–75s | CPU ~3–5 Min.',
-  onOpenInstaller,
-  missingModel = null,
-  onInstallModel,
-  remoteStatus,
-  remoteCancelPendingJobId = null,
-  remoteCancelCooldownJobId = null,
-  remoteEnabled = false,
-  remoteNotice = null,
-  onDismissRemoteNotice,
-  onRemoteEnabledChange,
-  onStartExternalSeparation,
-  onOpenRemoteSetup,
+  activeArchitectureLabel = 'Automatisch',
 }) => {
-  const [expertProfiles, setExpertProfiles] = React.useState(false);
-  const currentMode = STEM_MODES.find((mode) => mode.profiles.includes(selectedProfile))?.id ?? 'fast';
-  const remoteAvailable = Boolean(remoteStatus?.configured);
-  const remoteReady = remoteAvailable && remoteStatus?.reachable !== false;
-  const activeRemoteJob = (remoteStatus?.jobs ?? []).find(
-    (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
-  );
-  const remoteCancelPending = Boolean(activeRemoteJob && remoteCancelPendingJobId === activeRemoteJob.jobId);
-  const remoteCancelCoolingDown = Boolean(activeRemoteJob && remoteCancelCooldownJobId === activeRemoteJob.jobId);
-  const remoteLabel = remoteStatus?.label ?? 'Google Drive';
-  const remoteHint = !remoteAvailable
-    ? `Noch nicht eingerichtet – Button „Externe Zerlegung (Google Colab)" öffnet die Einrichtung (Drive-Ordner + Colab-Worker). Bis dahin läuft High Quality lokal.`
-    : remoteStatus?.reachable === false
-      ? `${remoteLabel} ist gerade nicht erreichbar. Der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
-      : `Jobablage erreichbar: ${remoteLabel}. Für Fernjobs muss die Colab-Worker-Zelle #5 aktiv sein (Drive-Sync startet Colab nicht). Klick auf „Externe Zerlegung (Google Colab)" lädt die Arbeitskopie hoch; Rückimport und Speicherung laufen danach automatisch.`;
+  /*
+   * Die Kanalzahl folgt dem Deskriptor des Jobs – nicht einer festen Vier.
+   * Ein Modell mit drei oder sechs Stems zeigt genau seine Stems; `STEM_TYPES`
+   * ist nur der Default, wenn kein Deskriptor vorliegt.
+   */
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
-    const known = STEM_CONFIGS.find((cfg) => cfg.id === id);
+    const known = STEM_CONFIGS.find((config) => config.id === id);
     return (
       known ?? {
         id,
         label: String(id).toUpperCase(),
-        sublabel: 'Stem aus Modell-Deskriptor',
         tooltipText: `Stem-Kanal: ${id}`,
-        color: '#8b98b8',
         activeBg: 'bg-[#1b2030]',
         activeBorder: 'border-[#5b6a92]',
         activeText: 'text-[#c8d4f0]',
@@ -275,468 +141,165 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
       }
     );
   });
-  const hasAnySolo = stemIds.some((s) => mixerState[s]?.solo);
-
-  const hasUsableEngine = profiles.some((p) => p.available);
-  const showUnavailable = !hasUsableEngine && !stems && !isSeparating;
+  const hasAnySolo = stemIds.some((stem) => mixerState[stem]?.solo);
 
   return (
-    <div className="bg-[#0e1015] border-b border-[#1c1e26] px-3 py-1.5 flex flex-col select-none z-20">
+    <div
+      className="bg-[#0e1015] border-b border-[#1c1e26] px-3 py-1.5 flex flex-col select-none"
+      data-zone="2"
+      data-stem-mixer="true"
+    >
+      {/* Kopfzeile: Ergebnis-Kontext, Presets, MIDI – keine Prozessbedienung */}
       <div className="flex items-center justify-between mb-1.5">
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-2">
           <div
-            className="rb-tab-chamfer bg-gradient-to-r from-[#0088ff] to-[#00c8ff] text-black font-extrabold text-[10.5px] px-2.5 py-0.5 tracking-wider uppercase flex items-center space-x-1 shadow-sm"
-            title="Pioneer DJ Deck Stems: 4 isolierte Spuren (Vocals, Drums, Bass, Other)"
+            className="rb-tab-chamfer bg-gradient-to-r from-[#0088ff] to-[#00c8ff] text-black font-extrabold text-[10.5px] px-2.5 py-0.5 tracking-wider uppercase flex items-center gap-1"
+            title="Fertige Stems dieses Tracks: separate Spuren für Vocals, Drums, Bass und Other"
           >
             <Layers size={12} />
             <span>DECK A • STEMS</span>
           </div>
 
-          {/* Active Settings Architecture Badge */}
           <span
             className="text-[9.5px] font-mono px-2 py-0.5 rounded bg-[#121622] border border-[#232a3d] text-neutral-300 flex items-center gap-1.5"
-            title={`Im Einstellungsmenü gewählter Architekturmodus: ${activeArchitectureLabel}. ${activeArchitectureBenchmark}`}
+            title={`Gerechnet mit: ${activeArchitectureLabel}`}
           >
             <Cpu size={10} className="text-[#00c8ff]" />
-            <span className="text-neutral-400">Architektur:</span>
+            <span className="text-neutral-400">Modell:</span>
             <span className="text-[#00e5ff] font-bold">{activeArchitectureLabel}</span>
           </span>
 
-          {stems && (
-            <span
-              className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#002f1d] border border-[#00c853]/60 text-[#00e676]"
-              title={`Echte AI-Stems mit ${stems.modelId} (${stems.profile}) – BS-RoFormer`}
+          <div className="flex items-center gap-1 text-[10px]">
+            <button
+              type="button"
+              onClick={onSetAcapella}
+              className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#00385e] border border-[#232738] hover:border-[#0088ff] text-neutral-300 hover:text-white transition-colors"
+              title="Acapella: alle Instrumente stumm, nur Vocals aktiv"
             >
-              KI: {stems.separationMethod === 'BS_ROFORMER' ? 'BS-ROFORMER' : stems.separationMethod}
-            </span>
-          )}
-
-          {showUnavailable && (
-            <span
-              className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#3a1111] border border-[#ef4444]/60 text-[#fca5a5] flex items-center gap-1 cursor-pointer hover:bg-[#4a1818]"
-              title={engineUnavailableReason || 'KI Stem Engine nicht installiert. Klicken zum Installieren.'}
-              onClick={onOpenInstaller || onSeparateStems}
+              Acapella
+            </button>
+            <button
+              type="button"
+              onClick={onSetInstrumental}
+              className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#3d2500] border border-[#232738] hover:border-[#ffaa00] text-neutral-300 hover:text-white transition-colors"
+              title="Instrumental: Gesang stumm, Drums/Bass/Other aktiv"
             >
-              <AlertTriangle size={10} />
-              STEM AI NICHT INSTALLIERT
-            </span>
-          )}
-
-          {stems && (
-            <div className="flex items-center space-x-1 text-[10px]">
-              <button
-                onClick={onSetAcapella}
-                className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#00385e] border border-[#232738] hover:border-[#0088ff] text-neutral-300 hover:text-white transition-colors"
-                title="Acapella-Modus: Schaltet alle Instrumente stumm, nur Vocals aktiv"
-              >
-                Acapella
-              </button>
-              <button
-                onClick={onSetInstrumental}
-                className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#3d2500] border border-[#232738] hover:border-[#ffaa00] text-neutral-300 hover:text-white transition-colors"
-                title="Instrumental-Modus: Schaltet Gesang stumm, Drums/Bass/Other aktiv"
-              >
-                Instrumental
-              </button>
-              <button
-                onClick={onResetStems}
-                className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#252a3a] border border-[#232738] text-neutral-400 hover:text-white transition-colors"
-                title="Stems zurücksetzen: Alle 4 Kanäle auf 100% Lautstärke und ungemutet"
-              >
-                Reset
-              </button>
-            </div>
-          )}
+              Instrumental
+            </button>
+            <button
+              type="button"
+              onClick={onResetStems}
+              className="px-2 py-0.5 rounded bg-[#161922] hover:bg-[#252a3a] border border-[#232738] text-neutral-400 hover:text-white transition-colors"
+              title="Stems zurücksetzen: alle Kanäle auf 100 %, ungemutet"
+            >
+              Reset
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center space-x-2 text-[10.5px]">
+        <div className="flex items-center gap-2 text-[10.5px]">
           {onOpenMidiModal && (
             <button
+              type="button"
               onClick={onOpenMidiModal}
-              className={`flex items-center space-x-1.5 px-2 py-0.5 rounded border transition-all ${
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border transition-all ${
                 isMidiConnected
-                  ? 'bg-[#002f1d] border-[#00c853] text-[#00e676] shadow-[0_0_8px_rgba(0,200,83,0.3)]'
+                  ? 'bg-[#002f1d] border-[#00c853] text-[#00e676]'
                   : 'bg-[#14161f] border-[#292c3a] text-neutral-400 hover:text-white hover:border-[#3d4258]'
               }`}
-              title="Pioneer DJ DDJ-FLX4 / DDJ-1000 Hardware Controller & Stem-Pads 1-4 zuweisen"
+              title={`${midiStatusLabel} – Pioneer DDJ-FLX4 / DDJ-1000 Stem-Pads 1-4 zuweisen`}
             >
               <Radio size={11} className={isMidiConnected ? 'animate-pulse' : ''} />
-              <span className="font-mono font-semibold">{midiStatusLabel}</span>
-              <span className="text-[9px] bg-black/40 px-1 rounded font-mono text-neutral-300">PADS 1-4</span>
+              <span>{isMidiConnected ? 'MIDI verbunden' : 'MIDI zuweisen'}</span>
             </button>
           )}
         </div>
       </div>
 
-      {!stems ? (
-        missingModel && onInstallModel ? (
-          <div className="flex items-center justify-between p-2 bg-[#1d1808] rounded border border-[#f0b429]/50">
-            <div className="flex items-center space-x-2.5 min-w-0">
-              <Download size={18} className="text-[#f0b429] shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="text-[#f5d78e] text-xs font-bold truncate">
-                  Gewähltes Modell nicht installiert: {missingModel.label}
-                </span>
-                <span className="text-neutral-400 text-[10px] truncate">
-                  Genau das im Einstellungsmenü gewählte Modell installieren, um mit dieser Architektur zu trennen.
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={onInstallModel}
-              title={`Modell "${missingModel.id}" installieren`}
-              className="flex items-center space-x-1.5 px-3 py-1 rounded bg-gradient-to-r from-[#10b981] to-[#34d399] hover:from-[#34d399] hover:to-[#6ee7b7] text-black font-bold text-xs shadow-md shrink-0 cursor-pointer"
+      {/* Kanalzüge: Grid folgt der Anzahl der Deskriptor-Stems */}
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${visibleConfigs.length}, minmax(0, 1fr))` }}>
+        {visibleConfigs.map((cfg) => {
+          const state = mixerState[cfg.id] ?? { muted: false, solo: false, volume: 1 };
+          const isAudible = hasAnySolo ? state.solo : !state.muted;
+          return (
+            <div
+              key={cfg.id}
+              title={cfg.tooltipText}
+              className={`p-1.5 rounded border transition-all flex flex-col justify-between ${
+                isAudible ? `${cfg.activeBg} ${cfg.activeBorder} ${cfg.glowClass}` : 'bg-[#101217] border-[#22242f] opacity-65'
+              }`}
             >
-              <Download size={13} />
-              <span>Modell installieren</span>
-            </button>
-          </div>
-        ) : showUnavailable ? (
-          <div className="flex items-center justify-between p-2 bg-[#1a1212] rounded border border-[#7f1d1d]/50">
-            <div className="flex items-center space-x-2.5">
-              <AlertTriangle size={18} className="text-[#ef4444] shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[#fca5a5] text-xs font-bold">
-                  KI Stem-Engine ist noch nicht installiert
-                </span>
-                <span className="text-neutral-400 text-[10.5px] max-w-[650px]">
-                  {engineUnavailableReason || 'BS-RoFormer & ONNX Modelle fehlen. Klicken Sie auf „Jetzt installieren", um alle Komponenten einzurichten.'}
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {onShowDiagnostics && (
-                <button
-                  onClick={onShowDiagnostics}
-                  className="px-2.5 py-1 rounded bg-[#2a1212] hover:bg-[#3a1818] border border-[#7f1d1d] text-[#fca5a5] text-xs font-semibold"
-                  title="System-Diagnose für Stem-Runtime ausführen"
-                >
-                  Diagnose
-                </button>
-              )}
-              <button
-                onClick={onOpenInstaller || onSeparateStems}
-                disabled={isSeparating}
-                className="flex items-center space-x-1.5 px-3.5 py-1 rounded bg-gradient-to-r from-[#10b981] to-[#00c853] hover:from-[#34d399] hover:to-[#00e676] text-black font-extrabold text-xs shadow-md disabled:opacity-50 cursor-pointer"
-                title="Öffnet das Installationsfenster zur automatischen Einrichtung aller Stem-Modelle"
-              >
-                <Download size={13} />
-                <span>Jetzt installieren</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between p-1.5 bg-[#12141c] rounded border border-[#202330]">
-            <div className="flex items-center space-x-2.5">
-              <Cpu size={16} className="text-[#00a2ff]" />
-              <div className="flex flex-col">
-                <div className="flex items-center space-x-2">
-                  <span className="text-white text-xs font-semibold">
-                    Stem-Separation bereit – Modus: {activeArchitectureLabel}
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <span className={isAudible ? cfg.activeText : 'text-neutral-500'}>{cfg.icon}</span>
+                  <span className={`text-xs font-bold tracking-wider ${isAudible ? 'text-white' : 'text-neutral-500'}`}>
+                    {cfg.label}
                   </span>
-                  <span className="text-[9px] font-mono text-[#00e5ff] bg-[#0088ff]/15 px-1.5 py-0.2 rounded border border-[#0088ff]/30">
-                    {activeArchitectureBenchmark}
-                  </span>
-                </div>
-                <span className="text-neutral-400 text-[10px]">
-                  Echte modellbasierte AI-Separation gemäß Einstellung. Kein spektraler Fallback.
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={onSeparateStems}
-              disabled={isSeparating}
-              className="flex items-center space-x-1.5 px-3.5 py-1 rounded bg-gradient-to-r from-[#0088ff] to-[#00c8ff] hover:from-[#0099ff] hover:to-[#22d3ee] text-black font-bold text-xs shadow-md disabled:opacity-50 cursor-pointer transition-all"
-              title={`Startet die KI-Separation des geladenen Tracks mit dem gewählten Architekturmodus (${activeArchitectureLabel}).`}
-            >
-              <Sparkles size={13} className={isSeparating ? 'animate-spin' : ''} />
-              <span>{isSeparating ? 'Stems werden getrennt...' : 'Stems jetzt trennen'}</span>
-            </button>
-          </div>
-        )
-      ) : (
-        <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${visibleConfigs.length}, minmax(0, 1fr))` }}>
-          {visibleConfigs.map((cfg) => {
-            const state = mixerState[cfg.id] ?? { muted: false, solo: false, volume: 1 };
-            const isAudible = hasAnySolo ? state.solo : !state.muted;
-            return (
-              <div
-                key={cfg.id}
-                title={cfg.tooltipText}
-                className={`p-1.5 rounded border transition-all flex flex-col justify-between ${
-                  isAudible ? `${cfg.activeBg} ${cfg.activeBorder} ${cfg.glowClass}` : 'bg-[#101217] border-[#22242f] opacity-65'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center space-x-1.5">
-                    <span className={isAudible ? cfg.activeText : 'text-neutral-500'}>{cfg.icon}</span>
-                    <span className={`text-xs font-bold tracking-wider ${isAudible ? 'text-white' : 'text-neutral-500'}`}>{cfg.label}</span>
-                    <span
-                      className={`text-[8.5px] font-mono px-1 rounded border ${
-                        isAudible ? 'bg-black/50 border-white/20 text-white' : 'bg-black/30 border-transparent text-neutral-600'
-                      }`}
-                      title={`Pioneer Hardware Controller Performance Pad ${cfg.padNumber}`}
-                    >
-                      PAD {cfg.padNumber}
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() => onToggleStemSolo(cfg.id)}
-                      className={`w-5 h-5 rounded flex items-center justify-center text-[9.5px] font-mono font-bold transition-all ${
-                        state.solo ? 'bg-[#ff9500] text-black' : 'bg-[#181a24] text-neutral-400 hover:text-white border border-[#2b2e3e]'
-                      }`}
-                      title={`Solo: Schaltet alle anderen Stems stumm, sodass nur ${cfg.label} zu hören ist`}
-                    >
-                      S
-                    </button>
-                    <button
-                      onClick={() => onToggleStemMute(cfg.id)}
-                      className={`w-5 h-5 rounded flex items-center justify-center text-[9.5px] font-mono font-bold transition-all ${
-                        state.muted ? 'bg-[#ff3b30] text-white' : 'bg-[#181a24] text-neutral-400 hover:text-white border border-[#2b2e3e]'
-                      }`}
-                      title={`Mute: Schaltet den ${cfg.label}-Kanal stumm`}
-                    >
-                      {state.muted ? <VolumeX size={10} /> : <Volume2 size={10} />}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px]">
-                  <div className="flex items-center space-x-1.5 flex-1 pr-2">
-                    <span className="text-[9px] text-neutral-400 font-mono">VOL</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1.5"
-                      step="0.05"
-                      value={state.volume}
-                      onChange={(e) => onStemVolumeChange(cfg.id, parseFloat(e.target.value))}
-                      className="w-full h-1 bg-[#1a1d28] rounded-lg appearance-none cursor-pointer accent-[#0088ff]"
-                      title={`Lautstärke für ${cfg.label}: ${Math.round(state.volume * 100)}%`}
-                    />
-                    <span className="text-[8.5px] font-mono text-neutral-400 w-6 text-right">{Math.round(state.volume * 100)}%</span>
-                  </div>
-                  <button
-                    onClick={() => onExtractStemToClip(cfg.id)}
-                    className="flex items-center space-x-0.5 px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2a2f42] text-[9.5px] font-medium transition-colors"
-                    title={`Diesen isolierten ${cfg.label}-Stem als eigenen Clip in die Clip-Palette exportieren`}
+                  <span
+                    className={`text-[8.5px] font-mono px-1 rounded border ${
+                      isAudible ? 'bg-black/50 border-white/20 text-white' : 'bg-black/30 border-transparent text-neutral-600'
+                    }`}
+                    title={`Pioneer Hardware Controller Pad ${cfg.padNumber}`}
                   >
-                    <Plus size={10} />
-                    <span>Clip</span>
+                    PAD {cfg.padNumber}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onToggleStemSolo(cfg.id)}
+                    className={`w-5 h-5 rounded flex items-center justify-center text-[9.5px] font-mono font-bold transition-all ${
+                      state.solo ? 'bg-[#ff9500] text-black' : 'bg-[#181a24] text-neutral-400 hover:text-white border border-[#2b2e3e]'
+                    }`}
+                    title={`Solo: schaltet alle anderen Stems stumm, sodass nur ${cfg.label} zu hören ist`}
+                    aria-pressed={state.solo}
+                  >
+                    S
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onToggleStemMute(cfg.id)}
+                    className={`w-5 h-5 rounded flex items-center justify-center transition-all ${
+                      state.muted ? 'bg-[#ff3b30] text-white' : 'bg-[#181a24] text-neutral-400 hover:text-white border border-[#2b2e3e]'
+                    }`}
+                    title={`Mute: schaltet den ${cfg.label}-Kanal stumm`}
+                    aria-pressed={state.muted}
+                  >
+                    {state.muted ? <VolumeX size={10} /> : <Volume2 size={10} />}
                   </button>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
-        <span className="uppercase tracking-wider text-neutral-500 font-bold">Qualität:</span>
-        {STEM_MODES.map((mode) => {
-          const active = currentMode === mode.id;
-          const modeProfiles = profiles.filter((profile) => mode.profiles.includes(profile.profile));
-          const usable = modeProfiles.some((profile) => profile.available);
-          return (
-            <button
-              key={mode.id}
-              onClick={() => {
-                const target = modeProfiles.find((profile) => profile.available) ?? modeProfiles[0];
-                if (target) onProfileChange?.(target.profile);
-                if (mode.id === 'fast' && remoteEnabled) onRemoteEnabledChange?.(false);
-              }}
-              disabled={isSeparating}
-              title={`${mode.hint}${usable ? '' : '\nZurzeit nicht nutzbar (keine Gewichte installiert).'}`}
-              className={`px-2.5 py-1 rounded border font-semibold transition-colors ${
-                active
-                  ? 'bg-[#00284a] border-[#00a2ff] text-[#00e5ff]'
-                  : 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#0088ff] hover:text-white'
-              } ${usable ? '' : 'opacity-70'}`}
-            >
-              {mode.label}
-            </button>
+              <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px]">
+                <div className="flex items-center gap-1.5 flex-1 pr-2">
+                  <span className="text-[9px] text-neutral-400 font-mono">VOL</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1.5"
+                    step="0.05"
+                    value={state.volume}
+                    onChange={(event) => onStemVolumeChange(cfg.id, parseFloat(event.target.value))}
+                    className="w-full h-1 bg-[#1a1d28] rounded-lg appearance-none cursor-pointer accent-[#0088ff]"
+                    title={`Lautstärke für ${cfg.label}: ${Math.round(state.volume * 100)}%`}
+                  />
+                  <span className="text-[8.5px] font-mono text-neutral-400 w-6 text-right">
+                    {Math.round(state.volume * 100)}%
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onExtractStemToClip(cfg.id)}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-[#1c202d] hover:bg-[#0088ff] text-neutral-300 hover:text-white border border-[#2a2f42] text-[9.5px] font-medium transition-colors"
+                  title={`Diesen isolierten ${cfg.label}-Stem als eigenen Clip in die Clip-Palette exportieren`}
+                >
+                  <Plus size={10} />
+                  <span>Clip</span>
+                </button>
+              </div>
+            </div>
           );
         })}
-        {/*
-         * Der eindeutige Button für den externen Zerlegungs-Workflow
-         * (Google Drive + Google Colab). Er ist immer sichtbar:
-         *  - noch nicht eingerichtet  → öffnet den Einrichtungs-Dialog
-         *  - eingerichtet             → startet die Zerlegung sofort
-         *  - externer Job aktiv       → zeigt Status, Abbrechen daneben
-         */}
-        <button
-          onClick={() => {
-            if (activeRemoteJob) { onStartExternalSeparation(); return; } // bestehenden Job-Monitor öffnen
-            if (!remoteAvailable) {
-              onOpenRemoteSetup();
-              return;
-            }
-            if (remoteEnabled) {
-              // Externer Modus ist gewählt (grün) – erneut klicken stellt
-              // „lokal" wieder ein, damit „Stems jetzt trennen" auf diesem
-              // Rechner rechnet und nicht in Colab.
-              onRemoteEnabledChange?.(false);
-              return;
-            }
-            onStartExternalSeparation();
-          }}
-          disabled={isSeparating && !activeRemoteJob}
-          className={`flex items-center space-x-1.5 px-2.5 py-1 rounded border font-semibold transition-colors ${
-            activeRemoteJob
-              ? 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0] opacity-75 cursor-default'
-              : !remoteAvailable
-              ? 'bg-[#161922] border-dashed border-[#3a3f52] text-neutral-400 hover:text-white hover:border-[#0088ff] cursor-pointer'
-              : remoteEnabled || remoteStatus?.reachable === false
-              ? remoteStatus?.reachable === false
-                ? 'bg-[#2a2108] border-[#f0b429]/60 text-[#f5d78e] hover:border-[#f0b429] cursor-pointer'
-                : 'bg-[#102a1c] border-[#1f9d55] text-[#7ef0b0] cursor-pointer'
-              : 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#1f9d55] hover:text-[#7ef0b0] cursor-pointer'
-          }`}
-          title={
-            activeRemoteJob
-              ? 'Externer Colab-Job läuft – Status unten, Abbrechen rechts daneben.'
-              : !remoteAvailable
-              ? 'Diesen Track auf Google Colab zerlegen lassen (externe Zerlegung: Arbeitskopie → Google Drive → Colab-Worker → 4 Stems zurück in den Editor). Noch nicht eingerichtet – Klick öffnet die Einrichtung (Drive-Ordner + Colab-Worker).'
-              : remoteStatus?.reachable === false
-              ? 'Google Drive ist gerade nicht erreichbar – der Job bleibt erhalten und läuft automatisch weiter, sobald die Verbindung steht. Klick startet dennoch (Warteverhalten).'
-              : remoteEnabled
-              ? 'Externer Modus ist AKTIV: die Trennung läuft auf Google Colab. Erneut klicken, um wieder lokal zu rechnen.'
-              : 'Externe Zerlegung auf Google Colab starten: Der Editor lädt die Arbeitskopie nach Google Drive hoch, der Colab-Worker trennt in High Quality (BS-RoFormer) und die 4 Stems (Vocals, Drums, Bass, Other) kommen automatisch zurück, werden dauerhaft gespeichert und mit dem Original-Track verknüpft. Original, rekordbox.xml und master.db werden nicht verändert.'
-          }
-        >
-          <Cloud size={12} className={activeRemoteJob ? 'animate-pulse' : undefined} />
-          <span>{activeRemoteJob ? 'Colab-Job läuft…' : 'Externe Zerlegung (Google Colab)'}</span>
-        </button>
-        <button
-          onClick={() => setExpertProfiles((value) => !value)}
-          className="px-1.5 py-1 rounded border border-[#232738] bg-[#121419] text-neutral-500 hover:text-neutral-300"
-          title="Weitere Qualitätsprofile anzeigen (Vorschau, High, Max)"
-        >
-          {expertProfiles ? 'Profile ausblenden' : 'Weitere Profile'}
-        </button>
-        {currentMode === 'hq' && (
-          <span className={`text-[9.5px] ${remoteEnabled && remoteStatus?.reachable === false ? 'text-[#fbbf24]' : 'text-neutral-500'}`}>
-            {remoteEnabled ? remoteHint : 'Lokal – kann je nach Rechner deutlich länger dauern.'}
-          </span>
-        )}
       </div>
-
-      {activeRemoteJob && (
-        <div className="mt-1 text-[10px] text-[#7ef0b0] flex items-center space-x-2">
-          <span>
-            Externer Colab-Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
-            {activeRemoteJob.cpuFallback ? ' (CPU-Fallback)' : activeRemoteJob.device ? ` (${activeRemoteJob.device})` : ''}
-            {activeRemoteJob.cancelPending ? ' · Abbruch wird nachgeliefert, sobald Drive wieder erreichbar ist' : ''}
-          </span>
-          {onCancelSeparation && (
-            <button
-              onClick={onCancelSeparation}
-              disabled={remoteCancelPending || remoteCancelCoolingDown}
-              className={`px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5] ${
-                remoteCancelPending || remoteCancelCoolingDown
-                  ? 'opacity-60 cursor-progress'
-                  : 'hover:bg-[#3f1618]'
-              }`}
-              title={
-                remoteCancelPending
-                  ? 'Der Abbruch wird gerade gemeldet – der externe Rechner stoppt die Rechnung beim nächsten Arbeitsschritt.'
-                  : remoteCancelCoolingDown
-                    ? 'Die letzte Abbruchanfrage wurde nicht bestätigt. Bitte kurz warten, bevor Sie es erneut versuchen.'
-                    : 'Rechnung auf Google Colab abbrechen: Der Worker beendet die laufende Trennung, es werden keine Stems übernommen.'
-              }
-            >
-              {remoteCancelPending ? 'Abbruch wird gemeldet…' : remoteCancelCoolingDown ? 'Kurz warten…' : 'Abbrechen'}
-            </button>
-          )}
-        </div>
-      )}
-
-      {remoteNotice && (
-        <div
-          role="status"
-          className={`mt-1 flex items-start justify-between gap-2 rounded border px-2 py-1 text-[10.5px] ${
-            remoteNotice.tone === 'error'
-              ? 'border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5]'
-              : 'border-[#0088ff]/40 bg-[#0a1a26] text-[#9fdcff]'
-          }`}
-        >
-          <span className="min-w-0">{remoteNotice.text}</span>
-          {onDismissRemoteNotice && (
-            <button
-              onClick={onDismissRemoteNotice}
-              className="shrink-0 text-[9.5px] uppercase tracking-wider opacity-70 hover:opacity-100"
-              title="Meldung ausblenden"
-            >
-              ausblenden
-            </button>
-          )}
-        </div>
-      )}
-
-      {expertProfiles && profiles.length > 0 && (
-        <div className="mt-1.5 flex items-center space-x-1.5 text-[10px]">
-          <span className="uppercase tracking-wider text-neutral-500 font-bold">Qualitätsprofil:</span>
-          {profiles.map((profile) => {
-            const active = profile.profile === selectedProfile;
-            return (
-              <button
-                key={profile.profile}
-                onClick={() => onProfileChange?.(profile.profile)}
-                disabled={!profile.available && isSeparating}
-                title={`${profile.description}\nModell: ${profile.modelId}\nStems: ${profile.stems.map((s) => s.displayName).join(', ') || '—'}${profile.available ? '' : `\nnicht nutzbar: ${profile.reason}`}`}
-                className={`px-2 py-0.5 rounded border font-semibold transition-colors ${
-                  active
-                    ? 'bg-[#00284a] border-[#00a2ff] text-[#00e5ff]'
-                    : profile.available
-                    ? 'bg-[#161922] border-[#232738] text-neutral-300 hover:border-[#0088ff] hover:text-white'
-                    : 'bg-[#121419] border-[#1f222c] text-neutral-600'
-                }`}
-              >
-                {PROFILE_LABELS[profile.profile] ?? profile.profile}
-                {!profile.available && <span className="ml-1 text-[8.5px] text-neutral-500">keine Gewichte</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {isSeparating && separationProgress && (
-        <div className="mt-1.5 bg-[#12141c] p-2 rounded border border-[#0088ff]/40 flex flex-col space-y-1">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-[#00e5ff] font-medium animate-pulse">{separationProgress.phaseText}</span>
-            <span className="flex items-center space-x-2">
-              <span className="font-mono text-white font-bold">{separationProgress.percent}%</span>
-              {onCancelSeparation && (
-                <button
-                  onClick={onCancelSeparation}
-                  disabled={remoteCancelPendingJobId != null || remoteCancelCooldownJobId != null}
-                  className={`px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5] text-[10px] font-semibold transition-colors ${
-                    remoteCancelPendingJobId != null || remoteCancelCooldownJobId != null
-                      ? 'opacity-60 cursor-progress'
-                      : 'hover:bg-[#3f1618]'
-                  }`}
-                  title={
-                    remoteCancelPendingJobId != null
-                      ? 'Der Abbruch wird gerade gemeldet – der Rechner stoppt beim nächsten Arbeitsschritt.'
-                      : remoteCancelCooldownJobId != null
-                        ? 'Bitte kurz warten, bevor eine abgelehnte/fehlgeschlagene Abbruchanfrage wiederholt wird.'
-                        : 'Laufende Stem-Separation abbrechen – der Rechner stoppt beim nächsten Arbeitsschritt'
-                  }
-                >
-                  {remoteCancelPendingJobId != null
-                    ? 'Abbruch läuft…'
-                    : remoteCancelCooldownJobId != null
-                      ? 'Kurz warten…'
-                      : 'Abbrechen'}
-                </button>
-              )}
-            </span>
-          </div>
-          <div className="w-full h-1.5 bg-[#1a1c26] rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-[#0088ff] to-[#00e5ff] transition-all duration-150" style={{ width: `${separationProgress.percent}%` }} />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

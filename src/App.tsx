@@ -4,7 +4,7 @@
  * Authoritative Visual Lock implementation matching screenshots 01, 02, and 03.
  */
 
-import React, { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { Suspense, useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import {
   TrackModel,
   PartialTrackModel,
@@ -41,11 +41,21 @@ import {
   SerializedTrack,
 } from './rekordbox/projectFile';
 
-import { TitleBar } from './components/TitleBar';
-import { MenuBar } from './components/MenuBar';
-import { EditModeBar } from './components/EditModeBar';
+/*
+ * UI v2.0 – Drei-Zonen-Architektur (docs/UI_V2_DREI_ZONEN.md):
+ *   Zone 1 -> Zone1TopBar (dauerhaft, ohne Prozessstatus)
+ *   Zone 2 -> TrackHeader + StemCenter + DetailWaveform + Paletten
+ *   Zone 3 -> Zone3Footer (eingeklappte Reiter) + BrowserMultiTrackBar
+ * Die früheren Zeilen TitleBar/MenuBar/EditModeBar sind in Zone 1 aufgegangen:
+ * eine Leiste statt drei. MenuBar lebt unverändert als Menü-Cluster darin.
+ */
+import { Zone1TopBar } from './components/zones/Zone1TopBar';
+import { StemCenter } from './components/zones/StemCenter';
+import { Zone3Footer } from './components/zones/Zone3Footer';
+import { TransientStatusToast } from './components/zones/TransientStatusToast';
+import type { TransientStatusItem } from './components/zones/TransientStatusToast';
 import { TrackHeader } from './components/TrackHeader';
-import { DeckStemsControl } from './components/DeckStemsControl';
+import type { DeckStemsControlProps } from './components/DeckStemsControl';
 import { StemQualityWarningModal } from './components/Modals/StemQualityWarningModal';
 import { StemModelInstallModal } from './components/Modals/StemModelInstallModal';
 import {
@@ -67,7 +77,6 @@ import {
 import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
-import { BottomControlBlock } from './components/BottomControlBlock';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
@@ -88,6 +97,14 @@ import {
   type RemoteServiceStatus,
 } from './audio/stemEngine';
 import { applyStemMixDuringPlayback, isCustomStemMix } from './audio/stemPlayback';
+import {
+  INITIAL_WORKSPACE_PANELS,
+  workspaceReducer,
+  deriveStemCenterPhase,
+  activeStemModelLabel,
+  zone3Visible,
+} from './ui/workspaceLayout';
+import type { StemQualityMode } from './components/zones/StemCenter';
 import {
   loadStemArchitectureSettings,
   resolveArchitectureJobOptions,
@@ -237,28 +254,39 @@ export default function App() {
   const [selection, setSelection] = useState<SelectionRange | null>(null);
 
   // Palette state - Starts completely empty
-  const [paletteOpen, setPaletteOpen] = useState<boolean>(true); // Screenshot 01 (open) vs Screenshot 02 (closed)
-  const [editPaletteOpen, setEditPaletteOpen] = useState<boolean>(true); // Collapsible lower Edit Palette (BEAT SELECT / SELECT / EDIT)
+  /*
+   * ── Panel-Zustand der Drei-Zonen-Architektur ─────────────────────────────
+   * Zone 3 ist standardmäßig eingeklappt, Zone 2 zeigt die Clip-Palette. Alle
+   * schließbaren Panels liegen in EINEM Reducer: der Fokus-Modus („Max. Platz /
+   * Alles einklappen") ist damit ein einziger, synchroner Übergang und kann
+   * kein Panel vergessen (die Liste steht in `FOCUS_MODE_CLOSES`).
+   */
+  const [workspace, dispatchWorkspace] = useReducer(workspaceReducer, INITIAL_WORKSPACE_PANELS);
+  const {
+    focusMode,
+    zone3Section,
+    stemConfigOpen,
+    stemModelPickerOpen,
+    paletteOpen,
+    deckViewOpen,
+    chatbotOpen,
+    browserOpen,
+  } = workspace;
+  const paletteViewMode: 'SIDEBAR' | 'FULL_DECK' = deckViewOpen ? 'FULL_DECK' : 'SIDEBAR';
+  const setPaletteOpen = useCallback((open: boolean) => dispatchWorkspace({ type: 'SET_PALETTE', open }), []);
+  const setBrowserOpen = useCallback((open: boolean) => dispatchWorkspace({ type: 'SET_BROWSER', open }), []);
+  const setChatbotOpenState = useCallback((open: boolean) => dispatchWorkspace({ type: 'SET_CHATBOT', open }), []);
+  const setPaletteViewMode = useCallback((mode: 'SIDEBAR' | 'FULL_DECK') => {
+    dispatchWorkspace({ type: 'SET_DECK_VIEW', open: mode === 'FULL_DECK' });
+  }, []);
+  const handleToggleZone3Section = useCallback((section: 'BEAT_SELECT' | 'SELECT' | 'EDIT') => {
+    dispatchWorkspace({ type: 'TOGGLE_ZONE3_SECTION', section });
+  }, []);
+  const handleToggleFocusMode = useCallback(() => dispatchWorkspace({ type: 'TOGGLE_FOCUS_MODE' }), []);
+
   const [paletteClips, setPaletteClips] = useState<PaletteClip[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [paletteViewMode, setPaletteViewMode] = useState<'SIDEBAR' | 'FULL_DECK'>('SIDEBAR');
   const [matchPitchOnInsert, setMatchPitchOnInsert] = useState<boolean>(true);
-
-  // Browser bar
-  const [browserOpen, setBrowserOpen] = useState<boolean>(false);
-
-  // Maximize Waveform Zen Mode (collapses both palettes for max screen editing area)
-  const isMaxWaveform = !editPaletteOpen && !paletteOpen && !browserOpen;
-  const handleToggleMaxWaveform = useCallback(() => {
-    if (isMaxWaveform) {
-      setEditPaletteOpen(true);
-      setPaletteOpen(true);
-    } else {
-      setEditPaletteOpen(false);
-      setPaletteOpen(false);
-      setBrowserOpen(false);
-    }
-  }, [isMaxWaveform]);
 
   // Clipboard for Copy / Paste / Insert. The compact provenance sidecar keeps
   // ANLZ waveform buckets and beat offsets with a copied selection.
@@ -442,8 +470,19 @@ export default function App() {
   );
 
 
-  // Chatbot Palette state
-  const [chatbotOpen, setChatbotOpen] = useState<boolean>(false);
+  /*
+   * Der Chatbot-Zustand liegt im Workspace-Reducer (Fokus-Modus schließt ihn
+   * mit). `useRecorder` erwartet weiterhin einen `Dispatch<SetStateAction<boolean>>`
+   * – die Fassade unten erfüllt diesen Vertrag, ohne einen zweiten Zustand
+   * anzulegen (zwei Quellen für „ist die Palette offen" waren der Grund, warum
+   * der Fokus-Modus sie früher stehen ließ).
+   */
+  const chatbotOpenRef = useRef(chatbotOpen);
+  chatbotOpenRef.current = chatbotOpen;
+  const setChatbotOpen = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((value) => {
+    const open = typeof value === 'function' ? Boolean(value(chatbotOpenRef.current)) : value;
+    setChatbotOpenState(open);
+  }, [setChatbotOpenState]);
 
   /** Persist a compact, app-owned track ↔ ANLZ association (never DB/audio data). */
   /*
@@ -711,6 +750,81 @@ export default function App() {
     stemProfile ??
     (stemEngineInfo?.defaultProfile as StemQualityProfile | undefined) ??
     (stemEngineInfo?.usable ? 'HIGH' : 'BALANCED');
+
+  /*
+   * ── Zone 2: abgeleitete Werte des Stem-Centers (UI v2.0) ──────────────────
+   * Der Zustand wird NICHT zusätzlich gespeichert, sondern aus den echten
+   * Signalen abgeleitet (Fertig → STEMS, läuft → PROCESSING, Panel offen →
+   * CONFIGURE, sonst IDLE). Eine zweite Wahrheit über „was zeigt die Leiste"
+   * wäre genau die Doppelung, die der Master-Plan beseitigt.
+   */
+  const stemCenterPhase = deriveStemCenterPhase({
+    hasStems: activeTrackStems !== null,
+    // Ein externer Job läuft über die Fern-Pipeline, nicht über die lokale
+    // Engine – beide Signale halten den Fortschrittsbalken sichtbar.
+    isSeparating: isSeparatingStems || remoteFlowRunning,
+    configOpen: stemConfigOpen,
+  });
+
+  /** Zustand B zeigt ausschließlich dieses Modell (Modell-Isolation). */
+  const activeModelOption = stemArchitectures.find(
+    (entry) => entry.id === stemArchitecture.architectureId
+  );
+  const activeModelLabel = activeStemModelLabel(
+    activeModelOption?.label ?? architectureLabel(stemArchitecture, stemArchitectures)
+  );
+
+  const FAST_PROFILES: StemQualityProfile[] = ['BALANCED', 'PREVIEW', 'HIGH'];
+  const HQ_PROFILES: StemQualityProfile[] = ['HIGH_QUALITY', 'MAXIMUM_QUALITY'];
+  const stemQualityMode: StemQualityMode = HQ_PROFILES.includes(resolvedStemProfile) ? 'hq' : 'fast';
+
+  /*
+   * Parameterwechsel im Stem-Center: „Schnell" wählt das beste verfügbare
+   * schnelle Profil und schaltet das Verarbeitungsziel auf lokal; „High
+   * Quality" wählt das beste HQ-Profil (lokal oder extern – der Zielumschalter
+   * daneben entscheidet). Nichts davon startet bereits einen Job.
+   */
+  const handleStemQualityModeChange = useCallback(
+    (mode: StemQualityMode) => {
+      const wanted = mode === 'hq' ? HQ_PROFILES : FAST_PROFILES;
+      const candidates = (stemEngineInfo?.profiles ?? []).filter((profile) =>
+        wanted.includes(profile.profile)
+      );
+      const target = candidates.find((profile) => profile.available) ?? candidates[0];
+      if (target) setStemProfile(target.profile);
+      if (mode === 'fast') setStemRemoteEnabled(false);
+    },
+    [stemEngineInfo, setStemRemoteEnabled]
+  );
+
+  /*
+   * Flüchtige Prozessmeldungen (außerhalb der Zonen): Ladezustand der Sammlung
+   * und Rückmeldungen der externen Zerlegung. Beides darf NICHT in Zone 1
+   * stehen und soll Zone 2 nicht dauerhaft belegen.
+   */
+  const transientStatuses = useMemo<TransientStatusItem[]>(() => {
+    const items: TransientStatusItem[] = [];
+    if (trackImportLoading) {
+      items.push({
+        id: 'track-import',
+        tone: 'busy',
+        text: 'Rekordbox-Sammlung wird geladen – der Track-Dialog öffnet sich gleich.',
+        dismissible: false,
+      });
+    }
+    if (remoteNotice) {
+      items.push({
+        id: 'remote-notice',
+        tone: remoteNotice.tone === 'error' ? 'error' : 'info',
+        text: remoteNotice.text,
+      });
+    }
+    return items;
+  }, [trackImportLoading, remoteNotice]);
+
+  const dismissTransientStatus = useCallback((id: string) => {
+    if (id === 'remote-notice') setRemoteNotice(null);
+  }, []);
 
   /**
    * Architekturliste für das Einstellungsmenü: kommt aus derselben Quelle wie
@@ -1360,6 +1474,18 @@ export default function App() {
     setViewDuration,
     setViewOffset,
   });
+
+  /*
+   * Stop (Zone 1, Transport-Player): beendet die Wiedergabe und setzt den
+   * Playhead an den Anfang. Bewusst dieselbe Wirkung wie „|<" (Cue-Start),
+   * nur zusätzlich mit beendeter Wiedergabe – ein Stop, der weiterlaufen lässt,
+   * wäre ein Pause-Knopf mit anderem Symbol.
+   */
+  const handleStopTransport = useCallback(() => {
+    setIsPlaying(false);
+    audioEngine.stop();
+    handleReturnToStart();
+  }, [handleReturnToStart]);
 
   // Hardware-Bedienung (Pioneer DDJ): Zuordnung Ereignis → Aktion in
   // `features/transport/useMidiBridge`.
@@ -2457,13 +2583,16 @@ export default function App() {
         if (!isInputField) {
           if (e.code === 'KeyE') {
             e.preventDefault();
-            setEditPaletteOpen((prev) => !prev);
+            handleToggleZone3Section('EDIT');
+          } else if (e.code === 'KeyS' && !e.shiftKey) {
+            e.preventDefault();
+            handleStopTransport();
           } else if (e.code === 'KeyP') {
             e.preventDefault();
-            setPaletteOpen((prev) => !prev);
+            setPaletteOpen(!paletteOpen);
           } else if (e.code === 'KeyM') {
             e.preventDefault();
-            handleToggleMaxWaveform();
+            handleToggleFocusMode();
           }
         }
       }
@@ -2749,299 +2878,315 @@ export default function App() {
         className="hidden"
       />
 
-      {/* 1. Top Windows-style Titlebar */}
-      <TitleBar />
-
-      {/* 2. Menu bar (Datei, Bearbeiten, Betrachten, Hilfe) */}
-      <MenuBar
-        onNewProject={handleNewProject}
-        onSaveProject={handleSaveProject}
-        onOpenProject={handleOpenProject}
-        onImportTracks={handleTrackImport}
-        trackImportLoading={trackImportLoading}
-        onImportAudio={() => audioFileInputRef.current?.click()}
-        onExportWav={() => setExportModalOpen(true)}
-        onExportXml={() => setExportModalOpen(true)}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        canUndo={undoStack.length > 0}
-        canRedo={redoStack.length > 0}
-        waveformMode={waveformMode}
-        onSetWaveformMode={setWaveformMode}
-        paletteOpen={paletteOpen}
-        onTogglePalette={() => setPaletteOpen(!paletteOpen)}
-        editPaletteOpen={editPaletteOpen}
-        onToggleEditPalette={() => setEditPaletteOpen(!editPaletteOpen)}
-        onMaximizeWaveform={handleToggleMaxWaveform}
-        browserOpen={browserOpen}
-        onToggleBrowser={() => setBrowserOpen(!browserOpen)}
-        chatbotOpen={chatbotOpen}
-        onToggleChatbot={() => setChatbotOpen(!chatbotOpen)}
-        onShowInfo={() => setInfoModalOpen(true)}
-        onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
-        onOpenSystemLogs={() => setSystemLogModalOpen(true)}
-        onClearHistory={() => setClearHistoryModalOpen(true)}
-        hasHistory={allUndoCount > 0 || allRedoCount > 0}
-        onCopy={handleCopy}
-        onCut={handleCut}
-        onPaste={handlePaste}
-        onDelete={handleDelete}
-        hasSelection={selection !== null && selection.duration > 0}
-        hasClipboard={clipboardBuffer !== null}
-        onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
-        onAnalyzeMixIn={() => setChatbotOpen(true)}
-        onOpenMidiModal={() => setMidiModalOpen(true)}
-        onSeparateStems={handleSeparateStems}
-        onOpenRecorder={openRecorder}
-        onOpenInitialSetup={() => setInitialSetupOpen(true)}
-      />
-
-      {/* 3. EDIT Mode Toolbar / Transport */}
-      <EditModeBar
+      {/* ═══════════ ZONE 1: Globale System-, Transport- & Fokus-Leiste ═══════════
+          Permanent sichtbar. Enthält ausschließlich Werkzeuge, Menüs, den
+          kompakten Player, den aktiven Track, die Systemzeit und den
+          Fokus-Umschalter – niemals Fortschritt, Status oder Import-Buttons. */}
+      <Zone1TopBar
         projectName={projectName}
+        activeTrack={activeTrack}
         isPlaying={isPlaying}
         onTogglePlay={handleTogglePlay}
+        onStop={handleStopTransport}
         onReturnToStart={handleReturnToStart}
         loopActive={loopActive}
         onToggleLoop={() => setLoopActive(!loopActive)}
         quantizeActive={quantize}
         onToggleQuantize={() => setQuantize(!quantize)}
-        onNewProject={() => setProjectName('New Project')}
-        onSaveProject={handleSaveProject}
-        onExport={() => setExportModalOpen(true)}
-        onShowInfo={() => setInfoModalOpen(true)}
-        onOpenSettings={() => setSettingsModalOpen(true)}
         masterVolume={masterVolume}
         onMasterVolumeChange={handleMasterVolumeChange}
-        paletteViewMode={paletteViewMode}
-        onTogglePaletteViewMode={() =>
-          setPaletteViewMode((prev) => (prev === 'FULL_DECK' ? 'SIDEBAR' : 'FULL_DECK'))
-        }
-        bottomControlOpen={editPaletteOpen}
-        onToggleBottomControl={() => setEditPaletteOpen(!editPaletteOpen)}
-        paletteOpen={paletteOpen}
-        onTogglePalette={() => setPaletteOpen(!paletteOpen)}
-        isMaxWaveform={isMaxWaveform}
-        onToggleMaxWaveform={handleToggleMaxWaveform}
+        focusMode={focusMode}
+        onToggleFocusMode={handleToggleFocusMode}
+        chatbotOpen={chatbotOpen}
+        onToggleChatbot={() => setChatbotOpen(!chatbotOpen)}
+        onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenRecorder={openRecorder}
-        recorderActive={recorderStage === 'RECORDING' || recorderStage === 'PREROLL' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING'}
-      />
-
-      {/* 4. Track Header & Overview Waveform (Authentic Pioneer DJ Header) */}
-      <TrackHeader
-        track={activeTrack}
-        viewOffset={viewOffset}
-        viewDuration={viewDuration}
-        onSeek={handleSeek}
-        onPanView={handlePanView}
-      />
-
-      {/* 4b. Deck Stems Control Bar (Pioneer DJ Stems: Vocals, Drums, Bass, Other) */}
-      <DeckStemsControl
-        stems={activeTrackStems}
-        mixerState={stemsMixerState}
-        isSeparating={isSeparatingStems}
-        separationProgress={separationProgress}
-        onSeparateStems={handleSeparateStems}
-        onCancelSeparation={handleCancelStemSeparation}
-        profiles={stemEngineInfo?.profiles ?? []}
-        selectedProfile={resolvedStemProfile}
-        onProfileChange={setStemProfile}
-        remoteStatus={stemRemoteStatus}
-        remoteEnabled={stemRemoteEnabled}
-        remoteCancelPendingJobId={remoteCancelPendingJobId}
-        remoteCancelCooldownJobId={remoteCancelCooldownJobId}
-        remoteNotice={remoteNotice}
-        onDismissRemoteNotice={() => setRemoteNotice(null)}
-        onRemoteEnabledChange={setStemRemoteEnabled}
-        onStartExternalSeparation={() => { void handleStartExternalSeparation(); }}
-        onOpenRemoteSetup={() => setRemoteSetupOpen(true)}
-        engineUnavailableReason={stemEngineUnavailableReason}
-        onShowDiagnostics={() => {
-          logger.info('STEMS', 'Diagnose angefordert – npm run stems:diagnose');
-          if (window.rekordboxDesktop?.getStemDiagnostics) {
-            void window.rekordboxDesktop.getStemDiagnostics().then((d: any) => console.log('Diagnostics:', d));
-          }
-        }}
-        activeArchitectureLabel={
-          stemArchitectures.find((a) => a.id === stemArchitecture.architectureId)?.label ??
-          (stemArchitecture.architectureId === 'auto' ? 'Automatisch' : stemArchitecture.architectureId)
+        recorderActive={
+          recorderStage === 'RECORDING' ||
+          recorderStage === 'PREROLL' ||
+          recorderStage === 'OPTIMIZING' ||
+          recorderStage === 'SAVING'
         }
-        activeArchitectureBenchmark={(() => {
-          const arch = stemArchitectures.find((a) => a.id === stemArchitecture.architectureId);
-          return arch?.benchmark5Min
-            ? `5-Min: GPU ${arch.benchmark5Min.gpuTime} | CPU ${arch.benchmark5Min.cpuTime}`
-            : '5-Min: GPU ~45–75s | CPU ~3–5 Min.';
-        })()}
-        onOpenInstaller={() => {
-          setStemQualityWarning('KI Stem-Engine ist noch nicht installiert. Bitte installieren Sie die Modelle, um Stems zu trennen.');
+        onOpenSettings={() => setSettingsModalOpen(true)}
+        onShowInfo={() => setInfoModalOpen(true)}
+        menuProps={{
+          onNewProject: handleNewProject,
+          onSaveProject: handleSaveProject,
+          onOpenProject: handleOpenProject,
+          onImportTracks: handleTrackImport,
+          trackImportLoading,
+          onImportAudio: () => audioFileInputRef.current?.click(),
+          onExportWav: () => setExportModalOpen(true),
+          onExportXml: () => setExportModalOpen(true),
+          onUndo: handleUndo,
+          onRedo: handleRedo,
+          canUndo: undoStack.length > 0,
+          canRedo: redoStack.length > 0,
+          waveformMode,
+          onSetWaveformMode: setWaveformMode,
+          paletteOpen,
+          onTogglePalette: () => setPaletteOpen(!paletteOpen),
+          zone3Section,
+          onToggleZone3Section: handleToggleZone3Section,
+          focusMode,
+          onToggleFocusMode: handleToggleFocusMode,
+          browserOpen,
+          onToggleBrowser: () => setBrowserOpen(!browserOpen),
+          chatbotOpen,
+          onToggleChatbot: () => setChatbotOpen(!chatbotOpen),
+          onShowInfo: () => setInfoModalOpen(true),
+          onOpenDatabaseInspector: () => setDbExtractionModalOpen(true),
+          onOpenSystemLogs: () => setSystemLogModalOpen(true),
+          onClearHistory: () => setClearHistoryModalOpen(true),
+          hasHistory: allUndoCount > 0 || allRedoCount > 0,
+          onCopy: handleCopy,
+          onCut: handleCut,
+          onPaste: handlePaste,
+          onDelete: handleDelete,
+          hasSelection: selection !== null && selection.duration > 0,
+          hasClipboard: clipboardBuffer !== null,
+          onOpenEditAssistant: () => setEditAssistantModalOpen(true),
+          onAnalyzeMixIn: () => setChatbotOpen(true),
+          onOpenMidiModal: () => setMidiModalOpen(true),
+          onSeparateStems: () => dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' }),
+          onOpenRecorder: openRecorder,
+          onOpenInitialSetup: () => setInitialSetupOpen(true),
+          onOpenStemModels: () => dispatchWorkspace({ type: 'SET_STEM_MODEL_PICKER', open: true }),
         }}
-        onToggleStemMute={handleToggleStemMute}
-        onToggleStemSolo={handleToggleStemSolo}
-        onStemVolumeChange={handleStemVolumeChange}
-        onExtractStemToClip={handleExtractStemToClip}
-        onSetAcapella={handleSetAcapella}
-        onSetInstrumental={handleSetInstrumental}
-        onResetStems={handleResetStems}
-        onOpenMidiModal={() => setMidiModalOpen(true)}
-        midiStatusLabel={midiStatusLabel}
-        isMidiConnected={isMidiConnected}
-        missingModel={missingStemModel}
-        onInstallModel={() => setStemInstallOpen(true)}
       />
 
-      {/* 5. Main Middle Working Area: Detail Waveform (Full-width or with Palette) */}
-      <div className="flex-1 flex overflow-hidden relative">
-        <DetailWaveform
+      {/* ═══════════ ZONE 2: Primärer Viewport ═══════════
+          Deck-Kontext, dynamisches Stem-Center (Zustände A/B/C), die
+          High-Resolution-Wellenform und die andockbaren Paletten. */}
+      <main className="flex-1 flex flex-col overflow-hidden min-h-0" data-zone="2">
+        {/* 4. Track Header & Overview Waveform (authentischer Pioneer-DJ-Kopf) */}
+        <TrackHeader
           track={activeTrack}
-          trackRevision={trackRevision}
-          getPositionSec={getPositionSec}
           viewOffset={viewOffset}
           viewDuration={viewDuration}
-          waveformMode={waveformMode}
-          selection={selection}
-          quantize={quantize}
           onSeek={handleSeek}
-          onSelect={setSelection}
-          onZoomIn={handleZoomIn}
-          onZoomOut={handleZoomOut}
-          onResetZoom={handleResetZoom}
-          onSelectZoomPreset={handleSelectZoomPreset}
           onPanView={handlePanView}
-          onAddToPalette={handleAddSelectionToPalette}
-          onCopy={handleCopy}
-          onCut={handleCut}
-          onPaste={handlePaste}
-          onInsert={handleInsert}
-          onReplace={handleReplace}
-          onOverdub={handleOverdub}
-          onDelete={handleDelete}
-          onClear={handleClear}
-          onAddCue={handleAddCue}
-          onPrevMemoryCue={handlePrevMemoryCue}
-          onNextMemoryCue={handleNextMemoryCue}
-          onAddMemoryCue={handleAddMemoryCue}
-          onSetFirstBeatHere={handleSetFirstBeatHere}
-          onShiftBeatgrid={handleShiftBeatgrid}
-          onAutoAlignBeatgrid={handleAutoAlignBeatgrid}
-          onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
-          onImportTracksClick={handleTrackImport}
-          onLoadAudioClick={() => audioFileInputRef.current?.click()}
-          onDropFile={handleDropFile}
-          onDropPaletteClip={handleDropPaletteClip}
-          onAnalyzeParts={handleAnalyzeParts}
         />
 
-        {/* Palette Panel (Screenshot 01 vs Screenshot 02) */}
-        {paletteViewMode === 'SIDEBAR' && (
-          <PalettePanel
-            isOpen={paletteOpen}
-            onToggle={() => setPaletteOpen(!paletteOpen)}
-            clips={paletteClips}
-            onAddFromSelection={handleAddSelectionToPalette}
-            onDeleteClip={(id) => {
-              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-              if (selectedClipId === id) setSelectedClipId(null);
-            }}
-            onSelectClip={(clip) => setSelectedClipId(clip.id)}
-            selectedClipId={selectedClipId}
-            hasSelection={selection !== null && selection.duration > 0}
-            onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
-            matchPitch={matchPitchOnInsert}
-            onToggleMatchPitch={setMatchPitchOnInsert}
-            targetBpm={activeTrack?.bpm}
-            targetKey={activeTrack?.key}
+        {/* 4b. Dynamisches Stem-Center – Zustand A/B/C, Modell-Isolation */}
+        <StemCenter
+          phase={stemCenterPhase}
+          configOpen={stemConfigOpen}
+          onOpenConfig={() => dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' })}
+          onCloseConfig={() => dispatchWorkspace({ type: 'CLOSE_STEM_CONFIG' })}
+          modelPickerOpen={stemModelPickerOpen}
+          onOpenModelPicker={() => dispatchWorkspace({ type: 'SET_STEM_MODEL_PICKER', open: true })}
+          onCloseModelPicker={() => dispatchWorkspace({ type: 'SET_STEM_MODEL_PICKER', open: false })}
+          activeModelLabel={activeModelLabel}
+          activeModelDetail={activeModelOption?.detail}
+          modelOptions={stemArchitectures}
+          selectedArchitectureId={stemArchitecture.architectureId}
+          onSelectArchitecture={(id) => setStemArchitecture((prev) => ({ ...prev, architectureId: id }))}
+          qualityMode={stemQualityMode}
+          onQualityModeChange={handleStemQualityModeChange}
+          targetMode={stemRemoteEnabled ? 'remote' : 'local'}
+          onTargetModeChange={(mode) => setStemRemoteEnabled(mode === 'remote')}
+          remoteConfigured={Boolean(stemRemoteStatus?.configured)}
+          remoteStatus={stemRemoteStatus}
+          onOpenRemoteSetup={() => setRemoteSetupOpen(true)}
+          onStartJob={() => { void handleSeparateStems(); }}
+          missingModel={missingStemModel}
+          onInstallModel={() => setStemInstallOpen(true)}
+          engineReason={stemEngineUnavailableReason}
+          onShowDiagnostics={() => {
+            logger.info('STEMS', 'Diagnose angefordert – npm run stems:diagnose');
+            if (window.rekordboxDesktop?.getStemDiagnostics) {
+              void window.rekordboxDesktop.getStemDiagnostics().then((d: unknown) => console.log('Diagnostics:', d));
+            }
+          }}
+          progress={separationProgress}
+          onCancelSeparation={handleCancelStemSeparation}
+          remoteCancelPendingJobId={remoteCancelPendingJobId}
+          remoteCancelCooldownJobId={remoteCancelCooldownJobId}
+          deckProps={{
+            stems: activeTrackStems,
+            mixerState: stemsMixerState,
+            onToggleStemMute: handleToggleStemMute,
+            onToggleStemSolo: handleToggleStemSolo,
+            onStemVolumeChange: handleStemVolumeChange,
+            onExtractStemToClip: handleExtractStemToClip,
+            onSetAcapella: handleSetAcapella,
+            onSetInstrumental: handleSetInstrumental,
+            onResetStems: handleResetStems,
+            onOpenMidiModal: () => setMidiModalOpen(true),
+            midiStatusLabel,
+            isMidiConnected,
+            activeArchitectureLabel: activeModelLabel,
+          }}
+        />
+
+        {/* 5. Hauptarbeitsfläche: Detail-Wellenform (voll oder mit Palette) */}
+        <div className="flex-1 flex overflow-hidden relative min-h-0">
+          <DetailWaveform
+            track={activeTrack}
+            trackRevision={trackRevision}
+            getPositionSec={getPositionSec}
+            viewOffset={viewOffset}
+            viewDuration={viewDuration}
             waveformMode={waveformMode}
+            selection={selection}
+            quantize={quantize}
+            /* Fokus-Modus: maximale vertikale Ausnutzung – die Wellenform
+               skaliert über die freie Höhe hinaus auf 1,25× Amplitude. */
+            verticalScale={focusMode ? 1.25 : 1}
+            onSeek={handleSeek}
+            onSelect={setSelection}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            onResetZoom={handleResetZoom}
+            onSelectZoomPreset={handleSelectZoomPreset}
+            onPanView={handlePanView}
+            onAddToPalette={handleAddSelectionToPalette}
+            onCopy={handleCopy}
+            onCut={handleCut}
+            onPaste={handlePaste}
+            onInsert={handleInsert}
+            onReplace={handleReplace}
+            onOverdub={handleOverdub}
+            onDelete={handleDelete}
+            onClear={handleClear}
+            onAddCue={handleAddCue}
+            onPrevMemoryCue={handlePrevMemoryCue}
+            onNextMemoryCue={handleNextMemoryCue}
+            onAddMemoryCue={handleAddMemoryCue}
+            onSetFirstBeatHere={handleSetFirstBeatHere}
+            onShiftBeatgrid={handleShiftBeatgrid}
+            onAutoAlignBeatgrid={handleAutoAlignBeatgrid}
+            onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
+            onImportTracksClick={handleTrackImport}
+            onLoadAudioClick={() => audioFileInputRef.current?.click()}
+            onDropFile={handleDropFile}
+            onDropPaletteClip={handleDropPaletteClip}
+            onAnalyzeParts={handleAnalyzeParts}
           />
+
+          {/* Clip-Palette (Zone 2, rechts); im Fokus-Modus geschlossen */}
+          {paletteViewMode === 'SIDEBAR' && (
+            <PalettePanel
+              isOpen={paletteOpen}
+              onToggle={() => setPaletteOpen(!paletteOpen)}
+              clips={paletteClips}
+              onAddFromSelection={handleAddSelectionToPalette}
+              onDeleteClip={(id) => {
+                setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+                if (selectedClipId === id) setSelectedClipId(null);
+              }}
+              onSelectClip={(clip) => setSelectedClipId(clip.id)}
+              selectedClipId={selectedClipId}
+              hasSelection={selection !== null && selection.duration > 0}
+              onExpandToDeckView={() => setPaletteViewMode('FULL_DECK')}
+              matchPitch={matchPitchOnInsert}
+              onToggleMatchPitch={setMatchPitchOnInsert}
+              targetBpm={activeTrack?.bpm}
+              targetKey={activeTrack?.key}
+              waveformMode={waveformMode}
+            />
+          )}
+
+          {/* KI-Copilot-Palette (Zone 2, rechts); im Fokus-Modus geschlossen */}
+          <ChatbotPalette
+            isOpen={chatbotOpen}
+            onClose={() => setChatbotOpen(false)}
+            trackContext={chatbotTrackContext}
+            getTrackContext={resolveChatbotTrackContext}
+            onExecuteAction={handleExecuteChatbotAction}
+            onSelectZoomPreset={handleSelectZoomPreset}
+          />
+        </div>
+
+        {/* Vollflächiges Clip-Deck (Zone 2, unterhalb der Wellenform) */}
+        {paletteViewMode === 'FULL_DECK' && (
+          <div className="h-56 flex flex-col flex-shrink-0 z-30 shadow-2xl">
+            <ClipDeckView
+              clips={paletteClips}
+              activeClipId={selectedClipId}
+              onSelectClip={(clip) => setSelectedClipId(clip.id)}
+              onDeleteClip={(id) => {
+                setPaletteClips((prev) => prev.filter((c) => c.id !== id));
+                if (selectedClipId === id) setSelectedClipId(null);
+              }}
+              onAddFromSelection={handleAddSelectionToPalette}
+              hasSelectionInDeckA={selection !== null && selection.duration > 0}
+              activeTrack={activeTrack}
+              matchPitch={matchPitchOnInsert}
+              onToggleMatchPitch={setMatchPitchOnInsert}
+              onInsertClipToDeckA={handleInsertClipToDeckA}
+              onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
+              onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
+              onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
+              waveformMode={waveformMode}
+            />
+          </div>
         )}
+      </main>
 
-        {/* Collapsible AI Copilot Assistant Palette */}
-        <ChatbotPalette
-          isOpen={chatbotOpen}
-          onClose={() => setChatbotOpen(false)}
-          trackContext={chatbotTrackContext}
-          getTrackContext={resolveChatbotTrackContext}
-          onExecuteAction={handleExecuteChatbotAction}
-          onSelectZoomPreset={handleSelectZoomPreset}
-        />
-      </div>
-
-      {/* Full Deck View (Expanded Clip Library Deck B) */}
-      {paletteViewMode === 'FULL_DECK' && (
-        <div className="h-56 flex flex-col flex-shrink-0 z-30 shadow-2xl">
-          <ClipDeckView
-            clips={paletteClips}
-            activeClipId={selectedClipId}
-            onSelectClip={(clip) => setSelectedClipId(clip.id)}
-            onDeleteClip={(id) => {
-              setPaletteClips((prev) => prev.filter((c) => c.id !== id));
-              if (selectedClipId === id) setSelectedClipId(null);
-            }}
-            onAddFromSelection={handleAddSelectionToPalette}
-            hasSelectionInDeckA={selection !== null && selection.duration > 0}
-            activeTrack={activeTrack}
+      {/* ═══════════ ZONE 3: Untere Bearbeitungs-Paletten ═══════════
+          Standardmäßig eingeklappt (schmale Reiter). Der Fokus-Modus blendet
+          die Zone vollständig aus – siehe `zone3Visible`. */}
+      {zone3Visible(workspace) && (
+        <div className="flex flex-col flex-shrink-0" data-zone3-shell="true">
+          <Zone3Footer
+            activeSection={zone3Section}
+            onToggleSection={handleToggleZone3Section}
+            selection={selection}
+            onBeatSelect={handleBeatSelect}
+            onHalfSelection={handleHalfSelection}
+            onDoubleSelection={handleDoubleSelection}
+            onCancelSelection={handleCancelSelection}
+            onClone={handleAddSelectionToPalette}
+            onCopy={handleCopy}
+            onCut={handleCut}
+            onPaste={handlePaste}
+            onInsert={handleInsert}
+            onReplace={handleReplace}
+            onOverdub={handleOverdub}
+            onDelete={handleDelete}
+            onClear={handleClear}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            canUndo={undoStack.length > 0}
+            canRedo={redoStack.length > 0}
+            hasClipboard={clipboardBuffer !== null}
             matchPitch={matchPitchOnInsert}
             onToggleMatchPitch={setMatchPitchOnInsert}
-            onInsertClipToDeckA={handleInsertClipToDeckA}
-            onReplaceDeckAWithClip={handleReplaceDeckAWithClip}
-            onOverdubDeckAWithClip={handleOverdubDeckAWithClip}
-            onCloseDeckView={() => setPaletteViewMode('SIDEBAR')}
-            waveformMode={waveformMode}
+            targetKey={activeTrack?.key}
+            onClearHistory={() => setClearHistoryModalOpen(true)}
+            onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
+          />
+
+          {/* Unterster Streifen: Browser & Sammlung */}
+          <BrowserMultiTrackBar
+            isOpen={browserOpen}
+            onToggle={() => setBrowserOpen(!browserOpen)}
+            tracks={tracks}
+            activeTrackId={activeTrackId}
+            onSelectTrack={(id) => {
+              setActiveTrackId(id);
+              const t = tracks.find((tr) => tr.id === id);
+              if (t && t.audioBuffer) {
+                setWorkingAudioBuffer(t.audioBuffer);
+                setPosition(0);
+                setViewOffset(0);
+                setIsPlaying(false);
+                audioEngine.stop();
+              }
+            }}
+            onImportTracks={handleTrackImport}
+            trackImportLoading={trackImportLoading}
+            onImportAudio={() => audioFileInputRef.current?.click()}
           />
         </div>
       )}
 
-      {/* 6. Lower Action Block: BEAT SELECT | SELECT | EDIT (Screenshots 01, 02, 03) */}
-      <BottomControlBlock
-        selection={selection}
-        onBeatSelect={handleBeatSelect}
-        onHalfSelection={handleHalfSelection}
-        onDoubleSelection={handleDoubleSelection}
-        onCancelSelection={handleCancelSelection}
-        onClone={handleAddSelectionToPalette}
-        onCopy={handleCopy}
-        onCut={handleCut}
-        onPaste={handlePaste}
-        onInsert={handleInsert}
-        onReplace={handleReplace}
-        onOverdub={handleOverdub}
-        onDelete={handleDelete}
-        onClear={handleClear}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        canUndo={undoStack.length > 0}
-        canRedo={redoStack.length > 0}
-        hasClipboard={clipboardBuffer !== null}
-        matchPitch={matchPitchOnInsert}
-        onToggleMatchPitch={setMatchPitchOnInsert}
-        targetKey={activeTrack?.key}
-        onClearHistory={() => setClearHistoryModalOpen(true)}
-        onOpenEditAssistant={() => setEditAssistantModalOpen(true)}
-        isOpen={editPaletteOpen}
-        onToggle={() => setEditPaletteOpen(!editPaletteOpen)}
-      />
-
-      {/* 7. Bottom Strip: BROWSER tab, Pioneer Rekordbox branding & Track Collection */}
-      <BrowserMultiTrackBar
-        isOpen={browserOpen}
-        onToggle={() => setBrowserOpen(!browserOpen)}
-        tracks={tracks}
-        activeTrackId={activeTrackId}
-        onSelectTrack={(id) => {
-          setActiveTrackId(id);
-          const t = tracks.find((tr) => tr.id === id);
-          if (t && t.audioBuffer) {
-            setWorkingAudioBuffer(t.audioBuffer);
-            setPosition(0);
-            setViewOffset(0);
-            setIsPlaying(false);
-            audioEngine.stop();
-          }
-        }}
-        onImportTracks={handleTrackImport}
-        trackImportLoading={trackImportLoading}
-        onImportAudio={() => audioFileInputRef.current?.click()}
-      />
+      {/* Flüchtige Prozessmeldungen: bewusst außerhalb aller drei Zonen, damit
+          Zone 1 statusfrei bleibt und Zone 2 im Ruhezustand nur die Wellenform
+          und die schmale Stem-Zeile zeigt. */}
+      <TransientStatusToast items={transientStatuses} onDismiss={dismissTransientStatus} />
 
       {/* Modals */}
       {/*
