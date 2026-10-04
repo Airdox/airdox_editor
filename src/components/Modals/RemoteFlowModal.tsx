@@ -39,6 +39,7 @@ import {
   Cpu,
   Database,
   Download,
+  ExternalLink,
   FileAudio,
   HardDrive,
   HeartPulse,
@@ -75,6 +76,9 @@ interface Props {
 
 /** Alter des Heartbeats in Sekunden – darüber gilt der Worker als „nicht mehr sichtbar“. */
 const WORKER_LIVENESS_SECONDS = 90;
+
+const COLAB_NOTEBOOK_URL =
+  'https://colab.research.google.com/github/Airdox/airdox_editor/blob/main/colab/airdox-stem-remote-worker.ipynb';
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
 const failedStatus = (value?: string) => value === 'FAILED' || value === 'CANCELLED';
@@ -406,14 +410,27 @@ export const RemoteFlowModal: React.FC<Props> = ({
               {job ? <span className="ml-2 font-mono text-[10px] text-neutral-600">{job.jobId}</span> : null}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Datenfluss schließen"
-            className="shrink-0 rounded-lg p-2 text-neutral-400 transition hover:bg-white/10 hover:text-white"
-          >
-            <X size={19} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={COLAB_NOTEBOOK_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/20 hover:text-white"
+              title="Colab-Notebook direkt in Google Colab öffnen"
+            >
+              <ExternalLink size={13} />
+              <span className="hidden sm:inline">In Google Colab öffnen</span>
+              <span className="sm:hidden">Colab</span>
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Datenfluss schließen"
+              className="rounded-lg p-2 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+            >
+              <X size={19} />
+            </button>
+          </div>
         </header>
 
         <div className="min-h-0 overflow-y-auto">
@@ -498,6 +515,17 @@ export const RemoteFlowModal: React.FC<Props> = ({
                       : ' Der Upload ist bestätigt, aber Colab hat noch nicht übernommen.'}{' '}
                     <span className="font-semibold">0 % ist in dieser Phase korrekt</span> – es wäre unehrlich, den Download oder die
                     KI-Rechnung vorzutäuschen. Der Laufzettel unten zeigt stattdessen Station für Station, was bereits belegt ist.
+                    <div className="mt-2.5">
+                      <a
+                        href={COLAB_NOTEBOOK_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300/40 bg-amber-300/15 px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/25"
+                      >
+                        <ExternalLink size={13} />
+                        <span>Colab-Notebook öffnen</span>
+                      </a>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -630,6 +658,23 @@ export const RemoteFlowModal: React.FC<Props> = ({
                               <HelpCircle size={13} className="mt-0.5 shrink-0 text-cyan-300" />
                               {station.hint}
                             </p>
+                          ) : null}
+
+                          {station.id === 'worker_seen' && station.state !== 'done' ? (
+                            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                              <a
+                                href={COLAB_NOTEBOOK_URL}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/15 px-3 py-1.5 text-[11px] font-semibold text-cyan-200 transition hover:bg-cyan-400/25 hover:text-white"
+                              >
+                                <ExternalLink size={13} />
+                                <span>Colab-Notebook jetzt öffnen</span>
+                              </a>
+                              <span className="text-[10px] text-neutral-400">
+                                Öffnet das Notebook direkt in Google Colab zum Starten von Zelle #5.
+                              </span>
+                            </div>
                           ) : null}
 
                           {station.id === 'cloud_sync' && station.state === 'unknown' && onConfirmCloudSync && job ? (

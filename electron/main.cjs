@@ -190,7 +190,12 @@ function createWindow() {
   Menu.setApplicationMenu(null);
   mainWindow.setMenuBarVisibility(false);
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     // Nur das eigene App-Protokoll und Dev-Tools erlauben.
     if (!url.startsWith(`${APP_PROTOCOL}://`) && !url.startsWith('devtools://')) {

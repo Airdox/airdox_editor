@@ -101,7 +101,10 @@ print("Offene Jobs:", len(os.listdir(os.path.join(JOB_ROOT, "jobs"))) if os.path
 # 2 · Abhängigkeiten + Quellcode
 import os, subprocess, sys
 
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "soundfile", "pyyaml"], check=False)
+subprocess.run([
+    sys.executable, "-m", "pip", "install", "-q",
+    "soundfile", "pyyaml", "ml-collections", "einops", "rotary-embedding-torch", "beartype", "msst"
+], check=False)
 
 REPO_DIR = "/content/airdox"
 if os.path.isdir(os.path.join("/content/drive/MyDrive", os.path.dirname(REPO_ARCHIV))) and os.path.isfile(os.path.join("/content/drive/MyDrive", REPO_ARCHIV)):

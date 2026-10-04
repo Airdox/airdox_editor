@@ -832,6 +832,19 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
         local_output.mkdir(parents=True, exist_ok=True)
         _remove_partial_outputs(local_output, list(manifest["engine"].get("stems") or DEFAULT_STEMS))
         input_path = safe_job_path(root, manifest["input"]["relativePath"])
+        expected_bytes = int(manifest.get("input", {}).get("bytes") or 0)
+        wait_deadline = time.monotonic() + 300
+        while time.monotonic() < wait_deadline:
+            try:
+                if hasattr(os, "sync"):
+                    os.sync()
+            except Exception:
+                pass
+            if input_path.is_file() and (expected_bytes == 0 or input_path.stat().st_size >= expected_bytes):
+                break
+            _say(f"Warte auf vollständige Cloud-Synchronisation der Eingabedatei ({input_path.name}) …", force=True)
+            _write_worker_status(root, options, "PROCESSING", job_id)
+            time.sleep(5)
         if not input_path.is_file():
             raise FileNotFoundError(f"Eingabedatei fehlt in der Jobablage: {manifest['input']['relativePath']}")
         input_hash = sha256_file(input_path)
