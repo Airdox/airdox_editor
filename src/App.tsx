@@ -13,7 +13,6 @@ import {
   PaletteClip,
   EditSegment,
   DataOrigin,
-  EditHistoryEntry,
   CuePoint,
   AnalysisFileReference,
   RekordboxCueSource,
@@ -26,7 +25,11 @@ import {
   sliceWaveformAnalysis,
 } from './waveform/analysisComposer';
 import { audioEngine } from './audio/audioEngine';
-import { exportAudioBuffer } from './audio/audioExporter';
+import {
+  AudioExportFormatUnavailableError,
+  exportAudioBuffer,
+  isAudioExportFormatSupported,
+} from './audio/audioExporter';
 import { measureRecordingAudio, optimizeRecordingBuffer } from './audio/recordingProcessor';
 import { FileAudio, ShieldCheck } from 'lucide-react';
 import {
@@ -95,9 +98,18 @@ import {
   type StemArchitectureViewState,
   type WorkspacePathSettings,
 } from './audio/stemArchitectures';
+import {
+  RemoteCancelRequestGuard,
+  REMOTE_CANCEL_RETRY_COOLDOWN_MS,
+} from './stems/remote/remoteCancelRequestGuard';
 import { midiManager } from './midi/midiManager';
 import { editAssistant } from './audio/editAssistant';
 import { useEditAssistant } from './hooks/useEditAssistant';
+import { useEditHistory } from './hooks/useEditHistory';
+import { useProjectSession } from './hooks/useProjectSession';
+import { useTransport } from './hooks/useTransport';
+import { useMidiLifecycle } from './hooks/useMidiLifecycle';
+import { createEditHistoryEntry, restoreEditHistoryEntry } from './audio/editHistory';
 import { logger } from './utils/logger';
 import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
@@ -105,7 +117,6 @@ import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
 import { detectTrackParts } from './audio/phraseDetection';
 import {
-  cloneAudioBuffer,
   executeCopy,
   executeCut,
   executeRippleDelete,
@@ -115,7 +126,8 @@ import {
   executeReplace,
   executeOverdub,
   applyExecutionToTrack,
-  EditCommandContext,
+  type EditCommandContext,
+  type EditExecutionResult,
   isExactSameSourceSlotRoundTrip,
 } from './audio/editingEngine';
 
@@ -402,35 +414,36 @@ async function rebuildTrackFromSerialized(
 }
 
 export default function App() {  // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
-  const [projectName, setProjectName] = useState<string>('New Project');
-  const [tracks, setTrackState] = useState<TrackModel[]>([]);
-  const [trackRevision, setTrackRevision] = useState(0);
-  const setTracks = useCallback(
-    (nextTracks: TrackModel[] | ((current: TrackModel[]) => TrackModel[])) => {
-      setTrackRevision((revision) => revision + 1);
-      setTrackState(nextTracks);
-    },
-    []
-  );
-  const [activeTrackId, setActiveTrackId] = useState<string>('');
-  const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
+  const {
+    projectName,
+    setProjectName,
+    tracks,
+    setTracks,
+    activeTrackId,
+    setActiveTrackId,
+    activeTrack,
+    workingAudioBuffer,
+    setWorkingAudioBuffer,
+    updateTrack,
+  } = useProjectSession();
 
-  // Viewport & Timeline state
-  const [currentTime, setCurrentTimeState] = useState<number>(0);
-  const currentTimeRef = useRef(0);
-  const setCurrentTime = useCallback((nextTime: number) => {
-    currentTimeRef.current = nextTime;
-    setCurrentTimeState(nextTime);
-  }, []);
+  // Viewport & timeline state
   const [viewOffset, setViewOffset] = useState<number>(0); // detail start in seconds
   const [viewDuration, setViewDuration] = useState<number>(18.0); // zoom window in seconds (default ~9-10 bars @ 130bpm)
+  const {
+    currentTime,
+    currentTimeRef,
+    setCurrentTime,
+    isPlaying,
+    setIsPlaying,
+    masterVolume,
+    setMasterVolume: handleMasterVolumeChange,
+    meterL,
+    meterR,
+  } = useTransport({ viewOffset, viewDuration, setViewOffset });
   const [waveformMode, setWaveformMode] = useState<WaveformMode>('RGB');
   const [quantize, setQuantize] = useState<boolean>(true);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loopActive, setLoopActive] = useState<boolean>(false);
-  const [masterVolume, setMasterVolume] = useState<number>(0.9);
-  const [meterL, setMeterL] = useState<number>(0);
-  const [meterR, setMeterR] = useState<number>(0);
 
   // Selection state - Starts with null (Clean Empty Project)
   const [selection, setSelection] = useState<SelectionRange | null>(null);
@@ -464,9 +477,17 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [clipboardBuffer, setClipboardBuffer] = useState<AudioBuffer | null>(null);
   const [clipboardProvenance, setClipboardProvenance] = useState<ClipboardProvenance | null>(null);
 
-  // History Stack for Undo / Redo
-  const [undoStack, setUndoStack] = useState<EditHistoryEntry[]>([]);
-  const [redoStack, setRedoStack] = useState<EditHistoryEntry[]>([]);
+  // Undo/redo is managed separately from project layout state.
+  const {
+    undoStack,
+    redoStack,
+    allUndoCount,
+    allRedoCount,
+    push: pushHistoryEntry,
+    undo: takeUndoEntry,
+    redo: takeRedoEntry,
+    clear: clearEditHistory,
+  } = useEditHistory(activeTrack?.id ?? null);
 
   // Modals
   const [infoModalOpen, setInfoModalOpen] = useState<boolean>(false);
@@ -575,6 +596,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, []);
   const [stemRemoteStatus, setStemRemoteStatus] = useState<RemoteServiceStatus | null>(null);
+  // Keep remote cancellation idempotent across re-renders and rapid clicks.
+  // Rejected/failed requests get a short cooldown; accepted requests stay locked
+  // until the next status snapshot reports a terminal job state.
+  const remoteCancelRequestGuardRef = useRef(new RemoteCancelRequestGuard());
+  const [remoteCancelPendingJobId, setRemoteCancelPendingJobId] = useState<string | null>(null);
+  const [remoteCancelCooldownJobId, setRemoteCancelCooldownJobId] = useState<string | null>(null);
+  const remoteCancelCooldownTimersRef = useRef(new Map<string, number>());
   const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const [remoteFlowOpen, setRemoteFlowOpen] = useState(false);
   const [remoteFlowJobId, setRemoteFlowJobId] = useState<string | null>(null);
@@ -582,7 +610,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [remoteFlowError, setRemoteFlowError] = useState<string | null>(null);
   const [remoteFlowRunning, setRemoteFlowRunning] = useState(false);
   const [remoteFlowTrack, setRemoteFlowTrack] = useState('');
-  const remoteCancelPendingRef = useRef<string | null>(null);
   // Architektur-Voreinstellung aus dem Einstellungsmenü: gilt für neue
   // Separationen und wird wie die übrigen Settings lokal persistiert.
   const [stemArchitecture, setStemArchitecture] = useState<StemArchitectureSettings>(() =>
@@ -623,8 +650,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   // Hardware Controller (Pioneer DDJ-FLX4 / DDJ-1000) state
   const [midiModalOpen, setMidiModalOpen] = useState<boolean>(false);
-  const [isMidiConnected, setIsMidiConnected] = useState<boolean>(false);
-  const [midiStatusLabel, setMidiStatusLabel] = useState<string>('MIDI bereit');
 
   // Edit Assistant State Manager (protects selection buffer & clipboard integrity)
   const { state: editAssistantState, summary: editAssistantSummary } = useEditAssistant(
@@ -653,8 +678,10 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   // Standalone audio file input. Rekordbox XML is bundled and has no file picker.
   const audioFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Active track helper (supports empty state)
-  const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+  const commitEditExecution = useCallback((trackId: string, result: EditExecutionResult) => {
+    updateTrack(trackId, (track) => applyExecutionToTrack(track, result));
+    setWorkingAudioBuffer(result.newBuffer);
+  }, [updateTrack]);
 
   const clearRecorderResources = useCallback(() => {
     const session = recorderSessionRef.current;
@@ -716,6 +743,11 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
 
   const handleRecorderStart = useCallback(async () => {
     if (recorderStage === 'PREROLL' || recorderStage === 'RECORDING' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING') return;
+    if (!isAudioExportFormatSupported(recordingFormat)) {
+      setRecorderError(new AudioExportFormatUnavailableError(recordingFormat).message);
+      setRecorderStage('ERROR');
+      return;
+    }
     if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
       setRecorderError('Dieser Chromium/Electron-Build unterstützt keine Audioaufnahme. Bitte die Desktop-App aktualisieren.');
       setRecorderStage('ERROR');
@@ -798,7 +830,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     } else {
       await beginCapture();
     }
-  }, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter]);
+  }, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter, recordingFormat]);
 
   const handleRecorderStop = useCallback(async () => {
     const session = recorderSessionRef.current;
@@ -1033,62 +1065,20 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [cacheAnalysisMapping]);
 
-  // Keep transport precision at display refresh rate, but publish React UI state less often.
+  // Restore stems only when the current immutable working buffer has the exact
+  // PCM fingerprint used for separation; edits must not inherit source-track stems.
   useEffect(() => {
-    let animId: number;
-    let lastTimeUiUpdate = Number.NEGATIVE_INFINITY;
-    let lastMeterUiUpdate = Number.NEGATIVE_INFINITY;
-    const timeUiIntervalMs = 1000 / 30;
-    const meterUiIntervalMs = 1000 / 20;
-
-    const updateLoop = (timestamp: number) => {
-      if (audioEngine.getIsPlaying()) {
-        const time = audioEngine.getCurrentTime();
-        currentTimeRef.current = time;
-        if (timestamp - lastTimeUiUpdate >= timeUiIntervalMs) {
-          setCurrentTimeState(time);
-          lastTimeUiUpdate = timestamp;
-        }
-
-        // Keep detail view centered or following playhead if near boundary
-        if (time > viewOffset + viewDuration * 0.9) {
-          setViewOffset(Math.max(0, time - viewDuration * 0.2));
-        }
-
-        if (timestamp - lastMeterUiUpdate >= meterUiIntervalMs) {
-          const meter = audioEngine.getMasterMeter();
-          setMeterL(meter.left);
-          setMeterR(meter.right);
-          lastMeterUiUpdate = timestamp;
-        }
-      } else if (timestamp - lastMeterUiUpdate >= meterUiIntervalMs) {
-        setMeterL((prev) => Math.max(0, prev * 0.85));
-        setMeterR((prev) => Math.max(0, prev * 0.85));
-        lastMeterUiUpdate = timestamp;
-      }
-      animId = requestAnimationFrame(updateLoop);
-    };
-
-    animId = requestAnimationFrame(updateLoop);
-    return () => cancelAnimationFrame(animId);
-  }, [viewOffset, viewDuration]);
-
-  // Master volume control
-  const handleMasterVolumeChange = useCallback((vol: number) => {
-    setMasterVolume(vol);
-    audioEngine.setMasterVolume(vol);
-  }, []);
-
-
-  // Check cached stems on track change
-  useEffect(() => {
-    if (activeTrack) {
-      const cached = stemEngine.getCachedStems(activeTrack.id, activeTrack.originalSha256);
+    if (activeTrack && workingAudioBuffer) {
+      const cached = stemEngine.getCachedStemsForBuffer(
+        activeTrack.id,
+        workingAudioBuffer,
+        activeTrack.originalSha256
+      );
       setActiveTrackStems(cached || null);
     } else {
       setActiveTrackStems(null);
     }
-  }, [activeTrackId, activeTrack]);
+  }, [activeTrack, workingAudioBuffer]);
 
   // Engine-Status beim Start abfragen: die UI baut daraus Profil-Auswahl UND
   // die Stem-Liste (die kommt aus dem Deskriptor, nicht aus einer Konstanten).
@@ -1212,6 +1202,28 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setSeparationProgress(null);
     }
   }, [activeTrack, workingAudioBuffer, showOperationFeedback, stemArchitecture]);
+
+  // Keep cancellation guards only while the job is active; terminal or
+  // disappeared jobs must not leave stale locks in the renderer.
+  useEffect(() => {
+    if (!stemRemoteStatus) return;
+    for (const jobId of remoteCancelRequestGuardRef.current.trackedJobIds()) {
+      const job = stemRemoteStatus.jobs.find((entry) => entry.jobId === jobId);
+      if (!job || job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') {
+        remoteCancelRequestGuardRef.current.forget(jobId);
+        const timer = remoteCancelCooldownTimersRef.current.get(jobId);
+        if (timer !== undefined) window.clearTimeout(timer);
+        remoteCancelCooldownTimersRef.current.delete(jobId);
+        setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
+        setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+      }
+    }
+  }, [stemRemoteStatus]);
+
+  useEffect(() => () => {
+    for (const timer of remoteCancelCooldownTimersRef.current.values()) window.clearTimeout(timer);
+    remoteCancelCooldownTimersRef.current.clear();
+  }, []);
 
   /**
    * Fernpfad (§15–§22): Status holen, offene Jobs nach einem Neustart
@@ -1341,21 +1353,63 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   }, [activeTrack, workingAudioBuffer, stemRemoteStatus, remoteFlowRunning, runRemoteStemSeparation, setStemRemoteEnabled]);
 
   const cancelRemoteFlowJob = useCallback((jobId: string) => {
-    if (remoteCancelPendingRef.current === jobId) return;
-    remoteCancelPendingRef.current = jobId; // synchron: blockiert Doppelklicks vor React-Render
+    const cancelGuard = remoteCancelRequestGuardRef.current;
+    if (!cancelGuard.begin(jobId)) return;
+
+    setRemoteCancelCooldownJobId(null);
+    setRemoteCancelPendingJobId(jobId);
     setSeparationProgress((prev) => prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev);
+    logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angefordert.`, { jobId });
+
+    const scheduleRetryCooldown = () => {
+      const previousTimer = remoteCancelCooldownTimersRef.current.get(jobId);
+      if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+      setRemoteCancelCooldownJobId(jobId);
+      const timer = window.setTimeout(() => {
+        if (remoteCancelCooldownTimersRef.current.get(jobId) !== timer) return;
+        remoteCancelCooldownTimersRef.current.delete(jobId);
+        setRemoteCancelCooldownJobId((current) => (current === jobId ? null : current));
+      }, REMOTE_CANCEL_RETRY_COOLDOWN_MS);
+      remoteCancelCooldownTimersRef.current.set(jobId, timer);
+    };
+
     void stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer')
-      .then((accepted) => {
+      .then(async (accepted) => {
+        const status = await stemEngine.pollRemoteJobs().catch(() => null);
+        if (status) setStemRemoteStatus(status);
+        cancelGuard.settle(jobId, accepted);
         if (!accepted) {
           setRemoteFlowError('Der Job konnte nicht mehr abgebrochen werden. Bitte Status aktualisieren.');
+          logger.warn(
+            'STEM-REMOTE',
+            `Abbruch des externen Jobs ${jobId} wurde vom Dienst nicht angenommen; erneuter Versuch nach ${REMOTE_CANCEL_RETRY_COOLDOWN_MS / 1000} s möglich.`,
+            { jobId, retryCooldownMs: REMOTE_CANCEL_RETRY_COOLDOWN_MS },
+          );
+          scheduleRetryCooldown();
         } else {
-          logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} bestätigt.`);
+          const currentStatus = status?.jobs.find((entry) => entry.jobId === jobId)?.status ?? 'unbekannt';
+          logger.info('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} wurde angenommen (Status ${currentStatus}).`, {
+            jobId,
+            status: currentStatus,
+          });
         }
-        return stemEngine.pollRemoteJobs();
       })
-      .then((status) => { if (status) setStemRemoteStatus(status); })
-      .catch((error) => setRemoteFlowError(`Abbruch konnte nicht bestätigt werden: ${error instanceof Error ? error.message : String(error)}`))
-      .finally(() => { remoteCancelPendingRef.current = null; });
+      .catch((error) => {
+        cancelGuard.settle(jobId, false);
+        scheduleRetryCooldown();
+        const message = error instanceof Error ? error.message : String(error);
+        setRemoteFlowError(`Abbruch konnte nicht bestätigt werden: ${message}`);
+        logger.warn(
+          'STEM-REMOTE',
+          `Abbruch des externen Jobs ${jobId} konnte nicht bestätigt werden: ${message}`,
+          { jobId, retryCooldownMs: REMOTE_CANCEL_RETRY_COOLDOWN_MS },
+        );
+      })
+      .finally(() => {
+        if (!cancelGuard.isPending(jobId)) {
+          setRemoteCancelPendingJobId((current) => (current === jobId ? null : current));
+        }
+      });
   }, []);
 
   const handleCancelStemSeparation = useCallback(() => {
@@ -1685,58 +1739,18 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
 
-  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle.
-  // Read transport time through a ref so 60fps playhead updates don't re-init MIDI listeners.
-  useEffect(() => {
-    let cancelled = false;
-
-    const refreshDeviceState = () => {
-      if (cancelled) return;
-      setIsMidiConnected(midiManager.getConnectedDevices().length > 0);
-      setMidiStatusLabel(midiManager.getStatusLabel());
-    };
-
-    midiManager.init().then(refreshDeviceState);
-    const unsubState = midiManager.onStateChange(refreshDeviceState);
-
-    const unsubActions = midiManager.subscribe((action) => {
-      switch (action.type) {
-        case 'STEM_TOGGLE':
-          if (action.stem) handleToggleStemMute(action.stem);
-          break;
-        case 'STEM_SOLO':
-          if (action.stem) handleToggleStemSolo(action.stem);
-          break;
-        case 'PLAY_PAUSE':
-          handleTogglePlay();
-          break;
-        case 'CUE':
-          handleReturnToStart();
-          break;
-        case 'LOOP_TOGGLE':
-          setLoopActive((prev) => !prev);
-          break;
-        case 'SEEK':
-          if (action.value !== undefined) {
-            handleSeek(currentTimeRef.current + action.value * 0.15);
-          }
-          break;
-        case 'MASTER_VOLUME':
-          if (action.value !== undefined) {
-            handleMasterVolumeChange(action.value);
-          }
-          break;
-        default:
-          break;
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      unsubState();
-      unsubActions();
-    };
-  }, [handleToggleStemMute, handleToggleStemSolo, handleTogglePlay, handleReturnToStart, handleSeek, handleMasterVolumeChange]);
+  // The MIDI hook reads transport time through a ref, so 60fps playhead updates
+  // never recreate controller subscriptions.
+  const { isMidiConnected, midiStatusLabel } = useMidiLifecycle({
+    currentTimeRef,
+    setLoopActive,
+    onToggleStemMute: handleToggleStemMute,
+    onToggleStemSolo: handleToggleStemSolo,
+    onTogglePlay: handleTogglePlay,
+    onReturnToStart: handleReturnToStart,
+    onSeek: handleSeek,
+    onMasterVolumeChange: handleMasterVolumeChange,
+  });
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -1847,7 +1861,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           return {
             ...t,
             cues: [...t.cues, newCue],
-            isModified: true,
           };
         }
         return t;
@@ -1881,7 +1894,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               beats: newBeats,
               origin: DataOrigin.USER_EDIT,
             },
-            isModified: true,
           };
         }
         return t;
@@ -1916,7 +1928,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
               beats: newBeats,
               origin: DataOrigin.USER_EDIT,
             },
-            isModified: true,
           };
         }
         return t;
@@ -1971,114 +1982,47 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     }
   };
 
-  // Snapshot current state for Undo (stores buffer, duration, analysis, cues, segments)
-  const pushHistorySnapshot = (desc: string) => {
+  // Capture the selected deck's causal state before every mutating edit.
+  const pushHistorySnapshot = (description: string) => {
     if (!activeTrack) return;
-    const snapshot: EditHistoryEntry = {
-      description: desc,
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setUndoStack((prev) => [...prev.slice(-30), snapshot]);
-    setRedoStack([]);
+    pushHistoryEntry(createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, description));
   };
 
   // Undo / Redo
   const handleUndo = () => {
-    if (undoStack.length === 0 || !activeTrack) return;
-    const previous = undoStack[undoStack.length - 1];
-    setUndoStack((prev) => prev.slice(0, -1));
+    if (!activeTrack) return;
+    const current = createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, 'Before Undo');
+    const previous = takeUndoEntry(current);
+    if (!previous) return;
 
-    // Push current to redo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Undo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setRedoStack((prev) => [...prev, currentSnapshot]);
-
-    // Restore track state
-    activeTrack.workingSegments = previous.segments;
-    activeTrack.cues = previous.cues;
-    if (previous.duration !== undefined) {
-      activeTrack.duration = previous.duration;
-    }
-    if (previous.analysis) {
-      activeTrack.analysis = previous.analysis;
-    }
+    const restored = restoreEditHistoryEntry(activeTrack, previous, {
+      renderWorkingAudio: (source, segments) => audioEngine.renderWorkingAudio(source, segments),
+      analyzeAudioBuffer: (buffer) => analyzeAudioBuffer(buffer, DataOrigin.PROJECT),
+    });
+    updateTrack(activeTrack.id, () => restored.track);
+    if (restored.audioBuffer) setWorkingAudioBuffer(restored.audioBuffer);
     setSelection(previous.selection);
-
-    if (previous.audioBuffer) {
-      setWorkingAudioBuffer(previous.audioBuffer);
-      if (!previous.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(previous.audioBuffer, DataOrigin.PROJECT);
-      }
-    } else if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, previous.segments);
-      setWorkingAudioBuffer(reRendered);
-      activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-    }
-    setTracks([...tracks]);
   };
 
   const handleRedo = () => {
-    if (redoStack.length === 0 || !activeTrack) return;
-    const next = redoStack[redoStack.length - 1];
-    setRedoStack((prev) => prev.slice(0, -1));
+    if (!activeTrack) return;
+    const current = createEditHistoryEntry(activeTrack, selection, workingAudioBuffer, 'Before Redo');
+    const next = takeRedoEntry(current);
+    if (!next) return;
 
-    // Push current to undo
-    const currentSnapshot: EditHistoryEntry = {
-      description: 'Before Redo',
-      timestamp: Date.now(),
-      segments: JSON.parse(JSON.stringify(activeTrack.workingSegments)),
-      selection: selection ? { ...selection } : null,
-      cues: JSON.parse(JSON.stringify(activeTrack.cues)),
-      audioBuffer: workingAudioBuffer ? cloneAudioBuffer(workingAudioBuffer) : undefined,
-      duration: activeTrack.duration,
-      analysis: activeTrack.analysis ? { ...activeTrack.analysis } : undefined,
-    };
-    setUndoStack((prev) => [...prev, currentSnapshot]);
-
-    activeTrack.workingSegments = next.segments;
-    activeTrack.cues = next.cues;
-    if (next.duration !== undefined) {
-      activeTrack.duration = next.duration;
-    }
-    if (next.analysis) {
-      activeTrack.analysis = next.analysis;
-    }
+    const restored = restoreEditHistoryEntry(activeTrack, next, {
+      renderWorkingAudio: (source, segments) => audioEngine.renderWorkingAudio(source, segments),
+      analyzeAudioBuffer: (buffer) => analyzeAudioBuffer(buffer, DataOrigin.PROJECT),
+    });
+    updateTrack(activeTrack.id, () => restored.track);
+    if (restored.audioBuffer) setWorkingAudioBuffer(restored.audioBuffer);
     setSelection(next.selection);
-
-    if (next.audioBuffer) {
-      setWorkingAudioBuffer(next.audioBuffer);
-      if (!next.analysis) {
-        activeTrack.analysis = analyzeAudioBuffer(next.audioBuffer, DataOrigin.PROJECT);
-      }
-    } else if (activeTrack.audioBuffer) {
-      const reRendered = audioEngine.renderWorkingAudio(activeTrack.audioBuffer, next.segments);
-      setWorkingAudioBuffer(reRendered);
-      activeTrack.duration = reRendered.duration;
-      activeTrack.analysis = analyzeAudioBuffer(reRendered, DataOrigin.PROJECT);
-    }
-    setTracks([...tracks]);
   };
 
   // Clear History handler (confirmed through ClearHistoryModal)
   const handleClearHistoryConfirm = () => {
-    const totalCount = undoStack.length + redoStack.length;
-    setUndoStack([]);
-    setRedoStack([]);
+    const totalCount = allUndoCount + allRedoCount;
+    clearEditHistory();
     logger.info('EDITING', `[History] Cleared ${totalCount} history snapshots after user confirmation.`);
     showOperationFeedback({
       title: 'Bearbeitungsverlauf geleert',
@@ -2338,9 +2282,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       beatOffsets: beatOffsetsForRange(activeTrack, effectiveSel.start, effectiveSel.end),
       ...nativeSourceCoordinatesForRange(activeTrack, effectiveSel.start, effectiveSel.end),
     });
-    applyExecutionToTrack(activeTrack, execution);
-    setWorkingAudioBuffer(execution.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, execution);
     setSelection(null);
 
     showOperationFeedback({
@@ -2385,9 +2327,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       } : undefined)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Audio Segment eingefügt (Paste)',
@@ -2428,9 +2368,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       } : undefined)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Audio Segment eingefügt (Insert)',
@@ -2510,9 +2448,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Clip in Deck A eingefügt (Insert)',
@@ -2573,9 +2509,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Auswahl in Deck A ersetzt (Replace mit Clip)',
@@ -2627,9 +2561,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       })
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Deck A überlagert (Overdub mit Clip)',
@@ -2700,9 +2632,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
     setSelection(null);
 
     showOperationFeedback({
@@ -2742,9 +2672,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
     setSelection(null);
 
     showOperationFeedback({
@@ -2779,9 +2707,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       createEditContext(activeTrack)
     );
 
-    applyExecutionToTrack(activeTrack, result);
-    setWorkingAudioBuffer(result.newBuffer);
-    setTracks([...tracks]);
+    commitEditExecution(activeTrack.id, result);
 
     showOperationFeedback({
       title: 'Bereich stummgeschaltet (Clear / Mute)',
@@ -2799,16 +2725,21 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const handleAddCue = (pos: number) => {
     if (!activeTrack) return;
     pushHistorySnapshot('Add Cue');
-    const newCue = {
-      id: `cue-${Date.now()}`,
-      name: `Cue ${activeTrack.cues.length + 1}`,
-      type: 'MEMORY' as const,
-      position: pos,
-      color: '#ff2a2a',
-      origin: DataOrigin.USER_EDIT,
-    };
-    activeTrack.cues.push(newCue);
-    setTracks([...tracks]);
+    const cueId = `cue-${Date.now()}`;
+    updateTrack(activeTrack.id, (track) => ({
+      ...track,
+      cues: [
+        ...track.cues,
+        {
+          id: cueId,
+          name: `Cue ${track.cues.length + 1}`,
+          type: 'MEMORY',
+          position: pos,
+          color: '#ff2a2a',
+          origin: DataOrigin.USER_EDIT,
+        },
+      ],
+    }));
   };
 
   // ANLZ belongs to the explicitly active XML/DB track. It is read-only input
@@ -3417,8 +3348,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       setViewOffset(0);
       setIsPlaying(false);
       setSelection(null);
-      setUndoStack([]);
-      setRedoStack([]);
+      clearEditHistory();
       audioEngine.stop();
 
       await cacheAnalysisMapping(resolvedDef, analysisSource.path, 'MASTER_DB_GATE', {
@@ -3991,8 +3921,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     setCurrentTime(0);
     setViewOffset(0);
     setViewDuration(16.0);
-    setUndoStack([]);
-    setRedoStack([]);
+    clearEditHistory();
     audioEngine.stop();
     setIsPlaying(false);
   }, []);
@@ -4073,10 +4002,6 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
           pushHistorySnapshot('Set Mix-In Point');
 
           // 2. Set or update Hot Cue
-          const existingCueIdx = activeTrack.cues.findIndex(
-            (c) => (c.type === 'HOT_CUE' && c.letter === cueSlot) || (c.name && c.name.startsWith('MIX-IN'))
-          );
-
           const hotCueNumber =
             cueSlot === 'A' ? 0 : cueSlot === 'B' ? 1 : cueSlot === 'C' ? 2 : cueSlot === 'D' ? 3 : 0;
 
@@ -4095,12 +4020,15 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
             origin: DataOrigin.USER_EDIT,
           };
 
-          if (existingCueIdx >= 0) {
-            activeTrack.cues[existingCueIdx] = newCue;
-          } else {
-            activeTrack.cues.push(newCue);
-          }
-          setTracks([...tracks]);
+          updateTrack(activeTrack.id, (track) => {
+            const existingCueIdx = track.cues.findIndex(
+              (cue) => (cue.type === 'HOT_CUE' && cue.letter === cueSlot) || (cue.name && cue.name.startsWith('MIX-IN'))
+            );
+            const cues = [...track.cues];
+            if (existingCueIdx >= 0) cues[existingCueIdx] = newCue;
+            else cues.push(newCue);
+            return { ...track, cues };
+          });
 
           // 3. Set zoom preset
           if (action.params.zoomPreset) {
@@ -4207,7 +4135,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     [
       activeTrack,
       selection,
-      tracks,
+      updateTrack,
       handleSelectZoomPreset,
       handleSeek,
       handleAddCue,
@@ -4270,7 +4198,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onOpenDatabaseInspector={() => setDbExtractionModalOpen(true)}
         onOpenSystemLogs={() => setSystemLogModalOpen(true)}
         onClearHistory={() => setClearHistoryModalOpen(true)}
-        hasHistory={undoStack.length > 0 || redoStack.length > 0}
+        hasHistory={allUndoCount > 0 || allRedoCount > 0}
         onCopy={handleCopy}
         onCut={handleCut}
         onPaste={handlePaste}
@@ -4340,6 +4268,8 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         selectedProfile={resolvedStemProfile}
         onProfileChange={setStemProfile}
         remoteStatus={stemRemoteStatus}
+        remoteCancelPendingJobId={remoteCancelPendingJobId}
+        remoteCancelCooldownJobId={remoteCancelCooldownJobId}
         remoteEnabled={stemRemoteEnabled}
         onRemoteEnabledChange={setStemRemoteEnabled}
         onStartExternalSeparation={() => { void handleStartExternalSeparation(); }}
@@ -4382,8 +4312,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
           track={activeTrack}
-          trackRevision={trackRevision}
+          currentTime={currentTime}
           currentTimeRef={currentTimeRef}
+          isPlaying={isPlaying}
           viewOffset={viewOffset}
           viewDuration={viewDuration}
           waveformMode={waveformMode}

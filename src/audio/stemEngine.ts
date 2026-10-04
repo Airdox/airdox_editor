@@ -17,6 +17,7 @@
  */
 
 import { BufferFactory } from './editingEngine';
+import { prepareStemInput } from './stemInput';
 import { logger } from '../utils/logger';
 import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
 // Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
@@ -37,7 +38,10 @@ export const STEM_PEAK_CEILING = 1.0;
 
 export interface TrackStems {
   trackId: string;
+  /** SHA-256 of the original imported file bytes; never reused as the PCM cache key. */
   originalSha256: string;
+  /** Versioned fingerprint of the exact canonical PCM WAV submitted for separation. */
+  inputFingerprint: string;
   duration: number;
   sampleRate: number;
   channels: number;
@@ -158,6 +162,60 @@ export interface EngineSeparationOptions {
   chunkSizeSamples?: number;
 }
 
+type StemCacheOrigin = 'local' | 'remote';
+
+/** AudioBuffers in the editor are treated as immutable working-copy revisions. */
+const inputFingerprintByBuffer = new WeakMap<AudioBuffer, string>();
+
+function stemInputKey(trackId: string, inputFingerprint: string): string {
+  return JSON.stringify([trackId, inputFingerprint]);
+}
+
+function separationCacheVariant(
+  origin: StemCacheOrigin,
+  profile: StemQualityProfile,
+  options: EngineSeparationOptions
+): string {
+  return `stem-cache-v2:${JSON.stringify({
+    origin,
+    profile,
+    modelId: options.modelId ?? null,
+    family: options.modelId ? null : options.family ?? null,
+    device: options.device ?? 'auto',
+    mode: options.mode ?? 'live',
+  })}`;
+}
+
+function exactStemCacheKey(trackId: string, inputFingerprint: string, variant: string): string {
+  return JSON.stringify([trackId, inputFingerprint, variant]);
+}
+
+function estimateStemBufferBytes(buffer: AudioBuffer): number {
+  if (!buffer || typeof buffer !== 'object') return 0;
+  const length = Number(buffer.length);
+  const channels = Number(buffer.numberOfChannels);
+  const bytes = length * channels * Float32Array.BYTES_PER_ELEMENT;
+  return Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : Number.MAX_SAFE_INTEGER;
+}
+
+function estimateTrackStemsBytes(stems: TrackStems): number {
+  const buffers = new Set<AudioBuffer>([
+    stems.vocals,
+    stems.drums,
+    stems.bass,
+    stems.other,
+    ...Object.values(stems.stemsById ?? {}),
+  ].filter((buffer): buffer is AudioBuffer => Boolean(buffer)));
+  let bytes = 0;
+  for (const buffer of buffers) {
+    bytes += estimateStemBufferBytes(buffer);
+    if (!Number.isSafeInteger(bytes)) return Number.MAX_SAFE_INTEGER;
+  }
+  return bytes;
+}
+
+const MAX_STEM_CACHE_BYTES = 512 * 1024 * 1024;
+
 export interface StemEngineAvailability {
   available: boolean;
   engine: 'BS_ROFORMER' | 'DEMUCS_HTDEMUCS_FT';
@@ -206,37 +264,6 @@ export type StemEngineErrorCode =
   | 'TORCH_MISSING'
   | 'MODEL_NOT_AVAILABLE';
 
-function encodeStereoFloatWav(buffer: AudioBuffer): Uint8Array {
-  const channels = 2;
-  const bytesPerSample = 4;
-  const dataSize = buffer.length * channels * bytesPerSample;
-  const bytes = new Uint8Array(44 + dataSize);
-  const view = new DataView(bytes.buffer);
-  const write = (offset: number, value: string) => {
-    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
-  };
-  write(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); write(8, 'WAVE');
-  write(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 3, true);
-  view.setUint16(22, channels, true); view.setUint32(24, buffer.sampleRate, true);
-  view.setUint32(28, buffer.sampleRate * channels * bytesPerSample, true);
-  view.setUint16(32, channels * bytesPerSample, true); view.setUint16(34, 32, true);
-  write(36, 'data'); view.setUint32(40, dataSize, true);
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
-  let offset = 44;
-  // Explizit L/R: die frühere Schreibweise legte pro Frame ein kleines
-  // `[left, right]`-Array an (17 Mio Arrays pro 6-Minuten-Track) – reiner
-  // GC-Druck ohne Nutzen.
-  for (let i = 0; i < buffer.length; i++) {
-    const l = left[i];
-    const r = right[i];
-    view.setFloat32(offset, Number.isFinite(l) ? l : 0, true);
-    view.setFloat32(offset + bytesPerSample, Number.isFinite(r) ? r : 0, true);
-    offset += bytesPerSample * 2;
-  }
-  return bytes;
-}
-
 function createStemBuffer(
   numChannels: number,
   length: number,
@@ -275,28 +302,115 @@ function createStemBuffer(
 }
 
 class StemEngine {
-  private stemsCache: Map<string, TrackStems> = new Map();
+  /** Exact cache entries include working PCM identity and separation settings. */
+  private stemsCache = new Map<string, TrackStems>();
+  /** Latest completed result for a track + exact PCM input, across local/remote profiles. */
+  private latestStemCacheByInput = new Map<string, string>();
+  private latestStemCacheByTrack = new Map<string, string>();
+  private cachedStemBytes = 0;
   private isProcessing: boolean = false;
   private activeJobId?: string;
 
-  public getCachedStems(trackId: string, originalSha256?: string): TrackStems | undefined {
-    const key = originalSha256 || trackId;
-    return this.stemsCache.get(key) || this.stemsCache.get(trackId);
+  public getCachedStems(
+    trackId: string,
+    inputFingerprint?: string,
+    cacheVariant?: string,
+    originalSha256?: string
+  ): TrackStems | undefined {
+    const exactKey = inputFingerprint
+      ? cacheVariant
+        ? exactStemCacheKey(trackId, inputFingerprint, cacheVariant)
+        : this.latestStemCacheByInput.get(stemInputKey(trackId, inputFingerprint))
+      : this.latestStemCacheByTrack.get(trackId);
+    const cached = exactKey ? this.readCachedStems(exactKey) : undefined;
+    if (!cached) return undefined;
+
+    // Reusing identical PCM is safe across file containers, but keep the
+    // current source-file digest attached for provenance.
+    if (originalSha256 && cached.originalSha256 !== originalSha256) {
+      return { ...cached, trackId, originalSha256 };
+    }
+    return cached;
   }
 
-  public hasCachedStems(trackId: string, originalSha256?: string): boolean {
-    const key = originalSha256 || trackId;
-    return this.stemsCache.has(key) || this.stemsCache.has(trackId);
+  public getCachedStemsForBuffer(
+    trackId: string,
+    sourceBuffer: AudioBuffer,
+    originalSha256?: string
+  ): TrackStems | undefined {
+    const inputFingerprint = inputFingerprintByBuffer.get(sourceBuffer);
+    return inputFingerprint
+      ? this.getCachedStems(trackId, inputFingerprint, undefined, originalSha256)
+      : undefined;
   }
 
-  public cacheStems(trackId: string, stems: TrackStems, originalSha256?: string): void {
-    const key = originalSha256 || trackId;
-    this.stemsCache.set(key, stems);
-    this.stemsCache.set(trackId, stems);
+  public hasCachedStems(trackId: string, inputFingerprint?: string, cacheVariant?: string): boolean {
+    return Boolean(this.getCachedStems(trackId, inputFingerprint, cacheVariant));
+  }
+
+  public cacheStems(trackId: string, stems: TrackStems, cacheVariant = 'stem-cache-v2:manual'): void {
+    const inputFingerprint = stems.inputFingerprint;
+    if (stems.trackId !== trackId) throw new Error('Stem-Cache-Track-ID stimmt nicht mit dem Ergebnis überein.');
+    if (!inputFingerprint.startsWith('stem-pcm-wav-v1:sha256:')) {
+      throw new Error('Stem-Cache benötigt einen versionierten PCM-Arbeitskopie-Fingerprint.');
+    }
+
+    const exactKey = exactStemCacheKey(trackId, inputFingerprint, cacheVariant);
+    const resultBytes = estimateTrackStemsBytes(stems);
+    if (resultBytes > MAX_STEM_CACHE_BYTES) {
+      this.removeCachedStems(exactKey);
+      return; // Return the result to the caller, but do not retain oversized PCM in memory.
+    }
+
+    this.removeCachedStems(exactKey);
+    this.stemsCache.set(exactKey, stems);
+    this.cachedStemBytes += resultBytes;
+    this.latestStemCacheByInput.set(stemInputKey(trackId, inputFingerprint), exactKey);
+    this.latestStemCacheByTrack.set(trackId, exactKey);
+
+    while (this.cachedStemBytes > MAX_STEM_CACHE_BYTES) {
+      const oldestKey = this.stemsCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.removeCachedStems(oldestKey);
+    }
   }
 
   public clearCache(): void {
     this.stemsCache.clear();
+    this.latestStemCacheByInput.clear();
+    this.latestStemCacheByTrack.clear();
+    this.cachedStemBytes = 0;
+  }
+
+  private readCachedStems(exactKey: string): TrackStems | undefined {
+    const cached = this.stemsCache.get(exactKey);
+    if (!cached) return undefined;
+    this.stemsCache.delete(exactKey);
+    this.stemsCache.set(exactKey, cached);
+    return cached;
+  }
+
+  private removeCachedStems(exactKey: string): void {
+    const cached = this.stemsCache.get(exactKey);
+    if (!cached) return;
+    this.stemsCache.delete(exactKey);
+    this.cachedStemBytes = Math.max(0, this.cachedStemBytes - estimateTrackStemsBytes(cached));
+
+    const inputKey = stemInputKey(cached.trackId, cached.inputFingerprint);
+    if (this.latestStemCacheByInput.get(inputKey) === exactKey) {
+      this.latestStemCacheByInput.delete(inputKey);
+      for (const [candidateKey, candidate] of this.stemsCache) {
+        if (candidate.trackId === cached.trackId && candidate.inputFingerprint === cached.inputFingerprint) {
+          this.latestStemCacheByInput.set(inputKey, candidateKey);
+        }
+      }
+    }
+    if (this.latestStemCacheByTrack.get(cached.trackId) === exactKey) {
+      this.latestStemCacheByTrack.delete(cached.trackId);
+      for (const [candidateKey, candidate] of this.stemsCache) {
+        if (candidate.trackId === cached.trackId) this.latestStemCacheByTrack.set(cached.trackId, candidateKey);
+      }
+    }
   }
 
   public getIsProcessing(): boolean {
@@ -665,21 +779,24 @@ class StemEngine {
     originalSha256: string,
     options: EngineSeparationOptions = {}
   ): Promise<TrackStems> {
-    const cached = this.getCachedStems(trackId, originalSha256);
-    if (cached) {
-      options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
-      return cached;
-    }
     if (this.isProcessing) throw new Error('Es läuft bereits eine Separation.');
 
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
     const duration = sourceBuffer.duration;
     const profile = options.profile ?? 'HIGH';
+    const cacheVariant = separationCacheVariant('local', profile, options);
     this.isProcessing = true;
     const startedAt = Date.now();
     try {
       options.onProgress?.({ percent: 1, phaseText: `Arbeitskopie für Profil ${profile} vorbereiten…`, processedSeconds: 0, totalSeconds: duration });
-      const wav = encodeStereoFloatWav(sourceBuffer);
+      const preparedInput = await prepareStemInput(sourceBuffer);
+      inputFingerprintByBuffer.set(sourceBuffer, preparedInput.fingerprint);
+      const cached = this.getCachedStems(trackId, preparedInput.fingerprint, cacheVariant, originalSha256);
+      if (cached) {
+        options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
+        return cached;
+      }
+      const wav = preparedInput.wav;
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
       let job: StemJobView;
@@ -780,8 +897,15 @@ class StemEngine {
         }
       }
 
-      const result = buildTrackStems({ trackId, originalSha256, job, stemsById, profile });
-      this.cacheStems(trackId, result, originalSha256);
+      const result = buildTrackStems({
+        trackId,
+        originalSha256,
+        inputFingerprint: preparedInput.fingerprint,
+        job,
+        stemsById,
+        profile,
+      });
+      this.cacheStems(trackId, result, cacheVariant);
       options.onProgress?.({
         percent: 100,
         phaseText: `${stemIds.length} Stems mit ${result.modelId} fertig`,
@@ -922,17 +1046,25 @@ class StemEngine {
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
     const duration = sourceBuffer.duration;
     const profile = options.profile ?? 'HIGH_QUALITY';
+    const cacheVariant = separationCacheVariant('remote', profile, options);
     this.isProcessing = true;
     const startedAt = Date.now();
     try {
-      const wav = encodeStereoFloatWav(sourceBuffer);
-      const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
       options.onProgress?.({
         percent: 1,
         phaseText: 'Stem-Separation wird vorbereitet (Arbeitskopie für Google Drive)…',
         processedSeconds: 0,
         totalSeconds: duration,
       });
+      const preparedInput = await prepareStemInput(sourceBuffer);
+      inputFingerprintByBuffer.set(sourceBuffer, preparedInput.fingerprint);
+      const cached = this.getCachedStems(trackId, preparedInput.fingerprint, cacheVariant, originalSha256);
+      if (cached) {
+        options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
+        return cached;
+      }
+      const wav = preparedInput.wav;
+      const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
       let job: RemoteStemJobView;
       if (desktop?.startRemoteStemJob) {
@@ -970,8 +1102,11 @@ class StemEngine {
         job = payload.data;
       }
       options.onRemoteJob?.(job);
-      logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} angelegt (${job.modelId}, ${profile}, ${job.trackName})`, {
+      logger.info('STEM-REMOTE', `Fern-Job ${job.jobId} bestätigt (Status ${job.status}; ${job.modelId}, ${profile}, ${job.trackName})`, {
         jobId: job.jobId,
+        status: job.status,
+        phase: job.phase,
+        percent: job.percent,
         model: job.modelId,
       });
 
@@ -1032,6 +1167,7 @@ class StemEngine {
       const result = buildTrackStems({
         trackId,
         originalSha256,
+        inputFingerprint: preparedInput.fingerprint,
         job: {
           jobId,
           status: 'COMPLETED',
@@ -1056,7 +1192,7 @@ class StemEngine {
         stemsById,
         profile,
       });
-      this.cacheStems(trackId, result, originalSha256);
+      this.cacheStems(trackId, result, cacheVariant);
       const deviceText = job.cpuFallback ? 'CPU-Fallback' : job.device ? String(job.device).toUpperCase() : 'externer Worker';
       options.onProgress?.({
         percent: 100,
@@ -1163,11 +1299,12 @@ async function decodeWavToAudioBuffer(bytes: Uint8Array): Promise<AudioBuffer> {
 function buildTrackStems(input: {
   trackId: string;
   originalSha256: string;
+  inputFingerprint: string;
   job: StemJobView;
   stemsById: Record<string, AudioBuffer>;
   profile: StemQualityProfile;
 }): TrackStems {
-  const { trackId, originalSha256, job, stemsById, profile } = input;
+  const { trackId, originalSha256, inputFingerprint, job, stemsById, profile } = input;
   const slots = ['vocals', 'drums', 'bass', 'other'];
   const unmapped = job.stems.filter((stem) => !slots.includes(stem));
   if (unmapped.length) {
@@ -1184,6 +1321,7 @@ function buildTrackStems(input: {
   return {
     trackId,
     originalSha256,
+    inputFingerprint,
     duration: first.duration,
     sampleRate: first.sampleRate,
     channels: first.numberOfChannels,

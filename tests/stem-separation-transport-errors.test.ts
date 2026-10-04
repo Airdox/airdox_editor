@@ -29,6 +29,9 @@ const OOM_FAIL =
   "process.stderr.write('Traceback (most recent call last):\\n" +
   "RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB\\n'); process.exitCode = 1;";
 
+const STRUCTURED_ERROR =
+  "process.stdout.write(JSON.stringify({type:'error',code:'STEM_CONFIG_INVALID',message:{argument:'--device',reason:'unsupported choice'}})+'\\n'); process.exitCode = 2;";
+
 async function run() {
   // ---- #1: Geräte-Mapping für den Python-Adapter ---------------------------
   console.log('\n[ TEST ] #1 pythonDeviceFor bildet Engine-Geräte auf argparse-Choices ab');
@@ -70,6 +73,16 @@ async function run() {
   assert.equal(oom.code, 'GPU_OUT_OF_MEMORY', `OOM-Signatur muss remappen, war: ${oom.code}`);
   assert.ok(oom.message.includes('out of memory'), 'der OOM-Text bleibt Bestandteil der Meldung');
   console.log(`  ✓ Exit 1 + OOM-Traceback -> ${oom.code}`);
+
+  // ---- #5: structured error message is never flattened to [object Object] --
+  console.log('\n[ TEST ] #5 JSON-Protokoll: strukturiertes message-Feld bleibt lesbar');
+  const structured = await runBackendProcess({ command: process.execPath, args: ['-e', STRUCTURED_ERROR] }).catch((error) => error);
+  assert.ok(isStemError(structured), `StemSeparationError erwartet, war: ${structured}`);
+  assert.equal(structured.code, 'STEM_CONFIG_INVALID');
+  assert.ok(structured.message.includes('"argument":"--device"'), `strukturierte Ursache fehlt: ${structured.message}`);
+  assert.ok(structured.message.includes('unsupported choice'), `strukturierte Diagnose fehlt: ${structured.message}`);
+  assert.ok(!structured.message.includes('[object Object]'));
+  console.log('  ✓ Objekt im Backend-`message` wird als JSON-Diagnose erhalten');
 
   console.log('\n✔ TRANSPORT-FEHLERDIAGNOSE: alle Prüfungen bestanden');
 }

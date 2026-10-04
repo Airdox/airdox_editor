@@ -4,7 +4,7 @@
  * Validates selection buffer integrity, clipboard validity, and non-destructive audio editing safeguards.
  */
 
-import { SelectionRange } from './rekordbox';
+import type { SelectionRange } from './selection';
 
 export type EditOperationType =
   | 'COPY'
