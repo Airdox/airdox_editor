@@ -62,17 +62,11 @@ def atomic_write_json(path: Path, data: dict) -> None:
             json.dump(data, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(str(temp_path), str(path))
-        # Directory fsync is available on Linux/Colab, but not on every host.
-        try:
-            directory_fd = os.open(str(path.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except (AttributeError, OSError):
-            pass
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(str(temp_path), str(path))
     finally:
         try:
             temp_path.unlink()
@@ -407,9 +401,30 @@ def _claim_timestamp_ms(claim: dict) -> Optional[float]:
     return None
 
 
-def _claim_is_fresh(claim: Optional[dict], lease_ms: int = 30 * 60 * 1000) -> bool:
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _claim_is_fresh(claim: Optional[dict], lease_ms: int = 90 * 1000) -> bool:
     if not isinstance(claim, dict):
         return False
+    # If the claiming worker was on this exact same host, check if its process is still alive.
+    if claim.get("host") == socket.gethostname():
+        pid = claim.get("pid")
+        if not pid and isinstance(claim.get("id"), str):
+            match = re.search(r"-(\d+)$", claim["id"])
+            if match:
+                try:
+                    pid = int(match.group(1))
+                except ValueError:
+                    pid = None
+        if pid:
+            if not _is_pid_alive(pid):
+                return False
     timestamp = _claim_timestamp_ms(claim)
     return timestamp is not None and max(0, _now_ms() - timestamp) < lease_ms
 
@@ -590,8 +605,12 @@ def _run_adapter(
     finished_output: list[str] = []
     reached_eof = False
 
-    def drain_lines() -> None:
-        nonlocal last_progress, reached_eof
+    last_progress_write = 0.0
+    last_phase = ""
+    pending_progress_write = False
+
+    def drain_lines(force_flush: bool = False) -> None:
+        nonlocal last_progress, reached_eof, last_progress_write, last_phase, pending_progress_write
         while True:
             try:
                 line = lines.get_nowait()
@@ -612,19 +631,40 @@ def _run_adapter(
                     if isinstance(fraction, (int, float)):
                         last_progress = 3 + max(0, min(1, float(fraction))) * 90
                     phase = str(event.get("phase") or "Inferenz läuft")
-                    try:
-                        updated = _set_manifest(
-                            job_dir, manifest, status="RUNNING", phase=phase,
-                            percent=max(3, min(99, int(round(last_progress)))),
-                        )
-                        manifest.clear()
-                        manifest.update(updated)
-                    except OSError:
-                        pass
-                    _write_progress(job_dir, last_progress, phase)
-                    _append_job_log(job_dir, "worker.inference_progress", phase, percent=last_progress)
+                    _say(f"[adapter] {last_progress:.1f}% ({phase})", bool(options.verbose))
+                    now_m = time.monotonic()
+                    pending_progress_write = True
+                    # Google Drive FUSE Throttling: höchstens alle 3 Sekunden auf Platte schreiben
+                    if force_flush or (now_m - last_progress_write >= 3.0) or (phase != last_phase):
+                        try:
+                            updated = _set_manifest(
+                                job_dir, manifest, status="RUNNING", phase=phase,
+                                percent=max(3, min(99, int(round(last_progress)))),
+                            )
+                            manifest.clear()
+                            manifest.update(updated)
+                        except OSError:
+                            pass
+                        _write_progress(job_dir, last_progress, phase)
+                        _append_job_log(job_dir, "worker.inference_progress", phase, percent=last_progress)
+                        last_progress_write = now_m
+                        last_phase = phase
+                        pending_progress_write = False
                 else:
                     _say(f"[adapter] {line}", bool(options.verbose))
+        if force_flush and pending_progress_write:
+            try:
+                updated = _set_manifest(
+                    job_dir, manifest, status="RUNNING", phase=last_phase or "Inferenz läuft",
+                    percent=max(3, min(99, int(round(last_progress)))),
+                )
+                manifest.clear()
+                manifest.update(updated)
+            except OSError:
+                pass
+            _write_progress(job_dir, last_progress, last_phase or "Inferenz läuft")
+            _append_job_log(job_dir, "worker.inference_progress", last_phase or "Inferenz läuft", percent=last_progress)
+            pending_progress_write = False
 
     try:
         while process.poll() is None:
@@ -649,9 +689,10 @@ def _run_adapter(
             time.sleep(cancel_interval)
         return_code = process.wait()
         while not reached_eof:
-            drain_lines()
+            drain_lines(force_flush=True)
             if not reached_eof:
                 time.sleep(0.005)
+        drain_lines(force_flush=True)
         output = "\n".join(finished_output)
         return return_code, output
     finally:
@@ -814,6 +855,7 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
     claim = {
         "id": options.worker,
         "host": socket.gethostname(),
+        "pid": os.getpid(),
         "claimedAt": _now_ms(),
         "heartbeatAt": _now_ms(),
         "device": options.device,
