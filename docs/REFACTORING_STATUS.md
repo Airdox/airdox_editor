@@ -24,6 +24,7 @@ Die drei großen Wirkungen:
 | Spiegel-Schreibvorgänge des Loggers (1.000 Einträge) | 1.000 (O(n) je Eintrag) | **40** | `npm run test -- --only logger-storage-batching` |
 | Rechenzeit pro Wellenform-Frame (1920 Spalten, 18-s-Fenster) | 2,539 ms (Kaltstart) | **0,117 ms** (Minimum aus 5 Läufen) | `npm run bench` |
 | React-Updates pro Sekunde bei Wiedergabe | ≈ 180 | **0** (Position geht am Renderer vorbei an den Canvas) | `tests/transport-playhead-driver.test.ts` |
+| `App.tsx` | 4.870 Zeilen, 84 `useState` | **3.245 Zeilen, 73 `useState`** | `wc -l` |
 
 ---
 
@@ -187,6 +188,53 @@ Zwei neue Testarten, die es vorher nicht gab:
   waren damit unsichtbar.
 - Framework-freie Logiktests für Treiber und Scheduler (gestubbte `requestAnimationFrame`-Queue,
   Zähler-Doubles) im Stil der bestehenden Suite (`node:assert`, kein vitest/Playwright).
+
+---
+
+## 3a. Phase 2 · WP-06 `App.tsx`-Dekomposition (begonnen 04.10.2026)
+
+Der Plan nennt neun Schritte. Umgesetzt sind die Schritte **1, 2, 3, 4 und 7** sowie die
+Voraussetzung dafür (die reinen Modulfunktionen). `App.tsx` ist dadurch von **4.870 auf 3.245 Zeilen**
+geschrumpft (−33 %), die Zahl der `useState`-Stellen von **84 auf 73**.
+
+| Schritt | Was | Neuer Ort | Zeilen |
+|---|---|---|---|
+| 1 | Transport, Zoom, Ansicht, MIDI-Brücke | `features/transport/useTransportControls.ts`, `useMidiBridge.ts` | 326 |
+| 2 | Einstellungen und ihre Persistenz | `state/settingsStore.ts` (+ neuer Test) | 204 |
+| – | reine Projektfunktionen (Voraussetzung für 3/4) | `features/project/projectModel.ts` | 302 |
+| 3 | Track-Import (ANLZ, Datenbank, Sammlung, Audiodatei) | `features/import/useTrackImport.ts` | 768 |
+| 4 | Projekt speichern/öffnen, Datei-Laden | `features/project/useProjectFiles.ts` | 550 |
+| 7 | Set-Aufnahme (Zustand + Ablauf) | `features/recorder/useRecorder.ts` | 312 |
+
+**Vorgehen (wie im Plan gefordert):** jeder Schritt verschiebt, statt umzuschreiben; die Rümpfe der
+Funktionen sind wörtlich übernommen. Abhängigkeiten kommen als Parameter herein und sind typisiert
+(`TrackImportDependencies`, `ProjectFileDependencies`, `RecorderDependencies`). Nach jedem Schritt:
+`tsc` grün und vollständige Testsuite.
+
+**Was dabei aufgefallen ist:**
+
+- Zwei der 20 Textvertrags-Tests lasen die Import-Handler aus `App.tsx`. Sie zeigen jetzt auf das neue
+  Modul; die Verträge selbst (kein Dateidialog, ANLZ-Herkunft erzwungen, kein synthetischer
+  Analysepfad, XML beim Ziehen abgelehnt) sind unverändert und grün.
+- `interface ClipboardProvenance` stand **zwischen** den Import-Zeilen von `App.tsx` – leicht zu
+  übersehen und ein Grund, warum die Datei schwer zu lesen war. Es liegt jetzt im Projektmodul.
+- Der Aufnahme-Zustand (12 Schalter) und seine fünf Handler standen 200 Zeilen auseinander.
+  Auffällig: der Ablauf ist ohne die Komponente vollständig lesbar.
+
+**Verifikation nach jedem Schritt:** `tsc --noEmit` grün, **78/78 Tests** (+4 Umgebungs-SKIPs, ~96 s),
+Build und Bundle-Budget grün (201,3 kB gzip / 674,9 kB roh).
+
+**Als Nächstes (Reihenfolge des Plans):**
+
+| Schritt | Was | Zeilen ca. |
+|---|---|---|
+| 5 | Edit-Befehle + Command-Registry (`COMMANDS`, 4 Eingabepfade auf dieselben IDs) | 1.050 |
+| 6 | Stems (Separation, Mixer, Fern-/Colab-Pfad) | 1.070 |
+| 8 | Chatbot-Switch → Command-Registry | 185 (Rest: 780) |
+| 9 | Paletten/Deck-B/Cues | 300 |
+
+Schritt 5 ist der Kern des Plans („die 781-Zeilen-Switch wird zu einer Map“) und macht `React.memo`
+anschließend wirksam – bis dahin bleibt es bewusst weg (siehe Abschnitt 4).
 
 ---
 
