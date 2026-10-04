@@ -155,11 +155,47 @@ function log(options: WorkerOptions, message: string): void {
   if (!options.quiet) console.log(`[STEM-REMOTE-WORKER] ${message}`);
 }
 
-async function appendCappedLine(transport: IRemoteTransport, relative: string, line: string): Promise<void> {
+/** Wie viele Zeilen eine Protokolldatei höchstens behält (ältere fallen weg). */
+const MAX_TRACE_FILE_LINES = 200;
+
+/**
+ * Anhänge an dieselbe Datei müssen **hintereinander** laufen.
+ *
+ * Der Anhang ist ein Lesen-Anhängen-Schreiben: erst der ganze Inhalt, dann
+ * eine Zeile mehr zurück. Laufen zwei solcher Vorgänge gleichzeitig – etwa
+ * eine Fortschrittsmeldung parallel zu „Inferenz gestartet“ –, liest der
+ * zweite den Stand **vor** der ersten Zeile und schreibt ihn zurück: die
+ * erste Zeile ist weg.
+ *
+ * Genau solche Lücken machen einen hängenden Lauf später unerklärlich, und
+ * unter Last traf es in der CI `worker.inference_started`. Deshalb hängt
+ * jede Datei an ihrer eigenen Kette; der Aufrufer darf weiterhin parallel
+ * melden, die Reihenfolge bleibt dabei erhalten.
+ */
+const appendChains = new WeakMap<IRemoteTransport, Map<string, Promise<unknown>>>();
+
+export async function appendCappedLine(transport: IRemoteTransport, relative: string, line: string): Promise<void> {
+  let chains = appendChains.get(transport);
+  if (!chains) {
+    chains = new Map<string, Promise<unknown>>();
+    appendChains.set(transport, chains);
+  }
+  const previous = chains.get(relative) ?? Promise.resolve();
+  // Auch nach einem fehlgeschlagenen Vorgang muss die Kette weiterlaufen,
+  // sonst bliebe die Datei dauerhaft blockiert.
+  const next = previous.then(
+    () => writeCappedLine(transport, relative, line),
+    () => writeCappedLine(transport, relative, line)
+  );
+  chains.set(relative, next.catch(() => undefined));
+  return next;
+}
+
+async function writeCappedLine(transport: IRemoteTransport, relative: string, line: string): Promise<void> {
   const current = (await transport.readText(relative)) ?? '';
   const lines = current.split(/\r?\n/).filter(Boolean);
   lines.push(line);
-  await transport.writeText(relative, `${lines.slice(-200).join('\n')}\n`);
+  await transport.writeText(relative, `${lines.slice(-MAX_TRACE_FILE_LINES).join('\n')}\n`);
 }
 
 async function logJobEvent(
