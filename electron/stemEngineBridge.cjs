@@ -17,6 +17,7 @@
  */
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 /** IPC-Kanäle – der Renderer spricht ausschließlich diese. */
 const CHANNELS = {
@@ -360,8 +361,6 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   };
 }
 
-module.exports = { resolveEnginePaths, CHANNELS, MAX_INPUT_BYTES, registerStemEngineIpc, loadStemBridge, sanitizeRequest };
-
 /* =====================================================================
  * EXTENDED BY MASTER-PLAN REVISION (Phase 5 / 9 / 10)
  * ---------------------------------------------------------------------
@@ -508,8 +507,14 @@ function loadRemoteStemsToDeck(outputDir, originalTrackMeta, opts) {
   }
 }
 
-/* Exporte für die bestehenden IPC-Kanäle (remoteStatus, remotePoll, etc.) */
+/* Public exports for the IPC host and the legacy remote-drive helpers. */
 module.exports = {
+  resolveEnginePaths,
+  CHANNELS,
+  MAX_INPUT_BYTES,
+  registerStemEngineIpc,
+  loadStemBridge,
+  sanitizeRequest,
   driveRemotePreflight,
   forceDriveRefresh,
   isClaimed,
