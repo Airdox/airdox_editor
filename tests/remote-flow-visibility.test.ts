@@ -22,9 +22,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   currentExplanation,
-  deriveStepStates,
   normalisedPercent,
 } from '../src/components/Modals/RemoteFlowModal';
+import {
+  buildRemoteDataFlow,
+  REMOTE_FLOW_STATIONS,
+  type RemoteFlowStationId,
+} from '../src/stems/remote/dataFlow';
+import type { RemoteJobRecord } from '../src/stems/remote/types';
 import type { RemoteStemJobView } from '../src/stems/transportTypes';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -34,6 +39,26 @@ const read = (relative: string) =>
 const modalSource = await read('src/components/Modals/RemoteFlowModal.tsx');
 const appSource = await read('src/App.tsx');
 const engineSource = await read('src/audio/stemEngine.ts');
+
+/** Laufzettel eines Jobs aus seinen Belegen – ohne Dienst, ohne Dateisystem. */
+function flow(ids: RemoteFlowStationId[], status = 'PENDING', worker: { id: string; device?: string } | null = null) {
+  const at = 1_700_000_000_000;
+  return buildRemoteDataFlow(
+    {
+      jobId: 'job-flow',
+      status,
+      createdAt: at,
+      updatedAt: at,
+      phase: 'TEST',
+      percent: 0,
+      flow: { checkpoints: ids.map((id, index) => ({ id, at: at + index * 1000, detail: id, facts: [] })) },
+    } as unknown as RemoteJobRecord,
+    { now: at + 60_000, worker }
+  );
+}
+
+const stateOf = (stations: ReturnType<typeof flow>['stations'], id: RemoteFlowStationId) =>
+  stations.find((station) => station.id === id)?.state;
 
 /** Vollständiger Fern-Job; einzelne Felder werden je Prüfung überschrieben. */
 function job(overrides: Partial<RemoteStemJobView> = {}): RemoteStemJobView {
@@ -89,39 +114,43 @@ console.log('\n[ TEST ] 1 – Kein erfundener KI-Prozentwert vor dem Worker-Clai
   console.log('  ✓ 0 % erscheint nur, wenn ein Worker wirklich 0 % meldet');
 }
 
-console.log('\n[ TEST ] 2 – Fünf Stationen werden nur bei Bestätigung grün');
+console.log('\n[ TEST ] 2 – Zehn Stationen werden nur bei Beleg grün');
 {
-  assert.deepEqual(
-    deriveStepStates(job({ status: 'PENDING' }), true, false),
-    ['complete', 'active', 'waiting', 'waiting', 'waiting'],
-    'während des Uploads ist die Drive-Ablage die aktive Station'
+  assert.equal(REMOTE_FLOW_STATIONS.length, 10, 'der Laufzettel kennt zehn Stationen');
+
+  const copy = flow(['working_copy']);
+  assert.equal(stateOf(copy.stations, 'working_copy'), 'done', 'die Arbeitskopie ist belegt');
+  assert.equal(stateOf(copy.stations, 'published'), 'active', 'die Ablage ist der nächste offene Schritt');
+  assert.equal(copy.currentId, 'published', 'der Fluss steht an der Ablage');
+
+  const published = flow(['working_copy', 'published']);
+  assert.equal(stateOf(published.stations, 'published'), 'done', 'der Hash-Rücklesebeleg schließt die Ablage');
+  assert.equal(stateOf(published.stations, 'cloud_sync'), 'unknown', 'der Cloud-Abgleich bleibt nicht messbar');
+  assert.equal(stateOf(published.stations, 'worker_seen'), 'active', 'ohne Lebenszeichen wartet der Worker sichtbar');
+
+  const seen = flow(['working_copy', 'published', 'worker_seen'], 'RUNNING', { id: 'colab-7' });
+  assert.equal(stateOf(seen.stations, 'worker_seen'), 'done', 'das Lebenszeichen ist der Beleg für den Worker');
+  assert.equal(stateOf(seen.stations, 'claimed'), 'pending', 'Lebenszeichen ist noch kein Job-Claim');
+  assert.equal(seen.currentId, 'claimed', 'jetzt fehlt die Annahme des Jobs');
+
+  const computing = flow(['working_copy', 'published', 'worker_seen', 'claimed'], 'RUNNING', { id: 'colab-7' });
+  assert.equal(computing.currentId, 'compute', 'nach dem Claim ist die Rechnung der offene Schritt');
+
+  const complete = flow(
+    ['working_copy', 'published', 'cloud_sync', 'worker_seen', 'claimed', 'compute', 'results_ready', 'downloaded', 'validated', 'imported'],
+    'COMPLETED'
   );
-  assert.deepEqual(
-    deriveStepStates(job({ status: 'RUNNING' }), true, false),
-    ['complete', 'complete', 'active', 'waiting', 'waiting'],
-    'in Drive, aber ohne Worker-Claim: die dritte Station wartet sichtbar'
+  assert.equal(
+    complete.stations.filter((station) => station.state === 'done').length,
+    10,
+    'erst der geprüfte Import schließt alle zehn Stationen'
   );
-  assert.deepEqual(
-    deriveStepStates(job({ status: 'RUNNING', worker: { id: 'colab-7', heartbeatAt: 1 } }), true, false),
-    ['complete', 'complete', 'complete', 'active', 'waiting'],
-    'mit Worker-Claim ist die Inferenz die aktive Station'
-  );
-  assert.deepEqual(
-    deriveStepStates(job({ status: 'COMPLETED', importedStems: [] }), false, false),
-    ['complete', 'complete', 'complete', 'complete', 'complete'],
-    'erst der geprüfte Import schließt alle fünf Stationen'
-  );
-  assert.deepEqual(
-    deriveStepStates(job({ status: 'FAILED' }), false, true),
-    ['complete', 'complete', 'error', 'waiting', 'waiting'],
-    'ein Fehlschlag markiert die offene Station als Problem'
-  );
-  assert.deepEqual(
-    deriveStepStates(null, true, false),
-    ['active', 'waiting', 'waiting', 'waiting', 'waiting'],
-    'vor dem ersten Job-Poll ist die Arbeitskopie die aktive Station'
-  );
-  console.log('  ✓ Stationen folgen bestätigten Ereignissen, nicht dem Statuswort allein');
+  assert.equal(complete.currentId, null, 'ein vollständiger Lauf steht an keiner Station mehr');
+
+  const failed = flow(['working_copy', 'published', 'worker_seen', 'claimed'], 'FAILED');
+  assert.equal(stateOf(failed.stations, 'compute'), 'failed', 'der Fehlschlag markiert die Station, an der es endete');
+  assert.equal(failed.currentId, 'compute', 'die Endstation ist benannt');
+  console.log('  ✓ Stationen folgen Belegen, nicht dem Statuswort allein');
 }
 
 console.log('\n[ TEST ] 3 – Der Monitor erklärt, warum 0 % korrekt ist');

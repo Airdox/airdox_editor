@@ -350,6 +350,11 @@ async function runOneJob(
       })
     )
   );
+  await logJobEvent(options, transport, jobId, 'worker.job_seen', 'Job in der Ablage gefunden, Worker übernimmt.', {
+    status: 'RUNNING',
+    phase: 'Job gefunden – Worker übernimmt',
+    device: claim.device,
+  });
   await logJobEvent(options, transport, jobId, 'worker.claimed', 'Worker hat den Job beansprucht.', {
     status: 'RUNNING',
     phase: 'Arbeitskopie wird geladen',

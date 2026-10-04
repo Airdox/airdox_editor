@@ -42,6 +42,10 @@ const CHANNELS = {
   remoteResume: 'stems:remote-resume',
   remoteConfigure: 'stems:remote-configure',
   remoteProgress: 'stems:remote-progress',
+  // Manuelle Bestätigung der Cloud-Synchronisation (§40). Eigener Kanal: eine
+  // ältere Brücke ohne diesen Kanal bleibt voll funktionsfähig, der Renderer
+  // prüft auf Vorhandensein und blendet den Knopf sonst aus.
+  remoteCloudSync: 'stems:remote-cloud-sync',
 };
 
 /** Obergrenze für den Mix, den der Renderer hochreicht (float32-Stereo-WAV). */
@@ -312,6 +316,14 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
       jobTimeoutMs: Number.isFinite(Number(input.jobTimeoutMs)) ? Number(input.jobTimeoutMs) : undefined,
     };
     return bridge.configureRemoteJobs(sanitized);
+  });
+  // Optional: nur wenn die gebündelte Brücke den Aufruf kennt. Der Job-Ident
+  // kommt aus dem Renderer und wird ausschließlich als Schlüssel benutzt.
+  ipcMain.handle(CHANNELS.remoteCloudSync, async (_event, jobId) => {
+    if (typeof bridge.confirmRemoteCloudSync !== 'function') {
+      return { ok: false, code: 'UNSUPPORTED', message: 'Diese Brücke kennt die Cloud-Bestätigung nicht.' };
+    }
+    return bridge.confirmRemoteCloudSync(String(jobId).slice(0, 64));
   });
 
   log(logger, 'info', 'Stem-Engine IPC registriert', { bundle: loaded.bundlePath, root: roots.root });
