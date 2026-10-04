@@ -521,7 +521,7 @@ def main(argv: List[str]) -> int:
             "numOverlap": args.num_overlap,
             "ensemblePasses": args.ensemble_passes,
             "chunkSize": args.chunk_size,
-            "sampleRate": sample_rate,
+            "sampleRate": output_sample_rate,
             "channels": channels,
             "modelStems": model_stems,
             "referenceSource": globals().get("REFERENCE_SOURCE_ROOT", ""),

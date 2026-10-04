@@ -89,7 +89,7 @@ assert.ok(existsSync(NOTEBOOK_MD), `Notebook-Quelle fehlt: ${NOTEBOOK_MD}`);
 let python = null;
 for (const candidate of pythonCandidates()) {
   const attempt = await runCandidate(candidate, [WORKER, '--help']);
-  if (attempt.spawned) {
+  if (attempt.spawned && attempt.code === 0) {
     python = candidate;
     break;
   }

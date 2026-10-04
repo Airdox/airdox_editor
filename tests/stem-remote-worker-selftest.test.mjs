@@ -84,7 +84,7 @@ let tried = [];
 for (const candidate of pythonCandidates()) {
   tried.push(candidate);
   const attempt = await runCandidate(candidate, [WORKER, '--self-test']);
-  if (attempt.spawned) {
+  if (attempt.spawned && attempt.code === 0) {
     result = { ...attempt, python: candidate };
     break;
   }
