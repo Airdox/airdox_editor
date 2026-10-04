@@ -724,7 +724,11 @@ def _publish_outputs(
         file_name = f"{stem_id}.wav"
         source = local_output / file_name
         if not source.is_file():
-            raise FileNotFoundError(f"Adapter hat den erwarteten Stem nicht geschrieben: {file_name}")
+            alternatives = list(local_output.glob(f"stem_*_{stem_id}.wav"))
+            if alternatives:
+                source = alternatives[0]
+            else:
+                raise FileNotFoundError(f"Adapter hat den erwarteten Stem nicht geschrieben: {file_name}")
         size = source.stat().st_size
         if size <= 44:
             raise ValueError(f"Adapter hat einen leeren Stem geschrieben: {file_name} ({size} Bytes)")

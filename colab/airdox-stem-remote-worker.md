@@ -140,7 +140,8 @@ else:
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, REPO_DIR], check=True)
     else:
         subprocess.run(["git", "-C", REPO_DIR, "fetch", "origin", BRANCH, "--depth", "1"], check=False)
-        subprocess.run(["git", "-C", REPO_DIR, "checkout", "FETCH_HEAD"], check=False)
+        subprocess.run(["git", "-C", REPO_DIR, "reset", "--hard", "FETCH_HEAD"], check=False)
+        subprocess.run(["git", "-C", REPO_DIR, "clean", "-fd"], check=False)
     print("Quellcode ausgecheckt:", REPO_DIR)
 
 # Welcher Stand rechnet hier? (Editor-Log und Colab-Ausgabe müssen denselben

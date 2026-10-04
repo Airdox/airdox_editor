@@ -202,18 +202,37 @@ def load_checkpoint(model, checkpoint_path: str, allow_random: bool, device: str
     return "checkpoint"
 
 
-def read_audio(path: str, sample_rate: int):
+def resample_audio(audio, orig_sr: int, target_sr: int):
+    """Resample 2D audio (channels, frames) using torchaudio, scipy, or linear interpolation."""
+    if orig_sr == target_sr:
+        return audio
+    import numpy as np
+    try:
+        import torch
+        import torchaudio.functional as F
+        tensor = torch.from_numpy(audio)
+        return F.resample(tensor, orig_sr, target_sr).numpy()
+    except Exception:
+        try:
+            from scipy import signal
+            num_samples = int(round(audio.shape[1] * target_sr / orig_sr))
+            return signal.resample(audio, num_samples, axis=1).astype(np.float32)
+        except Exception:
+            num_samples = int(round(audio.shape[1] * target_sr / orig_sr))
+            orig_x = np.linspace(0, 1, audio.shape[1])
+            target_x = np.linspace(0, 1, num_samples)
+            resampled = np.zeros((audio.shape[0], num_samples), dtype=np.float32)
+            for ch in range(audio.shape[0]):
+                resampled[ch] = np.interp(target_x, orig_x, audio[ch])
+            return resampled
+
+
+def read_audio(path: str, target_sample_rate: int):
     import numpy as np
     import soundfile as sf
 
     data, file_rate = sf.read(path, dtype="float32", always_2d=True)
-    if file_rate != sample_rate:
-        emit({
-            "type": "error",
-            "code": "AUDIO_INVALID_SAMPLE_RATE",
-            "message": f"Eingabe hat {file_rate} Hz, das Modell erwartet {sample_rate} Hz",
-        })
-        sys.exit(EXIT_AUDIO)
+    original_frames = data.shape[0]
     audio = data.T.copy()  # (channels, frames)
     if audio.shape[0] == 1:
         audio = np.concatenate([audio, audio], axis=0)
@@ -221,7 +240,13 @@ def read_audio(path: str, sample_rate: int):
     elif audio.shape[0] > 2:
         audio = audio[:2].copy()
         log(f"{audio.shape[0]} Kanäle auf das Front-Paar reduziert", "warning")
-    return audio
+
+    original_mix = audio.copy()
+    if file_rate != target_sample_rate:
+        log(f"Eingabe hat {file_rate} Hz; wird für Modell automatisch auf {target_sample_rate} Hz resampled")
+        audio = resample_audio(audio, file_rate, target_sample_rate)
+
+    return audio, file_rate, original_frames, original_mix
 
 
 def write_audio(path: str, audio, sample_rate: int) -> None:
@@ -371,7 +396,9 @@ def main(argv: List[str]) -> int:
     weight_state = load_checkpoint(model, args.checkpoint, args.allow_random_weights, device)
 
     try:
-        mix = read_audio(args.input, int(getattr(config.audio, "sample_rate", args.sample_rate)))
+        mix, file_rate, original_frames, original_mix = read_audio(
+            args.input, int(getattr(config.audio, "sample_rate", args.sample_rate))
+        )
     except Cancelled:
         return EXIT_CANCELLED
     except SystemExit as exit_code:
@@ -434,6 +461,25 @@ def main(argv: List[str]) -> int:
     os.makedirs(args.output_dir, exist_ok=True)
     requested = [stem.strip().lower() for stem in (args.stems or "").split(",") if stem.strip()]
 
+    # If the input audio had a different sample rate than the model (e.g. 48000 Hz vs 44100 Hz),
+    # resample the separated stems back to the input audio's native sample rate and exact frame count!
+    if file_rate != sample_rate:
+        log(f"Stems werden auf Original-Samplerate {file_rate} Hz zurückgerechnet …")
+        import numpy as np
+        resampled_estimates = []
+        for i in range(model_stems):
+            resampled_stem = resample_audio(estimates[i], sample_rate, file_rate)
+            if resampled_stem.shape[1] > original_frames:
+                resampled_stem = resampled_stem[:, :original_frames]
+            elif resampled_stem.shape[1] < original_frames:
+                pad_width = ((0, 0), (0, original_frames - resampled_stem.shape[1]))
+                resampled_stem = np.pad(resampled_stem, pad_width)
+            resampled_estimates.append(resampled_stem)
+        estimates = np.stack(resampled_estimates, axis=0)
+        output_sample_rate = file_rate
+    else:
+        output_sample_rate = sample_rate
+
     # Model outputs occupy the first entries of stem-order. Any further stem is
     # derived as the residual of the mix (this is exactly how native runtimes
     # produce `instrumental.wav` next to `vocals.wav`).
@@ -445,14 +491,17 @@ def main(argv: List[str]) -> int:
             audio = estimates[index]
         else:
             if derived_residual is None:
-                derived_residual = mix.copy()
+                derived_residual = original_mix.copy()
                 for stem_index in range(model_stems):
                     derived_residual -= estimates[stem_index]
                 log(f"Stem '{stem_id}' als Residual des Mixes abgeleitet (mix - {model_stems} Modell-Stems)")
             audio = derived_residual
         target = os.path.join(args.output_dir, f"stem_{index}_{stem_id}.wav")
+        target_plain = os.path.join(args.output_dir, f"{stem_id}.wav")
         try:
-            write_audio(target, audio, sample_rate)
+            write_audio(target, audio, output_sample_rate)
+            if target != target_plain:
+                write_audio(target_plain, audio, output_sample_rate)
         except Exception as error:  # noqa: BLE001
             emit({"type": "error", "code": "WRITE_DENIED", "message": f"Stem konnte nicht geschrieben werden: {error}"})
             return EXIT_IO
