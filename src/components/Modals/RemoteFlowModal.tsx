@@ -21,6 +21,7 @@ import {
   Server,
   ShieldCheck,
   X,
+  XCircle,
 } from 'lucide-react';
 import type { RemoteServiceStatus, RemoteStemJobView } from '../../stems/transportTypes';
 import { remoteJobStallWarning } from '../../stems/remote/diagnostics';
@@ -36,7 +37,7 @@ interface Props {
   running: boolean;
   error: string | null;
   phaseText?: string;
-  /** True, während der Abbruch gerade an den externen Rechner gemeldet wird. */
+  /** True, während die Abbruchfahne in die konfigurierte Jobablage geschrieben wird. */
   cancelPending?: boolean;
 }
 
@@ -44,9 +45,10 @@ interface Props {
 const WORKER_LIVENESS_SECONDS = 90;
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
-const failedStatus = (value?: string) => value === 'FAILED' || value === 'CANCELLED';
+const failedStatus = (value?: string) => value === 'FAILED';
+const cancelledStatus = (value?: string) => value === 'CANCELLED';
 
-type FlowStepState = 'complete' | 'active' | 'waiting' | 'error';
+type FlowStepState = 'complete' | 'active' | 'waiting' | 'error' | 'cancelled';
 
 type FlowStep = {
   id: 'copy' | 'drive' | 'worker' | 'inference' | 'import';
@@ -56,7 +58,7 @@ type FlowStep = {
 
 const FLOW_STEPS: FlowStep[] = [
   { id: 'copy', title: 'Arbeitskopie im Editor', icon: Laptop },
-  { id: 'drive', title: 'Google Drive · Ablage bestätigt', icon: CloudUpload },
+  { id: 'drive', title: 'Google Drive · Jobablage geschrieben', icon: CloudUpload },
   { id: 'worker', title: 'Google Colab übernimmt', icon: Server },
   { id: 'inference', title: 'KI-Trennung läuft', icon: Cpu },
   { id: 'import', title: 'Geprüft zurück im Editor', icon: Download },
@@ -65,6 +67,19 @@ const FLOW_STEPS: FlowStep[] = [
 function traceHas(job: RemoteStemJobView | null, ...steps: string[]): boolean {
   if (!job?.trace?.length) return false;
   return steps.some((step) => job.trace?.some((event) => event.step === step));
+}
+
+function workerHasClaimed(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.worker) || traceHas(job, 'editor.worker_claim_observed', 'worker.claimed');
+}
+
+function workerHasCancelled(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.trace?.some((event) => event.source === 'worker' && (event.step === 'worker.cancelled' || event.status === 'CANCELLED')));
+}
+
+function usesLocalFolderTransport(job: RemoteStemJobView | null): boolean {
+  const transport = job?.transport?.toLocaleLowerCase('de-DE') ?? '';
+  return transport.includes('ordner') || transport.includes('folder');
 }
 
 /**
@@ -77,8 +92,8 @@ export function deriveStepStates(job: RemoteStemJobView | null, running: boolean
   }
 
   const driveConfirmed = traceHas(job, 'editor.input_published', 'editor.transport_recovered') ||
-    (job.status !== 'PREPARING' && job.status !== 'PENDING');
-  const workerClaimed = Boolean(job.worker) || traceHas(job, 'editor.worker_claim_observed', 'worker.claimed');
+    ['RUNNING', 'RECONSTRUCTING', 'VALIDATING', 'COMPLETED'].includes(job.status);
+  const workerClaimed = workerHasClaimed(job);
   const inferenceFinished = traceHas(job, 'worker.inference_completed', 'worker.completed') ||
     job.status === 'RECONSTRUCTING' || job.status === 'VALIDATING' || job.status === 'COMPLETED';
   const imported = traceHas(job, 'editor.result_imported') || job.status === 'COMPLETED';
@@ -95,6 +110,15 @@ export function deriveStepStates(job: RemoteStemJobView | null, running: boolean
     if (complete[index + 1]) complete[index] = true;
   }
   const firstOpen = complete.findIndex((value) => !value);
+  if (cancelledStatus(job.status)) {
+    const cancelledIndex = firstOpen >= 0 ? firstOpen : 4;
+    return complete.map((isComplete, index) => {
+      if (isComplete) return 'complete';
+      if (index === cancelledIndex) return 'cancelled';
+      return 'waiting';
+    });
+  }
+
   const activeIndex = firstOpen >= 0 ? firstOpen : running ? 4 : -1;
   return complete.map((isComplete, index) => {
     if (isComplete) return 'complete';
@@ -174,12 +198,33 @@ export function currentExplanation(
   done: boolean,
   failed: boolean
 ): { title: string; description: string; waitingForWorker: boolean } {
+  if (cancelledStatus(job?.status)) {
+    const workerAcknowledged = workerHasCancelled(job);
+    const workerClaimed = workerHasClaimed(job);
+    if (workerAcknowledged) {
+      return {
+        title: 'Abbruch vom Colab-Worker bestätigt',
+        description: 'Der Worker hat die Abbruchfahne gesehen und die Rechnung beendet. Es werden keine unvollständigen Stems übernommen.',
+        waitingForWorker: false,
+      };
+    }
+    if (!workerClaimed) {
+      return {
+        title: 'Vor der Übernahme durch Colab abgebrochen',
+        description: 'Der Editor hat die Abbruchfahne in die konfigurierte Jobablage geschrieben, aber in diesem Ablauf kam kein Worker-Claim an. Bei einem synchronisierten Ordner ist damit weder der Cloud-Upload noch der Empfang durch Colab bestätigt. Für einen neuen Versuch: Colab-Notebook-Zelle 5 starten, JOB_ORDNER und Editor-Jobablage auf denselben Drive-Ordner setzen und den Job danach neu starten. Es werden keine unvollständigen Stems übernommen.',
+        waitingForWorker: false,
+      };
+    }
+    return {
+      title: 'Abbruch angefordert · Worker-Bestätigung fehlt',
+      description: 'Der Editor hat die Abbruchfahne geschrieben, aber noch kein worker.cancelled-Ereignis empfangen. Ergebnisse werden nicht importiert. Prüfen Sie, ob die Colab-Zelle läuft und der Drive-Ordner synchronisiert wird.',
+      waitingForWorker: false,
+    };
+  }
   if (failed) {
     return {
-      title: job?.status === 'CANCELLED' ? 'Abbruch ist bestätigt' : 'Vorgang wurde unterbrochen',
-      description: job?.status === 'CANCELLED'
-        ? 'Der externe Rechner verwirft die Rechnung. Es werden keine unvollständigen Stems übernommen.'
-        : job?.error?.message || 'Der Ablauf konnte nicht abgeschlossen werden. Die Originaldatei bleibt unverändert.',
+      title: 'Vorgang wurde unterbrochen',
+      description: job?.error?.message || 'Der Ablauf konnte nicht abgeschlossen werden. Die Originaldatei bleibt unverändert.',
       waitingForWorker: false,
     };
   }
@@ -206,11 +251,17 @@ export function currentExplanation(
     };
   }
   if (!job.worker) {
-    return {
-      title: 'Ablage bestätigt · warte auf Google Colab',
-      description: 'Arbeitskopie und Manifest liegen in der bestätigten Jobablage. Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
-      waitingForWorker: true,
-    };
+    return usesLocalFolderTransport(job)
+      ? {
+        title: 'Dateien im Sync-Ordner geschrieben · warte auf Google Colab',
+        description: 'Arbeitskopie und Manifest wurden in den konfigurierten Ordner geschrieben. Der Editor kann den Google-Drive-Cloud-Upload hier nicht messen und wartet auf claim.json vom Colab-Worker. Prüfen Sie die Datei zusätzlich in Drive im Web und starten Sie die Worker-Zelle im Notebook.',
+        waitingForWorker: true,
+      }
+      : {
+        title: 'Ablage bestätigt · warte auf Google Colab',
+        description: 'Arbeitskopie und Manifest liegen in der bestätigten Jobablage. Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
+        waitingForWorker: true,
+      };
   }
   if (job.status === 'VALIDATING' || job.status === 'RECONSTRUCTING') {
     return {
@@ -245,10 +296,13 @@ function flowStepDetail(
       return job ? `${formatBytes(job.workingCopyBytes)} WAV · Original read-only` : 'Nur die Arbeitskopie wird vorbereitet';
     case 'drive':
       return state === 'complete'
-        ? `Arbeitskopie + manifest.json bestätigt${job?.uploadedAt ? ` · ${formatTime(job.uploadedAt)}` : ''}${status?.kind === 'folder' ? ' · Cloud-Sync separat nicht messbar' : ''}`
-        : 'Noch nicht in der Jobablage bestätigt';
+        ? `Arbeitskopie + manifest.json geschrieben${job?.uploadedAt ? ` · ${formatTime(job.uploadedAt)}` : ''}${status?.kind === 'folder' ? ' · Cloud-Sync separat nicht messbar' : ''}`
+        : 'Noch nicht in die Jobablage geschrieben';
     case 'worker':
       if (job?.worker) return `Worker ${job.worker.id}${status?.worker?.device ? ` · ${String(status.worker.device).toUpperCase()}` : ''}`;
+      if (workerHasCancelled(job)) return 'Colab hat die Abbruchfahne verarbeitet';
+      if (workerHasClaimed(job)) return 'Worker-Claim in der Ablaufspur bestätigt';
+      if (cancelledStatus(job?.status)) return 'Abgebrochen, bevor ein Colab-Worker den Job beanspruchte';
       return 'Noch kein Colab-Worker hat den Job beansprucht';
     case 'inference':
       if (workerPercent !== null) return `${workerPercent}% gemeldet · ${job?.phase || 'laufend'}`;
@@ -269,8 +323,24 @@ interface FlowStepCardProps {
 
 const FlowStepCard: React.FC<FlowStepCardProps> = ({ step, state, detail, index, workerPercent }) => {
   const Icon = step.icon;
-  const stateLabel = state === 'complete' ? 'bestätigt' : state === 'active' ? 'jetzt' : state === 'error' ? 'Problem' : 'wartet';
-  const NodeIcon = state === 'complete' ? CheckCircle2 : state === 'active' ? LoaderCircle : state === 'error' ? AlertTriangle : Icon;
+  const stateLabel = state === 'complete'
+    ? 'bestätigt'
+    : state === 'active'
+      ? 'jetzt'
+      : state === 'error'
+        ? 'Problem'
+        : state === 'cancelled'
+          ? 'abgebrochen'
+          : 'wartet';
+  const NodeIcon = state === 'complete'
+    ? CheckCircle2
+    : state === 'active'
+      ? LoaderCircle
+      : state === 'error'
+        ? AlertTriangle
+        : state === 'cancelled'
+          ? XCircle
+          : Icon;
   return (
     <div
       className={`min-w-0 flex-1 rounded-xl border p-3 transition-colors ${
@@ -280,18 +350,36 @@ const FlowStepCard: React.FC<FlowStepCardProps> = ({ step, state, detail, index,
             ? 'border-cyan-400/60 bg-cyan-400/[.09] shadow-[0_0_24px_rgba(34,211,238,.08)]'
             : state === 'error'
               ? 'border-red-400/50 bg-red-400/[.08]'
-              : 'border-white/10 bg-white/[.025]'
+              : state === 'cancelled'
+                ? 'border-amber-400/40 bg-amber-400/[.07]'
+                : 'border-white/10 bg-white/[.025]'
       }`}
       aria-current={state === 'active' ? 'step' : undefined}
     >
       <div className="flex items-start justify-between gap-2">
         <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-          state === 'complete' ? 'bg-emerald-400/15 text-emerald-300' : state === 'active' ? 'bg-cyan-400/15 text-cyan-200' : state === 'error' ? 'bg-red-400/15 text-red-200' : 'bg-white/5 text-neutral-500'
+          state === 'complete'
+            ? 'bg-emerald-400/15 text-emerald-300'
+            : state === 'active'
+              ? 'bg-cyan-400/15 text-cyan-200'
+              : state === 'error'
+                ? 'bg-red-400/15 text-red-200'
+                : state === 'cancelled'
+                  ? 'bg-amber-400/15 text-amber-200'
+                  : 'bg-white/5 text-neutral-500'
         }`}>
           <NodeIcon size={17} className={state === 'active' ? 'animate-spin' : undefined} />
         </div>
         <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[.12em] ${
-          state === 'complete' ? 'bg-emerald-400/15 text-emerald-200' : state === 'active' ? 'bg-cyan-400/15 text-cyan-100' : state === 'error' ? 'bg-red-400/15 text-red-200' : 'bg-white/5 text-neutral-500'
+          state === 'complete'
+            ? 'bg-emerald-400/15 text-emerald-200'
+            : state === 'active'
+              ? 'bg-cyan-400/15 text-cyan-100'
+              : state === 'error'
+                ? 'bg-red-400/15 text-red-200'
+                : state === 'cancelled'
+                  ? 'bg-amber-400/15 text-amber-200'
+                  : 'bg-white/5 text-neutral-500'
         }`}>{stateLabel}</span>
       </div>
       <div className="mt-3 text-[11px] font-semibold leading-tight text-neutral-100">{index + 1}. {step.title}</div>
@@ -322,6 +410,7 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
     return () => window.clearInterval(timer);
   }, [open]);
 
+  const cancelled = cancelledStatus(job?.status);
   const failed = Boolean(error || failedStatus(job?.status));
   const done = job?.status === 'COMPLETED' && !running && !error;
   const stepStates = useMemo(() => deriveStepStates(job, running, failed), [job, running, failed]);
@@ -339,7 +428,7 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
   const heartbeatAge = heartbeatAt ? Math.max(0, Math.floor((now - heartbeatAt) / 1000)) : null;
   const workerAlive = Boolean(job?.worker && (heartbeatAge === null || heartbeatAge < WORKER_LIVENESS_SECONDS));
   const visibleTrace = [...(job?.trace ?? [])].slice(-12).reverse();
-  const flowStatus = done ? 'complete' : failed ? 'error' : 'active';
+  const flowStatus = done ? 'complete' : failed ? 'error' : cancelled ? 'cancelled' : 'active';
 
   if (!open) return null;
 
@@ -350,8 +439,8 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[.2em] text-cyan-300">
               <Activity size={13} /> Live-Datenfluss · Google Drive → Colab
-              <span className={`rounded-full px-2 py-0.5 text-[9px] tracking-[.12em] ${flowStatus === 'complete' ? 'bg-emerald-400/15 text-emerald-200' : flowStatus === 'error' ? 'bg-red-400/15 text-red-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
-                {done ? 'fertig' : failed ? 'prüfen' : 'wird verfolgt'}
+              <span className={`rounded-full px-2 py-0.5 text-[9px] tracking-[.12em] ${flowStatus === 'complete' ? 'bg-emerald-400/15 text-emerald-200' : flowStatus === 'error' ? 'bg-red-400/15 text-red-200' : flowStatus === 'cancelled' ? 'bg-amber-400/15 text-amber-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
+                {done ? 'fertig' : failed ? 'prüfen' : cancelled ? 'abgebrochen' : 'wird verfolgt'}
               </span>
             </div>
             <h2 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">Was passiert mit deinen Daten?</h2>
@@ -362,14 +451,14 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
 
         <div className="min-h-0 overflow-y-auto">
           <div className="space-y-5 p-4 sm:p-6">
-            <div className={`rounded-2xl border p-4 sm:p-5 ${failed ? 'border-red-400/40 bg-red-400/[.08]' : done ? 'border-emerald-400/40 bg-emerald-400/[.08]' : 'border-cyan-400/35 bg-cyan-400/[.07]'}`} aria-live="polite">
+            <div className={`rounded-2xl border p-4 sm:p-5 ${failed ? 'border-red-400/40 bg-red-400/[.08]' : done ? 'border-emerald-400/40 bg-emerald-400/[.08]' : cancelled ? 'border-amber-400/40 bg-amber-400/[.08]' : 'border-cyan-400/35 bg-cyan-400/[.07]'}`} aria-live="polite">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 gap-3">
-                  <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${failed ? 'bg-red-400/15 text-red-200' : done ? 'bg-emerald-400/15 text-emerald-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
-                    {failed ? <AlertTriangle size={20} /> : done ? <CheckCircle2 size={20} /> : <LoaderCircle size={20} className="animate-spin" />}
+                  <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${failed ? 'bg-red-400/15 text-red-200' : done ? 'bg-emerald-400/15 text-emerald-200' : cancelled ? 'bg-amber-400/15 text-amber-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
+                    {failed ? <AlertTriangle size={20} /> : done ? <CheckCircle2 size={20} /> : cancelled ? <XCircle size={20} /> : <LoaderCircle size={20} className="animate-spin" />}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruch wird an Colab gemeldet…' : explanation.title}</div>
+                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruchfahne wird gespeichert…' : explanation.title}</div>
                     <p className="mt-1 max-w-2xl text-xs leading-relaxed text-neutral-300 sm:text-sm">{explanation.description}</p>
                   </div>
                 </div>

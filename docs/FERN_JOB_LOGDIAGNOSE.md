@@ -4,7 +4,7 @@ Die protokollierten Zeitstempel enthalten mehrere Sitzungen ohne Datum. Daraus l
 
 - Frühere Fehler `INFERENCE_FAILED` (DirectML-Treiber), `STEM_CONFIG_INVALID` (lokales BS-RoFormer-Backend) und `ANLZ_NOT_FOUND`/`ANLZ_SOURCE_MISMATCH` (Rekordbox-Dateiquellen) sind **andere Pfade**. Später ist für Track 87868672 `REKORDBOX_ANLZ geladen` protokolliert; die lokalen ONNX-Jobs wurden teils erfolgreich abgeschlossen. Das beweist nicht, dass der Fernworker läuft.
 - `00:17:08` ist lediglich „Fern-Job … angelegt“. Im Ausschnitt fehlen Worker-Claim, Worker-Heartbeat, Modelllauf, Ergebnisse und Import. Die App hat damit **keinen Nachweis**, dass Drive für Desktop die Datei hochgeladen oder Colab sie erhalten hat. Drive-Desktop-Installation allein startet keinen Colab-Worker: Notebook öffnen, `JOB_ORDNER` auf denselben My-Drive-Ordner setzen, Drive-Mount freigeben und Worker-Zelle laufen lassen.
-- `00:45:43` bis `00:45:48`: wiederholte Abbruchanforderungen in < 5 Sekunden – das Muster „Knopf gedrückt, keine Reaktion, also noch einmal“ in 13 Klicks. Das Log belegt Anforderungen, aber keine bestätigte Statusänderung; `00:46:52` meldet dieselbe Job-ID erneut. Aus den Zeilen allein war nicht beweisbar, ob der Abbruch serverseitig ankam. **Inzwischen ist er es:** Der Colab-Worker (`colab/remote_worker.py`) und der Node-Worker (`scripts/stem-remote-worker.ts`) prüfen `cancel.flag` jetzt alle 5 Sekunden **während** der Rechnung und beenden den rechnerischen Adapter (SIGTERM, nach 10 s SIGKILL) – der Abbruch ist nicht mehr eine Bitte für den nächsten Job. Der Verbrauch der Fahne verhindert außerdem, dass ein unter derselben Job-ID neu ausgeschriebener Lauf (§21 B) sofort wieder erstickt wird.
+- `00:45:43` bis `00:45:48`: wiederholte Abbruchanforderungen in < 5 Sekunden – das Muster „Knopf gedrückt, keine Reaktion, also noch einmal“ in 13 Klicks. Das Log belegt Anforderungen, aber keine bestätigte Statusänderung; `00:46:52` meldet dieselbe Job-ID erneut. Beide Worker prüfen `cancel.flag` alle 5 Sekunden **während** der Rechnung und beenden den Adapter, sobald die Fahne bei ihnen angekommen ist (SIGTERM, nach 10 s SIGKILL). **Wichtig:** Im `folder`-Transport bestätigt „Abbruchflag geschrieben“ nur den lokalen Schreibvorgang in den Drive-Sync-Ordner – weder Google-Cloud-Sync noch Colab-Empfang. Erst ein Worker-Ereignis `worker.cancelled` bestätigt, dass Colab den Abbruch verarbeitet hat. Die Oberfläche unterscheidet diese Fälle jetzt und stellt einen Abbruch vor einem Worker-Claim nicht mehr als technischen Fehler dar. Der Verbrauch der Fahne verhindert außerdem, dass ein unter derselben Job-ID neu ausgeschriebener Lauf (§21 B) sofort wieder erstickt wird.
 
 ## Sichere Schritte auf dem betroffenen Rechner
 
@@ -25,8 +25,9 @@ Die protokollierten Zeitstempel enthalten mehrere Sitzungen ohne Datum. Daraus l
 Wichtig für die Einordnung künftiger Logs: Das gepostete Protokoll enthält Meldungen
 (`STEM_CONFIG_INVALID: … ([object Object])`, „Abbruch … angefordert“), die es in dieser
 Form im aktuellen Stand nicht mehr gibt – `src/stems/errors.ts` rendert die Ursache
-aus, der Abbruch protokolliert nur noch bestätigte (`accepted`) und abgelehnte Fälle
-getrennt. **Vor der nächsten Diagnose also prüfen, welches Build läuft**
+aus, der Abbruch protokolliert `cancel_flag=written` mit ausstehender Worker-Bestätigung
+oder den Schreibfehler getrennt. Ein Abbruch vor dem Claim wird im Live-Monitor als
+„abgebrochen“ statt „Problem“ markiert. **Vor der nächsten Diagnose also prüfen, welches Build läuft**
 (Einstellungen → Systemprotokoll, bzw. neu bauen: `npm run build && npm run desktop`).
 
 ## Nachtrag 2026-10-04: „Wartet auf den externen Rechner“ – zwei echte Ursachen gefunden

@@ -319,6 +319,10 @@ async function runOneJob(
   await watch.check();
   if (watch.triggered) {
     log(options, `Job ${jobId} wurde abgebrochen – Status wird gesetzt.`);
+    await logJobEvent(options, transport, jobId, 'worker.cancelled', 'Abbruchanforderung erkannt; Job wird nicht gestartet.', {
+      status: 'CANCELLED',
+      phase: 'Vom Editor abgebrochen',
+    }, 'warning');
     await transport.writeText(
       manifestRel,
       serializeManifest(withStatus(manifest, { status: 'CANCELLED', phase: 'Vom Editor abgebrochen', cancelRequested: true }))

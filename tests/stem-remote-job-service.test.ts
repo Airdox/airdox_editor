@@ -422,6 +422,11 @@ async function run() {
     const accepted = await h6.remote.cancel(job.jobId, 'Testabbruch');
     assert.equal(accepted.accepted, true);
     assert.equal(h6.remote.get(job.jobId)?.status, 'CANCELLED');
+    assert.equal(
+      h6.remote.get(job.jobId)?.trace?.some((event) => event.source === 'worker' && event.step === 'worker.cancelled'),
+      false,
+      'Flag-Schreiben wird nicht mit Worker-Bestätigung verwechselt'
+    );
     assert.equal(await h6.remote.cancel(job.jobId).then((result) => result.accepted), false, 'zweiter Abbruch ist wirkungslos');
     const flag = await readFile(path.join(h6.drive, 'jobs', job.jobId, 'cancel.flag'), 'utf8');
     assert.match(flag, /Testabbruch/, 'der Worker erfährt vom Abbruch');
@@ -440,8 +445,12 @@ async function run() {
     await h6.remote.poll();
     const view = h6.remote.get(job.jobId)!;
     assert.equal(view.status, 'CANCELLED', 'ein abgebrochener Job wird nie COMPLETED');
+    assert.ok(
+      view.trace?.some((event) => event.source === 'worker' && event.step === 'worker.cancelled'),
+      'der Monitor erhält nach dem lokalen Abbruch die explizite Worker-Bestätigung'
+    );
     assert.equal(h6.local.getJob(job.jobId), null, 'und es wird nichts importiert');
-    console.log('  ✓ Abbruch bleibt Abbruch, Worker respektiert die Fahne');
+    console.log('  ✓ Abbruch bleibt Abbruch, Worker respektiert die Fahne und bestätigt ihn');
   } finally {
     await h6.dispose();
   }

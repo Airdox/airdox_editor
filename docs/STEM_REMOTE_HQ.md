@@ -72,7 +72,7 @@ fertigen Stems (Solo/Mute/Volume, Presets, Clip-Export):
 | **Google Colab** | Konfigurations-Panel (B), Verarbeitungsziel | nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → wählt den externen Rechner |
 | **Job jetzt ausführen** | Konfigurations-Panel (B), einzige Primäraktion | startet den Lauf mit Qualität + Ziel |
 | Statuszeile | Stem-Center, Job-Monitor (C) | „Arbeitskopie wird vorbereitet…“, „Wartet auf externen Rechner (Google Drive)“, „Externer Rechner rechnet (GPU)“ … |
-| **Abbrechen** | Job-Monitor (C), dieselbe flache Zeile | legt `cancel.flag` in die Ablage und meldet das Ergebnis sofort („Abbruch läuft…“ / Grund, wenn Drive nicht erreichbar war). Während der Vorbereitung – vor dem ersten Job-Poll – merkt die App den Abbruch vor und stoppt vor dem Upload. Beide Worker prüfen die Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
+| **Abbrechen** | Job-Monitor (C), dieselbe flache Zeile | schreibt `cancel.flag` in die konfigurierte Ablage und meldet, ob der Schreibvorgang gelang. Bei `folder`-Transport beweist das weder Drive-Cloud-Sync noch Worker-Empfang; erst `worker.cancelled` bestätigt die Verarbeitung durch Colab. Während der Vorbereitung merkt die App den Abbruch vor und stoppt vor dem Upload. Beide Worker prüfen eine empfangene Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
 | **Live-Datenfluss** | schwebende Schaltfläche unten rechts | öffnet den Monitor mit fünf Stationen, Worker-Heartbeat, Ablaufprotokoll und Metadaten der Arbeitskopie |
 
 Es gibt keine Python-, Colab- oder Checkpoint-Bedienung in der UI und keine
@@ -170,7 +170,7 @@ Phasen („Wartet auf den externen Rechner“) und Felder (`device`,
 | I · Stem fehlt | FAILED `REMOTE_OUTPUT_INCOMPLETE` – nichts wird importiert |
 | J · Stem leer/kaputt/zu kurz | FAILED `REMOTE_OUTPUT_EMPTY`/`REMOTE_OUTPUT_INVALID` (Hash, Header, Kanäle, Dauer, Stille) |
 | K · „COMPLETED“, aber Stems fehlen | Editor prüft die Vollständigkeit gegen den Modell-Deskriptor – kein `COMPLETED` ohne alle Stems |
-| L · Abbruch | `cancel.flag` + Status `CANCELLED`; der Worker stoppt die laufende Rechnung (SIGTERM/SIGKILL) statt sie zu Ende zu rechnen. War die Ablage nicht erreichbar, bleibt der Job in Verfolgung und die Fahne wird bei jedem Poll nachgeliefert (`cancelPending`) – ein Abbruch, der nirgends ankam, wird nie als „erledigt“ verbucht. Ein danach eintreffendes Ergebnis wird verworfen und **nie** als `COMPLETED` angezeigt |
+| L · Abbruch | Nach erfolgreichem Schreiben werden `cancel.flag` und der lokale Status `CANCELLED` gesetzt; bei `folder`-Transport beweist das weder Drive-Cloud-Sync noch Worker-Empfang. Der Worker beendet die Rechnung (SIGTERM/SIGKILL), sobald er die Fahne verarbeitet, und bestätigt dies per `worker.cancelled`. War die Ablage nicht erreichbar, bleibt der Job in Verfolgung und die Fahne wird bei jedem Poll nachgeliefert (`cancelPending`). Ein später eintreffendes Ergebnis wird verworfen und **nie** als `COMPLETED` angezeigt |
 
 ## 6. Original-Schutz
 

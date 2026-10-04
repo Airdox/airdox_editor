@@ -112,9 +112,20 @@ console.log('\n[ TEST ] 2 – Fünf Stationen werden nur bei Bestätigung grün'
     'erst der geprüfte Import schließt alle fünf Stationen'
   );
   assert.deepEqual(
-    deriveStepStates(job({ status: 'FAILED' }), false, true),
+    deriveStepStates(job({
+      status: 'FAILED',
+      trace: [{
+        id: 'published-before-failure',
+        source: 'editor',
+        jobId: '9f1c1f2e-0dd0-4a3a-9a51-2f1c1f2e0dd0',
+        at: 1_700_000_000_050,
+        step: 'editor.input_published',
+        level: 'info',
+        message: 'Manifest veröffentlicht',
+      }],
+    }), false, true),
     ['complete', 'complete', 'error', 'waiting', 'waiting'],
-    'ein Fehlschlag markiert die offene Station als Problem'
+    'ein Fehlschlag markiert die erste nicht bestätigte Station als Problem'
   );
   assert.deepEqual(
     deriveStepStates(null, true, false),
@@ -130,6 +141,15 @@ console.log('\n[ TEST ] 3 – Der Monitor erklärt, warum 0 % korrekt ist');
   assert.equal(waiting.waitingForWorker, true, 'ohne Worker wird der Wartezustand benannt');
   assert.match(waiting.description, /claim\.json/, 'die Wartebedingung (claim.json) wird erklärt');
 
+  const waitingInSyncFolder = currentExplanation(
+    job({ status: 'RUNNING', transport: 'Google Drive (Ordner)' }),
+    undefined,
+    false,
+    false
+  );
+  assert.match(waitingInSyncFolder.title, /Sync-Ordner/);
+  assert.match(waitingInSyncFolder.description, /Cloud-Upload.*nicht messen/);
+
   const claimed = currentExplanation(
     job({ status: 'RUNNING', worker: { id: 'colab-7' }, workerPercent: 0, percent: 0 }),
     undefined,
@@ -142,8 +162,52 @@ console.log('\n[ TEST ] 3 – Der Monitor erklärt, warum 0 % korrekt ist');
   const running = currentExplanation(job({ status: 'RUNNING', worker: { id: 'colab-7' }, workerPercent: 55 }), undefined, false, false);
   assert.equal(running.title, 'Google Colab rechnet', 'ab dem ersten Worker-Wert läuft die Anzeige');
 
-  const cancelled = currentExplanation(job({ status: 'CANCELLED' }), undefined, false, true);
+  const cancelledBeforeClaim = job({
+    status: 'CANCELLED',
+    cancelRequested: true,
+    trace: [{
+      id: 'published-before-cancel',
+      source: 'editor',
+      jobId: '9f1c1f2e-0dd0-4a3a-9a51-2f1c1f2e0dd0',
+      at: 1_700_000_000_050,
+      step: 'editor.input_published',
+      level: 'info',
+      message: 'Manifest veröffentlicht',
+    }],
+  });
+  const cancelled = currentExplanation(cancelledBeforeClaim, undefined, false, true);
+  assert.match(cancelled.title, /Vor der Übernahme durch Colab abgebrochen/);
+  assert.match(cancelled.description, /kein Worker-Claim/, 'lokale Abbruchfahne darf nicht als Worker-Bestätigung erscheinen');
+  assert.match(cancelled.description, /Zelle 5/, 'die Ursache nennt den Colab-Worker-Schritt');
   assert.match(cancelled.description, /keine unvollständigen Stems/, 'ein Abbruch verspricht keine halben Stems');
+  assert.deepEqual(
+    deriveStepStates(cancelledBeforeClaim, false, false),
+    ['complete', 'complete', 'cancelled', 'waiting', 'waiting'],
+    'ein Abbruch nach dem lokalen Publizieren wird nicht als roter technischer Fehler markiert'
+  );
+  assert.deepEqual(
+    deriveStepStates(job({ status: 'CANCELLED' }), false, false),
+    ['complete', 'cancelled', 'waiting', 'waiting', 'waiting'],
+    'ein Abbruchstatus allein beweist nicht, dass der Job zuvor in die Ablage geschrieben wurde'
+  );
+
+  const workerCancelled = job({
+    status: 'CANCELLED',
+    worker: { id: 'colab-7' },
+    trace: [{
+      id: 'worker-cancelled',
+      source: 'worker',
+      jobId: '9f1c1f2e-0dd0-4a3a-9a51-2f1c1f2e0dd0',
+      at: 1_700_000_000_100,
+      step: 'worker.cancelled',
+      status: 'CANCELLED',
+      level: 'warning',
+      message: 'Abbruch bestätigt',
+    }],
+  });
+  assert.match(currentExplanation(workerCancelled, undefined, false, true).title, /Worker bestätigt/);
+  assert.ok(modalSource.includes('Colab hat die Abbruchfahne verarbeitet'), 'die Station zeigt eine Worker-Bestätigung auch ohne vorherigen Claim');
+
   assert.ok(
     modalSource.includes('0 % ist in dieser Phase korrekt'),
     'die Oberfläche sagt wörtlich, dass 0 % in dieser Phase korrekt ist'

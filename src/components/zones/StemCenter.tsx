@@ -355,7 +355,7 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
             className={`${UI_ACTION.danger} px-2.5 py-1 rounded text-[10px] font-semibold flex items-center gap-1.5 flex-shrink-0`}
             title={
               activeRemoteJob && remoteCancelPendingJobId === activeRemoteJob.jobId
-                ? 'Der Abbruch wird gerade gemeldet – der externe Rechner stoppt beim nächsten Arbeitsschritt'
+                ? 'Abbruchfahne wird in der Jobablage gespeichert; der Worker reagiert nach der Synchronisierung'
                 : activeRemoteJob && remoteCancelCooldownJobId === activeRemoteJob.jobId
                   ? 'Die letzte Abbruchanfrage wurde nicht bestätigt – bitte kurz warten'
                   : 'Laufende Stem-Separation abbrechen: keine Stems werden übernommen'
