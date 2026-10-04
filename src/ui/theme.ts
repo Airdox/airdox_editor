@@ -12,7 +12,7 @@
  *
  *   PRIORITÄT  ROLLE              FARBE                    WO (Beispiele)
  *   1 (hoch)  Primäraktion        Rekordbox-Cyan-Verlauf   „Job jetzt ausführen",
- *                                 (#0088ff → #00c8ff)      „Stems jetzt trennen", Play
+ *                                 (#0088ff → #00c8ff)      Play (wenn gestoppt)
  *   2         Sekundäraktion      Neutral erhöht           „Schnell", „High Quality",
  *                                 (#161922 / #232738)      „Lokal (GPU/CPU)", Copy
  *   3         Tertiär / Geist     transparent, Text        Menüpunkte, Reiter,
@@ -21,14 +21,15 @@
  *                                 (#0a1a26 / #00a2ff)      Loop/Quantize aktiv
  *   5         Warnung             Amber #f0b429            „nicht erreichbar",
  *                                                          HQ ohne GPU
- *   6         Zerstörend          Rot #ff453a             „Abbrechen", Delete
- *   7         Erfolg / bereit    Grün #00c853/#00e676     „Stem-Separation bereit"
+ *   6         Zerstörend          Rot #ff453a              „Abbrechen", Delete
+ *   7         Erfolg / bereit     Grün #00c853/#00e676     „bereit", Wiedergabe aktiv
+ *   REC       Aufnahme            Rot (bewusste Ausnahme)  globaler Recorder in Zone 1
  *
  * Harte Regeln (siehe docs/UI_V2_DREI_ZONEN.md):
  *   - Genau EINE Primäraktion pro Kontext. Nie zwei Cyan-Buttons nebeneinander.
- *   - Zone 1 kennt keine Prozessfarben: dort gibt es keinen Fortschritt, keinen
- *     Status und keine Import-Schaltfläche (deshalb existiert hier auch kein
- *     Token dafür – was nicht existiert, kann nicht verwendet werden).
+ *   - Zone 1 kennt keine Prozess-Fortschrittsanzeige und keine Import-Schaltfläche.
+ *     Der REC-Knopf behält nur seinen dedizierten Aufnahmezustand; er ist kein
+ *     allgemeiner Job-Status und verwendet ausschließlich die REC-Tokens.
  *   - Ein Fortschritt ist eine *Linie* (2 px) in einer Zeile, keine Fläche.
  */
 
@@ -67,6 +68,8 @@ export const UI_ACCENT = {
   warning: '#f0b429',
   /** Zerstörend (Abbrechen, Löschen). */
   danger: '#ff453a',
+  /** Aufnahmezustand (dedizierte REC-Ausnahme in der Top-Bar). */
+  recording: '#ff453a',
 } as const;
 
 /**
@@ -76,21 +79,31 @@ export const UI_ACCENT = {
 export const UI_ACTION = {
   /** Rang 1 – Primäraktion („Job jetzt ausführen"). Höchstens eine pro Kontext. */
   primary:
-    'bg-gradient-to-r from-[#0088ff] to-[#00c8ff] text-black font-bold border border-transparent hover:from-[#0099ff] hover:to-[#22d3ee] disabled:opacity-40 disabled:cursor-not-allowed',
+    'bg-gradient-to-r from-[#0088ff] to-[#00c8ff] text-black font-bold border border-transparent hover:from-[#0099ff] hover:to-[#22d3ee] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a2ff] disabled:opacity-40 disabled:cursor-not-allowed',
   /** Rang 2 – Sekundäraktion (Parameterwahl, Kopieren, Einfügen). */
   secondary:
-    'bg-[#161922] border border-[#232738] text-neutral-300 hover:border-[#0088ff] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed',
+    'bg-[#161922] border border-[#232738] text-[#c8c9ce] hover:border-[#0088ff] hover:text-white transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a2ff] disabled:opacity-40 disabled:cursor-not-allowed',
   /** Rang 2 – als *gewählt* markierte Sekundäraktion (Segment-Schalter). */
-  secondarySelected: 'bg-[#00284a] border border-[#00a2ff] text-[#00e5ff] font-semibold',
+  secondarySelected: 'bg-[#00284a] border border-[#00a2ff] text-[#00e5ff] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a2ff]',
   /** Rang 3 – Tertiär/Geist (Menüs, Reiter, Einklappen). */
-  ghost: 'border border-transparent text-neutral-400 hover:text-white hover:bg-[#1b1d26]',
+  ghost: 'border border-transparent text-[#7c828f] hover:text-white hover:bg-[#1b1d26] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a2ff] disabled:opacity-40 disabled:cursor-not-allowed',
   /** Rang 4 – Umschalter im aktiven Zustand (Fokus-Modus, Loop, Quantize). */
-  toggleOn: 'bg-[#0a1a26] border border-[#00a2ff] text-[#00e5ff]',
+  toggleOn: 'bg-[#0a1a26] border border-[#00a2ff] text-[#00e5ff] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00a2ff]',
+  /** Rang 5 – Warnung als Aktion (z. B. HQ ohne GPU, Replace mit Sicherheitswirkung). */
+  warning:
+    'bg-[#20180a] border border-[#3d2e15] text-[#f0b429] hover:bg-[#2b2109] hover:text-[#ffd166] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f0b429] disabled:opacity-40 disabled:cursor-not-allowed',
   /** Rang 6 – Zerstörend. */
   danger:
-    'bg-[#1f1214] border border-[#402024] text-[#ff453a] hover:bg-[#301a1c] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed',
-  /** Rang 5 – Warnung als Aktion (z. B. HQ ohne GPU). */
-  warning: 'bg-[#20180a] border border-[#3d2e15] text-[#ff9500] hover:bg-[#2b2109]',
+    'bg-[#1f1214] border border-[#402024] text-[#ff453a] hover:bg-[#301a1c] hover:text-white transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff453a] disabled:opacity-40 disabled:cursor-not-allowed',
+  /** Rang 7 – Erfolg/bereit; für aktive Transport-Zustände, nicht als Deko. */
+  successActive:
+    'bg-[#00c853] border border-transparent text-black shadow-[0_0_10px_rgba(0,200,83,0.35)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00c853]',
+  /** Fester Aufnahmeknopf; Rot ist hier die branchenübliche REC-Kennzeichnung. */
+  record:
+    'bg-[#21151a] border border-[#3b2830] text-[#ff5147] hover:bg-[#3a1517] hover:text-white transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff453a]',
+  /** Laufende Aufnahme – ausschließlich für den aktiven REC-Zustand. */
+  recordActive:
+    'bg-[#3a1517] border border-[#ff3b30] text-[#ff625b] animate-pulse transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff453a]',
 } as const;
 
 /**

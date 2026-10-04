@@ -25,7 +25,9 @@
  */
 import type { BackendKind, ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from '../types';
 import type { RemoteJobTraceEvent } from '../transportTypes';
+import type { RemoteJobFlow } from './dataFlow';
 export type { RemoteJobTraceEvent } from '../transportTypes';
+export type { RemoteJobFlow, RemoteFlowCheckpoint, RemoteFlowFact } from './dataFlow';
 
 /** Version des Manifest-Schemas. Erhöhen, wenn Felder brechen (nicht additiv). */
 export const REMOTE_JOB_SCHEMA_VERSION = 1;
@@ -162,6 +164,16 @@ export interface RemoteJobRecord {
   phaseUpdatedAt?: number;
   /** Begrenzte, persistente Ablaufspur; wird nicht bei jedem Poll erweitert. */
   trace?: RemoteJobTraceEvent[];
+  /**
+   * Belege des Datenflusses (`src/stems/remote/dataFlow.ts`): wann hat der
+   * Editor welche Station tatsächlich beobachtet? Überlebt den Neustart und
+   * ist die Grundlage des Laufzettels im Statusfenster.
+   */
+  flow?: RemoteJobFlow;
+  /** Anzeigename der Ablage zum Zeitpunkt des Starts (nur Anzeige, §23). */
+  transportLabel?: string;
+  /** Wurzel der Ablage zum Zeitpunkt des Starts (nur Anzeige, §23). */
+  transportRoot?: string;
   /** Worker-Event-IDs für Deduplizierung, auch wenn ältere Trace-Zeilen rotiert wurden. */
   workerTraceIds?: string[];
   status: RemoteJobStatus;

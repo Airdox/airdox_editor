@@ -1,11 +1,39 @@
-import React, { useEffect, useMemo, useState } from 'react';
+/**
+ * @license
+ * Statusfenster des Fernpfads – **Laufzettel der Daten** (§16, §20, §21, §40).
+ *
+ * Was dieses Fenster leisten muss
+ * --------------------------------
+ * Der Fernpfad führt die Arbeitskopie durch vier Reiche: dieser Rechner, die
+ * synchronisierte Ablage, die Google-Cloud und den Colab-Worker. Eine einzelne
+ * Prozentzahl kann das nicht abbilden: sie bleibt bei **0 %, solange kein
+ * Worker gerechnet hat** – also genau in der Phase, in der der Nutzer nichts
+ * anderes sieht. „0 %“ ist dann nicht falsch, aber es beantwortet nicht die
+ * Frage, die zählt: _Wo stehen die Daten, und woran ist das festgemacht?_
+ *
+ * Deshalb zeigt das Fenster drei Dinge gleichzeitig:
+ *
+ *   1. **Den Weg** – zehn Stationen, jede einzeln, mit Zustand, Uhrzeit, Dauer
+ *      und Beleg (`src/stems/remote/dataFlow.ts`).
+ *   2. **Die ehrliche Lücke** – die Cloud-Synchronisation ist die einzige
+ *      Station ohne technischen Beleg; sie bleibt sichtbar offen, bis sie
+ *      bestätigt oder durch den Rückweg bewiesen ist.
+ *   3. **Das Protokoll** – Editor und Colab schreiben in dieselbe Jobspur.
+ *
+ * Grundregel: **Eine Station ist nur belegt, wenn es einen Beleg gibt.** Was
+ * der Editor nicht beobachten kann, wird nicht geschätzt, nicht hochgerechnet
+ * und nicht „nach Gefühl“ grün gefärbt.
+ */
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
   ArrowDown,
   ArrowRight,
   CheckCircle2,
+  Clock,
   Clock3,
+  ClipboardCopy,
   Cloud,
   CloudUpload,
   Cpu,
@@ -14,6 +42,7 @@ import {
   FileAudio,
   HardDrive,
   HeartPulse,
+  HelpCircle,
   Info,
   Laptop,
   LoaderCircle,
@@ -24,6 +53,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { RemoteServiceStatus, RemoteStemJobView } from '../../stems/transportTypes';
+import type { RemoteFlowStation, RemoteFlowState, RemoteFlowWhere } from '../../stems/remote/dataFlow';
+import { REMOTE_FLOW_WHERE_LABEL, formatFlowAge, formatFlowClock } from '../../stems/remote/dataFlow';
 import { remoteJobStallWarning } from '../../stems/remote/diagnostics';
 
 interface Props {
@@ -31,6 +62,8 @@ interface Props {
   onClose: () => void;
   onCancel: () => void;
   onRefresh: () => void;
+  /** Bestätigt, dass die Arbeitskopie in Google Drive angekommen ist (§40). */
+  onConfirmCloudSync?: (jobId: string) => Promise<void> | void;
   status: RemoteServiceStatus | null;
   job: RemoteStemJobView | null;
   trackName: string;
@@ -41,92 +74,16 @@ interface Props {
   cancelPending?: boolean;
 }
 
-/** Alter des Heartbeats in Sekunden – darüber gilt der Worker als „nicht mehr sichtbar". */
+/** Alter des Heartbeats in Sekunden – darüber gilt der Worker als „nicht mehr sichtbar“. */
 const WORKER_LIVENESS_SECONDS = 90;
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
 const failedStatus = (value?: string) => value === 'FAILED';
 const cancelledStatus = (value?: string) => value === 'CANCELLED';
 
-type FlowStepState = 'complete' | 'active' | 'waiting' | 'error' | 'cancelled';
-
-type FlowStep = {
-  id: 'copy' | 'drive' | 'worker' | 'inference' | 'import';
-  title: string;
-  icon: React.ElementType;
-};
-
-const FLOW_STEPS: FlowStep[] = [
-  { id: 'copy', title: 'Arbeitskopie im Editor', icon: Laptop },
-  { id: 'drive', title: 'Google Drive · Jobablage geschrieben', icon: CloudUpload },
-  { id: 'worker', title: 'Google Colab übernimmt', icon: Server },
-  { id: 'inference', title: 'KI-Trennung läuft', icon: Cpu },
-  { id: 'import', title: 'Geprüft zurück im Editor', icon: Download },
-];
-
-function traceHas(job: RemoteStemJobView | null, ...steps: string[]): boolean {
-  if (!job?.trace?.length) return false;
-  return steps.some((step) => job.trace?.some((event) => event.step === step));
-}
-
-function workerHasClaimed(job: RemoteStemJobView | null): boolean {
-  return Boolean(job?.worker) || traceHas(job, 'editor.worker_claim_observed', 'worker.claimed');
-}
-
-function workerHasCancelled(job: RemoteStemJobView | null): boolean {
-  return Boolean(job?.trace?.some((event) => event.source === 'worker' && (event.step === 'worker.cancelled' || event.status === 'CANCELLED')));
-}
-
-function usesLocalFolderTransport(job: RemoteStemJobView | null): boolean {
-  const transport = job?.transport?.toLocaleLowerCase('de-DE') ?? '';
-  return transport.includes('ordner') || transport.includes('folder');
-}
-
-/**
- * Zustände der fünf bestätigten Stationen (exportiert für die Vertragsprüfung
- * in `tests/remote-flow-visibility.test.ts`).
- */
-export function deriveStepStates(job: RemoteStemJobView | null, running: boolean, hasError: boolean): FlowStepState[] {
-  if (!job) {
-    return [hasError ? 'error' : running ? 'active' : 'waiting', 'waiting', 'waiting', 'waiting', 'waiting'];
-  }
-
-  const driveConfirmed = traceHas(job, 'editor.input_published', 'editor.transport_recovered') ||
-    ['RUNNING', 'RECONSTRUCTING', 'VALIDATING', 'COMPLETED'].includes(job.status);
-  const workerClaimed = workerHasClaimed(job);
-  const inferenceFinished = traceHas(job, 'worker.inference_completed', 'worker.completed') ||
-    job.status === 'RECONSTRUCTING' || job.status === 'VALIDATING' || job.status === 'COMPLETED';
-  const imported = traceHas(job, 'editor.result_imported') || job.status === 'COMPLETED';
-
-  /*
-   * Bestätigungen sind unumkehrbar und können nicht übersprungen werden: Ist
-   * eine spätere Station bestätigt (z. B. der Import), dann müssen alle
-   * vorherigen stattgefunden haben. Ohne diese Monotonie könnte ein fertiger
-   * Job mit fehlendem Worker-Eintrag eine „aktive" Colab-Station mitten in der
-   * abgeschlossenen Kette zeigen.
-   */
-  const complete: boolean[] = [true, driveConfirmed, workerClaimed, inferenceFinished, imported];
-  for (let index = complete.length - 2; index >= 0; index -= 1) {
-    if (complete[index + 1]) complete[index] = true;
-  }
-  const firstOpen = complete.findIndex((value) => !value);
-  if (cancelledStatus(job.status)) {
-    const cancelledIndex = firstOpen >= 0 ? firstOpen : 4;
-    return complete.map((isComplete, index) => {
-      if (isComplete) return 'complete';
-      if (index === cancelledIndex) return 'cancelled';
-      return 'waiting';
-    });
-  }
-
-  const activeIndex = firstOpen >= 0 ? firstOpen : running ? 4 : -1;
-  return complete.map((isComplete, index) => {
-    if (isComplete) return 'complete';
-    if (hasError && index === activeIndex) return 'error';
-    if (index === activeIndex) return 'active';
-    return 'waiting';
-  });
-}
+/* ------------------------------------------------------------------------- *
+ * Anzeige-Helfer
+ * ------------------------------------------------------------------------- */
 
 function formatBytes(value?: number): string {
   if (!Number.isFinite(value) || value === undefined || value <= 0) return '—';
@@ -151,18 +108,63 @@ function formatAge(seconds: number): string {
   return `vor ${Math.floor(seconds / 60)} min`;
 }
 
-/**
- * Inferenzfortschritt des Workers – oder `null`, solange kein Worker den Job
- * beansprucht hat. Vor dem Claim gibt es keinen KI-Wert; der Upload- und
- * Wartefortschritt wird nie als Rechenfortschritt ausgegeben (exportiert für
- * die Vertragsprüfung in `tests/remote-flow-visibility.test.ts`).
- */
-export function normalisedPercent(job: RemoteStemJobView | null, done: boolean): number | null {
-  if (done) return 100;
-  if (!job?.worker) return null;
-  const value = job.workerPercent ?? job.percent;
-  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0;
+/** Dauer zwischen zwei Stationen – „wie lange hat dieser Schritt gedauert?“. */
+function formatStepDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return `${minutes}:${String(rest).padStart(2, '0')} min`;
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} h`;
 }
+
+/* ------------------------------------------------------------------------- *
+ * Laufzettel
+ * ------------------------------------------------------------------------- */
+
+const WHERE_ICON: Record<RemoteFlowWhere, React.ElementType> = {
+  local: HardDrive,
+  store: Server,
+  cloud: Cloud,
+  worker: Cpu,
+};
+
+const WHERE_STYLE: Record<RemoteFlowWhere, string> = {
+  local: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  store: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  cloud: 'bg-amber-500/15 text-amber-200 border-amber-500/30',
+  worker: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+};
+
+const STATE_CHIP: Record<RemoteFlowState, string> = {
+  done: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/40',
+  active: 'bg-cyan-400/15 text-cyan-100 border-cyan-400/40',
+  pending: 'bg-white/5 text-neutral-500 border-white/10',
+  unknown: 'bg-amber-400/15 text-amber-200 border-amber-400/40',
+  failed: 'bg-red-400/15 text-red-200 border-red-400/40',
+  cancelled: 'bg-amber-400/15 text-amber-200 border-amber-400/40',
+};
+
+const STATE_LABEL: Record<RemoteFlowState, string> = {
+  done: 'belegt',
+  active: 'jetzt',
+  pending: 'wartet',
+  unknown: 'nicht messbar',
+  failed: 'hier geendet',
+  cancelled: 'abgebrochen',
+};
+
+/** Dauer seit der letzten Station mit Beleg (null, wenn es keine vorherige gibt). */
+function stepDuration(stations: RemoteFlowStation[], index: number): number | null {
+  const current = stations[index];
+  const previous = [...stations.slice(0, index)].reverse().find((station) => typeof station.at === 'number');
+  if (typeof current.at !== 'number' || !previous || typeof previous.at !== 'number') return null;
+  return Math.max(0, current.at - previous.at);
+}
+
+/* ------------------------------------------------------------------------- *
+ * Kopfbereich: was gerade passiert
+ * ------------------------------------------------------------------------- */
 
 function statusLabel(job: RemoteStemJobView | null): string {
   if (!job) return 'wird vorbereitet';
@@ -188,9 +190,30 @@ function statusLabel(job: RemoteStemJobView | null): string {
   }
 }
 
+function traceHas(job: RemoteStemJobView | null, ...steps: string[]): boolean {
+  return Boolean(job?.trace?.some((event) => steps.includes(event.step)));
+}
+
+function workerHasClaimed(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.worker) || traceHas(job, 'editor.worker_claim_observed', 'worker.claimed');
+}
+
+function workerHasCancelled(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.trace?.some((event) => event.source === 'worker' && (event.step === 'worker.cancelled' || event.status === 'CANCELLED')));
+}
+
+function usesLocalFolderTransport(job: RemoteStemJobView | null): boolean {
+  const transport = job?.transport?.toLocaleLowerCase('de-DE') ?? '';
+  return transport.includes('ordner') || transport.includes('folder');
+}
+
 /**
- * Ehrliche Erklärung des aktuellen Zustands – inklusive der Begründung, warum
- * 0 % vor dem Worker-Claim korrekt ist (exportiert für den Vertragstest).
+ * Eine verständliche Antwort auf „was passiert gerade?“.
+ *
+ * Aus der Datei exportiert, damit `tests/remote-flow-visibility.test.ts` die
+ * Zusagen prüfen kann, ohne das Fenster zu rendern: vor einem Worker-Claim
+ * gibt es **keinen** KI-Prozentwert, und der Cloud-Abgleich wird nie als
+ * messbar dargestellt.
  */
 export function currentExplanation(
   job: RemoteStemJobView | null,
@@ -204,20 +227,20 @@ export function currentExplanation(
     if (workerAcknowledged) {
       return {
         title: 'Abbruch vom Colab-Worker bestätigt',
-        description: 'Der Worker hat die Abbruchfahne gesehen und die Rechnung beendet. Es werden keine unvollständigen Stems übernommen.',
+        description: 'Der Worker hat die Abbruchfahne verarbeitet. Das Ergebnis wird nicht importiert; unvollständige Stems bleiben außen vor.',
         waitingForWorker: false,
       };
     }
     if (!workerClaimed) {
       return {
         title: 'Vor der Übernahme durch Colab abgebrochen',
-        description: 'Der Editor hat die Abbruchfahne in die konfigurierte Jobablage geschrieben, aber in diesem Ablauf kam kein Worker-Claim an. Bei einem synchronisierten Ordner ist damit weder der Cloud-Upload noch der Empfang durch Colab bestätigt. Für einen neuen Versuch: Colab-Notebook-Zelle 5 starten, JOB_ORDNER und Editor-Jobablage auf denselben Drive-Ordner setzen und den Job danach neu starten. Es werden keine unvollständigen Stems übernommen.',
+        description: 'Der Editor hat die Abbruchfahne in die konfigurierte Jobablage geschrieben, aber in diesem Ablauf kam kein Worker-Claim an. Bei einem synchronisierten Ordner beweist das weder den Cloud-Upload noch den Empfang durch Colab. Prüfen Sie, ob die Colab-Notebook-Zelle #5 läuft, Drive gemountet ist und JOB_ORDNER auf denselben Ordner wie die Editor-Jobablage zeigt; danach den Job neu starten.',
         waitingForWorker: false,
       };
     }
     return {
       title: 'Abbruch angefordert · Worker-Bestätigung fehlt',
-      description: 'Der Editor hat die Abbruchfahne geschrieben, aber noch kein worker.cancelled-Ereignis empfangen. Ergebnisse werden nicht importiert. Prüfen Sie, ob die Colab-Zelle läuft und der Drive-Ordner synchronisiert wird.',
+      description: 'Die Abbruchfahne wurde geschrieben, aber noch kein worker.cancelled-Ereignis empfangen. Das Ergebnis wird nicht importiert. Prüfen Sie, ob die Colab-Zelle noch läuft und der Drive-Ordner synchronisiert wird.',
       waitingForWorker: false,
     };
   }
@@ -231,15 +254,15 @@ export function currentExplanation(
   if (done) {
     const count = job?.importedStems?.length ?? job?.stems.length ?? 0;
     return {
-      title: 'Ergebnis geprüft und importiert',
-      description: `${count || 'Alle'} Stems wurden per Hash geprüft und dauerhaft mit dem Track verknüpft.`,
+      title: 'Stems sind geprüft zurück',
+      description: `${count || 'Alle'} Ausgabedateien wurden per Hash, Geometrie und Pegel geprüft und dauerhaft mit dem Track verknüpft.`,
       waitingForWorker: false,
     };
   }
   if (!job) {
     return {
-      title: 'Arbeitskopie wird vorbereitet',
-      description: 'Der Editor erstellt eine WAV-Arbeitskopie. Das Original bleibt lokal und wird nicht überschrieben.',
+      title: 'Noch kein Job',
+      description: 'Der Laufzettel entsteht, sobald die externe Zerlegung gestartet wird.',
       waitingForWorker: false,
     };
   }
@@ -250,19 +273,6 @@ export function currentExplanation(
       waitingForWorker: false,
     };
   }
-  if (!job.worker) {
-    return usesLocalFolderTransport(job)
-      ? {
-        title: 'Dateien im Sync-Ordner geschrieben · warte auf Google Colab',
-        description: 'Arbeitskopie und Manifest wurden in den konfigurierten Ordner geschrieben. Der Editor kann den Google-Drive-Cloud-Upload hier nicht messen und wartet auf claim.json vom Colab-Worker. Prüfen Sie die Datei zusätzlich in Drive im Web und starten Sie die Worker-Zelle im Notebook.',
-        waitingForWorker: true,
-      }
-      : {
-        title: 'Ablage bestätigt · warte auf Google Colab',
-        description: 'Arbeitskopie und Manifest liegen in der bestätigten Jobablage. Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
-        waitingForWorker: true,
-      };
-  }
   if (job.status === 'VALIDATING' || job.status === 'RECONSTRUCTING') {
     return {
       title: 'Ergebnisse kommen zurück',
@@ -270,10 +280,24 @@ export function currentExplanation(
       waitingForWorker: false,
     };
   }
-  if (job.status === 'RUNNING' && !traceHas(job, 'worker.inference_started', 'worker.inference_progress') && (job.workerPercent ?? job.percent ?? 0) <= 0) {
+  if (!job.worker) {
+    return usesLocalFolderTransport(job)
+      ? {
+        title: 'Dateien im Sync-Ordner geschrieben · warte auf Google Colab',
+        description: 'Arbeitskopie und Steckbrief wurden in den lokalen Drive-Sync-Ordner geschrieben. Der Editor kann den Upload in die Google-Cloud nicht messen und wartet auf claim.json vom Colab-Worker. Prüfen Sie die Datei auch in Drive im Web und starten Sie die Worker-Zelle im Notebook.',
+        waitingForWorker: true,
+      }
+      : {
+        title: 'Ablage bestätigt · warte auf Google Colab',
+        description: 'Arbeitskopie und Steckbrief liegen in der bestätigten Jobablage (Hash wurde zurückgelesen). Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
+        waitingForWorker: true,
+      };
+  }
+  if ((job.workerPercent ?? job.percent ?? 0) <= 0) {
     return {
       title: 'Colab hat übernommen · erste Fortschrittsmeldung steht aus',
-      description: 'Der Worker ist verbunden. Die erste Inferenzmeldung ist noch nicht in der Jobablage eingetroffen; der Editor wartet weiter und erfindet keinen Prozentwert.',
+      description:
+        'Der Worker ist verbunden und hat den Job beansprucht. Die erste Inferenzmeldung ist noch nicht eingetroffen; der Editor wartet weiter und erfindet keinen Prozentwert.',
       waitingForWorker: true,
     };
   }
@@ -284,125 +308,68 @@ export function currentExplanation(
   };
 }
 
-function flowStepDetail(
-  step: FlowStep['id'],
-  state: FlowStepState,
-  job: RemoteStemJobView | null,
-  workerPercent: number | null,
-  status: RemoteServiceStatus | null
-): string {
-  switch (step) {
-    case 'copy':
-      return job ? `${formatBytes(job.workingCopyBytes)} WAV · Original read-only` : 'Nur die Arbeitskopie wird vorbereitet';
-    case 'drive':
-      return state === 'complete'
-        ? `Arbeitskopie + manifest.json geschrieben${job?.uploadedAt ? ` · ${formatTime(job.uploadedAt)}` : ''}${status?.kind === 'folder' ? ' · Cloud-Sync separat nicht messbar' : ''}`
-        : 'Noch nicht in die Jobablage geschrieben';
-    case 'worker':
-      if (job?.worker) return `Worker ${job.worker.id}${status?.worker?.device ? ` · ${String(status.worker.device).toUpperCase()}` : ''}`;
-      if (workerHasCancelled(job)) return 'Colab hat die Abbruchfahne verarbeitet';
-      if (workerHasClaimed(job)) return 'Worker-Claim in der Ablaufspur bestätigt';
-      if (cancelledStatus(job?.status)) return 'Abgebrochen, bevor ein Colab-Worker den Job beanspruchte';
-      return 'Noch kein Colab-Worker hat den Job beansprucht';
-    case 'inference':
-      if (workerPercent !== null) return `${workerPercent}% gemeldet · ${job?.phase || 'laufend'}`;
-      return 'Startet nach dem Worker-Claim';
-    case 'import':
-      if (state === 'complete') return `${job?.importedStems?.length ?? job?.stems.length ?? 0} Stems geprüft und registriert`;
-      return 'Wartet auf geprüfte Ausgabedateien';
+/** Vom Worker gemeldeter Inferenzfortschritt – `null`, solange er nicht rechnet. */
+export function normalisedPercent(job: RemoteStemJobView | null, done: boolean): number | null {
+  if (done) return 100;
+  if (!job?.worker) return null;
+  const value = job.workerPercent ?? job.percent;
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0;
+}
+
+/** Ein kopierbarer Diagnosebericht – für Support und Nachweiskette. */
+function buildReport(job: RemoteStemJobView | null, status: RemoteServiceStatus | null, trackName: string, now: number): string {
+  if (!job) return 'Kein Fern-Job ausgewählt.';
+  const lines: string[] = [
+    'AirDox – Datenfluss-Protokoll der externen Zerlegung',
+    `Stand: ${new Date(now).toLocaleString('de-DE')}`,
+    `Track: ${trackName}`,
+    `Job: ${job.jobId}`,
+    `Ablage: ${status?.label ?? job.transport ?? '–'} (erreichbar: ${status?.reachable ? 'ja' : 'nein'})`,
+    `Status: ${job.status} · Phase: ${job.phase} · Fortschritt: ${Math.round(job.percent ?? 0)} %`,
+    job.worker ? `Worker: ${job.worker.id} (Host ${job.worker.host ?? '?'})` : 'Worker: –',
+    '',
+    'Stationen:',
+  ];
+  for (const station of job.flow?.stations ?? []) {
+    const at = typeof station.at === 'number' ? formatTime(station.at) : '–';
+    lines.push(`  [${STATE_LABEL[station.state].padEnd(13)}] ${station.title} – ${at}${station.detail ? ` – ${station.detail}` : ''}`);
+    for (const fact of station.facts ?? []) lines.push(`      ${fact.label}: ${fact.value}`);
   }
+  if (job.error) lines.push('', `Fehler: ${job.error.code} – ${job.error.message}`);
+  if (job.trace?.length) {
+    lines.push('', 'Ablaufprotokoll:');
+    for (const event of job.trace.slice(-40)) {
+      lines.push(
+        `  ${new Date(event.at).toLocaleTimeString('de-DE')} ${event.source === 'worker' ? 'Colab' : 'Editor'} · ${event.step}${
+          event.code ? ` [${event.code}]` : ''
+        }: ${event.message}`
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
-interface FlowStepCardProps {
-  step: FlowStep;
-  state: FlowStepState;
-  detail: string;
-  index: number;
-  workerPercent: number | null;
-}
+/* ------------------------------------------------------------------------- *
+ * Fenster
+ * ------------------------------------------------------------------------- */
 
-const FlowStepCard: React.FC<FlowStepCardProps> = ({ step, state, detail, index, workerPercent }) => {
-  const Icon = step.icon;
-  const stateLabel = state === 'complete'
-    ? 'bestätigt'
-    : state === 'active'
-      ? 'jetzt'
-      : state === 'error'
-        ? 'Problem'
-        : state === 'cancelled'
-          ? 'abgebrochen'
-          : 'wartet';
-  const NodeIcon = state === 'complete'
-    ? CheckCircle2
-    : state === 'active'
-      ? LoaderCircle
-      : state === 'error'
-        ? AlertTriangle
-        : state === 'cancelled'
-          ? XCircle
-          : Icon;
-  return (
-    <div
-      className={`min-w-0 flex-1 rounded-xl border p-3 transition-colors ${
-        state === 'complete'
-          ? 'border-emerald-400/35 bg-emerald-400/[.07]'
-          : state === 'active'
-            ? 'border-cyan-400/60 bg-cyan-400/[.09] shadow-[0_0_24px_rgba(34,211,238,.08)]'
-            : state === 'error'
-              ? 'border-red-400/50 bg-red-400/[.08]'
-              : state === 'cancelled'
-                ? 'border-amber-400/40 bg-amber-400/[.07]'
-                : 'border-white/10 bg-white/[.025]'
-      }`}
-      aria-current={state === 'active' ? 'step' : undefined}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-          state === 'complete'
-            ? 'bg-emerald-400/15 text-emerald-300'
-            : state === 'active'
-              ? 'bg-cyan-400/15 text-cyan-200'
-              : state === 'error'
-                ? 'bg-red-400/15 text-red-200'
-                : state === 'cancelled'
-                  ? 'bg-amber-400/15 text-amber-200'
-                  : 'bg-white/5 text-neutral-500'
-        }`}>
-          <NodeIcon size={17} className={state === 'active' ? 'animate-spin' : undefined} />
-        </div>
-        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[.12em] ${
-          state === 'complete'
-            ? 'bg-emerald-400/15 text-emerald-200'
-            : state === 'active'
-              ? 'bg-cyan-400/15 text-cyan-100'
-              : state === 'error'
-                ? 'bg-red-400/15 text-red-200'
-                : state === 'cancelled'
-                  ? 'bg-amber-400/15 text-amber-200'
-                  : 'bg-white/5 text-neutral-500'
-        }`}>{stateLabel}</span>
-      </div>
-      <div className="mt-3 text-[11px] font-semibold leading-tight text-neutral-100">{index + 1}. {step.title}</div>
-      <div className="mt-1 min-h-[2.25rem] text-[10px] leading-relaxed text-neutral-400">{detail}</div>
-      {step.id === 'inference' && state === 'active' && workerPercent !== null && (
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/30" aria-label={`KI-Fortschritt ${workerPercent} Prozent`}>
-          <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-sky-300 transition-[width] duration-500" style={{ width: `${workerPercent}%` }} />
-        </div>
-      )}
-    </div>
-  );
-};
-
-/**
- * Transparenter Monitor für den externen Stem-Workflow.
- *
- * Wichtig: Der Prozentwert ist ausschließlich der vom Worker gemeldete
- * Inferenzfortschritt. Upload, Drive-Synchronisierung, Worker-Claim und
- * Rückimport werden als eigene, bestätigte Stationen dargestellt. So wird aus
- * „0 %" keine scheinbar hängende Gesamtanzeige.
- */
-export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRefresh, status, job, trackName, running, error, phaseText, cancelPending = false }) => {
+export const RemoteFlowModal: React.FC<Props> = ({
+  open,
+  onClose,
+  onCancel,
+  onRefresh,
+  onConfirmCloudSync,
+  status,
+  job,
+  trackName,
+  running,
+  error,
+  phaseText,
+  cancelPending = false,
+}) => {
   const [now, setNow] = useState(Date.now());
+  const [confirming, setConfirming] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -410,146 +377,477 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
     return () => window.clearInterval(timer);
   }, [open]);
 
+  if (!open) return null;
+
   const cancelled = cancelledStatus(job?.status);
-  const failed = Boolean(error || failedStatus(job?.status));
+  const failed = !cancelled && Boolean(error || failedStatus(job?.status));
   const done = job?.status === 'COMPLETED' && !running && !error;
-  const stepStates = useMemo(() => deriveStepStates(job, running, failed), [job, running, failed]);
+  const stations = job?.flow?.stations ?? [];
+  const current = stations.find((station) => station.id === job?.flow?.currentId) ?? null;
   const workerProgress = normalisedPercent(job, done);
   const explanation = currentExplanation(job, phaseText, done, failed);
-  const completedSteps = stepStates.filter((state) => state === 'complete').length;
+  const doneCount = stations.filter((station) => station.state === 'done').length;
   const stallWarning = job ? remoteJobStallWarning(job, now) : null;
-  const warning = job?.transportDegraded
-    ? `Die Jobablage ist derzeit nicht erreichbar. ${status?.reason ?? 'Der Ablauf bleibt erhalten und wird beim nächsten erfolgreichen Kontakt fortgesetzt.'}`
-    : status?.reachable === false
-      ? `Die Jobablage ist derzeit nicht erreichbar. ${status.reason ?? 'Der Job bleibt aktiv und wird weiter geprüft.'}`
+  const warning =
+    job?.transportDegraded || status?.reachable === false
+      ? `Die Jobablage ist derzeit nicht erreichbar. ${
+          status?.reason ?? 'Der Ablauf bleibt erhalten und wird beim nächsten erfolgreichen Kontakt fortgesetzt.'
+        }`
       : stallWarning;
+
   const workerStatus = status?.worker && (!job?.worker || status.worker.id === job.worker.id) ? status.worker : null;
   const heartbeatAt = workerStatus?.heartbeatAt ?? job?.worker?.heartbeatAt;
   const heartbeatAge = heartbeatAt ? Math.max(0, Math.floor((now - heartbeatAt) / 1000)) : null;
   const workerAlive = Boolean(job?.worker && (heartbeatAge === null || heartbeatAge < WORKER_LIVENESS_SECONDS));
-  const visibleTrace = [...(job?.trace ?? [])].slice(-12).reverse();
+  const lastContact = job?.flow?.lastEvidenceAt ?? heartbeatAt ?? job?.updatedAt ?? null;
+  const visibleTrace = [...(job?.trace ?? [])].slice(-14).reverse();
   const flowStatus = done ? 'complete' : failed ? 'error' : cancelled ? 'cancelled' : 'active';
 
-  if (!open) return null;
+  const confirmCloud = async () => {
+    if (!job || !onConfirmCloudSync) return;
+    setConfirming(true);
+    try {
+      await onConfirmCloudSync(job.jobId);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const copyReport = async () => {
+    try {
+      await navigator.clipboard.writeText(buildReport(job, status, trackName, now));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-3 sm:p-6" role="presentation">
-      <section role="dialog" aria-modal="true" aria-label="Live-Datenfluss der externen Zerlegung" className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-cyan-400/25 bg-[#0d151f] text-neutral-100 shadow-2xl shadow-cyan-950/50">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="Live-Datenfluss der externen Zerlegung"
+        className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-cyan-400/25 bg-[#0d151f] text-neutral-100 shadow-2xl shadow-cyan-950/50"
+      >
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 bg-gradient-to-r from-[#101f2b] to-[#10151f] px-5 py-4 sm:px-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[.2em] text-cyan-300">
               <Activity size={13} /> Live-Datenfluss · Google Drive → Colab
-              <span className={`rounded-full px-2 py-0.5 text-[9px] tracking-[.12em] ${flowStatus === 'complete' ? 'bg-emerald-400/15 text-emerald-200' : flowStatus === 'error' ? 'bg-red-400/15 text-red-200' : flowStatus === 'cancelled' ? 'bg-amber-400/15 text-amber-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[9px] tracking-[.12em] ${
+                  flowStatus === 'complete'
+                    ? 'bg-emerald-400/15 text-emerald-200'
+                    : flowStatus === 'error'
+                      ? 'bg-red-400/15 text-red-200'
+                      : flowStatus === 'cancelled'
+                        ? 'bg-amber-400/15 text-amber-200'
+                        : 'bg-cyan-400/15 text-cyan-100'
+                }`}
+              >
                 {done ? 'fertig' : failed ? 'prüfen' : cancelled ? 'abgebrochen' : 'wird verfolgt'}
               </span>
             </div>
             <h2 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">Was passiert mit deinen Daten?</h2>
-            <p className="mt-1 truncate text-xs text-neutral-400 sm:text-sm" title={trackName}>{trackName || 'Aktiver Track'}</p>
+            <p className="mt-1 truncate text-xs text-neutral-400 sm:text-sm" title={trackName}>
+              {trackName || 'Aktiver Track'}
+              {job ? <span className="ml-2 font-mono text-[10px] text-neutral-600">{job.jobId}</span> : null}
+            </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Datenfluss schließen" className="shrink-0 rounded-lg p-2 text-neutral-400 transition hover:bg-white/10 hover:text-white"><X size={19} /></button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Datenfluss schließen"
+            className="shrink-0 rounded-lg p-2 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+          >
+            <X size={19} />
+          </button>
         </header>
 
         <div className="min-h-0 overflow-y-auto">
           <div className="space-y-5 p-4 sm:p-6">
-            <div className={`rounded-2xl border p-4 sm:p-5 ${failed ? 'border-red-400/40 bg-red-400/[.08]' : done ? 'border-emerald-400/40 bg-emerald-400/[.08]' : cancelled ? 'border-amber-400/40 bg-amber-400/[.08]' : 'border-cyan-400/35 bg-cyan-400/[.07]'}`} aria-live="polite">
+            {/* ── Stand ───────────────────────────────────────────────────── */}
+            <div
+              className={`rounded-2xl border p-4 sm:p-5 ${
+                failed
+                  ? 'border-red-400/40 bg-red-400/[.08]'
+                  : done
+                    ? 'border-emerald-400/40 bg-emerald-400/[.08]'
+                    : cancelled
+                      ? 'border-amber-400/40 bg-amber-400/[.08]'
+                      : 'border-cyan-400/35 bg-cyan-400/[.07]'
+              }`}
+              aria-live="polite"
+            >
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 gap-3">
-                  <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${failed ? 'bg-red-400/15 text-red-200' : done ? 'bg-emerald-400/15 text-emerald-200' : cancelled ? 'bg-amber-400/15 text-amber-200' : 'bg-cyan-400/15 text-cyan-100'}`}>
+                  <div
+                    className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                      failed
+                        ? 'bg-red-400/15 text-red-200'
+                        : done
+                          ? 'bg-emerald-400/15 text-emerald-200'
+                          : cancelled
+                            ? 'bg-amber-400/15 text-amber-200'
+                            : 'bg-cyan-400/15 text-cyan-100'
+                    }`}
+                  >
                     {failed ? <AlertTriangle size={20} /> : done ? <CheckCircle2 size={20} /> : cancelled ? <XCircle size={20} /> : <LoaderCircle size={20} className="animate-spin" />}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruchfahne wird gespeichert…' : explanation.title}</div>
+                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruchfahne wird in die Jobablage geschrieben…' : explanation.title}</div>
                     <p className="mt-1 max-w-2xl text-xs leading-relaxed text-neutral-300 sm:text-sm">{explanation.description}</p>
+                    {current ? (
+                      <p className="mt-2 text-[11px] text-neutral-400">
+                        Station „{current.title}“
+                        {typeof current.at === 'number' ? ` · seit ${formatTime(current.at)}` : ''}
+                        {typeof job?.flow?.lastEvidenceAt === 'number'
+                          ? ` · letzter Beleg ${formatAge(Math.max(0, Math.floor((now - job.flow.lastEvidenceAt) / 1000)))}`
+                          : ''}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
-                <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-2 rounded-xl bg-black/15 px-3 py-2 text-right text-[10px] sm:min-w-[190px]">
-                  <span className="text-left text-neutral-500">Datenweg</span><strong className="text-neutral-100">{completedSteps}/5 bestätigt</strong>
-                  <span className="text-left text-neutral-500">KI-Fortschritt</span><strong className={workerProgress === null ? 'text-neutral-400' : 'text-cyan-100'}>{workerProgress === null ? 'noch nicht gestartet' : `${workerProgress} %`}</strong>
-                  <span className="text-left text-neutral-500">Letzter Kontakt</span><strong className="text-neutral-300">{heartbeatAge === null ? '—' : formatAge(heartbeatAge)}</strong>
+                <div className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-2 rounded-xl bg-black/15 px-3 py-2 text-right text-[10px] sm:min-w-[200px]">
+                  <span className="text-left text-neutral-500">Datenweg</span>
+                  <strong className="text-neutral-100">{stations.length ? `${doneCount}/${stations.length} belegt` : '—'}</strong>
+                  <span className="text-left text-neutral-500">Fortschritt (gemeldet)</span>
+                  <strong className={workerProgress === null ? 'text-neutral-400' : 'text-cyan-100'}>
+                    {workerProgress === null ? 'noch nicht gestartet' : `${workerProgress} %`}
+                  </strong>
+                  <span className="text-left text-neutral-500">Letzter Kontakt</span>
+                  <strong className="text-neutral-300">
+                    {lastContact ? formatAge(Math.max(0, Math.floor((now - lastContact) / 1000))) : '—'}
+                  </strong>
+                  <span className="text-left text-neutral-500">Laufzeit</span>
+                  <strong className="text-neutral-300">{job ? formatAge(Math.max(0, Math.floor((now - job.createdAt) / 1000))) : '—'}</strong>
                 </div>
               </div>
+
               <div className="mt-4">
-                <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[.14em] text-neutral-500"><span>{statusLabel(job)}</span><span>{workerProgress === null ? 'Worker meldet noch keinen Wert' : `Worker ${workerProgress}%`}</span></div>
-                <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-black/35" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={workerProgress ?? undefined} aria-valuetext={workerProgress === null ? 'Verarbeitung noch nicht gestartet' : `${workerProgress} Prozent`}>
-                  {workerProgress !== null && <div className={`h-full rounded-full transition-[width] duration-500 ${done ? 'bg-gradient-to-r from-emerald-500 to-emerald-300' : 'bg-gradient-to-r from-cyan-600 to-sky-300'}`} style={{ width: `${workerProgress}%` }} />}
+                <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[.14em] text-neutral-500">
+                  <span>{statusLabel(job)}</span>
+                  <span>{workerProgress === null ? 'Worker meldet noch keinen Wert' : `Worker ${workerProgress}%`}</span>
+                </div>
+                <div
+                  className="mt-1.5 h-2 overflow-hidden rounded-full bg-black/35"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={workerProgress ?? undefined}
+                  aria-valuetext={workerProgress === null ? 'Verarbeitung noch nicht gestartet' : `${workerProgress} Prozent`}
+                >
+                  {workerProgress !== null ? (
+                    <div
+                      className={`h-full rounded-full transition-[width] duration-500 ${
+                        done ? 'bg-gradient-to-r from-emerald-500 to-emerald-300' : 'bg-gradient-to-r from-cyan-600 to-sky-300'
+                      }`}
+                      style={{ width: `${workerProgress}%` }}
+                    />
+                  ) : null}
                 </div>
               </div>
-              {explanation.waitingForWorker && !failed && (
+
+              {explanation.waitingForWorker && !failed && !cancelled ? (
                 <div className="mt-3 flex gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[.08] p-3 text-xs leading-relaxed text-amber-100">
                   <Info size={16} className="mt-0.5 shrink-0" />
-                  <div><strong>Warum steht hier nicht einfach mehr Prozent?</strong>{job?.worker ? ' Colab hat den Job bereits übernommen, aber die erste Inferenzmeldung fehlt noch.' : ' Der Upload ist bestätigt, aber Colab hat noch nicht übernommen.'} <span className="font-semibold">0 % ist in dieser Phase korrekt</span> – es wäre unehrlich, den Download oder die KI-Rechnung vorzutäuschen. {job?.worker ? 'Sobald die nächste Worker-Meldung eintrifft, erscheint hier der echte Inferenzfortschritt.' : 'Sobald claim.json und ein Worker-Heartbeat eintreffen, erscheint hier der echte Inferenzfortschritt.'}</div>
+                  <div>
+                    <strong>Warum steht hier nicht einfach mehr Prozent?</strong>
+                    {job?.worker
+                      ? ' Colab hat den Job bereits übernommen, aber die erste Inferenzmeldung fehlt noch.'
+                      : ' Die Arbeitskopie wurde in die Jobablage geschrieben; der Cloud-Sync ist für den Editor nicht messbar.'}{' '}
+                    <span className="font-semibold">0 % ist in dieser Phase korrekt</span> – es wäre unehrlich, den Download oder die
+                    KI-Rechnung vorzutäuschen. Der Laufzettel unten zeigt stattdessen Station für Station, was bereits belegt ist.
+                  </div>
                 </div>
-              )}
+              ) : null}
             </div>
 
-            {warning && !failed && (
+            {warning && !failed && !cancelled ? (
               <div role="alert" className="flex gap-2 rounded-xl border border-amber-400/40 bg-amber-400/[.08] p-3 text-xs leading-relaxed text-amber-100">
                 <AlertTriangle size={17} className="mt-0.5 shrink-0" />
                 <span>{warning}</span>
               </div>
-            )}
+            ) : null}
 
+            {/* ── Laufzettel ──────────────────────────────────────────────── */}
             <div>
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <div><h3 className="text-sm font-bold">Der Weg deiner Arbeitskopie</h3><p className="mt-0.5 text-[11px] text-neutral-500">Jede Karte wird erst bei einer bestätigten Station grün.</p></div>
-                <span className="hidden rounded-full border border-white/10 bg-white/[.03] px-2 py-1 text-[10px] font-mono text-neutral-400 sm:inline-flex">{job?.jobId ? `Job ${job.jobId.slice(0, 12)}…` : 'Job wird angelegt'}</span>
+              <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold">Der Weg deiner Arbeitskopie – Station für Station</h3>
+                  <p className="mt-0.5 text-[11px] text-neutral-500">
+                    Ein Punkt wird nur grün, wenn es dafür einen Beleg gibt. Was der Editor nicht sehen kann, bleibt sichtbar offen.
+                  </p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-white/[.03] px-2 py-1 text-[10px] font-mono text-neutral-400">
+                  {job?.jobId ? `Job ${job.jobId.slice(0, 12)}…` : 'Job wird angelegt'}
+                </span>
               </div>
-              <div className="flex flex-col gap-2 md:flex-row md:items-stretch md:gap-1.5">
-                {FLOW_STEPS.map((step, index) => (
-                  <React.Fragment key={step.id}>
-                    <FlowStepCard
-                      step={step}
-                      state={stepStates[index]}
-                      index={index}
-                      detail={flowStepDetail(step.id, stepStates[index], job, workerProgress, status)}
-                      workerPercent={workerProgress}
-                    />
-                    {index < FLOW_STEPS.length - 1 && <div className="flex shrink-0 items-center justify-center text-neutral-600"><ArrowRight size={16} className="hidden md:block" /><ArrowDown size={16} className="md:hidden" /></div>}
-                  </React.Fragment>
-                ))}
-              </div>
+
+              {stations.length === 0 ? (
+                <div className="flex gap-2 rounded-xl border border-dashed border-white/10 p-3 text-xs text-neutral-500">
+                  <Clock3 size={15} className="shrink-0" />
+                  Noch keine Station belegt – der Laufzettel entsteht mit dem Start der Zerlegung.
+                </div>
+              ) : (
+                <ol className="space-y-1.5" aria-label="Stationen des Datenflusses">
+                  {stations.map((station, index) => {
+                    const Icon = WHERE_ICON[station.where];
+                    const duration = station.state === 'done' ? stepDuration(stations, index) : null;
+                    return (
+                      <li key={station.id} className="relative flex gap-3 pl-1">
+                        {index < stations.length - 1 ? (
+                          <span
+                            aria-hidden
+                            className={`absolute left-[15px] top-8 h-[calc(100%-1rem)] w-px ${
+                              station.state === 'done' ? 'bg-emerald-400/40' : 'bg-white/10'
+                            }`}
+                          />
+                        ) : null}
+                        <span
+                          className={`relative z-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                            station.state === 'done'
+                              ? 'border-emerald-400/50 bg-emerald-400/15 text-emerald-300'
+                              : station.state === 'active'
+                                ? 'border-cyan-400/60 bg-cyan-400/15 text-cyan-100'
+                                : station.state === 'unknown'
+                                  ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                                  : station.state === 'failed'
+                                    ? 'border-red-400/60 bg-red-400/15 text-red-200'
+                                    : station.state === 'cancelled'
+                                      ? 'border-amber-400/60 bg-amber-400/15 text-amber-200'
+                                      : 'border-white/10 bg-white/5 text-neutral-500'
+                          }`}
+                        >
+                          {station.state === 'done' ? (
+                            <CheckCircle2 size={15} />
+                          ) : station.state === 'active' ? (
+                            <LoaderCircle size={14} className="animate-spin" />
+                          ) : station.state === 'cancelled' ? (
+                            <XCircle size={14} />
+                          ) : (
+                            <Icon size={14} />
+                          )}
+                        </span>
+                        <div
+                          className={`min-w-0 flex-1 rounded-xl border p-3 ${
+                            station.state === 'active'
+                              ? 'border-cyan-400/40 bg-cyan-400/[.06]'
+                              : station.state === 'failed'
+                                ? 'border-red-400/40 bg-red-400/[.06]'
+                                : station.state === 'cancelled'
+                                  ? 'border-amber-400/40 bg-amber-400/[.06]'
+                                  : station.state === 'unknown'
+                                  ? 'border-amber-400/30 bg-amber-400/[.04]'
+                                  : 'border-white/10 bg-white/[.025]'
+                          }`}
+                          aria-current={station.state === 'active' ? 'step' : undefined}
+                        >
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-[13px] font-semibold text-neutral-100">{station.title}</span>
+                            <span
+                              className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[.12em] ${
+                                STATE_CHIP[station.state]
+                              }`}
+                            >
+                              {STATE_LABEL[station.state]}
+                            </span>
+                            <span
+                              className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[.12em] ${
+                                WHERE_STYLE[station.where]
+                              }`}
+                            >
+                              {REMOTE_FLOW_WHERE_LABEL[station.where]}
+                            </span>
+                            {typeof station.percent === 'number' && station.state === 'active' ? (
+                              <span className="font-mono text-[11px] text-cyan-100">{station.percent} %</span>
+                            ) : null}
+                          </div>
+
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[11px] text-neutral-500">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock size={11} />
+                              {typeof station.at === 'number' ? formatTime(station.at) : '—'}
+                              {typeof station.at === 'number' ? ` · ${formatAge(Math.max(0, Math.floor((now - station.at) / 1000)))}` : ''}
+                            </span>
+                            {duration !== null ? <span>Dauer {formatStepDuration(duration)}</span> : null}
+                            {typeof station.updatedAt === 'number' && station.updatedAt !== station.at ? (
+                              <span>letzte Meldung {formatAge(Math.max(0, Math.floor((now - station.updatedAt) / 1000)))}</span>
+                            ) : null}
+                          </div>
+
+                          {station.detail ? <p className="mt-1.5 text-xs leading-relaxed text-neutral-300">{station.detail}</p> : null}
+
+                          {station.facts?.length ? (
+                            <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                              {station.facts.map((fact) => (
+                                <div key={fact.label} className="flex min-w-0 items-baseline justify-between gap-2 text-[10px]">
+                                  <dt className="shrink-0 text-neutral-500">{fact.label}</dt>
+                                  <dd className="min-w-0 truncate font-mono text-neutral-200" title={fact.value}>
+                                    {fact.value}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : null}
+
+                          {station.hint ? (
+                            <p className="mt-2 flex gap-1.5 rounded-lg bg-black/20 p-2 text-[10px] leading-relaxed text-neutral-300">
+                              <HelpCircle size={13} className="mt-0.5 shrink-0 text-cyan-300" />
+                              {station.hint}
+                            </p>
+                          ) : null}
+
+                          {station.id === 'cloud_sync' && station.state === 'unknown' && onConfirmCloudSync && job ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void confirmCloud()}
+                                disabled={confirming}
+                                className="rounded-lg border border-amber-300/40 bg-amber-300/[.08] px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:bg-amber-300/[.16] disabled:opacity-60"
+                              >
+                                {confirming ? 'Wird vermerkt…' : 'In Drive gesehen'}
+                              </button>
+                              <span className="text-[10px] text-neutral-500">
+                                Nur ein Vermerk von Ihnen – der Editor kann die Cloud nicht prüfen.
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
             </div>
 
             <div className="grid gap-3 lg:grid-cols-[1.15fr_.85fr]">
               <section className="rounded-xl border border-white/10 bg-white/[.025] p-4">
-                <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-bold">Live-Ablaufprotokoll</h3><p className="mt-0.5 text-[11px] text-neutral-500">Editor und Colab schreiben in dieselbe korrelierbare Jobspur.</p></div><Database size={16} className="text-cyan-300/70" /></div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold">Live-Ablaufprotokoll</h3>
+                    <p className="mt-0.5 text-[11px] text-neutral-500">Editor und Colab schreiben in dieselbe korrelierbare Jobspur.</p>
+                  </div>
+                  <Database size={16} className="text-cyan-300/70" />
+                </div>
                 {visibleTrace.length ? (
                   <ol className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1" aria-label="Live-Ablaufprotokoll">
                     {visibleTrace.map((event) => (
                       <li key={event.id} className="flex gap-2.5 border-l border-white/15 pl-3 text-xs">
                         <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-neutral-500"><time dateTime={new Date(event.at).toISOString()}>{formatTime(event.at)}</time><span className={event.level === 'error' ? 'text-red-300' : event.level === 'warning' ? 'text-amber-200' : event.source === 'worker' ? 'text-violet-200' : 'text-cyan-200'}>{event.source === 'worker' ? 'COLAB' : 'EDITOR'}</span><span className="font-mono">{event.step}</span>{typeof event.percent === 'number' && <span>{event.percent}%</span>}</div>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-neutral-500">
+                            <time dateTime={new Date(event.at).toISOString()}>{formatTime(event.at)}</time>
+                            <span
+                              className={
+                                event.level === 'error'
+                                  ? 'text-red-300'
+                                  : event.level === 'warning'
+                                    ? 'text-amber-200'
+                                    : event.source === 'worker'
+                                      ? 'text-violet-200'
+                                      : 'text-cyan-200'
+                              }
+                            >
+                              {event.source === 'worker' ? 'COLAB' : 'EDITOR'}
+                            </span>
+                            <span className="font-mono">{event.step}</span>
+                            {typeof event.percent === 'number' ? <span>{event.percent}%</span> : null}
+                          </div>
                           <p className="mt-0.5 leading-relaxed text-neutral-200">{event.message}</p>
                         </div>
                       </li>
                     ))}
                   </ol>
                 ) : (
-                  <div className="mt-3 flex gap-2 rounded-lg border border-dashed border-white/10 p-3 text-xs text-neutral-500"><Clock3 size={15} className="shrink-0" />Noch kein Job-Ereignis bestätigt. Während die Arbeitskopie vorbereitet wird, bleibt dieses Protokoll bewusst leer.</div>
+                  <div className="mt-3 flex gap-2 rounded-lg border border-dashed border-white/10 p-3 text-xs text-neutral-500">
+                    <Clock3 size={15} className="shrink-0" />
+                    Noch kein Job-Ereignis bestätigt. Während die Arbeitskopie vorbereitet wird, bleibt dieses Protokoll bewusst leer.
+                  </div>
                 )}
               </section>
 
               <div className="space-y-3">
                 <section className="rounded-xl border border-white/10 bg-white/[.025] p-4">
-                  <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-bold">Was genau wird übertragen?</h3><FileAudio size={16} className="text-cyan-300/70" /></div>
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                    <div><div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Arbeitskopie</div><div className="mt-1 font-semibold text-neutral-200">{formatBytes(job?.workingCopyBytes)} WAV</div></div>
-                    <div><div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Dauer</div><div className="mt-1 font-semibold text-neutral-200">{formatDuration(job?.durationSeconds)}</div></div>
-                    <div><div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Ausgabe</div><div className="mt-1 font-semibold text-neutral-200">{job?.stems.length ?? 4} Stems</div></div>
-                    <div><div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Original</div><div className="mt-1 font-semibold text-emerald-200">bleibt unverändert</div></div>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-bold">Was genau wird übertragen?</h3>
+                    <FileAudio size={16} className="text-cyan-300/70" />
                   </div>
-                  <div className="mt-3 flex items-start gap-2 rounded-lg bg-emerald-400/[.06] p-2.5 text-[10px] leading-relaxed text-emerald-100"><ShieldCheck size={14} className="mt-0.5 shrink-0" />Es wird eine Arbeitskopie verarbeitet – nicht die Originaldatei, nicht rekordbox.xml und nicht master.db.</div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Arbeitskopie</div>
+                      <div className="mt-1 font-semibold text-neutral-200">{formatBytes(job?.workingCopyBytes)} WAV</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Dauer</div>
+                      <div className="mt-1 font-semibold text-neutral-200">{formatDuration(job?.durationSeconds)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Ausgabe</div>
+                      <div className="mt-1 font-semibold text-neutral-200">{job?.stems.length ?? 4} Stems</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[.12em] text-neutral-500">Original</div>
+                      <div className="mt-1 font-semibold text-emerald-200">bleibt unverändert</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-start gap-2 rounded-lg bg-emerald-400/[.06] p-2.5 text-[10px] leading-relaxed text-emerald-100">
+                    <ShieldCheck size={14} className="mt-0.5 shrink-0" />
+                    Es wird eine Arbeitskopie verarbeitet – nicht die Originaldatei, nicht rekordbox.xml und nicht master.db.
+                  </div>
                 </section>
 
                 <section className="rounded-xl border border-white/10 bg-white/[.025] p-4">
-                  <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-bold">Verbindung & Rechenort</h3><HeartPulse size={16} className={workerAlive ? 'text-emerald-300' : 'text-neutral-500'} /></div>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-bold">Verbindung &amp; Rechenort</h3>
+                    <HeartPulse size={16} className={workerAlive ? 'text-emerald-300' : 'text-neutral-500'} />
+                  </div>
                   <div className="mt-3 space-y-2 text-xs">
-                    <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-neutral-400"><Cloud size={14} />Transport</span><span className="text-right font-semibold text-neutral-200">{status?.label ?? job?.transport ?? 'Google Drive'}</span></div>
-                    <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-neutral-400"><HardDrive size={14} />Jobablage</span><span className={status?.reachable === false ? 'text-amber-200' : 'text-emerald-200'}>{status?.reachable === false ? 'nicht erreichbar' : job ? 'erreichbar / bestätigt' : 'wird geprüft'}</span></div>
-                    <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-neutral-400"><Server size={14} />Worker</span><span className={workerAlive ? 'text-emerald-200' : 'text-neutral-400'}>{job?.worker ? `${job.worker.id} · ${workerAlive ? 'online' : 'kein aktuelles Signal'}` : 'noch nicht verbunden'}</span></div>
-                    {workerStatus?.device && <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-neutral-400"><Cpu size={14} />Gerät</span><span className="font-semibold uppercase text-neutral-200">{workerStatus.device}{workerStatus.gpu && workerStatus.gpu !== 'cpu' ? ` · ${workerStatus.gpu}` : ''}</span></div>}
-                    {heartbeatAt && <div className="flex items-center justify-between gap-3 text-[10px] text-neutral-500"><span>Letzter Heartbeat</span><span>{formatTime(heartbeatAt)} · {formatAge(heartbeatAge ?? 0)}</span></div>}
-                    {status?.kind === 'folder' && <p className="mt-3 border-t border-white/10 pt-2 text-[10px] leading-relaxed text-neutral-500">Bestätigt ist der synchronisierte Drive-Ordner. Der eigentliche Cloud-Abgleich von Google Drive wird nicht vom Editor vorgetäuscht und kann hier separat nicht gemessen werden.</p>}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-2 text-neutral-400">
+                        <Cloud size={14} /> Transport
+                      </span>
+                      <span className="text-right font-semibold text-neutral-200">{status?.label ?? job?.transport ?? 'Google Drive'}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-2 text-neutral-400">
+                        <HardDrive size={14} /> Jobablage
+                      </span>
+                      <span className={status?.reachable === false ? 'text-amber-200' : 'text-emerald-200'}>
+                        {status?.reachable === false ? 'nicht erreichbar' : job ? 'erreichbar / bestätigt' : 'wird geprüft'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="flex items-center gap-2 text-neutral-400">
+                        <Server size={14} /> Worker
+                      </span>
+                      <span className={workerAlive ? 'text-emerald-200' : 'text-neutral-400'}>
+                        {job?.worker ? `${job.worker.id} · ${workerAlive ? 'online' : 'kein aktuelles Signal'}` : 'noch nicht verbunden'}
+                      </span>
+                    </div>
+                    {workerStatus?.device ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="flex items-center gap-2 text-neutral-400">
+                          <Cpu size={14} /> Gerät
+                        </span>
+                        <span className="font-semibold uppercase text-neutral-200">
+                          {workerStatus.device}
+                          {workerStatus.gpu && workerStatus.gpu !== 'cpu' ? ` · ${workerStatus.gpu}` : ''}
+                        </span>
+                      </div>
+                    ) : null}
+                    {heartbeatAt ? (
+                      <div className="flex items-center justify-between gap-3 text-[10px] text-neutral-500">
+                        <span>Letzter Heartbeat</span>
+                        <span>
+                          {formatTime(heartbeatAt)} · {formatAge(heartbeatAge ?? 0)}
+                        </span>
+                      </div>
+                    ) : null}
+                    <p className="mt-3 border-t border-white/10 pt-2 text-[10px] leading-relaxed text-neutral-500">
+                      Cloud-Sync separat nicht messbar: bestätigt ist nur der synchronisierte Drive-Ordner. Der eigentliche
+                      Cloud-Abgleich wird nicht vom Editor vorgetäuscht – er ist im Laufzettel die einzige Station ohne Beleg.
+                    </p>
                   </div>
                 </section>
               </div>
@@ -558,13 +856,49 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-neutral-500">
                 <span>Job {job?.jobId ?? 'wird angelegt'}</span>
-                <span>·</span><span>Status {job?.status ?? 'PREPARING'}</span>
-                {job?.updatedAt && <><span>·</span><span>aktualisiert {formatTime(job.updatedAt)}</span></>}
+                <span>·</span>
+                <span>Status {job?.status ?? 'PREPARING'}</span>
+                {job?.updatedAt ? (
+                  <>
+                    <span>·</span>
+                    <span>aktualisiert {formatTime(job.updatedAt)}</span>
+                  </>
+                ) : null}
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <button type="button" onClick={onRefresh} className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/10 hover:text-white"><RefreshCw size={13} /> Jetzt prüfen</button>
-                {running && !terminal(job?.status) && <button type="button" onClick={onCancel} disabled={cancelPending} title="Der Ablauf wird abgebrochen. Ein Ergebnis wird nicht übernommen." className="rounded-lg border border-red-400/40 bg-red-400/[.05] px-3 py-2 text-xs font-semibold text-red-200 transition hover:bg-red-400/[.12] disabled:cursor-progress disabled:opacity-60">{cancelPending ? 'Abbruch läuft…' : job ? 'Job abbrechen' : 'Vorbereitung abbrechen'}</button>}
-                <button type="button" onClick={onClose} className="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-cyan-500">{running ? 'Im Hintergrund weiter' : 'Schließen'}</button>
+                <button
+                  type="button"
+                  onClick={() => void copyReport()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/10 hover:text-white"
+                  title="Kopiert Stationen, Belege und Ablaufprotokoll als Text – für Support und Nachweis."
+                >
+                  <ClipboardCopy size={13} /> {copied ? 'Kopiert' : 'Protokoll kopieren'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/10 hover:text-white"
+                >
+                  <RefreshCw size={13} /> Jetzt prüfen
+                </button>
+                {running && !terminal(job?.status) ? (
+                  <button
+                    type="button"
+                    onClick={onCancel}
+                    disabled={cancelPending}
+                    title="Der Ablauf wird abgebrochen. Ein Ergebnis wird nicht übernommen."
+                    className="rounded-lg border border-red-400/40 bg-red-400/[.05] px-3 py-2 text-xs font-semibold text-red-200 transition hover:bg-red-400/[.12] disabled:cursor-progress disabled:opacity-60"
+                  >
+                    {cancelPending ? 'Abbruch läuft…' : job ? 'Job abbrechen' : 'Vorbereitung abbrechen'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-cyan-500"
+                >
+                  {running ? 'Im Hintergrund weiter' : 'Schließen'}
+                </button>
               </div>
             </div>
           </div>
@@ -573,3 +907,5 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
     </div>
   );
 };
+
+export default RemoteFlowModal;

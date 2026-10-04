@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { WaveformMode } from '../types/rekordbox';
 import type { Zone3SectionId } from '../ui/workspaceLayout';
+import { UI_ACTION } from '../ui/theme';
 
 export interface MenuBarProps {
   onNewProject: () => void;
@@ -86,8 +87,10 @@ export interface MenuBarProps {
   onOpenStemModels?: () => void;
 }
 
-const MENU_ITEM =
-  'w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white disabled:opacity-40 disabled:hover:bg-transparent flex justify-between items-center gap-3';
+const MENU_ITEM_LAYOUT = 'w-full text-left px-3 py-1.5 flex justify-between items-center gap-3';
+const MENU_ITEM = `${MENU_ITEM_LAYOUT} ${UI_ACTION.ghost}`;
+const MENU_ITEM_DANGER = `${MENU_ITEM_LAYOUT} ${UI_ACTION.danger}`;
+const MENU_ITEM_RECORD = `${MENU_ITEM_LAYOUT} ${UI_ACTION.record}`;
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
@@ -153,7 +156,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   };
   const triggerClass = (name: string) =>
     `px-2.5 py-1 rounded text-[11.5px] transition-colors ${
-      activeMenu === name ? 'bg-[#25272e] text-white' : 'text-neutral-300 hover:bg-[#1b1d26] hover:text-white'
+      activeMenu === name ? UI_ACTION.toggleOn : UI_ACTION.ghost
     }`;
   const dropdownClass = 'absolute left-0 top-full mt-1 bg-[#16171b] border border-[#2b2d35] rounded-sm shadow-2xl py-1 z-50 text-[11.5px]';
 
@@ -180,7 +183,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             </button>
             <div className="h-px bg-[#262830] my-1" />
             {onOpenDatabaseInspector && (
-              <button type="button" onClick={runAndClose(onOpenDatabaseInspector)} className={`${MENU_ITEM} text-[#00a2ff] font-medium`} title="Rekordbox SQLite-Datenbank & ANLZ-Wellenformen direkt analysieren">
+              <button type="button" onClick={runAndClose(onOpenDatabaseInspector)} className={MENU_ITEM} title="Rekordbox SQLite-Datenbank & ANLZ-Wellenformen direkt analysieren">
                 <span>Daten- &amp; Waveform-Extraktor (DB/ANLZ)…</span>
               </button>
             )}
@@ -192,7 +195,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <span>Audiodatei laden (WAV, MP3, FLAC)…</span>
             </button>
             {onOpenRecorder && (
-              <button type="button" onClick={runAndClose(onOpenRecorder)} className={`${MENU_ITEM} text-[#ff5147] font-semibold`} title="Professionellen DJ-Set- und Mikrofon-Recorder öffnen">
+              <button type="button" onClick={runAndClose(onOpenRecorder)} className={MENU_ITEM_RECORD} title="Professionellen DJ-Set- und Mikrofon-Recorder öffnen">
                 <span className="flex items-center gap-1.5"><Radio size={12} /><span>Pro Recorder öffnen…</span></span>
                 <span className="text-neutral-500">F9</span>
               </button>
@@ -244,37 +247,37 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               </button>
             )}
             {onDelete && (
-              <button type="button" onClick={runAndClose(onDelete)} disabled={!hasSelection} className={`${MENU_ITEM} text-[#ff5549]`} title="Auswahl löschen (Standard-Löschen oder Ripple Delete)">
+              <button type="button" onClick={runAndClose(onDelete)} disabled={!hasSelection} className={MENU_ITEM_DANGER} title="Auswahl löschen (Standard-Löschen oder Ripple Delete)">
                 <span className="flex items-center gap-1.5"><Trash2 size={11} /><span>Löschen (Delete)…</span></span>
                 <span className="text-neutral-500">Del</span>
               </button>
             )}
             <div className="h-px bg-[#262830] my-1" />
             {onOpenStemModels && (
-              <button type="button" onClick={runAndClose(onOpenStemModels)} className={`${MENU_ITEM} text-[#00c8ff]`} title="Modelle und Architekturen der Stem-Separation verwalten (ausgelagerte Modell-Auswahl)">
+              <button type="button" onClick={runAndClose(onOpenStemModels)} className={MENU_ITEM} title="Modelle und Architekturen der Stem-Separation verwalten (ausgelagerte Modell-Auswahl)">
                 <span className="flex items-center gap-1.5"><BrainCircuit size={12} /><span>Stem-Modelle &amp; Architekturen…</span></span>
               </button>
             )}
             {onSeparateStems && (
-              <button type="button" onClick={runAndClose(onSeparateStems)} className={`${MENU_ITEM} text-[#00c8ff] font-medium`} title="Öffnet das Stem-Center in Zone 2 und startet die Separation mit dem gewählten Modell">
+              <button type="button" onClick={runAndClose(onSeparateStems)} className={MENU_ITEM} title="Öffnet das Stem-Center in Zone 2 und startet die Separation mit dem gewählten Modell">
                 <span className="flex items-center gap-1.5"><Sparkles size={12} /><span>Stem-Separation starten…</span></span>
-                <span className="text-[9px] bg-[#0088ff]/30 text-[#00c8ff] px-1 rounded font-mono">KI</span>
+                <span className="text-[9px] bg-[#161922] text-[#a3a6ae] px-1 rounded font-mono">KI</span>
               </button>
             )}
             {onOpenEditAssistant && (
-              <button type="button" onClick={runAndClose(onOpenEditAssistant)} className={`${MENU_ITEM} text-[#00e5ff]`} title="Prüft die Integrität von Zwischenablage und Auswahlbereich">
+              <button type="button" onClick={runAndClose(onOpenEditAssistant)} className={MENU_ITEM} title="Prüft die Integrität von Zwischenablage und Auswahlbereich">
                 <span className="flex items-center gap-1.5"><ShieldCheck size={12} /><span>Edit Assistant prüfen…</span></span>
               </button>
             )}
             {onClearHistory && hasHistory && (
-              <button type="button" onClick={runAndClose(onClearHistory)} className={`${MENU_ITEM} text-[#ff8a80] hover:!bg-[#ff3b30] hover:!text-white`} title="Löscht den Undo/Redo-Verlauf zur Freigabe von Arbeitsspeicher">
+              <button type="button" onClick={runAndClose(onClearHistory)} className={MENU_ITEM_DANGER} title="Löscht den Undo/Redo-Verlauf zur Freigabe von Arbeitsspeicher">
                 <span className="flex items-center gap-1.5"><Trash2 size={11} /><span>Bearbeitungsverlauf leeren…</span></span>
               </button>
             )}
             {onOpenMidiModal && (
-              <button type="button" onClick={runAndClose(onOpenMidiModal)} className={`${MENU_ITEM} text-[#00e676]`} title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Action-Pad-Mapping öffnen">
+              <button type="button" onClick={runAndClose(onOpenMidiModal)} className={MENU_ITEM} title="Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller und Action-Pad-Mapping öffnen">
                 <span className="flex items-center gap-1.5"><Radio size={12} /><span>Pioneer MIDI Controller (DDJ-FLX4 / 1000)…</span></span>
-                <span className="text-[9px] bg-emerald-500/20 text-[#00e676] px-1 rounded font-mono">PADS</span>
+                <span className="text-[9px] bg-[#161922] text-[#a3a6ae] px-1 rounded font-mono">PADS</span>
               </button>
             )}
           </div>
@@ -299,9 +302,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <button
                 key={mode}
                 type="button"
+                aria-pressed={waveformMode === mode}
                 onClick={runAndClose(() => onSetWaveformMode(mode as WaveformMode))}
-                className={`w-full text-left px-3 py-1.5 hover:bg-[#0088ff] hover:text-white flex items-center justify-between ${
-                  waveformMode === mode ? 'text-[#00a2ff] font-medium' : ''
+                className={`${MENU_ITEM_LAYOUT} flex items-center justify-between ${
+                  waveformMode === mode ? UI_ACTION.secondarySelected : UI_ACTION.ghost
                 }`}
                 title={hint}
               >
@@ -311,7 +315,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             ))}
             <div className="h-px bg-[#262830] my-1" />
             {onToggleFocusMode && (
-              <button type="button" onClick={runAndClose(onToggleFocusMode)} className={`${MENU_ITEM} ${focusMode ? 'text-[#00e5ff]' : ''}`} title="Max. Platz: alle Panels in Zone 2 und Zone 3 schließen und die Wellenform auf die volle Höhe skalieren">
+              <button type="button" aria-pressed={focusMode} onClick={runAndClose(onToggleFocusMode)} className={`${MENU_ITEM_LAYOUT} ${focusMode ? UI_ACTION.toggleOn : UI_ACTION.ghost}`} title="Max. Platz: alle Panels in Zone 2 und Zone 3 schließen und die Wellenform auf die volle Höhe skalieren">
                 <span>Max. Platz / Alles einklappen</span>
                 <span className="flex items-center gap-2">
                   <span className="text-neutral-500 text-[10px]">M</span>
@@ -340,7 +344,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <span>{browserOpen ? '✓' : ''}</span>
             </button>
             {onToggleChatbot && (
-              <button type="button" onClick={runAndClose(onToggleChatbot)} className={`${MENU_ITEM} text-[#00a2ff] font-medium`} title="KI-gestützten DJ-Copiloten für Mix-Analysen und Cue-Vorschläge öffnen">
+              <button type="button" aria-pressed={chatbotOpen} onClick={runAndClose(onToggleChatbot)} className={`${MENU_ITEM_LAYOUT} ${chatbotOpen ? UI_ACTION.toggleOn : UI_ACTION.ghost}`} title="KI-gestützten DJ-Copiloten für Mix-Analysen und Cue-Vorschläge öffnen">
                 <span className="flex items-center gap-1.5"><Sparkles size={11} /><span>AI Smart Copilot Palette</span></span>
                 <span>{chatbotOpen ? '✓' : ''}</span>
               </button>
@@ -362,9 +366,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         {activeMenu === 'hilfe' && (
           <div className={`${dropdownClass} w-64`}>
             {onOpenInitialSetup && (
-              <button type="button" onClick={runAndClose(onOpenInitialSetup)} className={`${MENU_ITEM} text-[#00c8ff] font-semibold`} title="Ersteinrichtungs- und Installationsassistenten öffnen">
+              <button type="button" onClick={runAndClose(onOpenInitialSetup)} className={MENU_ITEM} title="Ersteinrichtungs- und Installationsassistenten öffnen">
                 <span className="flex items-center gap-1.5"><Wand2 size={12} /><span>Ersteinrichtung &amp; KI-Installer…</span></span>
-                <span className="text-[9px] bg-[#0088ff]/20 text-[#00c8ff] px-1 rounded font-mono">SETUP</span>
+                <span className="text-[9px] bg-[#161922] text-[#a3a6ae] px-1 rounded font-mono">SETUP</span>
               </button>
             )}
             <button type="button" onClick={runAndClose(onShowInfo)} className={MENU_ITEM} title="Informationen zu Rekordbox-Datenquellen und Non-Destructive-Originalschutz">

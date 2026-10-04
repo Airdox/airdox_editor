@@ -48,6 +48,7 @@ const deckMixerSource = await read('src/components/DeckStemsControl.tsx');
 const toastSource = await read('src/components/zones/TransientStatusToast.tsx');
 const menuSource = await read('src/components/MenuBar.tsx');
 const themeSource = await read('src/ui/theme.ts');
+const stylesSource = await read('src/index.css');
 
 /**
  * Entfernt Kommentare: geprüft wird der CODE – die Regel-Dokumentation darf
@@ -372,6 +373,9 @@ console.log('\n[ TEST ] B5 – Farb- und Button-Hierarchie ist zentral definiert
     'toggleOn:',
     'danger:',
     'warning:',
+    'successActive:',
+    'record:',
+    'recordActive:',
   ]) {
     assert.ok(themeSource.includes(token), `Token "${token}" fehlt in der Hierarchie`);
   }
@@ -382,7 +386,24 @@ console.log('\n[ TEST ] B5 – Farb- und Button-Hierarchie ist zentral definiert
   assert.ok(segmentClass(true).includes('#00a2ff'), 'gewählte Segmente sind cyan-getönt');
   assert.ok(segmentClass(false).includes('#161922'), 'nicht gewählte Segmente sind neutral');
   assert.ok(segmentClass(true, true).includes('cursor-not-allowed'), 'deaktivierte Segmente sind sichtbar gesperrt');
-  console.log('  ✓ Sieben Ränge, ein Token-Satz – keine Farbe wird im Bauteil erfunden');
+
+  // Hierarchie wird auch tatsächlich an den drei Zonen-Controls angewendet,
+  // nicht bloß als ungenutzter Token-Satz dokumentiert.
+  for (const token of ['UI_ACTION.secondary', 'UI_ACTION.secondarySelected', 'UI_ACTION.ghost', 'UI_ACTION.warning', 'UI_ACTION.danger']) {
+    assert.ok(zone3Source.includes(token), `Zone 3 muss den Token "${token}" verwenden`);
+  }
+  assert.ok(!zone3Source.includes('rb-button-grid'), 'Zone 3 darf keine legacy-Button-Farbklasse verwenden');
+  assert.ok(!stylesSource.includes('.rb-button-grid'), 'alte globale Grid-Button-Farben sind entfernt');
+  assert.ok(zone1TransportSource.includes('UI_ACTION.primary'), 'Play ist die Primäraktion des Transport-Kontexts');
+  assert.ok(zone1TransportSource.includes('UI_ACTION.successActive'), 'aktive Wiedergabe nutzt den Erfolgszustand');
+  assert.ok(zone1TransportSource.includes('UI_ACTION.ghost'), 'sekundäre Transportbefehle bleiben dezent');
+  assert.ok(zone1BarSource.includes('UI_ACTION.record') && zone1BarSource.includes('UI_ACTION.recordActive'), 'REC verwendet nur die dedizierten Aufnahme-Tokens');
+  assert.ok(menuSource.includes('UI_ACTION.ghost') && menuSource.includes('UI_ACTION.toggleOn'), 'Menüs nutzen Ghost- und Toggle-Ränge');
+  assert.ok(menuSource.includes('MENU_ITEM_DANGER') && menuSource.includes('aria-pressed={waveformMode === mode}'), 'Menüs markieren Gefahr und Auswahl semantisch');
+  assert.ok(menuSource.includes('aria-pressed={focusMode}') && menuSource.includes('aria-pressed={chatbotOpen}'), 'Menü-Toggles geben den aktiven Zustand barrierefrei aus');
+  assert.ok(!menuSource.includes('hover:bg-[#0088ff]'), 'Menüs verwenden keine deckende Markenfarbe als Standard-Hover');
+  assert.ok(!zone1BarSource.includes('#7c3aed'), 'der Copilot-Toggle erfindet keinen zweiten Markenverlauf');
+  console.log('  ✓ Farb-Ränge werden in Zone 1/3 angewandt; Legacy-Grid-Farben sind entfernt');
 }
 
 console.log('\n[ TEST ] B6 – Der Deck-Mixer zeigt nur Ergebnisse');

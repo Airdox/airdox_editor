@@ -62,6 +62,12 @@ export interface StemBridge {
   cancelRemoteJob(jobId: string, reason?: string): Promise<StemBridgeResult<import('./transportTypes').RemoteCancelResult>>;
   resumeRemoteJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
   configureRemoteJobs(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  /**
+   * Manuelle Bestätigung der Cloud-Synchronisation (§40): der Nutzer hat den
+   * Job im Drive-Ordner gesehen. Kein technischer Nachweis – nur ein Beleg,
+   * den der Editor im Laufzettel sichtbar macht.
+   */
+  confirmRemoteCloudSync(jobId: string): Promise<StemBridgeResult<RemoteStemJobView | null>>;
   onRemoteEvent(listener: (event: unknown) => void): () => void;
 
   close(): void;
@@ -222,6 +228,13 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
     async configureRemoteJobs(settings) {
       try {
         return { ok: true, data: await remote.configure(settings) };
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async confirmRemoteCloudSync(jobId) {
+      try {
+        return { ok: true, data: await remote.confirmCloudSync(String(jobId)) };
       } catch (error) {
         return failure(error);
       }

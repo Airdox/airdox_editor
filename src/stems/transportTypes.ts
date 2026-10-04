@@ -9,6 +9,7 @@
  * `tests/stem-engine-ipc-contract.test.ts`.
  */
 import type { ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from './types';
+import type { RemoteJobDataFlow } from './remote/dataFlow';
 
 /** Small serializable lifecycle event shared by the remote worker and UI. */
 export interface RemoteJobTraceEvent {
@@ -249,6 +250,7 @@ export interface StemDesktopApi {
   cancelRemoteStemJob?(jobId: string, reason?: string): Promise<StemBridgeResult<{ accepted: boolean }>>;
   resumeRemoteStemJobs?(): Promise<StemBridgeResult<RemoteServiceStatus>>;
   configureRemoteStemJobs?(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  confirmRemoteCloudSync?(jobId: string): Promise<StemBridgeResult<RemoteStemJobView | null>>;
   onRemoteStemJobProgress?(listener: (event: RemoteServiceEvent) => void): () => void;
 }
 
@@ -315,6 +317,15 @@ export interface RemoteStemJobView {
   cancelRequested?: boolean;
   /** Lokal vorhandene Ergebnisse (nach Import), damit die UI nichts nachfragen muss. */
   importedStems?: { id: StemId; filePath: string; bytes: number; sha256: string }[];
+  /**
+   * Laufzettel des Datenflusses: jede Station mit Beleg, Zeitpunkt und
+   * Zustand. Ersetzt die frühere „nur ein Prozentwert“-Anzeige (§40).
+   */
+  flow?: RemoteJobDataFlow;
+  /** Anzeigename der Ablage („Google Drive (Ordner)“), nur für die Anzeige. */
+  transportLabel?: string;
+  /** Wurzel der Ablage – nur Anzeige, nie ein Geheimnis (§23). */
+  transportRoot?: string;
 }
 
 /** Herzschlag eines laufenden Workers (Colab/rclone/Folder-Worker). */
@@ -419,4 +430,9 @@ export interface StemRemoteApi {
   /** Erneutes Anwenden des zuletzt gespeicherten Zustands (Editor-Neustart, §32). */
   resumeRemoteStemJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
   configureRemoteStemJobs(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
+  /**
+   * Optional (ältere Brücken kennen den Kanal nicht): der Nutzer bestätigt,
+   * dass die Arbeitskopie in Google Drive angekommen ist (§40).
+   */
+  confirmRemoteCloudSync?(jobId: string): Promise<StemBridgeResult<RemoteStemJobView | null>>;
 }

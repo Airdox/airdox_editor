@@ -190,15 +190,17 @@ Die Hierarchie liegt in `src/ui/theme.ts` (`UI_SURFACE`, `UI_TEXT`, `UI_ACCENT`,
 | 4 | **Umschalter aktiv** | Fläche `#0a1a26`, Linie `#00a2ff`, Text `#00e5ff` | `UI_ACTION.toggleOn` | Fokus-Modus AN, Loop, Quantize |
 | 5 | **Warnung** | `#f0b429` | `UI_ACCENT.warning` / `UI_ACTION.warning` | „nicht erreichbar", „keine Gewichte", HQ ohne GPU |
 | 6 | **Zerstörend** | `#ff453a` auf `#1f1214`, Linie `#402024` | `UI_ACTION.danger` | „Abbrechen", DELETE, „Bearbeitungsverlauf leeren" |
-| 7 | **Erfolg / bereit** | `#00c853` / `#00e676` | `UI_ACCENT.success` | „installiert", „MIDI verbunden", Play aktiv |
+| 7 | **Erfolg / bereit** | `#00c853` / `#00e676` | `UI_ACCENT.success` / `UI_ACTION.successActive` | „installiert", „MIDI verbunden", Wiedergabe aktiv |
+| REC | **Aufnahme** | Rot (`#ff453a`), ausschließlich als dedizierte REC-Kennzeichnung | `UI_ACTION.record` / `UI_ACTION.recordActive` | globaler Recorder in Zone 1 |
 
 ### 5.2 Regeln
 
 1. **Genau eine Primäraktion pro Kontext.** Nie zwei Cyan-Verläufe nebeneinander. Im
    Stem-Center-Panel ist es `Job jetzt ausführen`; ist das Modell nicht installiert, wird die
    Installation zur Sekundäraktion und die Primäraktion ist deaktiviert (nicht umgefärbt).
-2. **Farbe ist Bedeutung, nicht Dekoration.** Rot heißt immer „zerstörend oder Fehler", Amber immer
-   „Vorsicht/Voraussetzung", Grün immer „bereit/aktiv". Marken-Cyan ist Aktion.
+2. **Farbe ist Bedeutung, nicht Dekoration.** Rot bedeutet „zerstörend oder Fehler"; die einzige
+   ausdrücklich reservierte Ausnahme ist das dedizierte `REC`-Werkzeug (branchenübliche Kennzeichnung
+   einer Aufnahme). Amber bedeutet „Vorsicht/Voraussetzung", Grün „bereit/aktiv". Marken-Cyan ist Aktion.
 3. **Neutral ist der Normalfall.** Die Grundfläche bleibt dunkel (`#0a0b0d` / `#0e1015`); Farbe
    erscheint nur an der Stelle, an der eine Entscheidung ansteht.
 4. **Umschalter statt Dropdown für Parameter.** Qualität und Verarbeitungsziel sind Segmente –

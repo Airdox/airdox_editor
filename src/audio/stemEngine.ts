@@ -1044,6 +1044,27 @@ class StemEngine {
   }
 
   /**
+   * Bestätigt die einzige nicht messbare Station des Fernpfads: der Nutzer hat
+   * die Arbeitskopie im Google-Drive-Ordner gesehen (§40).
+   *
+   * Das ist bewusst eine **Aussage des Nutzers**, keine Messung – der Editor
+   * kann den Cloud-Stand nicht prüfen. Sie wird nur am lokalen Job-Datensatz
+   * vermerkt und im Laufzettel als Bestätigung (nicht als Beleg) gezeigt.
+   */
+  public async confirmRemoteCloudSync(jobId: string): Promise<RemoteStemJobView | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (desktop?.confirmRemoteCloudSync) {
+      const result = await desktop.confirmRemoteCloudSync(jobId);
+      if (result.ok === true) return result.data ?? null;
+      throw new Error((result as { message?: string }).message ?? 'Die Bestätigung wurde nicht übernommen.');
+    }
+    const response = await fetch(`/api/stems/remote/jobs/${encodeURIComponent(jobId)}/cloud-sync`, { method: 'POST' });
+    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; data?: RemoteStemJobView | null };
+    if (payload.ok) return payload.data ?? null;
+    throw new Error(payload.message ?? `Die Bestätigung wurde nicht übernommen (HTTP ${response.status}).`);
+  }
+
+  /**
    * High-Quality-Separation auf einem externen Worker (Colab).
    *
    * Der Editor bildet eine Arbeitskopie, lädt sie in die Drive-Ablage und

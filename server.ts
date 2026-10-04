@@ -398,6 +398,21 @@ async function startServer() {
     }
   });
 
+  /**
+   * Manuelle Bestätigung der Cloud-Synchronisation (§40). Schreibt **nur**
+   * einen Vermerk an den lokalen Job-Datensatz – es wird keine Datei in der
+   * Ablage verändert und keine Cloud-API berührt.
+   */
+  app.post('/api/stems/remote/jobs/:id/cloud-sync', async (req, res) => {
+    try {
+      const data = await remoteStemJobs.confirmCloudSync(req.params.id);
+      if (!data) return res.status(404).json({ ok: false, message: `Unbekannter Fern-Job ${req.params.id}.` });
+      return res.json({ ok: true, data });
+    } catch (error) {
+      return res.status(400).json(stemErrorPayload(error));
+    }
+  });
+
   app.put('/api/stems/remote/settings', async (req, res) => {
     try {
       const body = (req.body ?? {}) as { kind?: 'folder' | 'rclone'; root?: string; pollIntervalMs?: number; workerLeaseMs?: number; jobTimeoutMs?: number };
