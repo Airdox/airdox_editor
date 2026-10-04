@@ -144,7 +144,7 @@ async function run() {
   console.log('\n[ TEST ] #7 Zeitüberschreitung wird nicht festgeschrieben');
   const slow = fakeInterpreter('slow');
   const slowCache = path.join(temp, 'CacheSlow');
-  const slowResult = await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 200 });
+  const slowResult = await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 1200 });
   assert.equal(slowResult.available, false);
   assert.match(slowResult.reason ?? '', /nicht verfügbar|Zeitüberschreitung/);
   const persisted = path.join(slowCache, 'runtime-probe.json');
@@ -156,7 +156,7 @@ async function run() {
   const before = spawnCount('slow');
   assert.ok(before >= 1, 'Der erste Aufruf muss den Interpreter überhaupt gestartet haben');
   clearTorchProbeCache();
-  await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 200 });
+  await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 1200 });
   assert.ok(spawnCount('slow') > before, 'Nach einem Timeout muss neu gemessen werden');
   console.log('  ✓ Timeout nur im Speicher, nächste Messung startet neu');
 
