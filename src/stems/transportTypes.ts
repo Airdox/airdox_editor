@@ -9,6 +9,7 @@
  * `tests/stem-engine-ipc-contract.test.ts`.
  */
 import type { ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from './types';
+import type { RemoteJobTraceEvent } from './remote/types';
 
 /** Serializable per-stem result of a finished job. */
 export interface StemJobStemView {
@@ -262,6 +263,10 @@ export interface RemoteStemJobView {
   trackName: string;
   createdAt: number;
   updatedAt: number;
+  /** Letzte echte Status-/Phasenänderung; wird von unveränderten Polls nicht zurückgesetzt. */
+  phaseUpdatedAt?: number;
+  /** Letzte korrelierbare Editor-/Worker-Schritte (max. 120 Einträge). */
+  trace?: RemoteJobTraceEvent[];
   finishedAt?: number;
   /** lokaler Job, über den die Stems in den Editor kommen (nach COMPLETED). */
   localJobId?: string;

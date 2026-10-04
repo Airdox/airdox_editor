@@ -4,8 +4,9 @@ Dieses Notebook ist der **externe Rechenworker** für den High-Quality-Pfad des
 airdox_SMART_Editor. Der Editor schreibt eine **Arbeitskopie** und ein
 Job-Manifest in einen Google-Drive-Ordner; dieses Notebook nimmt den Job an,
 rechnet mit BS-RoFormer und legt die Stems samt SHA-256 zurück. Danach erkennt
-der Editor `COMPLETED` und importiert die Ergebnisse – der Benutzer muss Colab
-**nicht** bedienen, außer diesem Notebook einmal zu starten.
+der Editor `COMPLETED` und importiert die Ergebnisse. Für jeden Job muss die
+Worker-Zelle in einer aktiven Colab-Laufzeit laufen: Drive-Sync allein startet
+oder weckt Colab **nicht**. Nach Ende/Abbruch einer Laufzeit die Zelle erneut starten.
 
 > **Arbeitsweise.** Es gibt keinen Server und keine Datenbank (§38): Google Drive
 > ist die Jobablage, dieses Notebook der Rechenknecht. Die gesamte Editorlogik
@@ -36,7 +37,8 @@ der Editor `COMPLETED` und importiert die Ergebnisse – der Benutzer muss Colab
    keine erfundene URL, `sha256` wird geprüft, sobald der Katalog ihn nennt
 4. `colab/remote_worker.py` starten: Jobs finden, beanspruchen, verifizieren,
    rechnen (GPU, sonst CPU), Ergebnisse + Hashes zurückschreiben
-5. Am Ende zeigt das Notebook, welche Jobs fertig sind
+5. Im Leerlauf zeigt `worker.poll` alle `POLL_SEKUNDEN`, wie viele Jobordner geprüft wurden; pro Job schreibt der Worker korrelierbare Schritte nach `jobs/<jobId>/logs/worker.jsonl` und `worker.log`.
+6. Nach einem Worker-Claim zeigt der Editor `claim.json`-Lebenszeichen und übernimmt die Worker-Schritte ins Statusfenster.
 
 Der Worker ruft den **vorhandenen** Adapter `python/bsroformer_inference.py` auf –
 dieselbe Kette, die der Editor lokal für den HQ-Pfad benutzt. Es wird kein
@@ -176,8 +178,9 @@ print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Ab
 >>>
 
 <<<CELL py
-# 5 · Worker starten. Läuft er endlos, einfach die Zelle stoppen –
-#    halbfertige Jobs bleiben in Google Drive und werden hier wieder aufgenommen.
+# 5 · Worker starten und für neue Jobs laufen lassen.
+#    Drive-Sync startet diese Zelle nicht automatisch. Die Ausgabe zeigt
+#    worker.poll (scanned/pending); nach einem Colab-Neustart Zelle erneut ausführen.
 import subprocess, sys, os
 
 kommando = [
@@ -219,9 +222,30 @@ for name in sorted(os.listdir(jobs_dir)) if os.path.isdir(jobs_dir) else []:
             data = json.load(handle)
     except Exception:
         continue
-    zeilen.append((name, data.get("status"), data.get("phase"), data.get("engine", {}).get("modelId"), (data.get("worker") or {}).get("device")))
-for job_id, status, phase, model, device in zeilen:
-    print(f"{job_id}  {status:<10} {str(model):<36} {str(device or '-'):<8} {phase or ''}")
+    trace_path = os.path.join(jobs_dir, name, "logs", "worker.jsonl")
+    last_step = "-"
+    try:
+        with open(trace_path, encoding="utf-8") as handle:
+            lines = [line for line in handle if line.strip()]
+        if lines:
+            last_step = str(json.loads(lines[-1]).get("step") or "-")
+    except (OSError, ValueError):
+        pass
+    zeilen.append((name, data.get("status"), data.get("phase"), data.get("engine", {}).get("modelId"), (data.get("worker") or {}).get("device"), last_step))
+for job_id, status, phase, model, device, last_step in zeilen:
+    print(f"{job_id}  {status:<10} {str(model):<36} {str(device or '-'):<8} {last_step:<28} {phase or ''}")
 print(f"\n{len(zeilen)} Job(s) in der Ablage.")
-print("Der Editor erkennt COMPLETED automatisch und importiert die Stems – Colab muss dafür nichts weiter tun.")
+print("Der Editor importiert COMPLETED automatisch. Für weitere Jobs muss die Worker-Zelle in der aktiven Colab-Laufzeit weiterlaufen.")
+>>>
+
+<<<CELL md
+### Diagnose: Statusfenster wartet länger als zwei Minuten
+
+1. Job-ID im Editor notieren. Unter `jobs/<jobId>/` müssen `manifest.json` und `input/*.wav` im selben Drive-Konto/Jobordner sichtbar sein. Mit der Drive-Webansicht prüfen, dass Windows tatsächlich synchronisiert hat.
+2. Die Ausgabe der laufenden Worker-Zelle muss regelmäßig eine Zeile `worker.poll` mit `scanned`, `pending` und `processed` zeigen. Fehlt die Zeile, ist Zelle #5 noch nicht gestartet (z. B. weil Setup/Modelldownload noch läuft) oder die Laufzeit steht. `scanned: 0` trotz offenem Editor-Job spricht für einen falschen `JOB_ORDNER`, falschen Drive-Mount oder noch nicht synchronisierte Datei.
+3. Sobald der Worker den Job sieht, erscheint `claim.json`; `heartbeatAt` muss während der Rechnung weiterlaufen. Der Editor übernimmt Claim und Worker-Protokoll beim nächsten Poll.
+4. `jobs/<jobId>/logs/worker.jsonl` enthält strukturierte Ereignisse (`worker.claimed`, `worker.input_verified`, `worker.inference_started`, `worker.inference_progress`, `worker.output_written`, `worker.completed` oder `worker.failed`). `worker.log` ist die menschenlesbare Ergänzung; bei Fehlern außerdem `error.json` prüfen.
+5. Bei `COMPLETED` muss `manifest.json` alle Outputs aufführen. Danach zeigt der Editor `editor.output_validated` und `editor.result_imported`. Die Ablaufspur wird auch im Statusfenster angezeigt.
+
+Keine `input/*.wav`, Zugangsdaten oder vollständigen privaten Pfade in öffentliche Logs/Issues kopieren. Für neue Jobs muss die Colab-Worker-Zelle aktiv bleiben; Drive-Sync allein startet keinen externen Rechner.
 >>>

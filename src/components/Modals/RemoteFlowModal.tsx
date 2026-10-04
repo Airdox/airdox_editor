@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CloudUpload, Cpu, Download, FolderCheck, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import type { RemoteServiceStatus, RemoteStemJobView } from '../../stems/transportTypes';
+import { remoteJobStallWarning } from '../../stems/remote/diagnostics';
 
 interface Props {
   open: boolean;
@@ -29,7 +30,8 @@ const stages = [
 function stageFor(job: RemoteStemJobView | null, running: boolean): number {
   if (!job) return running ? 0 : 0;
   if (job.status === 'COMPLETED' || job.status === 'VALIDATING' || job.status === 'RECONSTRUCTING') return 4;
-  if (job.status === 'RUNNING' || job.worker) return 3;
+  // RUNNING ohne Claim bedeutet: der Editor wartet noch auf den Worker.
+  if (job.worker) return 3;
   return 2;
 }
 
@@ -44,15 +46,10 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
   const stage = stageFor(job, running);
   const done = job?.status === 'COMPLETED' && !running && !error;
   const failed = Boolean(error || job?.status === 'FAILED' || job?.status === 'CANCELLED');
-  const age = job ? Math.max(0, Math.floor((now - (job.worker?.heartbeatAt ?? job.updatedAt)) / 1000)) : 0;
-  const waiting = Boolean(job && !terminal(job.status) && age > (job.worker ? 90 : 120));
+  const stallWarning = job ? remoteJobStallWarning(job, now) : null;
   const warning = status?.reachable === false || job?.transportDegraded
     ? `Die Jobablage ist derzeit nicht erreichbar. ${status?.reason ?? 'Bitte Drive für Desktop, Anmeldung, Internetverbindung und den gewählten Ordner prüfen.'} Der Job wird nicht automatisch als fehlgeschlagen gewertet.`
-    : waiting
-      ? job?.worker
-        ? `Seit ${Math.floor(age / 60)} Minuten kein neues Worker-Lebenszeichen. Bitte die Colab-Laufzeit und den Drive-Mount prüfen; der Job bleibt vorerst aktiv.`
-        : `Seit ${Math.floor(age / 60)} Minuten keine Statusänderung. Bitte prüfen, ob Drive für Desktop synchronisiert und das Colab-Notebook mit demselben Jobordner läuft.`
-      : null;
+    : stallWarning;
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-4" role="presentation">
       <section role="dialog" aria-modal="true" aria-label="Datenfluss der externen Zerlegung" className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-cyan-500/30 bg-[#111923] text-neutral-100 shadow-2xl shadow-cyan-950/50">
@@ -73,6 +70,20 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
             const complete = index < stage || (done && index === 4);
             return <li key={item.title} className={`flex gap-3 rounded-xl p-3 ${index === stage && !done ? 'bg-white/10' : ''}`}><div className={`mt-0.5 ${complete ? 'text-emerald-400' : index === stage ? 'text-cyan-400' : 'text-neutral-600'}`}>{complete ? <CheckCircle2 size={20} /> : <Icon size={20} />}</div><div><div className="text-sm font-semibold">{item.title} <span className="font-normal text-neutral-400">{complete ? '· abgeschlossen' : index === stage && !failed ? '· aktuell' : ''}</span></div><p className="mt-1 text-xs leading-relaxed text-neutral-400">{item.detail}</p></div></li>;
           })}</ol>
+          {job?.trace?.length ? <details open={Boolean(stallWarning && !job.worker)} className="rounded-xl border border-white/10 bg-white/[.03] p-3">
+            <summary className="cursor-pointer text-sm font-semibold">Ablaufprotokoll und Diagnose ({job.trace.length} Schritte)</summary>
+            <ol className="mt-3 max-h-52 space-y-2 overflow-y-auto pr-1" aria-label="Korrelierbares Ablaufprotokoll">
+              {job.trace.slice(-20).map((event) => <li key={event.id} className="border-l border-white/15 pl-3 text-xs">
+                <div className="flex flex-wrap items-center gap-x-2 text-neutral-400">
+                  <time dateTime={new Date(event.at).toISOString()}>{new Date(event.at).toLocaleTimeString('de-DE')}</time>
+                  <span className={event.level === 'error' ? 'text-red-300' : event.level === 'warning' ? 'text-amber-200' : 'text-cyan-200'}>{event.source === 'worker' ? 'Worker' : 'Editor'} · {event.step}</span>
+                  {event.code && <span className="font-mono">{event.code}</span>}
+                  {typeof event.percent === 'number' && <span>{event.percent}%</span>}
+                </div>
+                <p className="mt-0.5 leading-relaxed text-neutral-200">{event.message}</p>
+              </li>)}
+            </ol>
+          </details> : null}
           <div className="rounded-xl bg-white/5 p-3 text-xs leading-relaxed text-neutral-400">Transport: {status?.label ?? job?.transport ?? 'Google Drive (Ordner)'} · Rechenort: {job?.device ?? 'noch nicht gemeldet'}{job?.cpuFallback ? ' (CPU-Fallback)' : ''}{job?.worker ? ` · Worker ${job.worker.id}` : ''}<br />Die Anzeige meldet nur vom Editor bestätigte Schritte. Synchronisierung in die Google-Cloud ist nicht separat messbar.</div>
           <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={onRefresh} className="rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/10">Jetzt prüfen</button>{running && job && !terminal(job.status) && <button type="button" onClick={onCancel} disabled={cancelPending} title="Der Worker beendet die laufende Rechnung beim nächsten Arbeitsschritt; ein Ergebnis wird nicht übernommen." className="rounded-lg border border-red-500/40 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:cursor-progress disabled:opacity-60">{cancelPending ? 'Abbruch läuft…' : 'Job abbrechen'}</button>}<button type="button" onClick={onClose} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold hover:bg-cyan-500">{running ? 'Im Hintergrund weiter' : 'Schließen'}</button></div>
         </div>

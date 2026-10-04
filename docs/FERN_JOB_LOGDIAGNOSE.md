@@ -28,3 +28,37 @@ Form im aktuellen Stand nicht mehr gibt – `src/stems/errors.ts` rendert die Ur
 aus, der Abbruch protokolliert nur noch bestätigte (`accepted`) und abgelehnte Fälle
 getrennt. **Vor der nächsten Diagnose also prüfen, welches Build läuft**
 (Einstellungen → Systemprotokoll, bzw. neu bauen: `npm run build && npm run desktop`).
+
+## Ergänzung: Popup wartet auf den externen Rechner (2026-10-04)
+
+Bei einem Status, der dauerhaft „Wartet auf den externen Rechner“ anzeigt, sind
+zwei Ursachen zu unterscheiden:
+
+1. **Editor-Diagnosefehler (behoben):** Die bisherige Warteuhr konnte durch
+   `updatedAt`-Schreibvorgänge bei jedem Editor-Poll zurückgesetzt werden. Ohne
+   Worker-Claim erschien dadurch keine Stallwarnung. Die Uhr nutzt jetzt den
+   stabilen Phasenzeitpunkt `phaseUpdatedAt`; ein Test mit kontrollierter Zeit
+   beweist: bei 119 Sekunden noch keine Warnung, bei 121 Sekunden Warnung trotz
+   Polls. Der aktive Job wird dabei nicht fälschlich als fehlgeschlagen markiert.
+2. **Worker nicht aktiv/Datei nicht synchronisiert:** Ein lokaler Editor kann
+   Colab nicht starten. Die Colab-Worker-Zelle muss laufen, denselben
+   `JOB_ORDNER`/Drive-Mount verwenden und im Leerlauf `worker.poll`-Ereignisse
+   ausgeben. Das Popup weist nach 120 Sekunden auf Laufzeit, Mount und Sync hin.
+3. **Worker hat übernommen:** `claim.json` enthält `workerId` und ein regelmäßig
+   erneuertes `heartbeatAt`. Die Statusanzeige liest den Claim auch ohne
+   Manifest-Änderung ein; dadurch bleiben Lease und tatsächliche Modellphase
+   unterscheidbar.
+4. **Schrittweise Ablaufspur:** Editor- und Worker-Ereignisse tragen dieselbe
+   Job-ID und stehen im Popup sowie unter
+   `jobs/<jobId>/logs/worker.jsonl` (strukturierte Spur) und `worker.log`
+   (lesbares Protokoll). Beide Worker-Logs behalten höchstens 200 Zeilen; Fehler
+   erscheinen zusätzlich in `error.json`. Pfade/Fehlermeldungen vor dem Teilen
+   redigieren.
+
+**Lokaler Beleg:** `npm run test:stems:remote` führt Regression, Ablaufspur,
+Claim/Heartbeat und Worker-Selbsttest aus; `npm run stems:remote:evidence`
+erzeugt die versionierte Prüfliste und Datei-Hashes. `npx tsc --noEmit` wurde
+ebenfalls lokal erfolgreich ausgeführt. **Nicht belegt:** echte Synchronisierung
+von Windows/Drive zu Google, Colab-GPU, trainierte Gewichte oder echter
+Audio-Rückimport. Dafür siehe die externe Abnahme in
+`docs/STEM_REMOTE_NACHWEISKETTE.md`.

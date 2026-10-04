@@ -31,6 +31,24 @@ export const REMOTE_JOB_SCHEMA_VERSION = 1;
 /** Status eines Fern-Jobs – identisch zu {@link JobStatus} (§14). */
 export type RemoteJobStatus = JobStatus;
 
+/** Persistente, korrelierbare Ablaufspur für Editor- und Worker-Schritte. */
+export interface RemoteJobTraceEvent {
+  id: string;
+  source: 'editor' | 'worker';
+  jobId: string;
+  at: number;
+  /** Maschinenlesbarer Schritt, z. B. `worker.input_verified`. */
+  step: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  workerId?: string;
+  status?: RemoteJobStatus;
+  phase?: string;
+  code?: string;
+  percent?: number;
+  device?: string;
+}
+
 /** Phasen, die nur im Fernpfad vorkommen (stehen in `phase`, nie im Status). */
 export const REMOTE_PHASES = {
   created: 'Job erstellt – Arbeitskopie wird vorbereitet',
@@ -156,6 +174,12 @@ export interface RemoteJobRecord {
   jobId: string;
   createdAt: number;
   updatedAt: number;
+  /** Zeitpunkt der letzten fachlichen Phase/Progress-Änderung (nicht jedes Polling). */
+  phaseUpdatedAt?: number;
+  /** Begrenzte, persistente Ablaufspur; wird nicht bei jedem Poll erweitert. */
+  trace?: RemoteJobTraceEvent[];
+  /** Worker-Event-IDs für Deduplizierung, auch wenn ältere Trace-Zeilen rotiert wurden. */
+  workerTraceIds?: string[];
   status: RemoteJobStatus;
   phase: string;
   percent: number;

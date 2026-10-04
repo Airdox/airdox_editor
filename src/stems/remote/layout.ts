@@ -12,7 +12,8 @@
  *     jobs/<jobId>/input/<datei.wav>    ← Arbeitskopie (nie das Original)
  *     jobs/<jobId>/claim.json           ← Worker-Lease (wer rechnet gerade)
  *     jobs/<jobId>/cancel.flag          ← Editor: „brich ab“
- *     jobs/<jobId>/logs/worker.log      ← Worker-Log (Text, kein Token)
+ *     jobs/<jobId>/logs/worker.log      ← lesbares Worker-Log
+ *     jobs/<jobId>/logs/worker.jsonl    ← strukturierte, korrelierbare Schritte
  *     jobs/<jobId>/output/<stem>.wav    ← Ergebnisse
  *     jobs/<jobId>/output/result.json   ← Ergebnisliste mit Hashes
  *     jobs/<jobId>/error.json           ← letzter Fehler (maschinenlesbar)
@@ -29,6 +30,7 @@ export const REMOTE_OUTPUT_DIR = 'output';
 export const REMOTE_LOGS_DIR = 'logs';
 export const REMOTE_RESULT_FILE = 'result.json';
 export const REMOTE_WORKER_LOG_FILE = 'worker.log';
+export const REMOTE_WORKER_TRACE_FILE = 'worker.jsonl';
 
 /** Erlaubte Job-Id-Form. Verhindert Pfad-Ausbrüche aus einem manipulierten Manifest. */
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$/;
@@ -86,6 +88,10 @@ export function jobResultPath(jobId: string): string {
 
 export function jobWorkerLogPath(jobId: string): string {
   return `${jobDir(jobId)}/${REMOTE_LOGS_DIR}/${REMOTE_WORKER_LOG_FILE}`;
+}
+
+export function jobWorkerTracePath(jobId: string): string {
+  return `${jobDir(jobId)}/${REMOTE_LOGS_DIR}/${REMOTE_WORKER_TRACE_FILE}`;
 }
 
 /** Ein WAV-Name für einen Stem – dieselbe Konvention wie im lokalen Pfad. */

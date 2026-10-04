@@ -255,7 +255,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
     ? `Noch nicht eingerichtet – Button „Externe Zerlegung (Google Colab)" öffnet die Einrichtung (Drive-Ordner + Colab-Worker). Bis dahin läuft High Quality lokal.`
     : remoteStatus?.reachable === false
       ? `${remoteLabel} ist gerade nicht erreichbar. Der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
-      : `Bereit: ${remoteLabel}. Klick auf „Externe Zerlegung (Google Colab)" startet: Arbeitskopie hochladen → Colab rechnet → Stems automatisch zurück.`;
+      : `Jobablage erreichbar: ${remoteLabel}. Für Fernjobs muss die Colab-Worker-Zelle #5 aktiv sein (Drive-Sync startet Colab nicht). Klick auf „Externe Zerlegung (Google Colab)" lädt die Arbeitskopie hoch; Rückimport und Speicherung laufen danach automatisch.`;
   const stemIds: StemType[] = ((stems?.stemIds ?? STEM_TYPES) as string[]) as StemType[];
   const visibleConfigs: StemVisualConfig[] = stemIds.map((id, index) => {
     const known = STEM_CONFIGS.find((cfg) => cfg.id === id);

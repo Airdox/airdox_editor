@@ -32,6 +32,7 @@ import { FolderTransport, RemoteUnreachableError, type IRemoteTransport } from '
 import { parseManifest, serializeManifest } from '../src/stems/remote/manifest';
 import { generateEdmTestTrack, writeTestAudio } from '../src/stems/testAudioGenerator';
 import { decodeWav } from '../src/stems/wavIo';
+import { remoteJobStallWarning } from '../src/stems/remote/diagnostics';
 import { runWorkerCycle } from '../scripts/stem-remote-worker';
 
 console.log('═══════════════════════════════════════════════════════════════════');
@@ -54,7 +55,7 @@ interface Harness {
   dispose(): Promise<void>;
 }
 
-async function makeHarness(options: { jobTimeoutMs?: number; workerLeaseMs?: number; env?: Record<string, string> } = {}): Promise<Harness> {
+async function makeHarness(options: { jobTimeoutMs?: number; workerLeaseMs?: number; env?: Record<string, string>; now?: () => number } = {}): Promise<Harness> {
   const base = await mkdtemp(path.join(os.tmpdir(), 'stem-remote-'));
   const root = path.join(base, 'engine');
   const drive = path.join(base, 'drive');
@@ -78,6 +79,7 @@ async function makeHarness(options: { jobTimeoutMs?: number; workerLeaseMs?: num
       jobTimeoutMs: options.jobTimeoutMs ?? 5 * 60_000,
     },
     logger: quietLogger,
+    now: options.now,
   });
   return {
     base,
@@ -148,6 +150,74 @@ async function fingerprint(file: string): Promise<string> {
 
 async function run() {
   // =========================================================================
+  console.log('\n[ TEST ] #0 §21 E: Polling ohne Worker setzt die Diagnoseuhr nicht zurück');
+  const clock = { value: Date.now() };
+  const h0 = await makeHarness({ now: () => clock.value });
+  try {
+    const job = await startJob(h0, 'waiting-without-worker');
+    const initial = h0.remote.get(job.jobId)!;
+    assert.equal(initial.worker, undefined, 'Colab hat den Job noch nicht beansprucht');
+    assert.equal(initial.phaseUpdatedAt, clock.value, 'Start der Wartephase ist dauerhaft markiert');
+    assert.ok(initial.trace?.some((event) => event.step === 'editor.waiting_for_worker'));
+
+    clock.value += 119_000;
+    await h0.remote.poll();
+    const beforeThreshold = h0.remote.get(job.jobId)!;
+    assert.equal(beforeThreshold.updatedAt, clock.value, 'Persistenzzeit ändert sich beim Poll');
+    assert.equal(beforeThreshold.phaseUpdatedAt, initial.phaseUpdatedAt, 'fachlicher Phasenzeitpunkt bleibt stabil');
+    assert.equal(remoteJobStallWarning(beforeThreshold, clock.value), null, 'vor 120 s noch kein Wartehinweis');
+
+    clock.value += 2_000;
+    await h0.remote.poll();
+    const stalled = h0.remote.get(job.jobId)!;
+    assert.equal(stalled.phaseUpdatedAt, initial.phaseUpdatedAt, 'auch der nächste Poll setzt die Diagnoseuhr nicht zurück');
+    assert.match(remoteJobStallWarning(stalled, clock.value) ?? '', /kein Worker-Claim/);
+    assert.match(remoteJobStallWarning(stalled, clock.value) ?? '', /Colab/);
+
+    const claimedAt = clock.value;
+    await writeFile(path.join(h0.drive, 'jobs', job.jobId, 'claim.json'), JSON.stringify({
+      id: 'colab-test-worker',
+      claimedAt,
+      heartbeatAt: claimedAt,
+      device: 'cuda',
+      version: 'colab-worker/test',
+    }));
+    clock.value += 15_000;
+    await writeFile(path.join(h0.drive, 'jobs', job.jobId, 'claim.json'), JSON.stringify({
+      id: 'colab-test-worker',
+      claimedAt,
+      heartbeatAt: clock.value,
+      device: 'cuda',
+      version: 'colab-worker/test',
+    }));
+    await h0.remote.poll();
+    const claimed = h0.remote.get(job.jobId)!;
+    assert.equal(claimed.worker?.id, 'colab-test-worker', 'claim.json wird auch ohne aktualisiertes Manifest gelesen');
+    assert.equal(claimed.worker?.heartbeatAt, clock.value, 'aktuelles Lease-Lebenszeichen wird übernommen');
+    assert.equal(remoteJobStallWarning(claimed, clock.value + 30_000), null, 'frischer Claim unterdrückt den Stale-Worker-Hinweis');
+
+    const traceDir = path.join(h0.drive, 'jobs', job.jobId, 'logs');
+    await mkdir(traceDir, { recursive: true });
+    await writeFile(path.join(traceDir, 'worker.jsonl'), `${JSON.stringify({
+      id: 'worker-test-heartbeat',
+      source: 'worker',
+      jobId: job.jobId,
+      at: clock.value,
+      step: 'worker.heartbeat_test',
+      level: 'info',
+      message: 'Heartbeat-Testereignis',
+      workerId: 'colab-test-worker',
+    })}\n`);
+    await h0.remote.poll();
+    await h0.remote.poll();
+    const afterRepeatedPoll = h0.remote.get(job.jobId)!;
+    assert.equal(afterRepeatedPoll.trace?.filter((event) => event.id === 'worker-test-heartbeat').length, 1, 'Worker-JSONL wird über mehrere Polls hinweg dedupliziert');
+    console.log('  ✓ 121 s ohne Worker: Warnung erscheint trotz erneuerter updatedAt-Polls; claim.json-Lebenszeichen und Worker-Trace werden separat erkannt');
+  } finally {
+    await h0.dispose();
+  }
+
+  // =========================================================================
   console.log('\n[ TEST ] #1 Start: Original read-only, Arbeitskopie im Engine-Ordner, Manifest in der Ablage');
   const h1 = await makeHarness();
   try {
@@ -201,6 +271,15 @@ async function run() {
     assert.equal(done.status, 'COMPLETED');
     assert.equal(done.localJobId, job.jobId, 'die Stems liegen unter derselben Job-Id im Editor');
     assert.deepEqual(done.stems, STEMS);
+    const traceSteps = new Set(done.trace?.map((event) => event.step));
+    for (const step of ['editor.job_created', 'editor.input_published', 'editor.waiting_for_worker', 'worker.claimed', 'worker.input_verified', 'worker.inference_started', 'worker.completed', 'editor.output_validated', 'editor.result_imported']) {
+      assert.ok(traceSteps.has(step), `Ablaufprotokoll enthält den Schritt ${step}`);
+    }
+    assert.ok(done.trace?.every((event) => event.jobId === job.jobId), 'alle Schritte sind über dieselbe Job-ID korrelierbar');
+    assert.equal(new Set(done.trace?.map((event) => event.id)).size, done.trace?.length, 'Ereignisse werden beim Abgleich nicht dupliziert');
+    const workerJsonl = await readFile(path.join(h1.drive, 'jobs', job.jobId, 'logs', 'worker.jsonl'), 'utf8');
+    assert.ok(workerJsonl.includes('"step":"worker.claimed"'));
+    assert.ok(workerJsonl.includes('"step":"worker.completed"'));
 
     const localView = h1.local.getJob(job.jobId);
     assert.ok(localView, 'der Fern-Job ist im lokalen Job-Register sichtbar');
