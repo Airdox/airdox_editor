@@ -33,6 +33,11 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (relative: string) => readFile(`${root}${relative}`.replace(/\/+/g, '/'), 'utf8');
 
 const appSource = await read('src/App.tsx');
+// Track-Import liegt seit der Zerlegung (WP-06, Schritt 3) in diesem Modul;
+// die Verträge sind unverändert, nur der Ablageort.
+const trackImportSource = await read('src/features/import/useTrackImport.ts');
+// Die Sammlungsdatei-Konstante liegt im Projektmodell.
+const projectModelSource = await read('src/features/project/projectModel.ts');
 const menuBarSource = await read('src/components/MenuBar.tsx');
 const preloadSource = await read('electron/preload.cjs');
 const mainSource = await read('electron/main.cjs');
@@ -49,15 +54,15 @@ function sliceBetween(source: string, startMarker: string, endMarker: string, la
 }
 
 const importSlice = sliceBetween(
-  appSource,
+  trackImportSource,
   'const loadBundledRekordboxCollection',
   'const handleSelectTrackFromXml',
   'handleTrackImport'
 );
 const selectSlice = sliceBetween(
-  appSource,
+  trackImportSource,
   'const handleSelectTrackFromXml',
-  '// ---- Phase 4',
+  '  return {',
   'handleSelectTrackFromXml'
 );
 
@@ -70,13 +75,16 @@ assert.ok(
   appSource.includes('accept="audio/*,.wav,.mp3,.flac,.aiff"'),
   'the only file input is the standalone audio picker'
 );
-assert.ok(!appSource.includes('showOpenDialog'), 'the renderer never opens a native file dialog');
+assert.ok(
+  !appSource.includes('showOpenDialog') && !trackImportSource.includes('showOpenDialog'),
+  'the renderer never opens a native file dialog'
+);
 assert.ok(importSlice.includes('loadBundledRekordboxCollection'), 'Track-Import loads the bundled collection');
 assert.ok(importSlice.includes('setXmlCollectionModalOpen(true)'), 'Track-Import opens the existing track picker');
 assert.ok(!importSlice.includes('chooseRekordboxDatabase'), 'Track-Import never asks for a database file');
 assert.ok(!importSlice.includes('chooseAnalysisFile'), 'Track-Import never asks for an ANLZ file');
 assert.ok(
-  appSource.includes("const BUNDLED_REKORDBOX_XML_FILENAME = 'rekordbox_export2.xml'"),
+  projectModelSource.includes("const BUNDLED_REKORDBOX_XML_FILENAME = 'rekordbox_export2.xml'"),
   'the single authoritative collection file is rekordbox_export2.xml'
 );
 assert.ok(
@@ -92,7 +100,7 @@ assert.ok(
   'the desktop app reads the XML as an app resource (no dialog)'
 );
 assert.ok(
-  importSlice.includes("import('./rekordbox/bundledCollection')"),
+  importSlice.includes("import('../../rekordbox/bundledCollection')"),
   'the browser/dev fallback uses the compiled-in asset of the same file'
 );
 
