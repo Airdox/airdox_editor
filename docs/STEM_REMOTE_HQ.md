@@ -48,7 +48,7 @@ In der Deck-Stem-Leiste steht nur noch:
 | **High Quality** | höchste Trennung – lokal oder extern |
 | **Externe Zerlegung (Google Colab)** | der eindeutige Workflow-Button, immer sichtbar: nicht eingerichtet → öffnet den Einrichtungs-Dialog (Drive-Ordner/rclone + Colab-Worker); eingerichtet → startet die Zerlegung sofort; grün markiert = extern gewählt, erneut klicken stellt „lokal“ wieder ein |
 | Statuszeile | „Arbeitskopie wird hochgeladen“, „Wartet auf den externen Rechner“, „Verarbeitung läuft – GPU/CPU“, „Stem-Separation abgeschlossen“ |
-| **Abbrechen** | setzt `cancel.flag`; der Worker hört auf, ein späteres Ergebnis wird verworfen |
+| **Abbrechen** | legt `cancel.flag` in die Ablage und meldet das Ergebnis des Klicks sofort an der Leiste („Abbruch gemeldet…“ / Grund, wenn Drive nicht erreichbar war). Beide Worker prüfen die Fahne alle 5 s **auch während** der Rechnung, beenden den Adapter und verbrauchen die Fahne; ein späteres Ergebnis wird verworfen |
 
 Es gibt keine Python-, Colab- oder Checkpoint-Bedienung in der UI und keine
 Tracebacks: technische Details stehen im Log (`STEM-REMOTE`), der Nutzer sieht
@@ -102,6 +102,13 @@ jobs/<jobId>/output/<stem>.wav Stems + result.json
 logs/worker.log                Worker-Protokoll (ohne Geheimnisse)
 ```
 
+Nach einem erfüllten Abbruch **verbraucht** der Worker die `cancel.flag`
+(er löscht sie). Grund: der Editor veröffentlicht einen Job mit ungeklärtem
+Upload unter derselben `jobId` erneut (§21 B) – bliebe die Fahne liegen, wäre
+jeder weitere Lauf in demselben Ordner sofort wieder „CANCELLED“, ohne dass
+jemand geklickt hat. Genau das fühlt sich an wie „ich drücke, es passiert
+nichts“.
+
 `jobId` ist eine UUID (§18). Status sind die **vorhandenen** `JobStatus`-Werte
 (`PENDING`…`COMPLETED`/`FAILED`/`CANCELLED`); der Fernpfad hat zusätzlich
 Phasen („Wartet auf den externen Rechner“) und Felder (`device`,
@@ -131,7 +138,7 @@ Phasen („Wartet auf den externen Rechner“) und Felder (`device`,
 | I · Stem fehlt | FAILED `REMOTE_OUTPUT_INCOMPLETE` – nichts wird importiert |
 | J · Stem leer/kaputt/zu kurz | FAILED `REMOTE_OUTPUT_EMPTY`/`REMOTE_OUTPUT_INVALID` (Hash, Header, Kanäle, Dauer, Stille) |
 | K · „COMPLETED“, aber Stems fehlen | Editor prüft die Vollständigkeit gegen den Modell-Deskriptor – kein `COMPLETED` ohne alle Stems |
-| L · Abbruch | `cancel.flag` + lokaler Status `CANCELLED`; ein danach eintreffendes Ergebnis wird verworfen und **nie** als `COMPLETED` angezeigt |
+| L · Abbruch | `cancel.flag` + Status `CANCELLED`; der Worker stoppt die laufende Rechnung (SIGTERM/SIGKILL) statt sie zu Ende zu rechnen. War die Ablage nicht erreichbar, bleibt der Job in Verfolgung und die Fahne wird bei jedem Poll nachgeliefert (`cancelPending`) – ein Abbruch, der nirgends ankam, wird nie als „erledigt“ verbucht. Ein danach eintreffendes Ergebnis wird verworfen und **nie** als `COMPLETED` angezeigt |
 
 ## 6. Original-Schutz
 

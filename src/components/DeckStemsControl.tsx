@@ -84,6 +84,14 @@ interface DeckStemsControlProps {
   remoteEnabled?: boolean;
   onRemoteEnabledChange?: (enabled: boolean) => void;
   /**
+   * Job, dessen Abbruch gerade gemeldet wird. Der Button zeigt diesen Zustand
+   * und ist blockiert – ohne ihn wirkt ein Klick auf „Abbrechen" wie ins Leere.
+   */
+  remoteCancelPendingJobId?: string | null;
+  /** Kurze Rückmeldung an der Leiste: was der letzte Klick tatsächlich getan hat. */
+  remoteNotice?: { tone: 'info' | 'error'; text: string } | null;
+  onDismissRemoteNotice?: () => void;
+  /**
    * Startet die externe Zerlegung sofort (Arbeitskopie → Drive → Colab →
    * Rückimport). Der eindeutige Button in der Qualitätszeile ruft diese an.
    */
@@ -223,6 +231,9 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   onInstallModel,
   remoteStatus,
   remoteEnabled = false,
+  remoteCancelPendingJobId = null,
+  remoteNotice = null,
+  onDismissRemoteNotice,
   onRemoteEnabledChange,
   onStartExternalSeparation,
   onOpenRemoteSetup,
@@ -610,13 +621,42 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
           <span>
             Externer Colab-Job {activeRemoteJob.jobId.slice(0, 8)}… – {activeRemoteJob.phase}
             {activeRemoteJob.cpuFallback ? ' (CPU-Fallback)' : activeRemoteJob.device ? ` (${activeRemoteJob.device})` : ''}
+            {activeRemoteJob.cancelPending ? ' · Abbruch wird nachgeliefert, sobald Drive wieder erreichbar ist' : ''}
           </span>
           {onCancelSeparation && (
             <button
               onClick={onCancelSeparation}
-              className="px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5]"
+              disabled={remoteCancelPendingJobId === activeRemoteJob.jobId}
+              className="px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] disabled:opacity-60 disabled:cursor-progress"
+              title={
+                remoteCancelPendingJobId === activeRemoteJob.jobId
+                  ? 'Der Abbruch wird gerade gemeldet – der externe Rechner stoppt die Rechnung beim nächsten Arbeitsschritt.'
+                  : 'Rechnung auf Google Colab abbrechen: Der Worker beendet die laufende Trennung, es werden keine Stems übernommen.'
+              }
             >
-              Abbrechen
+              {remoteCancelPendingJobId === activeRemoteJob.jobId ? 'Abbruch wird gemeldet…' : 'Abbrechen'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {remoteNotice && (
+        <div
+          role="status"
+          className={`mt-1 flex items-start justify-between gap-2 rounded border px-2 py-1 text-[10.5px] ${
+            remoteNotice.tone === 'error'
+              ? 'border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5]'
+              : 'border-[#0088ff]/40 bg-[#0a1a26] text-[#9fdcff]'
+          }`}
+        >
+          <span className="min-w-0">{remoteNotice.text}</span>
+          {onDismissRemoteNotice && (
+            <button
+              onClick={onDismissRemoteNotice}
+              className="shrink-0 text-[9.5px] uppercase tracking-wider opacity-70 hover:opacity-100"
+              title="Meldung ausblenden"
+            >
+              ausblenden
             </button>
           )}
         </div>
@@ -658,10 +698,11 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
               {onCancelSeparation && (
                 <button
                   onClick={onCancelSeparation}
-                  className="px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] text-[10px] font-semibold transition-colors"
-                  title="Laufenden Stem-Separationsprozess abbrechen"
+                  disabled={remoteCancelPendingJobId != null}
+                  className="px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] text-[10px] font-semibold transition-colors disabled:opacity-60 disabled:cursor-progress"
+                  title="Laufende Stem-Separation abbrechen – der Rechner stoppt beim nächsten Arbeitsschritt"
                 >
-                  Abbrechen
+                  {remoteCancelPendingJobId != null ? 'Abbruch läuft…' : 'Abbrechen'}
                 </button>
               )}
             </span>

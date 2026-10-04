@@ -43,6 +43,12 @@ export const REMOTE_PHASES = {
   importing: 'Ergebnisse werden geprüft und importiert',
   completed: 'Stem-Separation abgeschlossen',
   cancelled: 'Abgebrochen',
+  /**
+   * Der Nutzer hat abgebrochen, aber die Ablage war nicht erreichbar: der
+   * Editor liefert die Abbruchbitte bei jedem Poll nach, statt den Job still
+   * fallen zu lassen (§37 – „geklickt und nichts passiert“ war der Fehler).
+   */
+  cancelPending: 'Abbruch angefordert – Meldung an die Jobablage wird wiederholt',
 } as const;
 
 export interface RemoteJobInput {
@@ -191,6 +197,12 @@ export interface RemoteJobRecord {
   transportErrors: number;
   transportDegraded?: boolean;
   cancelRequestedAt?: number;
+  /**
+   * `true`, solange die Abbruchbitte die Jobablage noch nicht erreicht hat.
+   * Der Job bleibt dann in Verfolgung (nicht terminal!), damit ein späterer
+   * Poll die Fahne nachliefert und der Nutzer eine Rückmeldung bekommt.
+   */
+  cancelPending?: boolean;
   attempts?: number;
   device?: ComputeDevice;
   cpuFallback?: boolean;

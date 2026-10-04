@@ -43,6 +43,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,6 +51,12 @@ from typing import Any, Dict, List, Optional, Tuple
 SCHEMA_VERSION = 1
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED"}
 JOB_ID_MIN = 8
+# Wie schnell ein laufender Job die `cancel.flag` des Editors bemerkt (§37).
+# 5 s sind auf Drive/Rclone-Mounts ein Kompromiss aus Last und Reaktionszeit:
+# Vorher wurde der Abbruch erst beim *nächsten* Job überhaupt wahrgenommen –
+# der Nutzer sah „nichts passiert“, während Colab weiterrechnete.
+CANCEL_POLL_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_POLL_SECONDS", "5"))
+CANCEL_KILL_GRACE_SECONDS = float(os.environ.get("AIRODOX_STEM_CANCEL_GRACE_SECONDS", "10"))
 
 
 # --------------------------------------------------------------------------- #
@@ -199,8 +206,25 @@ class JobStore:
             return False
         return 0 <= age < self.lease_seconds * 1000
 
+    def cancel_flag_path(self, job_id: str) -> str:
+        return os.path.join(self.job_dir(job_id), "cancel.flag")
+
     def cancel_requested(self, job_id: str) -> bool:
-        return os.path.isfile(os.path.join(self.job_dir(job_id), "cancel.flag"))
+        return os.path.isfile(self.cancel_flag_path(job_id))
+
+    def consume_cancel_flag(self, job_id: str) -> None:
+        """Nimmt die Abbruchbitte weg, nachdem sie erfüllt wurde.
+
+        Würde die Fahne liegen bleiben, wäre *jeder* spätere Job mit derselben
+        Id in derselben Ablage sofort wieder abgebrochen – der Editor legt bei
+        einem fehlenden Manifest denselben Job erneut aus (§21 B). Das Ergebnis
+        wäre: Nutzer klickt auf „Externe Zerlegung“, der Worker verwirft den
+        Job lautlos – „es passiert einfach nichts“.
+        """
+        try:
+            os.remove(self.cancel_flag_path(job_id))
+        except OSError:
+            pass  # schon weg oder kurzer Sperre – kein Grund, den Job zu verlieren
 
     def claim(self, job_id: str, **extra: Any) -> Dict[str, Any]:
         claim = {
@@ -235,9 +259,91 @@ class JobStore:
         print(f"[STEM-REMOTE-WORKER] {job_id} {message}", flush=True)
 
 
+class JobCancelled(Exception):
+    """Der Editor hat `cancel.flag` gesetzt – laufende Arbeit wird beendet (§37).
+
+    Kein Fehler: der Job endet als `CANCELLED`, ein Ergebnis wird bewusst nicht
+    mehr geschrieben, damit der Editor es nie importieren kann.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Separation
 # --------------------------------------------------------------------------- #
+
+
+class CancelWatchdog:
+    """Beobachtet `cancel.flag`, solange ein Job rechnet, und beendet den Kindprozess.
+
+    Der Fortschrittsstrom des Adapters allein reicht nicht: zwischen zwei
+    Chunks können Minuten liegen, und ein hängender Adapter meldet gar nichts
+    mehr. Deshalb läuft die Prüfung in einem eigenen Thread. Entdeckter
+    Abbruch ⇒ SIGTERM, nach `grace_seconds` SIGKILL, dann `triggered = True`.
+    """
+
+    def __init__(
+        self,
+        cancel_check,
+        *,
+        poll_seconds: float = CANCEL_POLL_SECONDS,
+        grace_seconds: float = CANCEL_KILL_GRACE_SECONDS,
+    ) -> None:
+        self._cancel_check = cancel_check
+        self._poll = max(0.2, float(poll_seconds))
+        self._grace = max(0.5, float(grace_seconds))
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._process: Optional[subprocess.Popen] = None
+        self.triggered = False
+        self.checked = 0
+
+    def attach(self, process: subprocess.Popen) -> None:
+        self._process = process
+
+    def check_now(self) -> bool:
+        """Ein Blick auf die Ablage – wirft nie (Transportstörung ≠ Abbruch)."""
+        try:
+            self.checked += 1
+            return bool(self._cancel_check())
+        except Exception:  # noqa: BLE001 – Abbruchprüfung darf den Job nicht killen
+            return False
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="airdox-cancel-watchdog", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._poll):
+            if self.triggered:
+                return
+            if self.check_now():
+                self.trigger()
+                return
+
+    def trigger(self) -> None:
+        self.triggered = True
+        process = self._process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.terminate()
+            process.wait(timeout=self._grace)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=self._poll * 4 + 1)
+        self._thread = None
 
 
 class LocalAdapterRunner:
@@ -263,6 +369,7 @@ class LocalAdapterRunner:
         model_dir: str,
         device: str,
         on_progress=None,
+        watchdog: Optional["CancelWatchdog"] = None,
     ) -> Dict[str, Any]:
         engine = manifest["engine"]
         checkpoint = os.path.join(model_dir, os.path.basename(str(engine.get("checkpoint", {}).get("file") or "")))
@@ -297,30 +404,70 @@ class LocalAdapterRunner:
         report: Dict[str, Any] = {}
         logs: List[str] = []
         assert process.stdout is not None
-        for line in process.stdout:
-            line = line.strip()
-            if not line.startswith("{"):
-                logs.append(line)
-                continue
+        # Der Watchdog bekommt den Prozess: so beendet ein Abbruch die Inferenz
+        # innerhalb von Sekunden, statt sie bis zum Ende laufen zu lassen (§37).
+        if watchdog is not None:
+            watchdog.attach(process)
+            watchdog.start()
+        cancelled = False
+        try:
+            for line in process.stdout:
+                line = line.strip()
+                if watchdog is not None and watchdog.triggered:
+                    cancelled = True
+                    break
+                if not line.startswith("{"):
+                    logs.append(line)
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = event.get("type")
+                if kind == "progress" and on_progress:
+                    on_progress(float(event.get("fraction") or 0.0), str(event.get("phase") or ""))
+                elif kind == "done":
+                    report = event
+                elif kind == "error":
+                    raise ProtocolError(str(event.get("code") or "INFERENCE_FAILED"), str(event.get("message") or "Adapter-Fehler"))
+                elif kind == "log":
+                    logs.append(str(event.get("message")))
+            if watchdog is not None and watchdog.triggered:
+                cancelled = True
+        finally:
+            if watchdog is not None:
+                watchdog.stop()
+        if cancelled:
+            if process.poll() is None:
+                process.terminate()
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            kind = event.get("type")
-            if kind == "progress" and on_progress:
-                on_progress(float(event.get("fraction") or 0.0), str(event.get("phase") or ""))
-            elif kind == "done":
-                report = event
-            elif kind == "error":
-                raise ProtocolError(str(event.get("code") or "INFERENCE_FAILED"), str(event.get("message") or "Adapter-Fehler"))
-            elif kind == "log":
-                logs.append(str(event.get("message")))
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise JobCancelled("Der Editor hat den Abbruch verlangt (cancel.flag) – Inferenz beendet.")
         stderr = process.stderr.read() if process.stderr else ""
         code = process.wait()
         if code != 0:
             raise ProtocolError("INFERENCE_FAILED", f"Adapter endete mit Code {code}: {(stderr or '')[-400:]}")
         report["logs"] = logs[-20:]
         return report
+
+
+def _finish_cancelled(store: JobStore, job_id: str, manifest: dict, claim: Optional[dict] = None, note: str = "") -> str:
+    """Manifest auf CANCELLED setzen und die Abbruchbitte des Editors annehmen.
+
+    Die Fahne wird verbraucht (`consume_cancel_flag`), damit derselbe Jobordner
+    einen später erneut veröffentlichten Lauf nicht sofort wieder abwürgt.
+    """
+    manifest["status"] = "CANCELLED"
+    manifest["phase"] = "Vom Editor abgebrochen"
+    manifest["cancelRequested"] = True
+    if claim:
+        manifest["worker"] = {**claim, "heartbeatAt": int(time.time() * 1000)}
+    store.write_manifest(job_id, manifest)
+    store.consume_cancel_flag(job_id)
+    store.log(job_id, f"abgebrochen (cancel.flag){' – ' + note if note else ''}")
+    return "cancelled"
 
 
 def run_job(
@@ -332,17 +479,20 @@ def run_job(
     device: str,
     adapter: str,
     work_dir: str,
+    cancel_poll: float = CANCEL_POLL_SECONDS,
 ) -> str:
-    """Ein Job, vollständig: Hash prüfen, rechnen, prüfen, zurückschreiben."""
+    """Ein Job, vollständig: Hash prüfen, rechnen, prüfen, zurückschreiben.
+
+    Ein Abbruch des Editors wird in *jeder* Phase ernst genommen – vor dem
+    Upload, während der Inferenz (Watchdog beendet den Adapter) und vor dem
+    Zurückschreiben. Ergebnis eines abgebrochenen Laufs ist `CANCELLED`, nie
+    ein Ergebnis, das der Editor doch noch importiert (§37).
+    """
     if manifest.get("status") in TERMINAL_STATUSES:
         store.log(job_id, f"übersprungen – Status {manifest['status']} (§19)")
         return "skipped"
     if store.cancel_requested(job_id):
-        manifest["status"] = "CANCELLED"
-        manifest["phase"] = "Vom Editor abgebrochen"
-        store.write_manifest(job_id, manifest)
-        store.log(job_id, "abgebrochen (cancel.flag)")
-        return "cancelled"
+        return _finish_cancelled(store, job_id, manifest, note="vor dem Start")
     if store.claim_is_fresh(job_id):
         store.log(job_id, "wird bereits von einem anderen Worker gerechnet – übersprungen")
         return "skipped"
@@ -362,6 +512,8 @@ def run_job(
         local_input = os.path.join(work_dir, job_id, manifest["input"]["fileName"])
         os.makedirs(os.path.dirname(local_input), exist_ok=True)
         shutil.copyfile(remote_input, local_input)
+        if store.cancel_requested(job_id):
+            return _finish_cancelled(store, job_id, manifest, claim, note="beim Laden der Arbeitskopie")
         actual = sha256_file(local_input)
         if actual != manifest["input"]["sha256"]:
             raise ProtocolError(
@@ -379,6 +531,7 @@ def run_job(
             manifest.setdefault("worker", claim)["heartbeatAt"] = int(time.time() * 1000)
             store.write_manifest(job_id, manifest)
 
+        watchdog = CancelWatchdog(lambda: store.cancel_requested(job_id), poll_seconds=cancel_poll)
         runner = LocalAdapterRunner(adapter)
         try:
             report = runner.run(
@@ -388,6 +541,7 @@ def run_job(
                 model_dir=model_dir,
                 device=device,
                 on_progress=on_progress,
+                watchdog=watchdog,
             )
         except ProtocolError as error:
             if device != "cpu" and error.code in {"GPU_UNAVAILABLE", "GPU_OUT_OF_MEMORY", "INFERENCE_FAILED"}:
@@ -405,11 +559,16 @@ def run_job(
                     model_dir=model_dir,
                     device="cpu",
                     on_progress=on_progress,
+                    watchdog=watchdog,
                 )
                 report["cpuFallback"] = True
                 report["fallbackReason"] = error.message[:300]
             else:
                 raise
+
+        # Abbruch gewinnt – auch kurz vor der Abgabe der Stems (§37)
+        if watchdog.triggered or store.cancel_requested(job_id):
+            return _finish_cancelled(store, job_id, manifest, claim, note="Ergebnis verworfen")
 
         # Outputs einsammeln und prüfen (§34)
         stems = []
@@ -471,6 +630,11 @@ def run_job(
         )
         store.log(job_id, f"COMPLETED – {len(stems)} Stems, Gerät {device_report}")
         return "completed"
+    except JobCancelled as cancelled:
+        # „während der Rechnung“ ist der Nachweis, dass der Watchdog gegriffen
+        # hat – der Selbsttest (tests/stem-remote-worker-selftest.test.mjs)
+        # prüft genau dieses Wort, damit dieser Pfad nie wieder fehlt.
+        return _finish_cancelled(store, job_id, manifest, claim, note=f"während der Rechnung – {cancelled}")
     except ProtocolError as error:
         manifest["status"] = "FAILED"
         manifest["phase"] = "Fehlgeschlagen"
@@ -554,13 +718,105 @@ def self_test() -> int:
         other.claim(job_id)
         assert store.claim_is_fresh(job_id) is True
         assert JobStore(tmp, "other-worker").claim_is_fresh(job_id) is False
-        # 5. cancel.flag gewinnt
-        with open(os.path.join(store.job_dir(job_id), "cancel.flag"), "w", encoding="utf-8") as handle:
+        # 5. cancel.flag gewinnt – und wird verbraucht, damit der Ordner
+        #    für einen erneut veröffentlichten Lauf nicht verseucht bleibt
+        with open(store.cancel_flag_path(job_id), "w", encoding="utf-8") as handle:
             handle.write("{}")
         pending = dict(manifest, status="RUNNING")
         store.write_manifest(job_id, pending)
         assert run_job(store, job_id, store.read_manifest(job_id), model_dir=tmp, device="cpu", adapter="unused", work_dir=tmp) == "cancelled"
-        print("[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, Abbruch)")
+        assert store.cancel_requested(job_id) is False, "Abbruchbitte muss nach der Erfüllung weg sein"
+        assert store.read_manifest(job_id)["status"] == "CANCELLED"
+        # 6. Abbruch WÄHREND der Laufzeit: der Watchdog beendet den Kindprozess
+        flag_state = {"hit": False}
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        watchdog = CancelWatchdog(lambda: flag_state["hit"], poll_seconds=0.2, grace_seconds=2)
+        watchdog.attach(sleeper)
+        watchdog.start()
+        try:
+            time.sleep(0.4)
+            assert sleeper.poll() is None, "Watchdog darf nicht ohne Grund beenden"
+            flag_state["hit"] = True
+            deadline = time.time() + 15
+            while time.time() < deadline and not (watchdog.triggered and sleeper.poll() is not None):
+                time.sleep(0.1)
+            assert watchdog.triggered, "cancel.flag während der Inferenz wird übersehen"
+            assert sleeper.poll() is not None, "Adapter läuft nach dem Abbruch weiter (GPU/Colab brennt weiter)"
+        finally:
+            watchdog.stop()
+            if sleeper.poll() is None:
+                sleeper.kill()
+        # 7. Einzelfall „Prüfen ohne Fahne“: Watchdog löst nicht von selbst aus
+        quiet = CancelWatchdog(lambda: False, poll_seconds=0.2)
+        quiet.start()
+        time.sleep(0.5)
+        assert quiet.triggered is False and quiet.checked > 0, "Watchdog prüft, ohne voreilig abzubrechen"
+        quiet.stop()
+        # 8. Abbruch END-TO-END: Adapter rechnet, Editor setzt cancel.flag,
+        #    der Lauf stirbt – und die Fahne ist danach verbraucht.
+        live_id = str(uuid.uuid4())
+        live_dir = store.job_dir(live_id)
+        os.makedirs(os.path.join(live_dir, "input"), exist_ok=True)
+        os.makedirs(os.path.join(live_dir, "output"), exist_ok=True)
+        mix_path = os.path.join(live_dir, "input", "mix.wav")
+        with open(mix_path, "wb") as handle:
+            handle.write(b"RIFF" + b"\x00" * 64)
+        fake_adapter = os.path.join(tmp, "slow_adapter.py")
+        with open(fake_adapter, "w", encoding="utf-8") as handle:
+            handle.write(
+                "import json, sys, time\n"
+                "print(json.dumps({'type': 'progress', 'fraction': 0.1, 'phase': 'chunk 1'}), flush=True)\n"
+                "time.sleep(120)\n"
+            )
+        live_manifest = {
+            "schemaVersion": SCHEMA_VERSION,
+            "jobId": live_id,
+            "status": "RUNNING",
+            "createdAt": int(time.time() * 1000),
+            "engine": {
+                "modelId": "bsroformer-musdb18hq-4stem-zfturbo",
+                "profile": "HIGH_QUALITY",
+                "stems": ["vocals"],
+                "family": "bs_roformer",
+                "checkpoint": {"file": "model.ckpt"},
+            },
+            "input": {
+                "fileName": "mix.wav",
+                "relativePath": f"jobs/{live_id}/input/mix.wav",
+                "sha256": sha256_file(mix_path),
+                "bytes": os.path.getsize(mix_path),
+            },
+            "output": {"stems": []},
+        }
+        store.write_manifest(live_id, live_manifest)
+        started_at = time.time()
+        outcome_box: Dict[str, Any] = {}
+
+        def _cancel_soon() -> None:
+            time.sleep(1.2)
+            with open(store.cancel_flag_path(live_id), "w", encoding="utf-8") as handle:
+                handle.write('{"reason":"self-test"}')
+
+        bomber = threading.Thread(target=_cancel_soon, daemon=True)
+        bomber.start()
+        outcome_box["value"] = run_job(
+            store,
+            live_id,
+            store.read_manifest(live_id),
+            model_dir=tmp,
+            device="cpu",
+            adapter=fake_adapter,
+            work_dir=os.path.join(tmp, "work"),
+            cancel_poll=0.3,
+        )
+        bomber.join(timeout=5)
+        elapsed = time.time() - started_at
+        assert outcome_box["value"] == "cancelled", f"laufender Job endete als {outcome_box['value']}, erwartet cancelled"
+        assert elapsed < 60, "Der Lauf durfte nicht bis zum Ende des Adapters warten"
+        assert store.read_manifest(live_id)["status"] == "CANCELLED"
+        assert store.cancel_requested(live_id) is False, "Fahne muss nach dem Erfüllen verbraucht sein"
+        assert not os.listdir(os.path.join(live_dir, "output")), "ein abgebrochener Lauf legt nichts ab"
+        print("[STEM-REMOTE-WORKER] Selbsttest OK (Manifest, Idempotenz, Vollständigkeit, Lease, Abbruch vor/während der Rechnung)")
     return 0
 
 
@@ -573,6 +829,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--worker", default=f"colab-{socket.gethostname()}-{os.getpid()}")
     parser.add_argument("--poll", type=int, default=15)
+    parser.add_argument(
+        "--cancel-poll",
+        type=float,
+        default=CANCEL_POLL_SECONDS,
+        help="Sekunden zwischen Abbruch-Prüfungen während der Inferenz (0 = nur vor dem Start)",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=0, help="0 = unbegrenzt")
     parser.add_argument("--self-test", action="store_true")
@@ -612,6 +874,7 @@ def main(argv: List[str]) -> int:
                 device=args.device,
                 adapter=args.adapter,
                 work_dir=args.work_dir,
+                cancel_poll=args.cancel_poll,
             )
             if outcome in {"completed", "failed", "cancelled"}:
                 processed += 1

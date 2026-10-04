@@ -13,6 +13,8 @@ interface Props {
   running: boolean;
   error: string | null;
   phaseText?: string;
+  /** True, während der Abbruch gerade an den externen Rechner gemeldet wird. */
+  cancelPending?: boolean;
 }
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
@@ -31,7 +33,7 @@ function stageFor(job: RemoteStemJobView | null, running: boolean): number {
   return 2;
 }
 
-export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRefresh, status, job, trackName, running, error, phaseText }) => {
+export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRefresh, status, job, trackName, running, error, phaseText, cancelPending = false }) => {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!open) return;
@@ -60,7 +62,8 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
         </header>
         <div className="space-y-5 p-6">
           <div aria-live="polite" className={`rounded-xl border p-4 ${failed ? 'border-red-500/40 bg-red-500/10' : done ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-cyan-500/30 bg-cyan-500/10'}`}>
-            <div className="flex items-center gap-2 font-semibold">{failed ? <AlertTriangle size={18} /> : done ? <CheckCircle2 size={18} /> : <RefreshCw size={18} className="animate-spin" />}{failed ? 'Vorgang unterbrochen' : done ? 'Ergebnisse geprüft und importiert' : phaseText || job?.phase || 'Arbeitskopie wird vorbereitet…'}</div>
+            <div className="flex items-center gap-2 font-semibold">{failed ? <AlertTriangle size={18} /> : done ? <CheckCircle2 size={18} /> : <RefreshCw size={18} className="animate-spin" />}{cancelPending ? 'Abbruch wird an den externen Rechner gemeldet…' : failed ? job?.status === 'CANCELLED' ? 'Abgebrochen – keine Stems übernommen' : 'Vorgang unterbrochen' : done ? 'Ergebnisse geprüft und importiert' : phaseText || job?.phase || 'Arbeitskopie wird vorbereitet…'}</div>
+            {job?.status === 'CANCELLED' && !error ? <p className="mt-1 text-xs text-neutral-400">Der Abbruch ist in der Jobablage hinterlegt. Ein bereits gerechnetes Ergebnis wird nicht übernommen – Original, <span className="font-mono">rekordbox.xml</span> und <span className="font-mono">master.db</span> bleiben unverändert.</p> : null}
             {error || job?.error?.message ? <p className="mt-2 text-sm">{error || job?.error?.message}</p> : null}
             {job && <div className="mt-3 text-xs text-neutral-300">Job {job.jobId} · Status {job.status} · gemeldeter Fortschritt {Math.round(job.percent ?? 0)} %</div>}
           </div>
@@ -71,7 +74,7 @@ export const RemoteFlowModal: React.FC<Props> = ({ open, onClose, onCancel, onRe
             return <li key={item.title} className={`flex gap-3 rounded-xl p-3 ${index === stage && !done ? 'bg-white/10' : ''}`}><div className={`mt-0.5 ${complete ? 'text-emerald-400' : index === stage ? 'text-cyan-400' : 'text-neutral-600'}`}>{complete ? <CheckCircle2 size={20} /> : <Icon size={20} />}</div><div><div className="text-sm font-semibold">{item.title} <span className="font-normal text-neutral-400">{complete ? '· abgeschlossen' : index === stage && !failed ? '· aktuell' : ''}</span></div><p className="mt-1 text-xs leading-relaxed text-neutral-400">{item.detail}</p></div></li>;
           })}</ol>
           <div className="rounded-xl bg-white/5 p-3 text-xs leading-relaxed text-neutral-400">Transport: {status?.label ?? job?.transport ?? 'Google Drive (Ordner)'} · Rechenort: {job?.device ?? 'noch nicht gemeldet'}{job?.cpuFallback ? ' (CPU-Fallback)' : ''}{job?.worker ? ` · Worker ${job.worker.id}` : ''}<br />Die Anzeige meldet nur vom Editor bestätigte Schritte. Synchronisierung in die Google-Cloud ist nicht separat messbar.</div>
-          <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={onRefresh} className="rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/10">Jetzt prüfen</button>{running && job && !terminal(job.status) && <button type="button" onClick={onCancel} className="rounded-lg border border-red-500/40 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10">Job abbrechen</button>}<button type="button" onClick={onClose} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold hover:bg-cyan-500">{running ? 'Im Hintergrund weiter' : 'Schließen'}</button></div>
+          <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={onRefresh} className="rounded-lg border border-white/20 px-3 py-2 text-sm hover:bg-white/10">Jetzt prüfen</button>{running && job && !terminal(job.status) && <button type="button" onClick={onCancel} disabled={cancelPending} title="Der Worker beendet die laufende Rechnung beim nächsten Arbeitsschritt; ein Ergebnis wird nicht übernommen." className="rounded-lg border border-red-500/40 px-3 py-2 text-sm text-red-200 hover:bg-red-500/10 disabled:cursor-progress disabled:opacity-60">{cancelPending ? 'Abbruch läuft…' : 'Job abbrechen'}</button>}<button type="button" onClick={onClose} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold hover:bg-cyan-500">{running ? 'Im Hintergrund weiter' : 'Schließen'}</button></div>
         </div>
       </section>
     </div>

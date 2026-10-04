@@ -21,12 +21,12 @@ import { logger } from '../utils/logger';
 import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
 // Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
 // Vertragstest („Renderer importiert den Vertrag typ-only“) unverändert gilt.
-import type { RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
+import type { RemoteCancelResult, RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
 import type { ModelFamily } from '../stems/types';
 import { describeArchitectures, type StemArchitectureOption } from './stemArchitectures';
 
 export type { ModelFamily } from '../stems/types';
-export type { RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
+export type { RemoteCancelResult, RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
 
 export type StemType = 'vocals' | 'drums' | 'bass' | 'other';
 export const STEM_TYPES: StemType[] = ['vocals', 'drums', 'bass', 'other'];
@@ -889,19 +889,32 @@ class StemEngine {
     }
   }
 
-  public async cancelRemoteJob(jobId: string, reason = 'Abbruch durch Benutzer'): Promise<boolean> {
+  /**
+   * Verlangt den Abbruch eines externen Jobs. Die Rückmeldung ist ein
+   * Ergebnis – kein nacktes `boolean` – damit die UI sagen kann, **warum** ein
+   * Abbruch gerade nicht möglich ist (sonst wirkt jeder Klick wirkungslos).
+   */
+  public async cancelRemoteJob(jobId: string, reason = 'Abbruch durch Benutzer'): Promise<RemoteCancelResult> {
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
     if (desktop?.cancelRemoteStemJob) {
       const result = await desktop.cancelRemoteStemJob(jobId, reason);
-      return result.ok === true && result.data.accepted;
+      if (result.ok === true && result.data) return result.data;
+      return { accepted: false, message: (result as { message?: string }).message ?? 'Der Abbruch wurde vom Dienst nicht bestätigt.' };
     }
     const response = await fetch(`/api/stems/remote/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     });
-    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: { accepted?: boolean } };
-    return Boolean(payload.ok && payload.data?.accepted);
+    const payload = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      message?: string;
+      data?: { accepted?: boolean; deferred?: boolean; message?: string };
+    };
+    if (payload.ok && payload.data) {
+      return { accepted: Boolean(payload.data.accepted), deferred: payload.data.deferred, message: payload.data.message };
+    }
+    return { accepted: false, message: payload.message ?? `Der Abbruch wurde nicht bestätigt (HTTP ${response.status}).` };
   }
 
   /**
@@ -980,7 +993,7 @@ class StemEngine {
       const pollInterval = 5_000;
       for (;;) {
         if (options.signal?.aborted) {
-          await this.cancelRemoteJob(job.jobId, 'Abbruch über das Deck');
+          await this.cancelRemoteJob(job.jobId, 'Abbruch über das Deck').catch(() => undefined);
           throw Object.assign(new Error('Die Fern-Separation wurde abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
         }
         const status = await this.pollRemoteJobs();

@@ -59,7 +59,7 @@ export interface StemBridge {
   startRemoteJob(request: StartRemoteStemJobRequest): Promise<StemBridgeResult<RemoteStemJobView>>;
   listRemoteJobs(): StemBridgeResult<RemoteStemJobView[]>;
   pollRemoteJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
-  cancelRemoteJob(jobId: string, reason?: string): Promise<StemBridgeResult<{ accepted: boolean }>>;
+  cancelRemoteJob(jobId: string, reason?: string): Promise<StemBridgeResult<import('./transportTypes').RemoteCancelResult>>;
   resumeRemoteJobs(): Promise<StemBridgeResult<RemoteServiceStatus>>;
   configureRemoteJobs(settings: RemoteSettings): Promise<StemBridgeResult<RemoteServiceStatus>>;
   onRemoteEvent(listener: (event: unknown) => void): () => void;

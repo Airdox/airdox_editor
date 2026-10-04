@@ -580,6 +580,13 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
   const [remoteFlowJobId, setRemoteFlowJobId] = useState<string | null>(null);
   const [remoteFlowJob, setRemoteFlowJob] = useState<import('./stems/transportTypes').RemoteStemJobView | null>(null);
   const [remoteFlowError, setRemoteFlowError] = useState<string | null>(null);
+  /**
+   * Rückmeldung für den Bediener, direkt an der Stem-Leiste: was ein Klick auf
+   * „Abbrechen“ tatsächlich ausgelöst hat. Ohne diese Zeile wirkt der Button
+   * tot, solange der externe Job noch antwortet.
+   */
+  const [remoteNotice, setRemoteNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+  const [remoteCancelPendingJobId, setRemoteCancelPendingJobId] = useState<string | null>(null);
   const [remoteFlowRunning, setRemoteFlowRunning] = useState(false);
   const [remoteFlowTrack, setRemoteFlowTrack] = useState('');
   const remoteCancelPendingRef = useRef<string | null>(null);
@@ -1340,22 +1347,58 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     await runRemoteStemSeparation('HIGH_QUALITY');
   }, [activeTrack, workingAudioBuffer, stemRemoteStatus, remoteFlowRunning, runRemoteStemSeparation, setStemRemoteEnabled]);
 
+  useEffect(() => {
+    if (!remoteNotice) return;
+    const timer = window.setTimeout(() => setRemoteNotice(null), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [remoteNotice]);
+
+  /**
+   * Ein Klick auf „Abbrechen“ muss etwas bewirken **und** sichtbar sein:
+   *  1. Abbruchbitte in die Jobablage legen (der Worker beendet die Rechnung),
+   *  2. Jobstand sofort neu einlesen,
+   *  3. dem Nutzer in der Stem-Leiste sagen, was passiert ist – inklusive des
+   *     Grunds, wenn die Ablage gerade nicht erreichbar war.
+   * Doppelklicks werden über einen Ref geblockt, damit nicht elf Abbrüche im
+   * Protokoll stehen, während der erste noch läuft.
+   */
   const cancelRemoteFlowJob = useCallback((jobId: string) => {
-    if (remoteCancelPendingRef.current === jobId) return;
+    if (remoteCancelPendingRef.current === jobId) {
+      setRemoteNotice({ tone: 'info', text: 'Der erste Abbruch ist noch unterwegs – bitte einen Moment warten.' });
+      return;
+    }
     remoteCancelPendingRef.current = jobId; // synchron: blockiert Doppelklicks vor React-Render
-    setSeparationProgress((prev) => prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev);
-    void stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer')
-      .then((accepted) => {
-        if (!accepted) {
-          setRemoteFlowError('Der Job konnte nicht mehr abgebrochen werden. Bitte Status aktualisieren.');
-        } else {
-          logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} bestätigt.`);
+    setRemoteCancelPendingJobId(jobId);
+    setRemoteFlowError(null);
+    setRemoteNotice({ tone: 'info', text: 'Abbruch wird an den externen Rechner gemeldet…' });
+    setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev));
+    void (async () => {
+      try {
+        const result = await stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer');
+        const status = await stemEngine.pollRemoteJobs();
+        if (status) setStemRemoteStatus(status);
+        if (result.accepted) {
+          logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angenommen – der Worker verwirft die laufende Rechnung.`);
+          setRemoteFlowError(null);
+          setRemoteNotice({ tone: 'info', text: 'Abbruch gemeldet: Der externe Rechner stoppt die Rechnung, Ergebnisse werden nicht übernommen.' });
+          return;
         }
-        return stemEngine.pollRemoteJobs();
-      })
-      .then((status) => { if (status) setStemRemoteStatus(status); })
-      .catch((error) => setRemoteFlowError(`Abbruch konnte nicht bestätigt werden: ${error instanceof Error ? error.message : String(error)}`))
-      .finally(() => { remoteCancelPendingRef.current = null; });
+        const reason = result.message ?? 'Der Job konnte nicht abgebrochen werden.';
+        logger.error('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} ohne Wirkung: ${reason}`, { jobId, deferred: Boolean(result.deferred) });
+        setRemoteFlowError(reason);
+        setRemoteFlowOpen(true);
+        setRemoteNotice({ tone: 'error', text: result.deferred ? reason : `Abbruch nicht möglich: ${reason}` });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} fehlgeschlagen: ${message}`, { jobId });
+        setRemoteFlowError(`Abbruch fehlgeschlagen: ${message}`);
+        setRemoteFlowOpen(true);
+        setRemoteNotice({ tone: 'error', text: `Abbruch fehlgeschlagen: ${message}` });
+      } finally {
+        remoteCancelPendingRef.current = null;
+        setRemoteCancelPendingJobId(null);
+      }
+    })();
   }, []);
 
   const handleCancelStemSeparation = useCallback(() => {
@@ -1369,6 +1412,14 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
     const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
     logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
+    // Auch lokal gilt: der Klick muss eine Antwort zeigen. „kein aktiver Job
+    // abbruchbar“ nur ins Protokoll zu schreiben, ist der Weg zu „ich drücke,
+    // es passiert nichts“.
+    setRemoteNotice(
+      accepted
+        ? { tone: 'info', text: 'Abbruch angefordert: Der laufende Chunk wird zu Ende gerechnet, dann stoppt die lokale Engine.' }
+        : { tone: 'info', text: 'Es läuft gerade keine Stem-Separation – abgebrochen werden kann nichts.' }
+    );
   }, [stemRemoteStatus, cancelRemoteFlowJob]);
 
   const handleSeparateStems = useCallback(async () => {
@@ -4341,6 +4392,9 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         onProfileChange={setStemProfile}
         remoteStatus={stemRemoteStatus}
         remoteEnabled={stemRemoteEnabled}
+        remoteCancelPendingJobId={remoteCancelPendingJobId}
+        remoteNotice={remoteNotice}
+        onDismissRemoteNotice={() => setRemoteNotice(null)}
         onRemoteEnabledChange={setStemRemoteEnabled}
         onStartExternalSeparation={() => { void handleStartExternalSeparation(); }}
         onOpenRemoteSetup={() => setRemoteSetupOpen(true)}
@@ -4580,6 +4634,7 @@ export default function App() {  // Project state - Stringent Empty Project (Mas
         running={remoteFlowRunning || Boolean(remoteFlowJobId && stemRemoteStatus?.jobs.some((job) => job.jobId === remoteFlowJobId && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)))}
         error={remoteFlowError}
         phaseText={separationProgress?.phaseText}
+        cancelPending={Boolean(remoteFlowJobId && remoteCancelPendingJobId === remoteFlowJobId)}
       />
       <RemoteSetupModal
         isOpen={remoteSetupOpen}

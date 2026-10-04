@@ -17,7 +17,9 @@
  *   5. §34 I/J/K: fehlende, beschädigte oder unbrauchbare Stems ⇒ FAILED, nie COMPLETED
  *   6. §21 C: nicht erreichbare Ablage ⇒ Job bleibt aktiv (transportDegraded)
  *   7. §21 E: kein Worker ⇒ Zeitüberschreitung mit Grund, inkl. `error.json`
- *   8. §37: Abbruch gewinnt – ein später eintreffendes Worker-Ergebnis wird verworfen
+ *   8. §37: Abbruch gewinnt – ein später eintreffender Worker-Ergebnis wird verworfen
+ *   9. §37: Abbruch ohne erreichbare Ablage bleibt in Verfolgung und wird nachgeliefert
+ *  10. §21 B/§37: eine verbrauchte cancel.flag erstickt keinen neuen Lauf derselben Job-Id
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -26,7 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StemJobService } from '../src/stems/stemJobService';
 import { RemoteStemJobService } from '../src/stems/remote/remoteStemJobService';
-import { FolderTransport } from '../src/stems/remote/transport';
+import { FolderTransport, RemoteUnreachableError, type IRemoteTransport } from '../src/stems/remote/transport';
 import { parseManifest, serializeManifest } from '../src/stems/remote/manifest';
 import { generateEdmTestTrack, writeTestAudio } from '../src/stems/testAudioGenerator';
 import { decodeWav } from '../src/stems/wavIo';
@@ -90,6 +92,29 @@ async function makeHarness(options: { jobTimeoutMs?: number; workerLeaseMs?: num
       await rm(base, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Transport-Dekorateur für Test #10: Schreibversuche der Abbruchfahne
+ * schlagen fehl, solange `state.blocked` – genau der Fall „Drive-Sync steht
+ * still, Nutzer klickt Abbrechen“.
+ */
+function withBlockedCancelWrites(base: FolderTransport, state: { blocked: boolean }): IRemoteTransport {
+  const target = base as unknown as IRemoteTransport;
+  return new Proxy(target, {
+    get(receiver, key) {
+      if (key === 'writeText') {
+        return async (relative: string, text: string): Promise<void> => {
+          if (state.blocked && relative.endsWith('cancel.flag')) {
+            throw new RemoteUnreachableError('Google-Drive-Ordner nicht erreichbar (Testblockade)', { relative });
+          }
+          await target.writeText(relative, text);
+        };
+      }
+      const value = Reflect.get(target, key, receiver);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
 }
 
 /** Der echte Worker, ein Durchlauf – derselbe Code wie `--once` auf der Kommandozeile. */
@@ -340,6 +365,88 @@ async function run() {
     console.log('  ✓ Abbruch bleibt Abbruch, Worker respektiert die Fahne');
   } finally {
     await h6.dispose();
+  }
+
+  // =========================================================================
+  console.log('\n[ TEST ] #10 §37: Abbruch ohne erreichbare Ablage wird nachgeliefert');
+  const h7 = await makeHarness();
+  try {
+    const blocked = { blocked: true };
+    const remote = new RemoteStemJobService({
+      root: h7.root,
+      localService: h7.local,
+      transport: withBlockedCancelWrites(h7.transport, blocked),
+      allowPipelineDouble: true,
+      disableBackgroundPolling: true,
+      settings: { pollIntervalMs: 5_000, workerLeaseMs: 60_000, jobTimeoutMs: 5 * 60_000 },
+      logger: quietLogger,
+    });
+    const job = await startJob(h7, 'cancel-while-offline');
+    const tracked = remote.list().find((entry) => entry.jobId === job.jobId) ?? job;
+    assert.equal(tracked.status, 'RUNNING');
+
+    const deferred = await remote.cancel(job.jobId, 'Offline-Abbruch');
+    assert.equal(deferred.accepted, false, 'ohne Ablage kann ein Abbruch nicht bestätigt werden');
+    assert.equal(deferred.deferred, true, 'aber er geht nicht verloren');
+    assert.match(deferred.message ?? '', /erreichbar/, 'der Nutzer erfährt den Grund');
+    const pending = remote.get(job.jobId)!;
+    assert.notEqual(pending.status, 'CANCELLED', 'Job bleibt in Verfolgung – kein stiller Abgang');
+    assert.equal(pending.cancelPending, true, 'Nachlieferung ist vorgemerkt');
+    const flagBlocked = await readFile(path.join(h7.drive, 'jobs', job.jobId, 'cancel.flag'), 'utf8').then(
+      () => true,
+      () => false
+    );
+    assert.equal(flagBlocked, false, 'bei blockierter Ablage darf keine Fahne liegen');
+
+    // Ablage wieder erreichbar: derselbe Poll liefert die Bitte nach – CANCELLED.
+    blocked.blocked = false;
+    await remote.poll();
+    const delivered = remote.get(job.jobId)!;
+    assert.equal(delivered.status, 'CANCELLED', 'Nachlieferung führt zum Abbruch');
+    assert.equal(delivered.cancelPending ?? false, false);
+    const flag = await readFile(path.join(h7.drive, 'jobs', job.jobId, 'cancel.flag'), 'utf8');
+    assert.match(flag, /Offline-Abbruch|Abbruch durch Benutzer/, 'die Fahne liegt jetzt in der Ablage');
+    remote.dispose();
+    console.log('  ✓ blockierte Ablage ⇒ Abbruch bleibt aktiv, wird nachgeliefert und ist dann CANCELLED');
+  } finally {
+    await h7.dispose();
+  }
+
+  // =========================================================================
+  console.log('\n[ TEST ] #11 §21 B/§37: verbrauchte cancel.flag erstickt keinen neuen Lauf');
+  const h8 = await makeHarness();
+  try {
+    const job = await startJob(h8, 'republish-after-cancel');
+    // Der Worker sieht die Fahne, bricht ab – und nimmt sie mit.
+    await writeFile(path.join(h8.drive, 'jobs', job.jobId, 'cancel.flag'), JSON.stringify({ at: Date.now(), reason: 'Nutzer' }), 'utf8');
+    assert.equal(await runWorker(h8), 1, 'der Worker beantwortet den Abbruch');
+    assert.equal((await stat(path.join(h8.drive, 'jobs', job.jobId, 'manifest.json'))).isFile(), true);
+    assert.equal(
+      parseManifest(await readFile(path.join(h8.drive, 'jobs', job.jobId, 'manifest.json'), 'utf8'), job.jobId).status,
+      'CANCELLED'
+    );
+    await assert.rejects(
+      () => readFile(path.join(h8.drive, 'jobs', job.jobId, 'cancel.flag'), 'utf8'),
+      (error) => (error as NodeJS.ErrnoException).code === 'ENOENT',
+      'die Fahne muss verbraucht sein, sonst ist jeder weitere Lauf sofort tot'
+    );
+
+    // Derselbe Ordner, derselbe Job, ein neu ausgeschriebener Steckbrief (§21 B):
+    // der Worker rechnet ihn ganz normal fertig statt ihn lautlos zu verwerfen.
+    const cancelled = parseManifest(await readFile(path.join(h8.drive, 'jobs', job.jobId, 'manifest.json'), 'utf8'), job.jobId);
+    await writeFile(
+      path.join(h8.drive, 'jobs', job.jobId, 'manifest.json'),
+      serializeManifest({ ...cancelled, status: 'RUNNING', phase: 'Wartet auf den externen Rechner (Google Drive)', percent: 0, cancelRequested: undefined }),
+      'utf8'
+    );
+    await runWorker(h8);
+    const manifest = parseManifest(await readFile(path.join(h8.drive, 'jobs', job.jobId, 'manifest.json'), 'utf8'), job.jobId);
+    assert.equal(manifest.status, 'COMPLETED', 'ein erneut veröffentlichter Lauf wird nicht vom alten Abbruch erstickt');
+    await h8.remote.poll();
+    assert.equal(h8.remote.get(job.jobId)?.status, 'COMPLETED', 'und der Editor nimmt das Ergebnis an');
+    console.log('  ✓ Abbruch wird verbraucht; derselbe Jobordner bleibt für einen neuen Lauf benutzbar');
+  } finally {
+    await h8.dispose();
   }
 
   console.log('\n═══════════════════════════════════════════════════════════════════');

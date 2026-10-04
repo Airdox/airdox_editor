@@ -29,7 +29,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { createTransport, type IRemoteTransport } from '../src/stems/remote/transport';
-import { jobClaimPath, jobOutputPath, jobResultPath, stemFileName } from '../src/stems/remote/layout';
+import { jobCancelPath, jobClaimPath, jobOutputPath, jobResultPath, stemFileName } from '../src/stems/remote/layout';
 import {
   buildResultDocument,
   isTerminalStatus,
@@ -41,6 +41,9 @@ import type { RemoteJobManifest } from '../src/stems/remote/types';
 import { StemJobService } from '../src/stems/stemJobService';
 import { analyzeAudio, decodeWav, parseWavLayout } from '../src/stems/wavIo';
 import { QUALITY_PROFILES, type ComputeDevice, type QualityProfile } from '../src/stems/types';
+
+/** Standard: alle 5 s in die Ablage schauen – schnell genug für einen Klick. */
+const DEFAULT_CANCEL_POLL_MS = 5_000;
 
 /** Kopfdaten + Pegel einer Stem-Datei – für Manifest und Selbstkontrolle. */
 function inspectStemWav(bytes: Uint8Array): { frames: number; sampleRate: number; channels: number; peak: number } {
@@ -64,6 +67,8 @@ interface WorkerOptions {
   maxJobs: number;
   allowPipelineDouble: boolean;
   quiet: boolean;
+  /** Millisekunden zwischen Abbruch-Prüfungen während der Rechnung (§37). */
+  cancelPollMs?: number;
   /** Testhaken: nach der Separation absichtlich einen Defekt einbauen. */
   corruptOutput?: string;
 }
@@ -79,6 +84,7 @@ function parseArgs(argv: string[]): WorkerOptions {
     maxJobs: Number.POSITIVE_INFINITY,
     allowPipelineDouble: false,
     quiet: false,
+    cancelPollMs: Number(process.env.AIRODOX_STEM_CANCEL_POLL_MS ?? 5000),
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -123,12 +129,15 @@ function parseArgs(argv: string[]): WorkerOptions {
       case '--corrupt-output':
         options.corruptOutput = next();
         break;
+      case '--cancel-poll':
+        options.cancelPollMs = Math.max(500, Number(next()));
+        break;
       case '--quiet':
         options.quiet = true;
         break;
       case '--help':
       case '-h':
-        console.log('airdox Fernworker – Optionen: --root --kind --workdir --worker --once --poll --model --profile --device --model-dir --max-jobs --allow-pipeline-double --corrupt-output --quiet');
+        console.log('airdox Fernworker – Optionen: --root --kind --workdir --worker --once --poll --model --profile --device --model-dir --max-jobs --allow-pipeline-double --corrupt-output --cancel-poll --quiet');
         process.exit(0);
         break;
       default:
@@ -175,22 +184,110 @@ async function claimIsFresh(transport: IRemoteTransport, jobId: string, leaseMs:
   }
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Hält Ausschau nach `cancel.flag`, **während** der Worker rechnet.
+ *
+ * Vorher wurde die Fahne nur vor dem Start eines Jobs gesehen. Ein Abbruch
+ * mitten in der (Stunden langen) High-Quality-Rechnung lief因此 weiter: der
+ * Nutzer sah nach dem Klick keine Veränderung – „drücken, was man will, es
+ * passiert nichts“. Jetzt beendet der Watchdog die lokale Rechnung und der
+ * Job wird als CANCELLED abgeschlossen.
+ */
+class CancelWatch {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private hit = false;
+
+  constructor(
+    private readonly transport: IRemoteTransport,
+    private readonly jobId: string,
+    private readonly intervalMs: number
+  ) {}
+
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      void this.check().catch(() => undefined);
+    }, Math.max(500, this.intervalMs));
+    this.timer.unref?.();
+  }
+
+  get triggered(): boolean {
+    return this.hit;
+  }
+
+  /** Ein Blick in die Ablage. Transportstörung ist kein Abbruch. */
+  async check(): Promise<boolean> {
+    try {
+      if (await this.transport.exists(jobCancelPath(this.jobId))) this.hit = true;
+    } catch {
+      /* kurze Drive-Sperre – beim nächsten Takt erneut prüfen */
+    }
+    return this.hit;
+  }
+
+  /** Nahm der Editor die Abbruchbitte ab, darf die Fahne den nächsten Lauf nicht ersticken. */
+  async consume(): Promise<void> {
+    await this.transport.remove(jobCancelPath(this.jobId)).catch(() => undefined);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}
+
+/**
+ * Wartet auf die Separation und gibt sie nur zurück, wenn kein Abbruch
+ * dazwischenkam. Bei Abbruch wird der lokale Abbruch-Token ausgelöst, damit
+ * die Engine sofort aufhört und nicht bis zum Ende rechnet.
+ */
+async function waitForSeparation(
+  service: StemJobService,
+  localJobId: string,
+  watch: CancelWatch,
+  pollMs: number
+): Promise<Awaited<ReturnType<StemJobService['waitFor']>>> {
+  const pending = service.waitFor(localJobId);
+  for (;;) {
+    const winner = await Promise.race([
+      pending.then((view) => ({ kind: 'done' as const, view })),
+      sleep(Math.max(500, pollMs)).then(() => ({ kind: 'tick' as const })),
+    ]);
+    if (winner.kind === 'done') return winner.view;
+    if (await watch.check()) {
+      service.cancel(localJobId, 'Vom Editor abgebrochen (cancel.flag)');
+      throw Object.assign(new Error('Der Editor hat den Abbruch verlangt (cancel.flag) – Rechnung beendet.'), {
+        code: 'REMOTE_CANCELLED_BY_EDITOR',
+      });
+    }
+  }
+}
+
 async function runOneJob(
   options: WorkerOptions,
   transport: IRemoteTransport,
   jobId: string,
   manifest: RemoteJobManifest
 ): Promise<'completed' | 'skipped' | 'failed' | 'cancelled'> {
+  const manifestRel = `jobs/${jobId}/manifest.json`;
+  const cancelPollMs = options.cancelPollMs ?? DEFAULT_CANCEL_POLL_MS;
+  const watch = new CancelWatch(transport, jobId, cancelPollMs);
   if (isTerminalStatus(manifest.status)) {
     log(options, `Job ${jobId} ist ${manifest.status} – wird nicht erneut gerechnet (§19).`);
     return 'skipped';
   }
-  if (await transport.exists(`jobs/${jobId}/cancel.flag`)) {
+  await watch.check();
+  if (watch.triggered) {
     log(options, `Job ${jobId} wurde abgebrochen – Status wird gesetzt.`);
     await transport.writeText(
-      `jobs/${jobId}/manifest.json`,
-      serializeManifest(withStatus(manifest, { status: 'CANCELLED', phase: 'Vom Editor abgebrochen' }))
+      manifestRel,
+      serializeManifest(withStatus(manifest, { status: 'CANCELLED', phase: 'Vom Editor abgebrochen', cancelRequested: true }))
     );
+    // Fahne verbrauchen: ein später erneut ausgeschriebener Job mit derselben
+    // Id dürfte sonst nie wieder rechnen (§21 B, §37).
+    await watch.consume();
     return 'cancelled';
   }
 
@@ -216,6 +313,7 @@ async function runOneJob(
     )
   );
 
+  watch.start();
   const heartbeat = setInterval(() => {
     claim.heartbeatAt = Date.now();
     void transport.writeText(jobClaimPath(jobId), `${JSON.stringify(claim, null, 2)}\n`).catch(() => undefined);
@@ -264,7 +362,7 @@ async function runOneJob(
       device: requestedDevice,
     });
     log(options, `Job ${jobId}: Separation mit ${started.modelId} (${started.profile}) gestartet`);
-    const finished = await service.waitFor(started.jobId);
+    const finished = await waitForSeparation(service, started.jobId, watch, cancelPollMs);
     if (finished.status !== 'COMPLETED') {
       throw Object.assign(new Error(finished.error?.message ?? `Separation endete mit ${finished.status}`), {
         code: finished.error?.code ?? 'INFERENCE_FAILED',
@@ -272,6 +370,13 @@ async function runOneJob(
     }
 
     // ---- Ergebnisse hochladen, Hashes schreiben ---------------------------
+    // Vor der Abgabe noch einmal nachsehen: wer während der Rechnung abbricht,
+    // bekommt keine Stems mehr in die Ablage (§37).
+    if (await watch.check()) {
+      throw Object.assign(new Error('Der Editor hat den Abbruch verlangt (cancel.flag) – Ergebnis verworfen.'), {
+        code: 'REMOTE_CANCELLED_BY_EDITOR',
+      });
+    }
     const stems = [];
     for (const stem of finished.result?.stems ?? []) {
       let payload = await readFile(stem.filePath);
@@ -319,6 +424,26 @@ async function runOneJob(
   } catch (error) {
     const code = (error as { code?: string }).code ?? 'INFERENCE_FAILED';
     const message = error instanceof Error ? error.message : String(error);
+    if (code === 'REMOTE_CANCELLED_BY_EDITOR' || code === 'INFERENCE_CANCELLED') {
+      // Der Abbruch kommt vom Nutzer – kein Fehler, sondern CANCELLED, damit
+      // der Editor die Antwort zuordnen kann und die Abbruchbitte verbraucht ist (§37).
+      await transport
+        .writeText(
+          manifestRel,
+          serializeManifest(
+            withStatus(manifest, {
+              status: 'CANCELLED',
+              phase: 'Vom Editor abgebrochen',
+              cancelRequested: true,
+              worker: { ...claim, heartbeatAt: Date.now() },
+            })
+          )
+        )
+        .catch(() => undefined);
+      await watch.consume();
+      log(options, `Job ${jobId}: CANCELLED – ${message}`);
+      return 'cancelled';
+    }
     log(options, `Job ${jobId}: FAILED – ${code}: ${message}`);
     const failed = withStatus(manifest, {
       status: 'FAILED',
@@ -333,6 +458,7 @@ async function runOneJob(
     return 'failed';
   } finally {
     clearInterval(heartbeat);
+    watch.stop();
   }
 }
 
