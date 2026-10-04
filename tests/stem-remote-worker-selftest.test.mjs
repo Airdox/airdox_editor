@@ -35,7 +35,8 @@ function runCandidate(command, args, timeoutMs = 120_000) {
         cwd: ROOT,
         windowsHide: true,
         // Redirected Python output can use the Windows ANSI code page; Node
-        // decodes captured child output as UTF-8, so make the protocol explicit.
+        // decodes captured child output as UTF-8, so make the test protocol
+        // encoding explicit on every platform.
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
