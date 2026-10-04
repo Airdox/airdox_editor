@@ -24,30 +24,14 @@
  * Feldern, nicht in neuen Statusnamen.
  */
 import type { BackendKind, ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from '../types';
+import type { RemoteJobTraceEvent } from '../transportTypes';
+export type { RemoteJobTraceEvent } from '../transportTypes';
 
 /** Version des Manifest-Schemas. Erhöhen, wenn Felder brechen (nicht additiv). */
 export const REMOTE_JOB_SCHEMA_VERSION = 1;
 
 /** Status eines Fern-Jobs – identisch zu {@link JobStatus} (§14). */
 export type RemoteJobStatus = JobStatus;
-
-/** Persistente, korrelierbare Ablaufspur für Editor- und Worker-Schritte. */
-export interface RemoteJobTraceEvent {
-  id: string;
-  source: 'editor' | 'worker';
-  jobId: string;
-  at: number;
-  /** Maschinenlesbarer Schritt, z. B. `worker.input_verified`. */
-  step: string;
-  level: 'info' | 'warning' | 'error';
-  message: string;
-  workerId?: string;
-  status?: RemoteJobStatus;
-  phase?: string;
-  code?: string;
-  percent?: number;
-  device?: string;
-}
 
 /** Phasen, die nur im Fernpfad vorkommen (stehen in `phase`, nie im Status). */
 export const REMOTE_PHASES = {

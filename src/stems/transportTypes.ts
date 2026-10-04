@@ -9,7 +9,23 @@
  * `tests/stem-engine-ipc-contract.test.ts`.
  */
 import type { ComputeDevice, JobStatus, ModelFamily, QualityProfile, StemId } from './types';
-import type { RemoteJobTraceEvent } from './remote/types';
+
+/** Small serializable lifecycle event shared by the remote worker and UI. */
+export interface RemoteJobTraceEvent {
+  id: string;
+  source: 'editor' | 'worker';
+  jobId: string;
+  at: number;
+  step: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  workerId?: string;
+  status?: JobStatus;
+  phase?: string;
+  code?: string;
+  percent?: number;
+  device?: string;
+}
 
 /** Serializable per-stem result of a finished job. */
 export interface StemJobStemView {
