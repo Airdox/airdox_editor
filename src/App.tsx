@@ -112,6 +112,7 @@ import {
   subscribeTransport,
 } from './state/transportStore';
 import { startPlayheadDriver, type PlayheadDriverHandle } from './features/transport/playheadDriver';
+import { sha256Hex } from './utils/sha256';
 import { ChatbotPalette } from './components/ChatbotPalette';
 import { ChatbotAction, TrackEditorContext } from './types/chatbot';
 import { analyzeTrackForMixIn, generateAutoCuesForTrack } from './audio/mixAnalysis';
@@ -426,7 +427,15 @@ export default function App() {
    */
   // Project state - Stringent Empty Project (Master Prompt & Voice Directive)
   const [projectName, setProjectName] = useState<string>('New Project');
-  const [tracks, setTracks] = useState<TrackModel[]>([]);
+  const [tracks, setTrackState] = useState<TrackModel[]>([]);
+  const [trackRevision, setTrackRevision] = useState(0);
+  const setTracks = useCallback(
+    (nextTracks: TrackModel[] | ((current: TrackModel[]) => TrackModel[])) => {
+      setTrackRevision((revision) => revision + 1);
+      setTrackState(nextTracks);
+    },
+    []
+  );
   const [activeTrackId, setActiveTrackId] = useState<string>('');
   const [workingAudioBuffer, setWorkingAudioBuffer] = useState<AudioBuffer | null>(null);
 
@@ -1649,7 +1658,9 @@ export default function App() {
     }
 
     if (isPlaying) {
-      audioEngine.pause();
+      // `pause()` liefert die exakte Position: sie geht in den Store, damit
+      // Playhead und Anzeigen ohne React-Update nachziehen.
+      setPosition(audioEngine.pause());
       setIsPlaying(false);
     } else {
       let loopStart = 0;
@@ -1686,7 +1697,8 @@ export default function App() {
     }
   }, [activeTrack, isPlaying, workingAudioBuffer, activeTrackStems, stemsMixerState, stemsMixIsCustom, loopActive]);
 
-  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle
+  // Pioneer DDJ-FLX4 & DDJ-1000 MIDI Controller Hardware Lifecycle.
+  // Read transport time through a ref so 60fps playhead updates don't re-init MIDI listeners.
   useEffect(() => {
     let cancelled = false;
 
@@ -3711,17 +3723,16 @@ export default function App() {
       }
 
       const arrayBuf = await file.arrayBuffer();
-      // Robust decodeAudioData with promise/callback compatibility
-      const decoded: AudioBuffer = await new Promise((resolve, reject) => {
+      // Hash the complete source file bytes, not a sample of the decoded left channel.
+      const decodedPromise: Promise<AudioBuffer> = new Promise((resolve, reject) => {
         const copy = arrayBuf.slice(0);
         const res = audioCtx.decodeAudioData(copy, resolve, reject);
         if (res && typeof (res as unknown as Promise<AudioBuffer>).then === 'function') {
           (res as unknown as Promise<AudioBuffer>).then(resolve).catch(reject);
         }
       });
-
+      const [decoded, sha256] = await Promise.all([decodedPromise, sha256Hex(arrayBuf)]);
       const analysis = analyzeAudioBuffer(decoded, DataOrigin.LOCAL_ANALYSIS);
-      const sha256 = audioEngine.computeBufferChecksum(decoded);
 
       // Check if the currently active deck track needs its audio file (or has matching name)
       const currentActive = tracks.find((t) => t.id === activeTrackId);
@@ -3876,8 +3887,8 @@ export default function App() {
         });
       }
     } catch (err) {
-      logger.error('AUDIO_ENGINE', `Fehler beim Decodieren der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
-      alert('Konnte Audiodatei nicht decodieren. Bitte überprüfe das Dateiformat (WAV, MP3, AIFF, FLAC).');
+      logger.error('AUDIO_ENGINE', `Fehler beim Laden der Audiodatei "${file.name}": ${err instanceof Error ? err.message : String(err)}`, err);
+      alert(`Audiodatei konnte nicht geladen werden: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -4410,6 +4421,7 @@ export default function App() {
       <div className="flex-1 flex overflow-hidden relative">
         <DetailWaveform
           track={activeTrack}
+          trackRevision={trackRevision}
           getPositionSec={getPositionSec}
           viewOffset={viewOffset}
           viewDuration={viewDuration}

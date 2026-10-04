@@ -12,6 +12,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { createLayerScheduler } from '../waveform/layerScheduler';
+import { drawPlayhead } from '../waveform/canvasLayers';
 import { subscribeTransport } from '../state/transportStore';
 import {
   TrackModel,
@@ -52,6 +53,12 @@ interface DetailWaveformProps {
   getPositionSec?: () => number;
   /** Position zum Zeitpunkt des letzten React-Renders (Fallback/Tests). */
   currentTime?: number;
+  /**
+   * Inkrement-Zähler des Elternbaums: steigt, wenn sich der Track geändert hat,
+   * auch wenn die `track`-Identität gleich bleibt (z. B. In-Place-Mutation des
+   * AudioBuffer nach einem Edit). Ohne diesen Wert bliebe die Basis-Ebene stehen.
+   */
+  trackRevision?: number;
   viewOffset: number;
   viewDuration: number;
   waveformMode: WaveformMode;
@@ -104,6 +111,7 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
   track,
   getPositionSec,
   currentTime,
+  trackRevision,
   viewOffset,
   viewDuration,
   waveformMode,
@@ -745,25 +753,10 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
         }
       }
 
-      // 8. Draw Playhead (White vertical hairline)
-      const playX = timeToPixel(readPosition(), width);
-      if (playX >= 0 && playX <= width) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(playX, 0);
-        ctx.lineTo(playX, height);
-        ctx.stroke();
-
-        // Top triangle pointer
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.moveTo(playX - 4, 0);
-        ctx.lineTo(playX + 4, 0);
-        ctx.lineTo(playX, 6);
-        ctx.closePath();
-        ctx.fill();
-      }
+      // 8. Playhead (weiße Haarlinie + Dreieck oben). Die Zeichnung liegt in
+      //    `waveform/canvasLayers.ts` und wird hier ohne Leeren aufgerufen –
+      //    das Overlay wurde am Anfang dieses Frames bereits geleert.
+      drawPlayhead(ctx, readPosition(), viewOffset, viewDuration, width, height, { clear: false });
 
   };
 
@@ -796,11 +789,13 @@ export const DetailWaveform: React.FC<DetailWaveformProps> = ({
     scheduleFrameRef.current();
   }, []);
 
-  // Neue Basis: Track, Fenster, Zoom, Modus, Snap-Raster.
+  // Neue Basis: Track, Fenster, Zoom, Modus, Snap-Raster – und `trackRevision`,
+  // weil ein Edit den AudioBuffer an Ort und Stelle verändert, ohne dass sich
+  // die Track-Identität ändert.
   useEffect(() => {
     schedulerRef.current.markBase();
     scheduleFrameRef.current();
-  }, [track, viewOffset, viewDuration, waveformMode, snapTime, timeToPixel]);
+  }, [track, trackRevision, viewOffset, viewDuration, waveformMode, snapTime, timeToPixel]);
 
   // Nur Overlay: Auswahl und Quantisierung.
   useEffect(() => {

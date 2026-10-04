@@ -535,21 +535,6 @@ class AudioEngine {
   }
 
   /**
-   * Simulates/computes a reliable SHA-256 style fingerprint of original AudioBuffer data
-   */
-  public computeBufferChecksum(buffer: AudioBuffer): string {
-    const left = buffer.getChannelData(0);
-    let hash = 0x811c9dc5;
-    const step = Math.max(1, Math.floor(left.length / 5000));
-    for (let i = 0; i < left.length; i += step) {
-      const val = Math.floor((left[i] + 1.0) * 32767);
-      hash ^= val;
-      hash = Math.imul(hash, 0x01000193);
-    }
-    return 'sha256-' + Math.abs(hash).toString(16).padStart(8, '0') + '-' + buffer.length.toString(16);
-  }
-
-  /**
    * Exports an AudioBuffer to standard 16-bit stereo PCM WAV blob
    */
   public exportToWavBlob(buffer: AudioBuffer): Blob {

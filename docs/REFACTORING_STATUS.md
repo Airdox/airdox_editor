@@ -1,6 +1,7 @@
 # Refaktorisierung – Statusbericht
 
-**Stand:** 04.10.2026 · **Basis:** `main` @ `eea1a94` (v0.4.2) · **Branch:** `arena/01a10410-airdox-editor`
+**Stand:** 04.10.2026 · **Basis:** `main` @ `f7a0ef0` (v0.4.2, inkl. Merge `main` ← Branch) ·
+**Branch:** `arena/01a10410-airdox-editor`
 **Plan:** [`docs/REFACTORING_PLAN.md`](REFACTORING_PLAN.md) (freigegebene Roadmap, Phase 0–4)
 **Freigaben des Auftraggebers:** eigene Stores statt zustand ✓ · ZIPs nur aus HEAD, keine History-Umschreibung ✓ · Phase 1 vollständig ✓
 
@@ -33,7 +34,7 @@ Auf GitHub (Linux-Runner, ohne native Module) zusätzlich bestätigt: PR #76, Jo
 ```
 npm run verify
   > npm run lint      →  tsc --noEmit, keine Fehler
-  > npm test          →  75/75 bestanden, 4 übersprungen, 0 fehlgeschlagen (92,3 s)
+  > npm test          →  77/77 bestanden, 4 übersprungen, 0 fehlgeschlagen (91,6 s)
   > npm run build     →  vite 6,11 s + stems-bridge + server.cjs
   > npm run budget    →  199,1 kB gzip / 668,3 kB roh  (Budget 260 / 900) ✓
 ```
@@ -56,6 +57,26 @@ npm run bench:budget →  keine Budgetverletzung
 > erst diese Zahlen sind reproduzierbar (Median weicht nur noch um 2–5 % ab, vorher Faktor 2–10).
 > Als Budgetgrundlage sind die alten Werte damit unbrauchbar – die Budgets in `budgets.json` wurden
 > entsprechend neu gesetzt und begründet.
+
+---
+
+## 2a. Zusammenführung mit `main` (parallele Sitzung)
+
+Während dieser Arbeit hat eine **zweite Arena-Sitzung** auf `main` gemergt (PR #75, Commit `47bc212`,
+„Playhead-Ebene trennen, Transport-Ref, echter SHA-256“) und dabei genau dieselben zwei Kerndateien
+angefasst (`src/App.tsx`, `src/components/DetailWaveform.tsx`) – mit einem verwandten, aber flacheren
+Ansatz. Der Branch wurde deshalb mit `main` zusammengeführt (`git merge origin/main`, 18 Konflikte in
+zwei Dateien) und so aufgelöst, dass beide Beiträge erhalten bleiben:
+
+| Beitrag der Parallelsitzung | Entscheidung |
+|---|---|
+| `src/utils/sha256.ts` – **echtes** SHA-256 über die Dateibytes (vorher ein nachgebauter FNV-Hash des linken Kanals, der sich „sha256“ nannte) | **übernommen**; `computeBufferChecksum` ist entfernt, `App.tsx` hasht jetzt die vollständigen Dateibytes parallel zum Dekodieren |
+| `trackRevision` + `setTracks`-Wrapper – erzwingt ein Neuzeichnen der Basis-Ebene, wenn ein Edit den `AudioBuffer` **an Ort und Stelle** ändert (die Track-Identität bleibt dabei gleich) | **übernommen**; `DetailWaveform` hat dafür jetzt eine gleichnamige optionale Prop, die `markBase()` auslöst. Ohne sie wäre nach einem Edit die Wellenform stehen geblieben |
+| Ruhigere Fehlermeldung beim fehlgeschlagenen Dekodieren (Ursache im Text statt fester Liste) | **übernommen** |
+| `src/waveform/canvasLayers.ts` – eigener Zeichenpfad für die Playhead-Ebene | **übernommen und erweitert**: `drawPlayhead` ist jetzt die *einzige* Implementierung des Playhead-Strichs; die Detail-Wellenform ruft sie mit `clear: false` auf, weil sie am Frame-Anfang selbst leert (sonst würden Auswahl, Hover und Snap-Badge überschrieben). Der Test prüft beide Betriebsarten. |
+| Gedrosselter React-Loop (30 Hz Zeit, 20 Hz Pegel, `currentTimeRef`) in `App.tsx` | **verworfen** – vom Transport-Store samt Frame-Treiber abgelöst: dort entstehen **0** React-Updates pro Frame statt 30–50, und der Pegelabfall bei Pause liegt im Treiber |
+| `playheadCanvasRef` + zweiter Dauer-`rAF` im Detail-Waveform | **verworfen** – davon bleibt nur die geteilte Zeichenfunktion; gezeichnet wird über den Layer-Scheduler, der im Leerlauf gar nichts tut |
+| `docs/REFAKTORISIERUNGSPLAN.md` (Plan der Parallelsitzung) | bleibt liegen; **dieser** Bericht und `docs/REFACTORING_PLAN.md` sind die für diese Sitzung maßgebliche Roadmap |
 
 ---
 
@@ -164,6 +185,22 @@ Zwei neue Testarten, die es vorher nicht gab:
 | `tools/code_analysis`, `code_analysis_out`, `visualization.html` löschen | Das Analyse-Werkzeug ist mit README selbst dokumentiert und reproduzierbar. | Verschoben statt gelöscht (Root sauber, Wissen bleibt). |
 | Logger-Batching als reine Optimierung | Dabei kam der Flush-Fehler aus Abschnitt 3 zum Vorschein (bis zu 904 statt 40 Schreibvorgänge). | Fehler behoben, Test sichert ihn ab. |
 | `React.memo` in WP-03 | Setzt stabile Callbacks voraus, die erst WP-06 liefert. | Verschoben nach WP-06, Begründung oben. |
+
+---
+
+## 4a. Konsequenz aus der Zusammenführung
+
+Zwei Dinge sind damit belegt und für die nächsten Phasen wichtig:
+
+1. **Beide Sitzungen haben am selben Hotspot gearbeitet.** `App.tsx` und `DetailWaveform.tsx` sind
+   nicht nur intern zu groß, sie sind auch die Dateien, in denen parallele Arbeit zwangsläufig
+   kollidiert. Das erhöht die Priorität von **WP-06** (Dekomposition) und **WP-03/WP-06**-Grenzen:
+   solange 84 `useState` und ~92 Inline-Callbacks in einer Datei liegen, ist jeder Merge ein
+   manueller Eingriff.
+2. **Die Zustandsführung ist jetzt eindeutig.** Nach der Zusammenführung gibt es genau eine Quelle für
+   die Wiedergabeposition (Transport-Store) und genau zwei Wege, sie zu lesen: `subscribeTransport`
+   (Canvas/Playhead) und `useThrottledPosition` (Anzeigen). Ein zweiter Pfad wie `currentTimeRef` darf
+   nicht wieder entstehen – das ist als Regel in Abschnitt 5 des Plans aufzunehmen.
 
 ---
 
