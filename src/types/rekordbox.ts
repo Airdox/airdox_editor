@@ -3,6 +3,9 @@
  * Rekordbox DJ Audio Editor - Type Definitions
  */
 
+import type { SelectionRange } from './selection';
+export type { SelectionRange } from './selection';
+
 export enum DataOrigin {
   REKORDBOX_DB = 'REKORDBOX_DB',
   REKORDBOX_XML = 'REKORDBOX_XML',
@@ -323,17 +326,8 @@ export type PartialTrackModel = Partial<TrackModel> & {
   fileSize?: number;
 };
 
-export interface SelectionRange {
-  start: number; // seconds
-  end: number; // seconds
-  startBeat?: number;
-  endBeat?: number;
-  beatsCount: number;
-  barsCount: number;
-  duration: number;
-}
-
 export interface EditHistoryEntry {
+  trackId: string;
   description: string;
   timestamp: number;
   segments: EditSegment[];
@@ -342,6 +336,9 @@ export interface EditHistoryEntry {
   audioBuffer?: AudioBuffer;
   duration?: number;
   analysis?: WaveformAnalysisData;
+  loops?: LoopPoint[];
+  beatGrid?: BeatGrid;
+  phrases?: PhraseSection[];
 }
 
 export interface MultiTrackLayer {

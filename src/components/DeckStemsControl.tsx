@@ -80,14 +80,16 @@ interface DeckStemsControlProps {
    * Machbarkeit/Erreichbarkeit – Pfade und Intervalle, niemals Zugangsdaten (§23).
    */
   remoteStatus?: RemoteServiceStatus | null;
-  /** True, wenn die externe Zerlegung (Google Colab) als Zielmodus gewählt ist. */
-  remoteEnabled?: boolean;
-  onRemoteEnabledChange?: (enabled: boolean) => void;
   /**
    * Job, dessen Abbruch gerade gemeldet wird. Der Button zeigt diesen Zustand
    * und ist blockiert – ohne ihn wirkt ein Klick auf „Abbrechen" wie ins Leere.
    */
   remoteCancelPendingJobId?: string | null;
+  /** Kurzzeitige Sperre nach einer abgelehnten/fehlgeschlagenen Fern-Abbruchanfrage. */
+  remoteCancelCooldownJobId?: string | null;
+  /** True, wenn die externe Zerlegung (Google Colab) als Zielmodus gewählt ist. */
+  remoteEnabled?: boolean;
+  onRemoteEnabledChange?: (enabled: boolean) => void;
   /** Kurze Rückmeldung an der Leiste: was der letzte Klick tatsächlich getan hat. */
   remoteNotice?: { tone: 'info' | 'error'; text: string } | null;
   onDismissRemoteNotice?: () => void;
@@ -230,8 +232,9 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   missingModel = null,
   onInstallModel,
   remoteStatus,
-  remoteEnabled = false,
   remoteCancelPendingJobId = null,
+  remoteCancelCooldownJobId = null,
+  remoteEnabled = false,
   remoteNotice = null,
   onDismissRemoteNotice,
   onRemoteEnabledChange,
@@ -245,6 +248,8 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
   const activeRemoteJob = (remoteStatus?.jobs ?? []).find(
     (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
   );
+  const remoteCancelPending = Boolean(activeRemoteJob && remoteCancelPendingJobId === activeRemoteJob.jobId);
+  const remoteCancelCoolingDown = Boolean(activeRemoteJob && remoteCancelCooldownJobId === activeRemoteJob.jobId);
   const remoteLabel = remoteStatus?.label ?? 'Google Drive';
   const remoteHint = !remoteAvailable
     ? `Noch nicht eingerichtet – Button „Externe Zerlegung (Google Colab)" öffnet die Einrichtung (Drive-Ordner + Colab-Worker). Bis dahin läuft High Quality lokal.`
@@ -626,15 +631,21 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
           {onCancelSeparation && (
             <button
               onClick={onCancelSeparation}
-              disabled={remoteCancelPendingJobId === activeRemoteJob.jobId}
-              className="px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] disabled:opacity-60 disabled:cursor-progress"
+              disabled={remoteCancelPending || remoteCancelCoolingDown}
+              className={`px-1.5 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5] ${
+                remoteCancelPending || remoteCancelCoolingDown
+                  ? 'opacity-60 cursor-progress'
+                  : 'hover:bg-[#3f1618]'
+              }`}
               title={
-                remoteCancelPendingJobId === activeRemoteJob.jobId
+                remoteCancelPending
                   ? 'Der Abbruch wird gerade gemeldet – der externe Rechner stoppt die Rechnung beim nächsten Arbeitsschritt.'
-                  : 'Rechnung auf Google Colab abbrechen: Der Worker beendet die laufende Trennung, es werden keine Stems übernommen.'
+                  : remoteCancelCoolingDown
+                    ? 'Die letzte Abbruchanfrage wurde nicht bestätigt. Bitte kurz warten, bevor Sie es erneut versuchen.'
+                    : 'Rechnung auf Google Colab abbrechen: Der Worker beendet die laufende Trennung, es werden keine Stems übernommen.'
               }
             >
-              {remoteCancelPendingJobId === activeRemoteJob.jobId ? 'Abbruch wird gemeldet…' : 'Abbrechen'}
+              {remoteCancelPending ? 'Abbruch wird gemeldet…' : remoteCancelCoolingDown ? 'Kurz warten…' : 'Abbrechen'}
             </button>
           )}
         </div>
@@ -698,11 +709,25 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
               {onCancelSeparation && (
                 <button
                   onClick={onCancelSeparation}
-                  disabled={remoteCancelPendingJobId != null}
-                  className="px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] hover:bg-[#3f1618] text-[#fca5a5] text-[10px] font-semibold transition-colors disabled:opacity-60 disabled:cursor-progress"
-                  title="Laufende Stem-Separation abbrechen – der Rechner stoppt beim nächsten Arbeitsschritt"
+                  disabled={remoteCancelPendingJobId != null || remoteCancelCooldownJobId != null}
+                  className={`px-2 py-0.5 rounded border border-[#7f1d1d] bg-[#2a1113] text-[#fca5a5] text-[10px] font-semibold transition-colors ${
+                    remoteCancelPendingJobId != null || remoteCancelCooldownJobId != null
+                      ? 'opacity-60 cursor-progress'
+                      : 'hover:bg-[#3f1618]'
+                  }`}
+                  title={
+                    remoteCancelPendingJobId != null
+                      ? 'Der Abbruch wird gerade gemeldet – der Rechner stoppt beim nächsten Arbeitsschritt.'
+                      : remoteCancelCooldownJobId != null
+                        ? 'Bitte kurz warten, bevor eine abgelehnte/fehlgeschlagene Abbruchanfrage wiederholt wird.'
+                        : 'Laufende Stem-Separation abbrechen – der Rechner stoppt beim nächsten Arbeitsschritt'
+                  }
                 >
-                  {remoteCancelPendingJobId != null ? 'Abbruch läuft…' : 'Abbrechen'}
+                  {remoteCancelPendingJobId != null
+                    ? 'Abbruch läuft…'
+                    : remoteCancelCooldownJobId != null
+                      ? 'Kurz warten…'
+                      : 'Abbrechen'}
                 </button>
               )}
             </span>

@@ -83,6 +83,22 @@ function tailLines(text: string, maxLines: number, maxChars = 900): string {
   return lines.slice(-maxLines).join('\n').slice(-maxChars).trim();
 }
 
+/** JSON-lines backends may accidentally put a structured object in `message`.
+ * Never collapse that useful diagnostic to JavaScript's `[object Object]`. */
+function protocolValueToText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  if (value instanceof Error) return `${value.name}: ${value.message}`;
+  try {
+    const json = JSON.stringify(value);
+    if (json !== undefined) return json.slice(0, 2000);
+  } catch {
+    // Fall through to a type label for cyclic/unserializable objects.
+  }
+  return Object.prototype.toString.call(value);
+}
+
 export async function runBackendProcess(options: RunProcessOptions): Promise<ProcessResult> {
   const started = Date.now();
   const logs: string[] = [];
@@ -238,7 +254,10 @@ export async function runBackendProcess(options: RunProcessOptions): Promise<Pro
             logs.push(String(message.message ?? ''));
             break;
           case 'error':
-            reportedError = { code: String(message.code ?? ''), message: String(message.message ?? '') };
+            reportedError = {
+              code: protocolValueToText(message.code),
+              message: protocolValueToText(message.message ?? message.details),
+            };
             break;
           case 'done':
             doneSeen = true;

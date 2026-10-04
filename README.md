@@ -1,20 +1,38 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# airdox SMART Editor
 
-# Run and deploy your AI Studio app
+Browser-/Electron-basierter DJ-Audioeditor mit Waveform-Bearbeitung, Rekordbox-Import, Cues/Loops, nicht-destruktiven Edits und optionaler Stem-Separation.
 
-This contains everything you need to run your app locally.
+## Lokal starten
 
-View your app in AI Studio: https://ai.studio/apps/cdc38682-7c4b-40ff-b27c-3fb4e4376384
+**Voraussetzung:** Node.js und npm. Für die Kernfunktionen ist kein API-Schlüssel nötig.
 
-## Run Locally
+```bash
+npm ci
+cp .env.example .env   # optional: GEMINI_API_KEY für Gemini-Copilot-Funktionen eintragen
+npm run dev
+```
 
-**Prerequisites:**  Node.js
+Der lokale Express-/Vite-Server startet standardmäßig auf Port `3000`; abweichend mit `PORT=...` (Windows PowerShell: `$env:PORT=3000`). Öffne anschließend `http://localhost:3000`.
 
+Ohne `GEMINI_API_KEY` bleiben Bearbeitung und lokale Copilot-Fallbacks verfügbar; Gemini-gestützte Antworten benötigen einen gültigen Schlüssel. Der Schlüssel gehört nur in die lokale `.env`-Datei bzw. die sichere Laufzeitumgebung, niemals in Renderer-Code oder ins Repository.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Entwicklung und Tests
+
+```bash
+npm run lint   # TypeScript-Prüfung (tsc --noEmit)
+npm test       # vollständige Testsuite; optionale Umgebungs-SKIPs werden ausgewiesen
+npm run build  # Web-App, Stem-Bridge und Server bauen
+npm start      # gebauten Server starten
+```
+
+Für die Windows-Desktop-App stehen `npm run desktop` und die Paketziele `npm run package:win`, `npm run package:win:nsis` sowie `npm run package:win:portable` bereit. Native Rekordbox-/SQLCipher- und Hardwareprüfungen müssen auf einem passenden Windows-System mit Rekordbox ausgeführt werden.
+
+## Optionale Stem-Separation
+
+Stem-Modelle und Python-/ONNX-Runtimes sind groß und werden nicht ins Git-Repository eingecheckt. Diagnose, Installation, Offline-Bundling und Release-Gates sind in [`docs/STEM_BUNDLING.md`](docs/STEM_BUNDLING.md), [`docs/STEM_SEPARATION.md`](docs/STEM_SEPARATION.md) und [`docs/STEM_SEPARATION_ENGINE.md`](docs/STEM_SEPARATION_ENGINE.md) beschrieben. Ein übersprungener Qualitäts- oder Plattformtest gilt nicht als Freigabe.
+
+## Technische Dokumentation
+
+- [`docs/REFAKTORISIERUNGSPLAN.md`](docs/REFAKTORISIERUNGSPLAN.md) – Befunde, priorisierte Umsetzung und offene Gates
+- [`docs/REKORDBOX_DATABASE_FORMAT.md`](docs/REKORDBOX_DATABASE_FORMAT.md) – Rekordbox-Datenbank/ANLZ-Verträge
+- [`docs/LOGGING.md`](docs/LOGGING.md) – Logging und Diagnose

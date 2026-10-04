@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "jobId": "00000000-0000-4000-8000-000000000001",
+  "createdAt": 1760137200000,
+  "updatedAt": 1760137200000,
+  "createdAtIso": "2025-10-10T15:00:00.000Z",
+  "updatedAtIso": "2025-10-10T15:00:00.000Z",
+  "status": "PENDING",
+  "percent": 0,
+  "idempotencyKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "origin": {
+    "app": "airdox_SMART_Editor",
+    "version": "0.4.2",
+    "host": "fixture-host"
+  },
+  "input": {
+    "fileName": "fixture-mix.wav",
+    "relativePath": "jobs/00000000-0000-4000-8000-000000000001/input/fixture-mix.wav",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "bytes": 1234567,
+    "durationSeconds": 300,
+    "sampleRate": 48000,
+    "channels": 2
+  },
+  "engine": {
+    "backend": "bs_roformer",
+    "family": "bs_roformer",
+    "modelId": "bsroformer-musdb18hq-4stem-zfturbo",
+    "profile": "HIGH_QUALITY",
+    "stems": ["drums", "bass", "other", "vocals"],
+    "device": "auto"
+  },
+  "output": {
+    "stems": []
+  },
+  "attempts": 0,
+  "notes": ["fixture=shared TypeScript/Python protocol contract"]
+}

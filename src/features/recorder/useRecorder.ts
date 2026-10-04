@@ -16,7 +16,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { audioEngine } from '../../audio/audioEngine';
-import { exportAudioBuffer } from '../../audio/audioExporter';
+import {
+  AudioExportFormatUnavailableError,
+  exportAudioBuffer,
+  isAudioExportFormatSupported,
+} from '../../audio/audioExporter';
 import { measureRecordingAudio, optimizeRecordingBuffer } from '../../audio/recordingProcessor';
 import type { OperationTelemetry } from '../../components/Modals/OperationFeedbackModal';
 import type { RecorderFormat, RecorderSource, RecorderStage } from '../../components/Modals/RecorderModal';
@@ -136,6 +140,17 @@ const saveRecorderBytes = useCallback(async (
 
 const handleRecorderStart = useCallback(async () => {
   if (recorderStage === 'PREROLL' || recorderStage === 'RECORDING' || recorderStage === 'OPTIMIZING' || recorderStage === 'SAVING') return;
+  /*
+   * Export-Unterstützung vor dem Aufnehmen prüfen: ein Format, das der
+   * Exporteur nicht schreiben kann, würde sonst erst nach der Aufnahme
+   * auffallen – die Aufnahme wäre dann verloren. WAV ist verfügbar; die
+   * komprimierten Formate melden ihren Grund sofort.
+   */
+  if (!isAudioExportFormatSupported(recordingFormat)) {
+    setRecorderError(new AudioExportFormatUnavailableError(recordingFormat).message);
+    setRecorderStage('ERROR');
+    return;
+  }
   if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
     setRecorderError('Dieser Chromium/Electron-Build unterstützt keine Audioaufnahme. Bitte die Desktop-App aktualisieren.');
     setRecorderStage('ERROR');
@@ -218,7 +233,7 @@ const handleRecorderStart = useCallback(async () => {
   } else {
     await beginCapture();
   }
-}, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter]);
+}, [clearRecorderResources, recorderStage, recorderSource, recorderPreRoll, recordingLimiter, recordingFormat]);
 
 const handleRecorderStop = useCallback(async () => {
   const session = recorderSessionRef.current;

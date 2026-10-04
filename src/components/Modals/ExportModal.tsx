@@ -1,13 +1,18 @@
 /**
  * @license
  * Rekordbox ExportModal Component
- * Export master audio to WAV, MP3, FLAC, AAC, OGG, WEBM, Rekordbox XML, or Project JSON.
+ * Export master audio to verified WAV, Rekordbox XML, or Project JSON.
  */
 
 import React, { useState } from 'react';
 import { X, Download, FileAudio, FileCode, CheckCircle2, Layers, HardDrive, Info } from 'lucide-react';
 import { TrackModel, PaletteClip } from '../../types/rekordbox';
-import { exportAudioBuffer, AudioExportFormat } from '../../audio/audioExporter';
+import {
+  AudioExportFormatUnavailableError,
+  exportAudioBuffer,
+  isAudioExportFormatSupported,
+} from '../../audio/audioExporter';
+import type { AudioExportFormat } from '../../audio/audioExporter';
 import { exportToRekordboxXml } from '../../rekordbox/xmlParser';
 import { OperationTelemetry } from './OperationFeedbackModal';
 import { MultiLayerRenderInspector } from './MultiLayerRenderInspector';
@@ -52,6 +57,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const triggerActualDownload = async () => {
+    if (isAudioFormat(format) && !isAudioExportFormatSupported(format)) {
+      alert(new AudioExportFormatUnavailableError(format).message);
+      return;
+    }
+
     setShowLayerInspector(false);
     setIsExporting(true);
     setSuccessMsgInfo(null);
@@ -184,6 +194,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const isDesktop = typeof window !== 'undefined' && Boolean(window.rekordboxDesktop);
+  const selectedAudioFormatUnavailable =
+    isAudioFormat(format) && !isAudioExportFormatSupported(format);
 
   const audioFormatList: {
     id: AudioExportFormat;
@@ -197,7 +209,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'WAV',
       name: 'WAV (PCM)',
       ext: '.wav',
-      desc: 'Unkomprimierte Studioqualität (16-Bit / 44.1 kHz PCM)',
+      desc: 'Unkomprimiertes 16-Bit-PCM mit der Samplerate der Arbeitskopie.',
       tag: 'Studio Master',
       color: 'text-[#0088ff]',
     },
@@ -205,7 +217,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'MP3',
       name: 'MP3 (MPEG-1 Layer 3)',
       ext: '.mp3',
-      desc: 'High-Quality Audio (320 kbps CBR, universell kompatibel)',
+      desc: 'Derzeit nicht verfügbar: Ein geprüfter MP3-Encoder ist noch nicht integriert.',
       tag: 'Universal',
       color: 'text-[#10b981]',
     },
@@ -213,7 +225,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'FLAC',
       name: 'FLAC (Lossless Codec)',
       ext: '.flac',
-      desc: 'Verlustfreie Kompression (Studio-Standard & DJ-Softwares)',
+      desc: 'Derzeit nicht verfügbar: Ein geprüfter FLAC-Encoder ist noch nicht integriert.',
       tag: 'Lossless HQ',
       color: 'text-[#00e5ff]',
     },
@@ -221,7 +233,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'AAC',
       name: 'AAC / M4A (MPEG-4)',
       ext: '.m4a',
-      desc: 'Advanced Audio Coding (Apple DJ Standard & rekordbox)',
+      desc: 'Derzeit nicht verfügbar: Ein geprüfter AAC-Encoder ist noch nicht integriert.',
       tag: 'AAC HQ',
       color: 'text-[#f59e0b]',
     },
@@ -229,7 +241,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'OGG',
       name: 'OGG Vorbis',
       ext: '.ogg',
-      desc: 'Open Source Audio Container mit hoher Effizienz',
+      desc: 'Derzeit nicht verfügbar: Ein geprüfter OGG-Encoder ist noch nicht integriert.',
       tag: 'Ogg Opus',
       color: 'text-[#ec4899]',
     },
@@ -237,7 +249,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       id: 'WEBM',
       name: 'WebM Audio',
       ext: '.webm',
-      desc: 'WebM Audio Container mit Opus Codec',
+      desc: 'Derzeit nicht verfügbar: Ein geprüfter WebM/Opus-Encoder ist noch nicht integriert.',
       tag: 'Web Standard',
       color: 'text-[#8b5cf6]',
     },
@@ -268,7 +280,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <div className="flex items-center space-x-2">
               <Info size={14} className="text-[#0088ff] flex-shrink-0" />
               <span>
-                Wähle das Zielformat für den Export. Die Original-Audiodatei bleibt dabei 100% unberührt (Non-destructive).
+                WAV ist derzeit das einzige verfügbare Audioexportformat. Die Original-Audiodatei bleibt beim Export unberührt (Non-destructive).
               </span>
             </div>
           </div>
@@ -283,14 +295,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {audioFormatList.map((item) => {
                 const isSelected = format === item.id;
+                const isSupported = isAudioExportFormatSupported(item.id);
                 return (
                   <div
                     key={item.id}
-                    onClick={() => setFormat(item.id)}
-                    className={`p-2.5 rounded-xs border cursor-pointer transition-all flex flex-col justify-between ${
+                    aria-disabled={!isSupported}
+                    title={isSupported ? undefined : `${item.id}-Export ist derzeit nicht verfügbar: kein verifizierter Encoder mit passendem Container.`}
+                    onClick={isSupported ? () => setFormat(item.id) : undefined}
+                    className={`p-2.5 rounded-xs border transition-all flex flex-col justify-between ${
+                      isSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                    } ${
                       isSelected
                         ? 'bg-[#182030] border-[#0088ff] text-white shadow-sm ring-1 ring-[#0088ff]/40'
-                        : 'bg-[#0f1015] border-[#22242f] text-neutral-400 hover:bg-[#14161e] hover:border-[#2d3142]'
+                        : isSupported
+                          ? 'bg-[#0f1015] border-[#22242f] text-neutral-400 hover:bg-[#14161e] hover:border-[#2d3142]'
+                          : 'bg-[#0f1015] border-[#22242f] text-neutral-500'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -299,7 +318,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         <span>{item.name}</span>
                       </span>
                       <span className="text-[9px] font-mono px-1.5 py-0.2 bg-[#1b202e] border border-[#2b3345] rounded text-neutral-300">
-                        {item.tag}
+                        {isSupported ? item.tag : 'Nicht verfügbar'}
                       </span>
                     </div>
                     <p className="text-[10px] text-neutral-400 leading-tight">
@@ -309,6 +328,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 );
               })}
             </div>
+            <p className="text-[10px] text-amber-300/80">
+              Komprimierte Formate bleiben deaktiviert, bis echte Encoder und passende Container integriert und geprüft sind. WAV ist derzeit das einzige verfügbare Audioformat.
+            </p>
           </div>
 
           {/* Section 2: Library & Project Formats */}
@@ -413,7 +435,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
             <button
               onClick={triggerActualDownload}
-              disabled={isExporting}
+              disabled={isExporting || selectedAudioFormatUnavailable}
+              title={selectedAudioFormatUnavailable ? 'Dieses Audioformat ist derzeit nicht verfügbar.' : undefined}
               className="px-4 py-1.5 bg-[#0088ff] hover:bg-[#0070d6] text-white rounded-xs font-bold text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-50 shadow-md hover:shadow-[#0088ff]/25 cursor-pointer"
             >
               <Download size={13} />

@@ -3,6 +3,8 @@ name: Windows-Build
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -17,8 +19,16 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Python für den sprachübergreifenden Remote-Manifesttest einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Abhängigkeiten installieren
         run: npm ci
+
+      - name: TypeScript prüfen
+        run: npm run lint
 
       - name: Native Module für Electron neu bauen
         run: npm run rekordbox:native:ensure
@@ -32,6 +42,12 @@ jobs:
       # Der Runner meldet Fehlschläge als ::error-Annotation im Job-Log.
       - name: Test-Suite ausführen
         run: npm test
+
+      # Die Freigabe-Teilmenge darf keine Tests aufgrund fehlender
+      # Voraussetzungen überspringen. Der Check deckt u. a. die gemeinsame
+      # TypeScript-/Python-Manifest-Fixture des Remote-Workers ab.
+      - name: Portable Stem-Freigabetests ohne SKIPs
+        run: npm run test:stems:release
 
       - name: Electron-Installer bauen (NSIS)
         run: npm run package:win:nsis
