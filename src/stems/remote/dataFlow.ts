@@ -37,9 +37,10 @@ export type RemoteFlowWhere = 'local' | 'store' | 'cloud' | 'worker';
  *  - `active`  – der Fluss steht hier (der nächste Beleg wird hier erwartet)
  *  - `pending` – noch nicht erreicht
  *  - `unknown` – **nicht messbar**; der Editor hat keine Quelle dafür
- *  - `failed`  – hier ist der Lauf geendet (Fehler oder Abbruch)
+ *  - `failed`   – hier ist der Lauf mit einem technischen Fehler geendet
+ *  - `cancelled` – hier wurde der Lauf durch einen Abbruch beendet
  */
-export type RemoteFlowState = 'done' | 'active' | 'pending' | 'unknown' | 'failed';
+export type RemoteFlowState = 'done' | 'active' | 'pending' | 'unknown' | 'failed' | 'cancelled';
 
 /** Ein benannter Beleg einer Station (Paar aus Bezeichnung und Wert). */
 export interface RemoteFlowFact {
@@ -354,7 +355,7 @@ export function buildRemoteDataFlow(record: RemoteJobRecord, options: RemoteFlow
     const ended = stations[openIndex];
     stations[openIndex] = {
       ...ended,
-      state: 'failed',
+      state: ctx.outcome === 'cancelled' ? 'cancelled' : 'failed',
       at: ended.at ?? record.finishedAt ?? record.updatedAt,
       detail: ended.detail ?? (ctx.outcome === 'cancelled' ? 'Hier wurde der Lauf abgebrochen.' : 'Hier ist der Lauf fehlgeschlagen.'),
       facts: ended.facts ?? (record.error ? [{ label: 'Grund', value: `${record.error.code}: ${record.error.message}` }] : undefined),
@@ -413,7 +414,8 @@ function stationFacts(ctx: StationContext, id: RemoteFlowStationId): Omit<Remote
     case 'published': {
       const checked = fromCheckpoint();
       if (checked) return checked;
-      if (record.uploadedAt || (record.status !== 'PREPARING' && record.status !== 'PENDING')) {
+      const statusImpliesPublished = record.status === 'RUNNING' || record.status === 'RECONSTRUCTING' || record.status === 'VALIDATING' || record.status === 'COMPLETED';
+      if (record.uploadedAt || statusImpliesPublished) {
         return {
           state: 'done',
           at: record.uploadedAt ?? record.updatedAt,
