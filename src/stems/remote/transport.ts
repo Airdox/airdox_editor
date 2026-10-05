@@ -127,7 +127,7 @@ export class FolderTransport implements IRemoteTransport {
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === 'ENOENT') return null;
-      if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') {
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY' || code === 'EISDIR') {
         throw new RemoteUnreachableError(`Datei vorübergehend nicht lesbar (${code}): ${relative}`, { relative });
       }
       throw error;
@@ -145,9 +145,9 @@ export class FolderTransport implements IRemoteTransport {
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === 'ENOENT') return null;
-      if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') {
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY' || code === 'EISDIR') {
         // Drive synchronisiert im Hintergrund: eine Datei kann kurz gesperrt
-        // sein. Das ist ein Transport-, kein Job-Problem.
+        // oder temporär als Ordner/Platzhalter sichtbar sein. Das ist ein Transport-, kein Job-Problem.
         throw new RemoteUnreachableError(`Datei vorübergehend nicht lesbar (${code}): ${relative}`, { relative });
       }
       throw error;

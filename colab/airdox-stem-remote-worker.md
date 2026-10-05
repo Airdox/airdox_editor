@@ -246,11 +246,27 @@ else:
 
 <<<CELL py
 # 4 · GPU-Check – kein Job bricht ab, nur weil DirectML/CUDA fehlt (§7)
-import os, subprocess
+import os, subprocess, torch
 try:
-    print(subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip() or "Keine NVIDIA-GPU sichtbar")
+    smi = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout.strip()
+    if smi:
+        print("✓ GPU erkannt:", smi)
+    else:
+        print("Keine NVIDIA-GPU sichtbar.")
 except FileNotFoundError:
-    print("nvidia-smi fehlt – CPU-Pfad")
+    print("nvidia-smi fehlt.")
+
+if not torch.cuda.is_available():
+    print("\n" + "=" * 65)
+    print("⚠️  ACHTUNG: KEINE GPU AKTIVIERT (CPU-MODUS)!")
+    print("   Auf der CPU dauert eine Trennung 60–90 Minuten pro Track!")
+    print("   Empfehlung: Jetzt im Colab-Menü umstellen auf T4-GPU:")
+    print("   Laufzeit → Laufzeittyp ändern → Hardwarebeschleuniger: T4-GPU")
+    print("   (Mit GPU dauert dieselbe Trennung nur 2–3 Minuten)")
+    print("=" * 65 + "\n")
+else:
+    print(f"✓ PyTorch CUDA aktiv: {torch.cuda.get_device_name(0)} (ca. 2–3 Minuten pro Track)")
+
 print("device:", GERAET, "| max jobs:", MAX_JOBS, "| einmalig:", EINMALIG, "| Abbruch alle:", ABBRUCH_SEKUNDEN, "s")
 >>>
 
