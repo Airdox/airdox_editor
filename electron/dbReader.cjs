@@ -612,11 +612,11 @@ function collectPioneerRootCandidates(pioneerRoot) {
   const results = [];
   if (!pioneerRoot) return results;
   // Accept both a standard Rekordbox application-data root and an exported
-  // PIONEER media root supplied by the user (for example D:\\PIONEER).
+  // PIONEER media root supplied by the user (for example E:\\PIONEER or D:\\PIONEER).
   // Only known database filenames are considered; all filesystem access stays
   // read-only.
   results.push(...findDatabaseFiles(pioneerRoot, { includeOptions: false }));
-  for (const dirName of ['rekordbox7', 'rekordbox6', 'rekordbox']) {
+  for (const dirName of ['Master', 'master', 'rekordbox7', 'rekordbox6', 'rekordbox']) {
     results.push(...findDatabaseFiles(path.join(pioneerRoot, dirName)));
   }
   return results;
@@ -650,8 +650,10 @@ function locateRekordboxDatabases() {
   // winning when the user intentionally points diagnostics at another library.
   if (override.length === 0 && process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    // Check the user-supplied export/database root before standard locations,
+    // Check user-supplied export/database roots before standard locations,
+    // prioritizing Partition E followed by D as fallback,
     // but still prefer MASTER_DB over OneLibrary in the gate's type ordering.
+    candidates.push(...collectPioneerRootCandidates(path.win32.join('E:\\', 'PIONEER')));
     candidates.push(...collectPioneerRootCandidates(path.win32.join('D:\\', 'PIONEER')));
     candidates.push(...collectPioneerRootCandidates(path.join(appData, 'Pioneer')));
   } else if (override.length === 0 && process.platform === 'darwin') {
@@ -663,8 +665,9 @@ function locateRekordboxDatabases() {
   const unique = [];
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate.path);
-    if (seen.has(resolved)) continue;
-    seen.add(resolved);
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
     unique.push({ ...candidate, path: resolved });
   }
   return unique;

@@ -153,13 +153,35 @@ async function beforePack(context) {
     onlyModules: [MODULE_NAME],
     force: true,
   };
-  try {
-    await rebuild(context2);
-  } catch (error) {
+  const electronPath = electronBinaryPath(dir);
+  if (!electronPath || !fs.existsSync(electronPath)) {
     fail(
-      `Der native Rebuild von ${MODULE_NAME} für Electron ${electronVersion} ist fehlgeschlagen: ${error.message || error}`,
-      'Ein Build ohne lauffähiges SQLCipher wird nicht erzeugt.'
+      'Die Electron-Binary wurde nicht gefunden; ohne sie ist der ABI-Nachweis unmöglich.',
+      'electron ist eine devDependency – bitte "npm ci" ausführen und erneut bauen.'
     );
+  }
+
+  // Wenn bereits ein passendes prebuilt Binary für diese Electron-ABI vorliegt
+  // und in der Laufzeit fehlerfrei lädt, ist kein C++-Kompilierer auf dem Rechner nötig.
+  const existingBinary = findNativeBinary(dir);
+  let needsRebuild = true;
+  if (existingBinary) {
+    const preCheck = requireInElectronRuntime(electronPath, moduleDir);
+    if (preCheck.ok) {
+      console.log(`[airdox:packaging] beforePack: vorhandenes Prebuild für Electron ist funktionsfähig (${preCheck.stdout})`);
+      needsRebuild = false;
+    }
+  }
+
+  if (needsRebuild) {
+    try {
+      await rebuild(context2);
+    } catch (error) {
+      fail(
+        `Der native Rebuild von ${MODULE_NAME} für Electron ${electronVersion} ist fehlgeschlagen: ${error.message || error}`,
+        'Ein Build ohne lauffähiges SQLCipher wird nicht erzeugt.'
+      );
+    }
   }
 
   const binary = findNativeBinary(dir);
@@ -173,13 +195,6 @@ async function beforePack(context) {
 
   // Der Nachweis muss in der Electron-Laufzeit stattfinden – in Node lässt
   // sich ein für Electron gebautes Binary grundsätzlich nicht laden.
-  const electronPath = electronBinaryPath(dir);
-  if (!electronPath || !fs.existsSync(electronPath)) {
-    fail(
-      'Die Electron-Binary wurde nicht gefunden; ohne sie ist der ABI-Nachweis unmöglich.',
-      'electron ist eine devDependency – bitte "npm ci" ausführen und erneut bauen.'
-    );
-  }
   const probe = requireInElectronRuntime(electronPath, moduleDir);
   if (!probe.ok) {
     fail(

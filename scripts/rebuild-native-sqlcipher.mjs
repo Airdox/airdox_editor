@@ -83,12 +83,34 @@ async function main() {
   const moduleVersion = detectModuleVersion();
   const binary = locatePrebuiltBinary();
   const stamp = readStamp();
+  const electronBinary = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
+  let loadsInElectron = false;
+  if (binary && existsSync(binary) && existsSync(electronBinary)) {
+    const probe = spawnSync(electronBinary, ['-e', `require(${JSON.stringify(path.join(ROOT, 'node_modules', MODULE_NAME))}); console.log('ok');`], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      encoding: 'utf8',
+    });
+    loadsInElectron = probe.status === 0 && probe.stdout.includes('ok');
+  }
+
   const upToDate =
-    stamp &&
-    stamp.electronVersion === electronVersion &&
-    stamp.moduleVersion === moduleVersion &&
-    binary &&
-    existsSync(binary);
+    loadsInElectron || (
+      stamp &&
+      stamp.electronVersion === electronVersion &&
+      stamp.moduleVersion === moduleVersion &&
+      binary &&
+      existsSync(binary)
+    );
+
+  if (loadsInElectron && !stamp) {
+    writeStamp({
+      electronVersion,
+      moduleVersion,
+      binary: path.relative(ROOT, binary),
+      builtAt: new Date().toISOString(),
+      durationMs: 0,
+    });
+  }
 
   console.log(`[rekordbox:native] Electron ${electronVersion}, ${MODULE_NAME} ${moduleVersion || 'nicht installiert'}`);
   console.log(`[rekordbox:native] Binary: ${binary || 'NICHT GEBRAUT'}`);

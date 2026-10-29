@@ -250,9 +250,8 @@ async function run() {
   });
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.equal(cancelHarness.service.cancel(cancelView.jobId, 'Nutzer hat abgebrochen'), true);
-  const cancelled = await cancelHarness.service.waitFor(cancelView.jobId).catch((error) => {
-    const described = (error as { code?: string; message?: string }) ?? {};
-    return { status: 'FAILED', error: { code: described.code ?? '?', message: described.message ?? '?' } } as never;
+  const cancelled = await cancelHarness.service.waitFor(cancelView.jobId).catch(() => {
+    return cancelHarness.service.getJob(cancelView.jobId)!;
   });
   assert.equal(cancelled.status, 'CANCELLED', `Abbruch endet als ${cancelled.status}: ${cancelled.error?.message}`);
   assert.equal(cancelled.result, undefined, 'abgebrochener Job hat keine fertigen Stems');

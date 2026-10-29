@@ -2,6 +2,7 @@ node_modules/
 .venv/
 build/
 dist/
+release/
 coverage/
 __pycache__/
 .DS_Store

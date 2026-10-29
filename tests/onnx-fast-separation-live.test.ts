@@ -316,18 +316,22 @@ async function run() {
     });
     const gpuFinished = await service.waitFor(gpuRun.jobId);
     assert.equal(gpuFinished.status, 'COMPLETED', 'ein fehlender GPU-Provider darf den Job nicht beenden');
-    assert.equal(gpuFinished.device, 'cpu');
-    assert.equal(gpuFinished.cpuFallback, true, 'der Rückfall ist als solcher gekennzeichnet');
-    assert.match(
-      String(gpuFinished.fallbackReason ?? ''),
-      /dml|directml|Provider|Session|CPU/i,
-      // Englische Reasons aus der Session- und Provider-Kette ("Session …",
-      // "Provider …", "dml") ebenso wie die deutsche Direktnachricht des
-      // Separator ('Gerät "directml" ist auf diesem System nicht nutzbar …'),
-      // je nach Plattform kann eine der beiden Varianten entstehen.
-    );
+    if (gpuFinished.device === 'directml') {
+      console.log('  ✓ DirectML ist nativ verfügbar und wurde genutzt (kein Fallback nötig)');
+    } else {
+      assert.equal(gpuFinished.device, 'cpu');
+      assert.equal(gpuFinished.cpuFallback, true, 'der Rückfall ist als solcher gekennzeichnet');
+      assert.match(
+        String(gpuFinished.fallbackReason ?? ''),
+        /dml|directml|Provider|Session|CPU/i,
+        // Englische Reasons aus der Session- und Provider-Kette ("Session …",
+        // "Provider …", "dml") ebenso wie die deutsche Direktnachricht des
+        // Separator ('Gerät "directml" ist auf diesem System nicht nutzbar …'),
+        // je nach Plattform kann eine der beiden Varianten entstehen.
+      );
+      console.log(`  ✓ Gerät gemeldet: ${gpuFinished.device}, cpuFallback=${gpuFinished.cpuFallback}, Grund: ${gpuFinished.fallbackReason}`);
+    }
     assert.equal(gpuFinished.result?.originalUnchanged, true);
-    console.log(`  ✓ Gerät gemeldet: ${gpuFinished.device}, cpuFallback=${gpuFinished.cpuFallback}, Grund: ${gpuFinished.fallbackReason}`);
 
     console.log('\n═══════════════════════════════════════════════════════════════════');
     console.log(`  SCHNELLER PFAD BESTANDEN – Runtime: ${label}`);

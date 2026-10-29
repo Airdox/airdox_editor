@@ -84,7 +84,7 @@
     "@types/react-dom": "^19.2.7",
     "@types/three": "^0.186.0",
     "autoprefixer": "^10.4.21",
-    "electron": "^44.2.0",
+    "electron": "^42.0.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
