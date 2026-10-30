@@ -74,12 +74,13 @@ export type StemQualityProfile = 'PREVIEW' | 'BALANCED' | 'HIGH' | 'HIGH_QUALITY
 export const STEM_QUALITY_PROFILES: StemQualityProfile[] = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALITY'];
 
 /** Selectable architectures, mirrored here so the settings menu has labels even offline. */
-export const SELECTABLE_MODEL_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs'];
+export const SELECTABLE_MODEL_FAMILIES: ModelFamily[] = ['scnet', 'bs_roformer', 'mel_band_roformer', 'htdemucs'];
 
 const FAMILY_LABEL: Record<ModelFamily, string> = {
   bs_roformer: 'BS-RoFormer',
   mel_band_roformer: 'Mel-Band-RoFormer',
   htdemucs: 'HTDemucs',
+  scnet: 'SCNet',
   pipeline_double: 'Pipeline-Double (Test)',
 };
 
@@ -87,6 +88,7 @@ const FAMILY_DESCRIPTION: Record<ModelFamily, string> = {
   bs_roformer: 'Primäre Engine – beste Trennqualität für Vocals/Drums/Bass/Other.',
   mel_band_roformer: 'Alternative RoFormer-Architektur für A/B-Vergleiche, v. a. Vocals/Other.',
   htdemucs: 'Legacy-Engine, schneller aber weniger präzise als BS-RoFormer.',
+  scnet: 'Kompakter ONNX-Livepfad für vier DJ-Stems (Vocals, Drums, Bass, Other).',
   pipeline_double: 'Test-Double – kein trainiertes Modell.',
 };
 

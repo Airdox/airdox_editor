@@ -246,6 +246,42 @@
       "notes": "Performance-Modell für den Live-Betrieb. Die Datei speichert fp16-Gewichte, gerechnet wird fp32 (I/O des Graphen ist float32) – deshalb precision: f32. Exakter Datei-Hash wird beim Bundling (npm run stems:bundle) berechnet und im bundle-manifest.json festgehalten; stimmt er, den Wert hier als checkpoint.sha256 und modelHash eintragen."
     },
     {
+      "id": "scnet-onnx-4stem-int8",
+      "family": "scnet",
+      "architecture": "SCNet (ONNX Runtime, kompakte int8-Gewichte)",
+      "version": "audiojs-scnet-int8-e71bcdb",
+      "checkpoint": {
+        "file": "scnet/scnet.int8.onnx",
+        "format": "onnx",
+        "url": "https://huggingface.co/audiojs/scnet/resolve/e71bcdb42bce1d62b7fae25ba90fcbcf90f73f46/scnet.int8.onnx",
+        "sha256": "98228931494151762a1c4ab1ec7899a894b1f81fd4a509921a9d2f9bacc50845",
+        "bytes": 12900277
+      },
+      "checkpointSha256": "98228931494151762a1c4ab1ec7899a894b1f81fd4a509921a9d2f9bacc50845",
+      "sampleRate": 44100,
+      "inputChannels": 2,
+      "outputStems": ["drums", "bass", "other", "vocals"],
+      "stemOrder": ["drums", "bass", "other", "vocals"],
+      "supportedStems": ["drums", "bass", "other", "vocals"],
+      "stemDisplayNames": {"drums": "Drums", "bass": "Bass", "other": "Other", "vocals": "Vocals"},
+      "modelHash": "98228931494151762a1c4ab1ec7899a894b1f81fd4a509921a9d2f9bacc50845",
+      "sourceUrl": "https://github.com/starrytong/SCNet/tree/5d95bf96b19c3eede63248d171efeca8e3abb948",
+      "license": "MIT (SCNet, starrytong)",
+      "weightLicense": "MIT; author permits redistribution of converted ONNX weights with attribution",
+      "licenseUrl": "https://github.com/starrytong/SCNet/issues/35",
+      "backendSupport": ["onnx"],
+      "precision": ["f32"],
+      "recommendedOverlap": 1,
+      "chunkSizeSamples": 485100,
+      "qualityProfile": {
+        "serves": ["PREVIEW", "BALANCED"],
+        "numOverlap": {"PREVIEW": 1, "BALANCED": 1},
+        "ensemblePasses": {"PREVIEW": 1, "BALANCED": 1},
+        "rationale": "Kompakte vier-Stem-Alternative für lokale DJ-Bearbeitung. PREVIEW nutzt 50 %, BALANCED 40 % Segment-Schrittweite für schnellere lokale Trennung. Gemessene MUSDB18-HQ Median-SDR der Referenzkonfiguration (25 % Schrittweite): Vocals 9.88, Drums 9.44, Bass 8.35, Other 6.14 dB; diese Qualität ist nicht für die reduzierte Überlappung zugesichert."
+      },
+      "notes": "SCNet-Frontend/STFT, Chunking und Rekonstruktion werden durch @audio/neural-separate bereitgestellt. 12,9 MB Modell, Download einmalig; DJ-Modi verwenden 4.4- bzw. 5.5-s Segmentabstand bei 11-s-Fenster. MUSDB18-HQ-Datensatz hat Education-only-Lizenz; beachten bei kommerzieller Distribution."
+    },
+    {
       "id": "pipeline-double-v1",
       "family": "pipeline_double",
       "architecture": "Pipeline Double (Synthetic)",

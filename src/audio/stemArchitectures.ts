@@ -104,6 +104,17 @@ export const STEM_ARCHITECTURE_BENCHMARKS: Record<string, StemArchitectureBenchm
     useCase: 'Ultra-schneller Live-DJ-Betrieb und spontane Stem-Separation während der Performance. Läuft in-process ohne Python-Subprozess.',
     summary: 'Optimiert für maximale Geschwindigkeit, minimale Latenz und geringen Ressourcenverbrauch.',
   },
+  'scnet-onnx-4stem-int8': {
+    gpuTime: 'Auf diesem Laptop nicht mit GPU zugesichert',
+    cpuTime: 'Für 5 Minuten noch auf der Zielhardware zu messen; Vorschau ist sofort nutzbar',
+    realtimeFactor: 'Chunkweise; Fortschritt während der Bearbeitung',
+    sdrScore: 'MUSDB18-HQ Median: Vocals 9.88, Drums 9.44, Bass 8.35, Other 6.14 dB',
+    vram: 'Kein dedizierter VRAM nötig',
+    memory: '13 MB Modell; Laufzeitspeicher hängt von der Vorschaugröße ab',
+    qualityLevel: 'LIVE_PERFORMANCE',
+    useCase: 'Kompakte, vierteilige SCNet-ONNX-Trennung. Für schnelle DJ-Vorschauen und Editieren auf CPU ausgelegt.',
+    summary: '12,9-MB-Modell; Projektangaben sind keine Laufzeitgarantie für diesen Laptop.',
+  },
   'htdemucs-ft-4stem': {
     gpuTime: '~35–60 Sek.',
     cpuTime: '~2.5–5 Min.',
@@ -168,6 +179,7 @@ const FAMILY_LABEL: Record<string, string> = {
   bs_roformer: 'BS-RoFormer',
   mel_band_roformer: 'Mel-Band RoFormer',
   htdemucs: 'HT-Demucs',
+  scnet: 'SCNet',
   pipeline_double: 'Pipeline-Double',
 };
 
@@ -246,6 +258,7 @@ export function deviceChoices(onnx?: StemServiceStatus['onnx']): StemDeviceChoic
 function labelForArchitecture(model: StemServiceStatus['models'][number]): string {
   const family = FAMILY_LABEL[model.family] ?? model.family;
   if (model.family === 'htdemucs' && model.format === 'onnx') return `${family} · Live (ONNX, in-process)`;
+  if (model.family === 'scnet') return `${family} · Live (ONNX, 4 Stems)`;
   if (model.family === 'htdemucs') return `${family} FT · Demucs (PyTorch)`;
   if (model.family === 'pipeline_double') return `${family} (nur Tests)`;
   const only = model.stems.length === 1 ? ` · ${model.stems[0]}` : '';

@@ -34,6 +34,7 @@ import { BSRoFormerSeparator, MelBandRoFormerSeparator } from './backends/roform
 import { HTDemucsSeparator } from './backends/htDemucsSeparator';
 import { PipelineDoubleSeparator } from './backends/pipelineDoubleSeparator';
 import { OnnxSeparator, type OnnxRuntimeLike } from './backends/onnxSeparator';
+import { ScnetSeparator } from './backends/scnetSeparator';
 import { availabilityCacheKey, BackendAvailabilityCache } from './backends/availabilityCache';
 
 export const DEFAULT_CHUNK_OVERLAP: Record<QualityProfile, number> = {
@@ -148,6 +149,9 @@ export function createDefaultBackendFactory(options: BackendFactoryOptions = {})
             })
           );
         }
+      }
+      if (descriptor.family === 'scnet') {
+        out.push(new ScnetSeparator({ modelStoreDir: options.modelStoreDir ?? '.' }));
       }
       return out;
     },
@@ -572,7 +576,7 @@ export class StemSeparationEngine {
       // bekommen den kompletten Track in einem Zug: bei ~3-s-Engine-Chunks
       // waren das sonst ~100 Prozessstarts pro 5-Minuten-Song plus doppelt
       // gerechneter Modellaufrufe (äußeres 50-%-Overlap × inneres Overlap).
-      const wholeFile = !inMemory && backendCapabilities.processesWholeFile === true;
+      const wholeFile = backendCapabilities.processesWholeFile === true;
       const plans = planChunks({
         totalFrames: working.frames,
         chunkSamples: wholeFile ? Math.max(working.frames, MIN_OVERLAP_SAMPLES * 2) : job.settings.chunkSizeSamples,
@@ -592,7 +596,7 @@ export class StemSeparationEngine {
       // Nur der Ganzdatei-Pfad darf auf das Einlesen verzichten (das Backend
       // bekommt die Datei direkt); Multi-Chunk-Dateibackends und In-memory-
       // Backends brauchen die Samples hier.
-      const workingAudio = wholeFile ? { data: new Float32Array(0), channels: working.channels } : await readWavFile(working.workingPath);
+      const workingAudio = wholeFile && !inMemory ? { data: new Float32Array(0), channels: working.channels } : await readWavFile(working.workingPath);
       // In-memory backends (ONNX, double) never see a chunk file. That removes
       // the per-chunk WAV write, the per-chunk output directory and the read
       // back of every stem – the reason the Python path produced hundreds of

@@ -86,7 +86,7 @@ async function run() {
   // ---- #1: keine Gewichte -> Katalog-Reihenfolge, alles unbenutzbar ---------
   console.log('\n[ TEST ] #1 Ohne Gewichte bleibt die Reihenfolge des Katalogs');
   const bareRegistry = ModelRegistry.fromBundledCatalog();
-  assert.equal(bareRegistry.selectForProfile('PREVIEW').id, DEMUCS_ID, 'reine Katalogfrage bleibt htdemucs');
+  assert.equal(bareRegistry.selectForProfile('PREVIEW').id, 'scnet-onnx-4stem-int8', 'reine Katalogfrage bevorzugt SCNet');
   const bareEngine = new StemSeparationEngine({
     registry: bareRegistry,
     workingRoot: path.join(root, 'Working'),
@@ -94,9 +94,9 @@ async function run() {
     cacheRoot: path.join(root, 'Cache'),
     modelStoreDir: store,
   });
-  assert.equal(bareEngine.resolveModel('PREVIEW').id, DEMUCS_ID, 'ohne Dateien keine stille Umsortierung');
+  assert.equal(bareEngine.resolveModel('PREVIEW').id, 'scnet-onnx-4stem-int8', 'ohne Dateien bleibt SCNet die Vorschau-Empfehlung');
   assert.equal(bareEngine.isSelectable(bareRegistry.require(PRIMARY_ID)), false, 'nichts vorhanden -> nicht auswählbar');
-  console.log(`  ✓ leerer Store  -> PREVIEW bleibt ${DEMUCS_ID} (Auswahl wie bisher)`);
+  console.log('  ✓ leerer Store  -> SCNet ist die erste PREVIEW-Empfehlung');
 
   // ---- Vorbereitung: BS-RoFormer „installiert" (nur Präsenz, kein Hash) -----
   // Der Testkatalog verzichtet auf den sha256-Zwang, damit eine Platzhalterdatei
@@ -126,10 +126,10 @@ async function run() {
   assert.equal(preview.family, 'bs_roformer');
   assert.equal(
     registry.selectForProfile('PREVIEW').family,
-    'htdemucs',
+    'scnet',
     'die Katalog-Reihenfolge selbst bleibt unverändert (nur die Auswahl nutzt die Verfügbarkeit)'
   );
-  assert.equal(registry.selectForProfile('PREVIEW', undefined, { isAvailable: () => false }).id, DEMUCS_ID);
+  assert.equal(registry.selectForProfile('PREVIEW', undefined, { isAvailable: () => false }).id, 'scnet-onnx-4stem-int8');
   const engineStatus = await engine.status();
   assert.equal(engineStatus.profiles.PREVIEW, PRIMARY_ID);
   assert.equal(engineStatus.profiles.HIGH_QUALITY, PRIMARY_ID);

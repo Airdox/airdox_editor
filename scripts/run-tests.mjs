@@ -53,7 +53,7 @@ const GROUPS = {
   // TypeScript und ohne Python ausführbar (die python-abhängigen Suiten
   // erklären sich über @requires-Direktiven selbst für SKIP).
   stems: (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-/.test(file) &&
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-|scnet-separator/.test(file) &&
     (!/live/.test(file) || /onnx-fast-separation-live/.test(file)),
   // Die Freigabe-Läufe mit echten Gewichten (Checkpoint + PyTorch nötig). Beide
   // sind ohne installierten Checkpoint ein sauberer SKIP – `test:stems:release`
@@ -62,7 +62,7 @@ const GROUPS = {
   'stems-live': (file) => /stem-separation-.*live|stem-isolation-gate-live/.test(file),
   // CI-Freigabe: alles, was ohne Spezialumgebung wirklich laufen muss.
   'stems-release': (file) =>
-    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-/.test(file) &&
+    /stem-separation-|stem-isolation-gate|stem-job-service|stem-engine|stem-installer-|stem-asar-unpack|stem-bundle-|stem-remote-|onnx-|scnet-separator/.test(file) &&
     !/live/.test(file) &&
     // Die Python-ORT-Probe braucht ein zusätzliches Paket und ist kein
     // Freigabekriterium der App – sie belegt den Testgraphen, nichts mehr.

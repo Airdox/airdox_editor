@@ -62,8 +62,8 @@ async function run() {
   const familyIds = status.families.map((entry) => entry.family);
   assert.deepEqual(
     [...familyIds].sort(),
-    ['bs_roformer', 'htdemucs', 'mel_band_roformer'],
-    'genau die drei echten Architekturen, pipeline_double ist kein Auswahlpunkt'
+    ['bs_roformer', 'htdemucs', 'mel_band_roformer', 'scnet'],
+    'alle vier echten Architekturen, pipeline_double ist kein Auswahlpunkt'
   );
   for (const entry of status.families) {
     assert.ok(entry.label && entry.label.length > 0, `${entry.family} braucht ein UI-Label`);
@@ -80,6 +80,9 @@ async function run() {
     ['PREVIEW', 'BALANCED', 'HIGH'],
     'htdemucs bedient laut Katalog PREVIEW/BALANCED/HIGH (Subprozess-Demucs + in-process ONNX), aber nicht HIGH_QUALITY/MAXIMUM_QUALITY'
   );
+  const scnet = status.families.find((entry) => entry.family === 'scnet')!;
+  assert.deepEqual(scnet.modelIds, ['scnet-onnx-4stem-int8']);
+  assert.ok(scnet.serves.includes('PREVIEW') && scnet.serves.includes('BALANCED'));
   console.log(`  ✓ ${status.families.length} Architekturen mit Label/Beschreibung/Modellen: ${familyIds.join(', ')}`);
 
   // =========================================================================

@@ -18,6 +18,7 @@ export type ModelFamily =
   | 'bs_roformer'
   | 'mel_band_roformer'
   | 'htdemucs'
+  | 'scnet'
   | 'pipeline_double';
 
 /**

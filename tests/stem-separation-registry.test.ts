@@ -70,7 +70,7 @@ async function run() {
   console.log('\n[ TEST ] #2 Profilauflösung: BS-RoFormer ist die High-Quality-Engine');
   assert.equal(registry.selectForProfile('HIGH_QUALITY').family, 'bs_roformer');
   assert.equal(registry.selectForProfile('MAXIMUM_QUALITY').family, 'bs_roformer');
-  assert.equal(registry.selectForProfile('PREVIEW').family, 'htdemucs', 'PREVIEW nutzt die schnellere Engine');
+  assert.equal(registry.selectForProfile('PREVIEW').family, 'scnet', 'PREVIEW nutzt die kompakte SCNet-DJ-Engine');
   const fourStem = registry.require('bsroformer-musdb18hq-4stem-zfturbo');
   // Authoritative: release v1.0.12 config_bs_roformer_384_8_2_485100.yaml, training.instruments.
   assert.deepEqual(fourStem.stemOrder, ['drums', 'bass', 'other', 'vocals']);

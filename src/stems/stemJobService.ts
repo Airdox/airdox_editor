@@ -130,6 +130,7 @@ const FAMILY_LABEL: Record<ModelFamily, string> = {
   bs_roformer: 'BS-RoFormer',
   mel_band_roformer: 'Mel-Band-RoFormer',
   htdemucs: 'HTDemucs',
+  scnet: 'SCNet',
   pipeline_double: 'Pipeline-Double (Test)',
 };
 
@@ -137,6 +138,7 @@ const FAMILY_DESCRIPTION: Record<ModelFamily, string> = {
   bs_roformer: 'Primäre Engine – Band-Split-RoFormer, beste Trennqualität für Vocals/Drums/Bass/Other.',
   mel_band_roformer: 'Alternative RoFormer-Architektur (Mel-Band-Split) – A/B-Vergleich, v. a. für Vocals/Other.',
   htdemucs: 'Legacy-Engine (Hybrid-Transformer-Demucs) – schnellere, ältere Architektur, nur für die Vorschau gedacht.',
+  scnet: 'SCNet-ONNX – kompakter Vier-Stem-Livepfad mit checksum-geprüftem 12,9-MB-Modell.',
   pipeline_double: 'Deterministisches Test-Double – kein trainiertes Modell, nicht für echte Trennung gedacht.',
 };
 

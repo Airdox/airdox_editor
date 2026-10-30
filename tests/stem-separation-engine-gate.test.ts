@@ -534,7 +534,7 @@ async function run() {
   assert.ok(maxSettings.numOverlap >= 4, 'MAXIMUM_QUALITY braucht hohe num_overlap');
   assert.ok(maxSettings.ensemblePasses >= 3, 'MAXIMUM_QUALITY nutzt Ensemble-Pässe');
   assert.ok(maxSettings.chunkOverlap > previewSettings.chunkOverlap, 'MAXIMUM_QUALITY überlappt stärker als PREVIEW');
-  assert.equal(previewSettings.family, 'htdemucs', 'PREVIEW nutzt die schnellere Engine');
+  assert.equal(previewSettings.family, 'scnet', 'PREVIEW nutzt die kompakte SCNet-DJ-Engine');
   console.log(`  ✓ MAXIMUM_QUALITY: num_overlap ${maxSettings.numOverlap}, ensemble ${maxSettings.ensemblePasses}, chunk-overlap ${maxSettings.chunkOverlap}`);
   console.log(`  ✓ PREVIEW: ${previewSettings.family} num_overlap ${previewSettings.numOverlap}, chunk-overlap ${previewSettings.chunkOverlap}`);
 

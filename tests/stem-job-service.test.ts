@@ -115,11 +115,11 @@ async function run() {
   const preview = status.profiles.find((entry) => entry.profile === 'PREVIEW')!;
   const high = status.profiles.find((entry) => entry.profile === 'HIGH_QUALITY')!;
   const maximum = status.profiles.find((entry) => entry.profile === 'MAXIMUM_QUALITY')!;
-  assert.equal(preview.modelId, 'htdemucs-ft-4stem', 'PREVIEW bleibt beim Demucs-Pfad');
+  assert.equal(preview.modelId, 'scnet-onnx-4stem-int8', 'PREVIEW bevorzugt die kompakte SCNet-DJ-Architektur');
   assert.deepEqual(
     preview.stems.map((stem) => stem.id),
     ['drums', 'bass', 'other', 'vocals'],
-    'PREVIEW-Stems folgen dem htdemucs-Deskriptor (stemOrder), nicht der alten Konstanten'
+    'PREVIEW-Stems folgen dem SCNet-Deskriptor (stemOrder), nicht der alten Konstanten'
   );
   assert.equal(high.modelId, 'bsroformer-musdb18hq-4stem-zfturbo');
   assert.deepEqual(high.stems.map((stem) => stem.id), ['drums', 'bass', 'other', 'vocals']);

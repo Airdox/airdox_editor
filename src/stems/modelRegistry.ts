@@ -33,7 +33,7 @@ export interface RegistryValidationResult {
 }
 
 /** Every model family the catalog schema accepts. Exported so callers never hard code this list. */
-export const KNOWN_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
+export const KNOWN_FAMILIES: ModelFamily[] = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'scnet', 'pipeline_double'];
 const KNOWN_BACKENDS: BackendKind[] = ['native-cli', 'python-torch', 'in-process', 'onnx'];
 const KNOWN_PRECISION: ModelPrecision[] = ['native', 'f32', 'f16', 'bf16', 'q8_0'];
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -218,8 +218,8 @@ export class ModelRegistry {
     }
     const familyRank: Record<ModelFamily, number> =
       profile === 'PREVIEW'
-        ? { htdemucs: 0, bs_roformer: 1, mel_band_roformer: 2, pipeline_double: 3 }
-        : { bs_roformer: 0, mel_band_roformer: 1, htdemucs: 2, pipeline_double: 3 };
+        ? { scnet: 0, htdemucs: 1, bs_roformer: 2, mel_band_roformer: 3, pipeline_double: 4 }
+        : { bs_roformer: 0, mel_band_roformer: 1, htdemucs: 2, scnet: 3, pipeline_double: 4 };
     // Prefer the primary 4-stem model for HQ profiles
     return [...candidates].sort((a, b) => {
       const rank = familyRank[a.family] - familyRank[b.family];

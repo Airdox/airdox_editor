@@ -71,6 +71,7 @@ function mapLegacyToNew(descriptor: ModelDescriptor, modelStoreDir: string): Omi
     bs_roformer: 'BS-RoFormer',
     mel_band_roformer: 'Mel-Band RoFormer',
     htdemucs: 'HTDemucs',
+    scnet: 'SCNet',
     pipeline_double: 'Pipeline Double (Synthetic)',
   };
   // Weight license – infer from notes/license

@@ -63,6 +63,7 @@
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
+    "@audio/neural-separate": "^0.7.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
