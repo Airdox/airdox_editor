@@ -147,6 +147,38 @@ async function main() {
     assert.ok(!fs.existsSync(path.join(paths.modelDir, 'htdemucs_fp16weights.onnx.part')), 'Teil-Datei muss geräumt sein');
   }
 
+  // 5b. SCNet stores its graph in a nested folder. The installer must create
+  // that folder before opening the .part file and report byte-level progress.
+  {
+    const { repo, stemsRoot, paths } = makeEnv();
+    const crypto = require('node:crypto');
+    const payload = Buffer.from('scnet-install-fixture'.repeat(64));
+    const digest = crypto.createHash('sha256').update(payload).digest('hex');
+    const catalog = JSON.parse(fs.readFileSync(paths.catalog, 'utf8'));
+    const scnet = catalog.models.find((entry) => entry.id === 'scnet-onnx-4stem-int8');
+    assert.ok(scnet, 'SCNet catalog entry exists');
+    scnet.checkpoint.sha256 = digest;
+    fs.writeFileSync(paths.catalog, JSON.stringify(catalog));
+    const chunks = [payload.subarray(0, 80), payload.subarray(80)];
+    const progress = [];
+    const result = await installStemEngine(repo, (event) => progress.push(event), {
+      stemsRoot,
+      modelId: scnet.id,
+      fetchImpl: async () => ({
+        ok: true,
+        headers: { get: (name) => (name === 'content-length' ? String(payload.length) : null) },
+        body: { getReader: () => ({ read: async () => chunks.length
+          ? { done: false, value: new Uint8Array(chunks.shift()) }
+          : { done: true, value: undefined } }) },
+      }),
+      checkOnnxRuntime: () => ({ available: true }),
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(fs.readFileSync(path.join(paths.modelDir, 'scnet', 'scnet.int8.onnx')).compare(payload), 0);
+    assert.ok(progress.some((event) => event.step === 2 && event.percent > 33), 'Download progress advances beyond step start');
+    assert.equal(progress.at(-1).percent, 100);
+  }
+
   // 6. Ablehnungen: unbekanntes Modell und Test-Double (synthetic).
   {
     const { repo, stemsRoot } = makeEnv();

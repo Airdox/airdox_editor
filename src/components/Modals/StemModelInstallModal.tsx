@@ -51,7 +51,7 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !installing) onClose();
+      if (e.key === 'Escape') onClose();
     };
     if (isOpen) {
       window.addEventListener('keydown', handleKeyDown);
@@ -107,7 +107,6 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            disabled={installing}
             aria-label="Schließen"
             className="p-1 hover:text-white text-neutral-400 hover:bg-[#252834] rounded transition-colors disabled:opacity-40"
           >
@@ -216,10 +215,9 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
             <>
               <button
                 onClick={onClose}
-                disabled={installing}
                 className="px-3 py-1.5 rounded bg-[#1e2230] hover:bg-[#272d40] border border-[#343b52] text-neutral-200 text-xs font-medium disabled:opacity-40"
               >
-                {install.phase === 'FAILED' ? 'Abbrechen' : 'Schließen'}
+                {install.phase === 'RUNNING' ? 'Im Hintergrund' : install.phase === 'FAILED' ? 'Abbrechen' : 'Schließen'}
               </button>
               <button
                 onClick={() => void handleInstall()}

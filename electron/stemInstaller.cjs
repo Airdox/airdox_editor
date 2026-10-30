@@ -156,6 +156,10 @@ async function streamDownload(fetchImpl, ref, target, onPercent) {
   let received = 0;
   let lastPercent = -1;
   try {
+    // Catalog files may live below a model-specific subdirectory (for example
+    // scnet/scnet.int8.onnx). Creating only modelDir leaves the .part open to
+    // fail with ENOENT, which used to escape as an uncaught main-process error.
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     const reader = response.body.getReader();
     const writer = fs.createWriteStream(partial);
     for (;;) {
@@ -237,8 +241,14 @@ function writeInstallManifest(modelDir, model, sha256, fsImpl = fs) {
 
 /** ONNX path: no Python, no venv – just a verified file in the model store. */
 async function installOnnxModel(paths, model, onProgress, options) {
-  const report = (step, label, logLine) => onProgress?.({
-    step, totalSteps: ONNX_TOTAL_STEPS, percent: Math.min(99, Math.round((step - 1) / ONNX_TOTAL_STEPS * 100)), label, logLine,
+  const report = (step, label, logLine, stepPercent = 0) => onProgress?.({
+    step,
+    totalSteps: ONNX_TOTAL_STEPS,
+    // Reflect byte progress within the download step instead of leaving the
+    // UI frozen at 33% for the entire network transfer.
+    percent: Math.min(99, Math.round(((step - 1 + stepPercent / 100) / ONNX_TOTAL_STEPS) * 100)),
+    label,
+    logLine,
   });
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   try {
@@ -261,7 +271,7 @@ async function installOnnxModel(paths, model, onProgress, options) {
     } else {
       report(2, `${model.checkpoint.file} wird heruntergeladen…`);
       if (exists) fs.rmSync(target);
-      await streamDownload(fetchImpl, model.checkpoint, target, (percent) => report(2, `${model.checkpoint.file} wird heruntergeladen… ${percent} %`));
+      await streamDownload(fetchImpl, model.checkpoint, target, (percent) => report(2, `${model.checkpoint.file} wird heruntergeladen… ${percent} %`, undefined, percent));
     }
     report(3, 'Datei wird final geprüft…');
     const finalStat = fs.statSync(target);
