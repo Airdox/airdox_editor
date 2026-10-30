@@ -401,11 +401,12 @@ export interface StartRemoteStemJobPayload {
 /**
  * Antwort auf einen Abbruchwunsch im Fernpfad (§37).
  *
- * `accepted` heißt: die Abbruchbitte liegt in der Jobablage, der Worker stoppt.
- * `deferred` heißt: der Wunsch ist notiert, aber die Ablage war nicht
- * erreichbar – der Editor liefert nach. Beides ist dem Nutzer zu sagen; ein
- * bloßes „nicht angenommen“ ohne Grund ist das, was als „nichts passiert“
- * ankommt.
+ * `accepted` heißt: der Transport hat die Abbruchfahne in die konfigurierte
+ * Jobablage geschrieben. Bei einem synchronisierten Ordner beweist das weder
+ * den Cloud-Upload noch den Empfang durch Colab; dafür muss der Worker ein
+ * `worker.cancelled`-Ereignis zurückschreiben.
+ * `deferred` heißt: die Ablage war nicht erreichbar und der Editor liefert
+ * die Fahne später nach.
  */
 export interface RemoteCancelResult {
   accepted: boolean;

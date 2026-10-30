@@ -90,6 +90,17 @@ import type {
 
 export { REMOTE_PHASES };
 
+/** Continue polling a locally cancelled job briefly so Colab's acknowledgement can arrive. */
+const CANCEL_ACK_POLL_WINDOW_MS = 2 * 60_000;
+
+function hasWorkerCancellationAck(record: Pick<RemoteJobRecord, 'trace'>): boolean {
+  return Boolean(record.trace?.some((event) => event.source === 'worker' && (event.step === 'worker.cancelled' || event.status === 'CANCELLED')));
+}
+
+function awaitsWorkerCancellationAck(record: RemoteJobRecord): boolean {
+  return record.status === 'CANCELLED' && Boolean(record.cancelRequestedAt) && !hasWorkerCancellationAck(record);
+}
+
 export interface StartRemoteStemJobRequest extends Omit<StartRemoteStemJobPayload, 'bytes'> {
   bytes?: Uint8Array | ArrayBuffer;
 }
@@ -824,17 +835,20 @@ export class RemoteStemJobService {
     }
 
     for (const record of [...this.records.values()]) {
-      // Steht ein Abbruch noch aus, zuerst nachliefern (§37). Erst wenn die
-      // Fahne in der Ablage liegt, gilt der Job als beendet.
+      // Steht ein Abbruch noch aus, zuerst nachliefern (§37). Ein erfolgreicher
+      // Schreibvorgang beendet den lokalen Editor-Eintrag; er bestätigt weder
+      // Cloud-Synchronisierung noch Empfang durch den Worker.
       if (record.cancelPending && !isTerminalStatus(record.status)) {
         if (await this.deliverCancelFlag(record)) {
-          await this.finalizeCancel(record, 'Abbruch nachgeliefert – Worker wird beendet');
+          await this.finalizeCancel(record, 'Abbruchfahne nach Wiederherstellung der Ablage geschrieben; Worker-Bestätigung steht aus');
           continue;
         }
       }
-      // Abbruch/Fehler sind endgültig. Nur ein fertiger Job ohne lokalen
-      // Import darf nach einem Neustart noch einmal synchronisiert werden.
-      if (isTerminalStatus(record.status) && (record.status !== 'COMPLETED' || record.localJobId)) continue;
+      // Lokale Abbrüche werden kurz weiter abgefragt, damit der Worker-Claim
+      // und worker.cancelled als echte Bestätigung eintreffen können. Andere
+      // terminale Jobs werden nicht erneut synchronisiert.
+      const cancellationAckPending = awaitsWorkerCancellationAck(record);
+      if (isTerminalStatus(record.status) && !cancellationAckPending && (record.status !== 'COMPLETED' || record.localJobId)) continue;
       try {
         await this.syncRecord(record, transport);
       } catch (error) {
@@ -995,6 +1009,15 @@ export class RemoteStemJobService {
       });
     }
 
+    // Nach lokalem Abbruch bleibt der Job terminal, auch wenn die Ablage noch
+    // ein älteres RUNNING/PENDING-Manifest zeigt. Worker-Trace und Claim werden
+    // oben dennoch synchronisiert, damit die Bestätigung sichtbar werden kann.
+    if (record.status === 'CANCELLED' && record.cancelRequestedAt && !isTerminalStatus(manifest.status)) {
+      await this.persist(record);
+      this.emitEvent('progress', record);
+      return;
+    }
+
     // Abbruch des Nutzers gewinnt immer: ein danach eintreffendes Ergebnis wird
     // nicht mehr importiert und der Job steht nicht als COMPLETED (§37).
     if (record.cancelRequestedAt && isTerminalStatus(manifest.status)) {
@@ -1003,7 +1026,14 @@ export class RemoteStemJobService {
         phase: manifest.status === 'COMPLETED' ? 'Abgebrochen – Ergebnis des Workers verworfen' : REMOTE_PHASES.cancelled,
       });
       record.finishedAt = record.finishedAt ?? this.now();
-      this.addTrace(record, 'editor.job_cancelled', 'Abbruch bestätigt; ein späteres Worker-Ergebnis wird verworfen.', 'warning');
+      const cancellationNote = manifest.status === 'CANCELLED'
+        ? (hasWorkerCancellationAck(record)
+          ? 'Worker-Abbruchereignis empfangen; das Ergebnis wird verworfen.'
+          : 'Worker-Manifest meldet CANCELLED; das Ergebnis wird verworfen.')
+        : manifest.status === 'COMPLETED'
+          ? 'Worker hat vor einer Abbruchbestätigung abgeschlossen; der Editor verwirft das Ergebnis.'
+          : 'Worker-Lauf endete nach der Abbruchanforderung; das Ergebnis wird verworfen.';
+      this.addTrace(record, 'editor.job_cancelled', cancellationNote, 'warning');
       await this.persist(record);
       this.emitEvent('cancelled', record);
       return;
@@ -1210,17 +1240,17 @@ export class RemoteStemJobService {
     // Wer vorher abbrechen wollte, dessen Absicht gilt weiter: jetzt neu melden.
     if (record.cancelPending || (record.cancelRequestedAt && !isTerminalStatus(record.status))) {
       if (await this.deliverCancelFlag(record)) {
-        await this.finalizeCancel(record, 'Abbruch mit dem neuen Steckbrief gemeldet');
+        await this.finalizeCancel(record, 'Abbruchfahne mit dem neuen Manifest erneut geschrieben; Worker-Bestätigung steht aus');
       }
     }
   }
 
-  /** Abbruch ist in der Ablage angekommen – lokal ebenso beenden (§37). */
+  /** Abbruchfahne wurde geschrieben – lokalen Job als abgebrochen markieren (§37). */
   private async finalizeCancel(record: RemoteJobRecord, note: string): Promise<void> {
     record.cancelPending = false;
     this.setState(record, { status: 'CANCELLED', phase: REMOTE_PHASES.cancelled });
     record.finishedAt = record.finishedAt ?? this.now();
-    this.addTrace(record, 'editor.job_cancelled', note, 'warning');
+    this.addTrace(record, 'editor.cancel_flag_written', note, 'warning');
     await this.persist(record);
     this.options.logger?.warn?.('STEM-REMOTE', `jobId=${record.jobId} ${note}`, { jobId: record.jobId, status: 'CANCELLED' });
     this.emitEvent('cancelled', record);
@@ -1492,9 +1522,11 @@ export class RemoteStemJobService {
    * --------------------------------------------------------------------- */
 
   /**
-   * Abbruch: `cancel.flag` in die Jobablage legen, damit der Worker die
-   * laufende Rechnung beendet (§37 – beide Worker prüfen die Fahne auch
-   * *während* der Inferenz). Ein später eintreffendes Ergebnis wird verworfen.
+   * Abbruch: `cancel.flag` in die konfigurierte Jobablage schreiben; ein
+   * Worker beendet die Rechnung, sobald er die synchronisierte Fahne verarbeitet
+   * (§37 – beide Worker prüfen sie auch *während* der Inferenz). Ein später
+   * eintreffendes Ergebnis wird verworfen. Bei `folder`-Transport bestätigt ein
+   * erfolgreicher Schreibvorgang weder Cloud-Synchronisierung noch Worker-Empfang.
    *
    * Ehrlich statt schnell: war die Ablage nicht erreichbar, wird der Job
    * **nicht** als erledigt abgehakt. Er bleibt in Verfolgung, die Meldung wird
@@ -1530,20 +1562,31 @@ export class RemoteStemJobService {
       return {
         accepted: false,
         deferred: true,
-        message: 'Der Abbruch konnte nicht in die Jobablage geschrieben werden (Google Drive nicht erreichbar). Der externe Rechner rechnet weiter – der Editor meldet den Abbruch automatisch erneut.',
+        message: 'Der Abbruch konnte nicht in die Jobablage geschrieben werden (Google Drive nicht erreichbar). Der externe Rechner kann weiterrechnen – der Editor meldet den Abbruch automatisch erneut.',
       };
     }
     record.cancelPending = false;
     this.setState(record, { status: 'CANCELLED', phase: `${REMOTE_PHASES.cancelled} – ${reason}` });
     record.finishedAt = record.finishedAt ?? this.now();
-    this.addTrace(record, 'editor.job_cancelled', 'Abbruchflag wurde in die Jobablage geschrieben.', 'warning');
+    this.addTrace(
+      record,
+      'editor.cancel_flag_written',
+      'Abbruchflag wurde in die konfigurierte Jobablage geschrieben; eine Bestätigung durch den Worker steht noch aus.',
+      'warning'
+    );
     await this.persist(record);
-    this.options.logger?.warn?.('STEM-REMOTE', `jobId=${jobId} status=CANCELLED reason=${reason}`, { jobId, status: 'CANCELLED', reason });
+    this.options.logger?.warn?.('STEM-REMOTE', `jobId=${jobId} cancel_flag=written worker_ack=pending reason=${reason}`, {
+      jobId,
+      status: 'CANCELLED',
+      reason,
+      workerAcknowledged: false,
+    });
     this.emitEvent('cancelled', record);
+    this.schedulePolling();
     return { accepted: true };
   }
 
-  /** Schreibt die Abbruchbitte in die Ablage. `false` = nicht angekommen. */
+  /** Schreibt die Abbruchfahne. `false` = Schreibvorgang fehlgeschlagen. */
   private async deliverCancelFlag(record: RemoteJobRecord, reason = 'Abbruch durch Benutzer'): Promise<boolean> {
     try {
       const settings = await this.effectiveSettings();
@@ -1553,7 +1596,7 @@ export class RemoteStemJobService {
     } catch (error) {
       this.options.logger?.warn?.(
         'STEM-REMOTE',
-        `Abbruch konnte nicht an den Worker gemeldet werden: ${error instanceof Error ? error.message : String(error)}`,
+        `Abbruchfahne konnte nicht in die Jobablage geschrieben werden: ${error instanceof Error ? error.message : String(error)}`,
         { jobId: record.jobId }
       );
       return false;
@@ -1713,7 +1756,13 @@ export class RemoteStemJobService {
 
   private schedulePolling(): void {
     if (this.options.disableBackgroundPolling) return;
-    const hasActive = [...this.records.values()].some((record) => !isTerminalStatus(record.status));
+    const now = this.now();
+    const hasActive = [...this.records.values()].some((record) => {
+      if (!isTerminalStatus(record.status)) return true;
+      if (!awaitsWorkerCancellationAck(record)) return false;
+      const cancelledAt = record.finishedAt ?? record.cancelRequestedAt ?? now;
+      return now - cancelledAt < CANCEL_ACK_POLL_WINDOW_MS;
+    });
     if (!hasActive) {
       if (this.timer) {
         clearInterval(this.timer);

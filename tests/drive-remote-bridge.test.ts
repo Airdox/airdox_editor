@@ -109,6 +109,12 @@ function assert(cond: boolean, msg: string) {
   assert(res.channels.drums !== null && res.channels.drums.decoded === true, 'drums decoded');
   assert(res.cleanupQueued === true, 'cleanup queued');
   assert(res.errors.length === 0, 'no deck errors');
+
+  // A runtime-invalid path exercises the catch branch and its complete channel shape.
+  const failedLoad = loadStemsToDeck(undefined as unknown as string, {});
+  assert(failedLoad.assigned === false, 'a deck exception is reported as unassigned');
+  assert(['drums', 'bass', 'other', 'vocals'].every((stem) => failedLoad.channels[stem as keyof typeof failedLoad.channels] === null), 'all required channels are null on error');
+  assert(failedLoad.errors.some((message) => message.startsWith('Deck-Fehler:')), 'the deck exception is preserved');
   console.log('[PASS] Phase 10 — loadStemsToDeck');
 }
 

@@ -1071,7 +1071,8 @@ export default function App() {
 
   /**
    * Ein Klick auf „Abbrechen“ muss etwas bewirken **und** sichtbar sein:
-   *  1. Abbruchbitte in die Jobablage legen (der Worker beendet die Rechnung),
+   *  1. Abbruchfahne in die konfigurierte Jobablage schreiben (der Worker beendet
+   *     die Rechnung, sobald die Fahne synchronisiert und verarbeitet wurde),
    *  2. Jobstand sofort neu einlesen,
    *  3. dem Nutzer in der Stem-Leiste sagen, was passiert ist – inklusive des
    *     Grunds, wenn die Ablage gerade nicht erreichbar war.
@@ -1110,8 +1111,8 @@ export default function App() {
     setRemoteCancelCooldownJobId(null);
     setRemoteCancelPendingJobId(jobId);
     setRemoteFlowError(null);
-    setRemoteNotice({ tone: 'info', text: 'Abbruch wird an den externen Rechner gemeldet…' });
-    setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird an den Worker gemeldet…' } : prev));
+    setRemoteNotice({ tone: 'info', text: 'Abbruchfahne wird in der Jobablage gespeichert…' });
+    setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruchfahne wird in der Jobablage gespeichert…' } : prev));
     void (async () => {
       try {
         const result = await stemEngine.cancelRemoteJob(jobId, 'Abbruch durch Benutzer');
@@ -1119,9 +1120,9 @@ export default function App() {
         if (status) setStemRemoteStatus(status);
         cancelGuard.settle(jobId, result.accepted);
         if (result.accepted) {
-          logger.warn('STEM-REMOTE', `Abbruch des externen Jobs ${jobId} angenommen – der Worker verwirft die laufende Rechnung.`);
+          logger.warn('STEM-REMOTE', `Abbruchflag für Fern-Job ${jobId} in der konfigurierten Jobablage geschrieben; Worker-Bestätigung steht aus.`, { jobId });
           setRemoteFlowError(null);
-          setRemoteNotice({ tone: 'info', text: 'Abbruch gemeldet: Der externe Rechner stoppt die Rechnung, Ergebnisse werden nicht übernommen.' });
+          setRemoteNotice({ tone: 'info', text: 'Abbruchflag in der Jobablage geschrieben. Das Ergebnis wird nicht übernommen; eine Colab-Bestätigung erscheint erst, wenn der Worker die Fahne verarbeitet hat.' });
           return;
         }
         const reason = result.message ?? 'Der Job konnte nicht abgebrochen werden.';
@@ -1197,7 +1198,7 @@ export default function App() {
     // telling the user that nothing is running.
     if (remoteFlowRunning) {
       remoteAbortRef.current.aborted = true;
-      setRemoteNotice({ tone: 'info', text: 'Abbruch vorgemerkt: Der Editor stoppt vor dem Upload bzw. meldet den Abbruch direkt an den Worker.' });
+      setRemoteNotice({ tone: 'info', text: 'Abbruch vorgemerkt: Der Editor stoppt vor dem Upload oder speichert die Abbruchfahne, sobald der Job angelegt ist.' });
       setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird vorgemerkt…' } : prev));
       logger.info('STEM-REMOTE', 'Abbruch während der Vorbereitung vorgemerkt.');
       return;

@@ -318,4 +318,3 @@ export type FlowPreviewScenarioId = keyof typeof SCENARIOS;
 
 /** Für Tests und Dokumentation: alle Lagen mit Bezeichnung und Erklärung. */
 export const PREVIEW_SCENARIOS = SCENARIOS;
-
