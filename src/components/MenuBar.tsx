@@ -85,6 +85,8 @@ export interface MenuBarProps {
   onOpenInitialSetup?: () => void;
   /** Modell-Editor öffnen („Modelle & Architekturen"). */
   onOpenStemModels?: () => void;
+  /** Schließt Menüs und blockiert sie, solange ein Dialog im Vordergrund ist. */
+  modalOpen?: boolean;
 }
 
 const MENU_ITEM_LAYOUT = 'w-full text-left px-3 py-1.5 flex justify-between items-center gap-3';
@@ -135,6 +137,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onOpenRecorder,
   onOpenInitialSetup,
   onOpenStemModels,
+  modalOpen = false,
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -148,6 +151,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     window.addEventListener('mousedown', handleClickOutside);
     return () => window.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (modalOpen) setActiveMenu(null);
+  }, [modalOpen]);
 
   const toggleMenu = (name: string) => setActiveMenu(activeMenu === name ? null : name);
   const runAndClose = (action: () => void) => () => {
@@ -164,7 +171,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     <div ref={menuRef} className="flex items-center gap-0.5 text-xs select-none relative flex-shrink-0" data-zone1-cluster="menu">
       {/* ── Datei ─────────────────────────────────────────────────────────── */}
       <div className="relative">
-        <button type="button" onClick={() => toggleMenu('datei')} className={triggerClass('datei')} title="Projekt- und Dateioperationen (Neu, Öffnen, Speichern, Import, Export)">
+        <button type="button" disabled={modalOpen} onClick={() => toggleMenu('datei')} className={triggerClass('datei')} title="Projekt- und Dateioperationen (Neu, Öffnen, Speichern, Import, Export)">
           Datei
         </button>
         {activeMenu === 'datei' && (
@@ -214,7 +221,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* ── Bearbeiten ────────────────────────────────────────────────────── */}
       <div className="relative">
-        <button type="button" onClick={() => toggleMenu('bearbeiten')} className={triggerClass('bearbeiten')} title="Schnitt- und Bearbeitungsoperationen (Undo, Redo, Cut, Copy, Paste, Stems)">
+        <button type="button" disabled={modalOpen} onClick={() => toggleMenu('bearbeiten')} className={triggerClass('bearbeiten')} title="Schnitt- und Bearbeitungsoperationen (Undo, Redo, Cut, Copy, Paste, Stems)">
           Bearbeiten
         </button>
         {activeMenu === 'bearbeiten' && (
@@ -286,7 +293,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* ── Betrachten ────────────────────────────────────────────────────── */}
       <div className="relative">
-        <button type="button" onClick={() => toggleMenu('betrachten')} className={triggerClass('betrachten')} title="Ansichten, Farbpaletten, Wellenform-Modi und Fokus-Modus einstellen">
+        <button type="button" disabled={modalOpen} onClick={() => toggleMenu('betrachten')} className={triggerClass('betrachten')} title="Ansichten, Farbpaletten, Wellenform-Modi und Fokus-Modus einstellen">
           Betrachten
         </button>
         {activeMenu === 'betrachten' && (
@@ -360,7 +367,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* ── Hilfe ─────────────────────────────────────────────────────────── */}
       <div className="relative">
-        <button type="button" onClick={() => toggleMenu('hilfe')} className={triggerClass('hilfe')} title="Hilfe, Ersteinrichtung und System-Diagnose">
+        <button type="button" disabled={modalOpen} onClick={() => toggleMenu('hilfe')} className={triggerClass('hilfe')} title="Hilfe, Ersteinrichtung und System-Diagnose">
           Hilfe
         </button>
         {activeMenu === 'hilfe' && (

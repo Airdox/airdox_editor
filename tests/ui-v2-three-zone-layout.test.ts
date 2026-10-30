@@ -269,8 +269,8 @@ console.log('\n[ TEST ] B1 – Zustand A zeigt nur den Start-Button');
   const buttonCount = (idle.match(/<button/g) || []).length;
   assert.equal(buttonCount, 1, `Ruhezustand darf genau eine Schaltfläche haben (gefunden: ${buttonCount})`);
   assert.ok(idle.includes('data-stem-action="start-config"'), 'die Schaltfläche startet die Konfiguration');
-  assert.ok(idle.includes('Stem-Separation starten'), 'Beschriftung „Stem-Separation starten"');
-  for (const forbidden of ['Qualität', 'Schnell', 'High Quality', 'Fortschritt', '<select', 'Modell']) {
+  assert.ok(idle.includes('Stems erzeugen'), 'Beschriftung „Stems erzeugen"');
+  for (const forbidden of ['Qualität', 'High Quality', 'Fortschritt', '<select', 'Modell']) {
     assert.ok(
       !idle.includes(forbidden),
       `Ruhezustand darf "${forbidden}" nicht zeigen (keine Erklärtexte, keine Fortschritte)`

@@ -18,11 +18,17 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import App from '../src/App';
 
 const html = renderToString(React.createElement(App));
+const sourceRoot = fileURLToPath(new URL('..', import.meta.url));
+const menuSource = await readFile(`${sourceRoot}/src/components/MenuBar.tsx`, 'utf8');
+const setupSource = await readFile(`${sourceRoot}/src/components/Modals/InitialSetupModal.tsx`, 'utf8');
+const appSource = await readFile(`${sourceRoot}/src/App.tsx`, 'utf8');
 
 /*
  * 1. Grundgerüst der Oberfläche ist vorhanden – geprüft wird die
@@ -37,7 +43,7 @@ for (const marker of [
   'AI COPILOT',
   'DB-Extraktor',
   'Max. Platz / Alles einklappen',
-  'Stem-Separation starten',
+  'Stems erzeugen',
   'BEAT SELECT',
   'MEM CUE',
   'GRID',
@@ -75,8 +81,20 @@ assert.ok(
   );
   assert.ok(
     html.includes('data-stem-action="start-config"'),
-    'das Stem-Center startet im Ruhezustand (nur die Start-Zeile)'
+    'das Stem-Center hat im Ruhezustand einen direkten Einstieg zum Stem-Workflow'
   );
+  assert.ok(html.includes('Stems erzeugen'), 'der Stem-Start ist in der Oberfläche klar beschriftet');
+}
+
+// 1d. Der erste Start bietet den kompakten DJ-Schnellpfad, und Dialoge können
+//     keine Menü-Dropdowns im Hintergrund öffnen.
+assert.ok(setupSource.includes("const quickModelId = 'scnet-onnx-4stem-int8'"), 'Ersteinrichtung installiert gezielt das kompakte SCNet-Modell');
+assert.ok(setupSource.includes('onComplete(updated, installedModelId)'), 'nach Setup-Abschluss wird das installierte Modell an die App übergeben');
+assert.ok(appSource.includes("dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' })"), 'erfolgreiche Installation öffnet die Stem-Konfiguration');
+assert.ok(appSource.includes("handleStemQualityModeChange('fast')"), 'das Stem-Center öffnet standardmäßig mit Schnellmodus');
+assert.ok(appSource.includes('stemInstallOpen || stemModelPickerOpen || settingsModalOpen'), 'alle Dialoge sperren die Menüs');
+for (const menu of ['datei', 'bearbeiten', 'betrachten', 'hilfe']) {
+  assert.ok(menuSource.includes(`disabled={modalOpen} onClick={() => toggleMenu('${menu}')}`), `${menu}-Menü ist während eines Dialogs gesperrt`);
 }
 
 // 2. Kein Platzhalter eines nachzuladenden Dialogs darf im Erstrendering stehen.

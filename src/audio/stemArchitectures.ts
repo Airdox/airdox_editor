@@ -281,7 +281,7 @@ export function describeArchitectures(
       id: 'auto',
       label: 'Automatisch (Profil entscheidet)',
       family: 'auto',
-      detail: 'Je Profil das erste installierte Modell: Studio (BS-RoFormer) vor Vorschau (HT-Demucs).',
+      detail: 'Studio nutzt RoFormer; Schnell/Vorschau bevorzugt das kompakte SCNet, danach HT-Demucs.',
       installed: anyInstalled,
       reason: anyInstalled ? undefined : 'Noch kein Modell installiert – npm run stems:bundle (oder In-App-Installer).',
       inProcess: false,

@@ -767,6 +767,13 @@ export default function App() {
     isSeparating: isSeparatingStems || remoteFlowRunning,
     configOpen: stemConfigOpen,
   });
+  const appModalOpen = Boolean(
+    initialSetupOpen || stemInstallOpen || stemModelPickerOpen || settingsModalOpen ||
+    infoModalOpen || exportModalOpen || dbExtractionModalOpen || xmlCollectionModalOpen ||
+    feedbackModalOpen || systemLogModalOpen || clearHistoryModalOpen || editAssistantModalOpen ||
+    deleteModeModalOpen || remoteSetupOpen || remoteFlowOpen || recorderOpen || midiModalOpen ||
+    stemQualityWarning !== null
+  );
 
   /** Zustand B zeigt ausschließlich dieses Modell (Modell-Isolation). */
   const activeModelOption = stemArchitectures.find(
@@ -866,11 +873,16 @@ export default function App() {
     void refreshStemArchitectures();
   }, [refreshStemArchitectures]);
 
-  const handleCompleteInitialSetup = useCallback((paths: WorkspacePathSettings) => {
+  const handleCompleteInitialSetup = useCallback((paths: WorkspacePathSettings, installedModelId?: string) => {
     setWorkspacePaths(paths);
     saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, paths);
     setInitialSetupOpen(false);
     void refreshStemArchitectures();
+    if (installedModelId) {
+      setStemArchitecture((prev) => ({ ...prev, architectureId: installedModelId, validationMode: 'fast_dj', device: 'auto' }));
+      setStemProfile('PREVIEW');
+      dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' });
+    }
     logger.info('SYSTEM', 'Ersteinrichtung erfolgreich abgeschlossen.', { paths });
   }, [refreshStemArchitectures]);
 
@@ -2935,6 +2947,7 @@ export default function App() {
         onOpenSettings={() => setSettingsModalOpen(true)}
         onShowInfo={() => setInfoModalOpen(true)}
         menuProps={{
+          modalOpen: appModalOpen,
           onNewProject: handleNewProject,
           onSaveProject: handleSaveProject,
           onOpenProject: handleOpenProject,
@@ -2997,7 +3010,10 @@ export default function App() {
         <StemCenter
           phase={stemCenterPhase}
           configOpen={stemConfigOpen}
-          onOpenConfig={() => dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' })}
+          onOpenConfig={() => {
+            handleStemQualityModeChange('fast');
+            dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' });
+          }}
           onCloseConfig={() => dispatchWorkspace({ type: 'CLOSE_STEM_CONFIG' })}
           modelPickerOpen={stemModelPickerOpen}
           onOpenModelPicker={() => dispatchWorkspace({ type: 'SET_STEM_MODEL_PICKER', open: true })}
@@ -3486,6 +3502,17 @@ export default function App() {
         model={missingStemModel}
         onClose={() => setStemInstallOpen(false)}
         onInstalled={(modelId, result) => {
+          // Neue Installation sofort als konkrete Arbeitsarchitektur wählen.
+          // Sonst bleibt „Automatisch“ aktiv und der Nutzer muss suchen, wo
+          // das soeben installierte Modell ausgewählt wird.
+          setStemArchitecture((prev) => ({
+            ...prev,
+            architectureId: modelId,
+            validationMode: 'fast_dj',
+            device: 'auto',
+          }));
+          setStemProfile('PREVIEW');
+          dispatchWorkspace({ type: 'OPEN_STEM_CONFIG' });
           logger.info(
             'EDITING',
             result?.label ?? `KI-Modell wurde installiert: ${modelId}`,

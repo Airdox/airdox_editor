@@ -45,7 +45,7 @@ import { DirectorySelector } from '../DirectorySelector';
 interface InitialSetupModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onComplete: (paths: WorkspacePathSettings) => void;
+  onComplete: (paths: WorkspacePathSettings, installedModelId?: string) => void;
 }
 
 type InstallPhase = 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED';
@@ -64,7 +64,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
   const [installLog, setInstallLog] = useState<string>('');
   const [installError, setInstallError] = useState<string | null>(null);
   const [restartRequired, setRestartRequired] = useState<boolean>(false);
-  const [autoInstallChecked, setAutoInstallChecked] = useState<boolean>(true);
+  const [installedModelId, setInstalledModelId] = useState<string | undefined>();
 
   useEffect(() => {
     if (isOpen) {
@@ -84,15 +84,17 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
     });
 
     try {
+      const quickModelId = 'scnet-onnx-4stem-int8';
       const result = await installStemEngineWithProgress((progress) => {
         setInstallProgress(progress);
         if (progress.logLine) {
           setInstallLog(progress.logLine);
         }
-      });
+      }, { modelId: quickModelId });
 
       if (result.ok) {
         setInstallPhase('DONE');
+        setInstalledModelId(quickModelId);
         setRestartRequired(Boolean(result.restartRequired));
       } else {
         setInstallPhase('FAILED');
@@ -110,7 +112,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
       setupCompleted: true,
     };
     saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, updated);
-    onComplete(updated);
+    onComplete(updated, installedModelId);
   };
 
   const handleSkip = () => {
@@ -166,7 +168,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
               </div>
               <p className="text-[11px] text-neutral-300 leading-relaxed">
                 Um beim ersten Öffnen sofort loslegen zu können, konfigurieren Sie bitte kurz die Speicherorte
-                für Ihre Projekte und die hochpräzisen KI-Stem-Modelle (BS-RoFormer SDR 9.65 &amp; HT-Demucs ONNX).
+                Öffnen Sie den Editor sofort. Für eine schnelle lokale Trennung können Sie das kompakte SCNet-Modell installieren; weitere Modelle lassen sich später ergänzen.
               </p>
             </div>
           </div>
@@ -203,7 +205,7 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
               onChange={(newPath) => setPaths((prev) => ({ ...prev, stemDataPath: newPath }))}
               presets={STEM_DATA_PRESETS}
               dialogTitle="Stem- & KI-Modellverzeichnis auswählen"
-              helperText="Speicherort für KI-Gewichte (BS-RoFormer ~503 MB, ONNX-Netze), isoliertes Python-Environment und Stem-Cache."
+              helperText="Speicherort-Einstellung für Stem-Modelle und Cache. Das SCNet-Modell lässt sich auch später in der Stem-Modellverwaltung installieren."
               icon={<Cpu size={12} className="text-[#00e5ff]" />}
               badgeText="SSD empfohlen"
             />
@@ -214,10 +216,10 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
             <div className="flex items-center justify-between border-b border-[#202538] pb-1.5">
               <div className="flex items-center space-x-2 text-white font-bold text-[11.5px] uppercase tracking-wider">
                 <Zap size={13} className="text-[#10b981]" />
-                <span>2. Vollautomatische KI-Installation</span>
+                <span>2. Schnellstart für Stem-Trennung</span>
               </div>
               <span className="text-[9.5px] font-mono text-[#10b981] bg-[#10b981]/15 px-1.5 py-0.2 rounded border border-[#10b981]/30">
-                Empfohlen für Sofortstart
+                Kompakter Download
               </span>
             </div>
 
@@ -228,12 +230,10 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
                     <Download size={16} className="text-[#10b981] shrink-0 mt-0.5" />
                     <div className="space-y-1">
                       <div className="font-bold text-[#6ee7b7] text-[11.5px]">
-                        Alle KI-Stem-Modelle &amp; Runtimes jetzt automatisch einrichten
+                        SCNet Live installieren (4 DJ-Spuren)
                       </div>
                       <p className="text-[10.5px] text-neutral-300 leading-relaxed">
-                        Richtet die isolierte Python-Runtime, PyTorch (mit GPU/DirectML-Unterstützung), den BS-RoFormer
-                        Studio-Master-Checkpoint (~503 MB, SDR 9.65) und das in-process ONNX Live-Modell ein.
-                        Verifiziert alle SHA256-Prüfsummen und führt eine kurze Test-Inferenz durch.
+                        Lädt das kompakte ONNX-Modell herunter und prüft die Datei. Es benötigt keine separate Python-/PyTorch-Runtime. Die Berechnung läuft später lokal und nutzt die verfügbare CPU oder GPU.
                       </p>
                     </div>
                   </div>
@@ -241,32 +241,24 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-1 text-[10px] text-neutral-400">
                     <div className="flex items-center space-x-1.5 bg-black/30 p-1.5 rounded">
                       <Check size={11} className="text-[#10b981]" />
-                      <span>BS-RoFormer (Studio Master · 4 Stems)</span>
+                      <span>SCNet Live (ONNX · 4 Stems)</span>
                     </div>
                     <div className="flex items-center space-x-1.5 bg-black/30 p-1.5 rounded">
                       <Check size={11} className="text-[#10b981]" />
-                      <span>HT-Demucs ONNX (Live-DJ in-process)</span>
+                      <span>Schnellmodus · lokale Verarbeitung</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between pt-1">
-                  <label className="flex items-center space-x-2 cursor-pointer text-neutral-300 text-[11px]">
-                    <input
-                      type="checkbox"
-                      checked={autoInstallChecked}
-                      onChange={(e) => setAutoInstallChecked(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded accent-[#10b981] cursor-pointer"
-                    />
-                    <span>Sofortige automatische Vollinstallation aktivieren</span>
-                  </label>
+                  <span className="text-[10px] text-neutral-400">Ein Modell, kein Python-Setup</span>
 
                   <button
                     onClick={handleStartInstallation}
                     className="flex items-center space-x-2 px-4 py-2 rounded bg-gradient-to-r from-[#10b981] to-[#00c853] hover:from-[#34d399] hover:to-[#00e676] text-black font-extrabold text-xs shadow-lg transition-all cursor-pointer"
                   >
                     <Download size={13} />
-                    <span>Jetzt alles automatisch installieren</span>
+                    <span>SCNet Live installieren</span>
                   </button>
                 </div>
               </div>
@@ -310,13 +302,11 @@ export const InitialSetupModal: React.FC<InitialSetupModalProps> = ({
                 <div className="flex items-center space-x-2 text-[#34d399]">
                   <CheckCircle2 size={16} />
                   <span className="font-bold text-[12px]">
-                    Alle KI-Stem-Modelle und Runtimes erfolgreich installiert und verifiziert!
+                    SCNet Live heruntergeladen und geprüft
                   </span>
                 </div>
                 <p className="text-[11px] text-neutral-300 leading-relaxed">
-                  Die BS-RoFormer Engine (ep17 SDR 9.6568) und die HT-Demucs Live Engine sind voll funktionsfähig.
-                  Beim Klick auf den Stem-Trennungs-Button wird direkt der in den Einstellungen gewählte
-                  Architekturmodus ausgeführt.
+                  Schließen Sie die Einrichtung ab, laden Sie einen Track und klicken Sie im Stem-Center auf „Stems erzeugen“. Schnell und Lokal sind für den direkten Einstieg vorausgewählt.
                 </p>
                 {restartRequired && (
                   <div className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/30 p-1.5 rounded">

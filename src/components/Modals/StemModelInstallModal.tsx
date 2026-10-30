@@ -13,6 +13,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Cpu, Download, Loader2, X } from 'lucide-react';
 import {
   installStemEngineWithProgress,
@@ -93,11 +94,11 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
     }
   }, [model, onInstalled]);
 
-  if (!isOpen || !model) return null;
+  if (!isOpen || !model || typeof document === 'undefined') return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[110] select-none p-4">
-      <div className="w-full max-w-lg bg-[#12141a] border border-[#272935] rounded-sm shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs">
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] bg-black/70 backdrop-blur-sm flex items-center justify-center select-none p-4" data-stem-install-overlay="true">
+      <div role="dialog" aria-modal="true" aria-label={`Modell installieren – ${model.label}`} className="w-full max-w-lg bg-[#12141a] border border-[#272935] rounded-sm shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs">
         <div className="h-10 bg-[#171922] border-b border-[#252834] flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center space-x-2 min-w-0">
             <Cpu size={15} className="text-[#0088ff] shrink-0" />
@@ -181,6 +182,15 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
                   ? 'Bitte laufende Arbeiten speichern und die App bzw. den Server neu starten, damit die neue Runtime übernommen wird.'
                   : <>Modell <span className="font-mono text-[10px]">{install.modelId}</span> ist bereit – neue Separationen laufen mit genau dieser Architektur.</>}
               </p>
+              <div className="border-t border-[#10b981]/20 pt-2 mt-2 text-[10.5px] leading-relaxed text-neutral-300">
+                <div className="font-bold text-white mb-1">So verwendest du die Stems:</div>
+                <ol className="list-decimal pl-4 space-y-0.5">
+                  <li>Dieses Fenster mit „Fertig“ schließen.</li>
+                  <li>Unter dem Track-Header „Stems erzeugen“ öffnen.</li>
+                  <li>„Schnell“ und „Lokal“ wählen, dann „Stems erzeugen“ starten.</li>
+                  <li>Im Mixer Vocals, Drums, Bass und Other solo, stummschalten oder pegeln.</li>
+                </ol>
+              </div>
               {install.warning && (
                 <p className="text-[10.5px] text-[#f5d78e] font-mono break-all leading-relaxed">{install.warning}</p>
               )}
@@ -231,6 +241,7 @@ export const StemModelInstallModal: React.FC<StemModelInstallModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

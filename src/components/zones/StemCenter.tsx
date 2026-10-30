@@ -144,11 +144,12 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
           type="button"
           onClick={onOpenConfig}
           data-stem-action="start-config"
-          className="h-7 w-full flex items-center gap-2 px-3 text-[10.5px] font-semibold tracking-wide text-neutral-500 hover:text-[#00c8ff] bg-[#0c0e12] hover:bg-[#0e1520] border-b border-[#14161c] hover:border-[#0088ff]/40 transition-colors"
-          title="Stem-Separation vorbereiten: Modell bestätigen, Qualität und Verarbeitungsziel wählen"
+          className="h-9 w-full flex items-center gap-2.5 px-3 text-[12px] font-bold tracking-wide text-white bg-gradient-to-r from-[#09243a] to-[#0d1822] hover:from-[#0b3150] hover:to-[#122330] border-y border-[#087fc2]/55 hover:border-[#00a2ff] transition-colors"
+          title="Stems vorbereiten: aktives Modell prüfen, Schnell/Lokal wählen und die Trennung starten"
         >
-          <Plus size={12} />
-          <span>Stem-Separation starten</span>
+          <Plus size={15} className="text-[#59c5ff]" />
+          <span>Stems erzeugen</span>
+          <span className="ml-auto text-[10px] font-normal text-[#9bc5dc]">Schnell · Lokal · 4 DJ-Spuren</span>
         </button>
       )}
 
@@ -284,7 +285,7 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
                 }
               >
                 <Play size={12} fill="currentColor" />
-                <span>Job jetzt ausführen</span>
+                <span>Stems erzeugen</span>
               </button>
             </div>
           </div>
@@ -385,7 +386,7 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
           type="button"
           onClick={onOpenConfig}
           data-stem-action="reconfigure"
-          className="h-5 w-full flex items-center gap-1.5 px-3 text-[9.5px] text-neutral-600 hover:text-[#00c8ff] bg-[#0b0d11] border-b border-[#14161c] transition-colors"
+          className="h-7 w-full flex items-center gap-1.5 px-3 text-[10.5px] font-semibold text-[#86a9bc] hover:text-white bg-[#0b1520] border-b border-[#1d3444] transition-colors"
           title="Stem-Separation erneut konfigurieren (Modell, Qualität, Verarbeitungsziel)"
         >
           <ChevronDown size={10} />
