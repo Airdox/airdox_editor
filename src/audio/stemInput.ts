@@ -12,7 +12,7 @@ export interface PreparedStemInput {
  * transports. Non-finite samples are normalized to silence; mono is duplicated
  * to stereo. Keep changes versioned because the fingerprint includes this WAV.
  */
-export function encodeStemInputWav(buffer: AudioBuffer): Uint8Array {
+function allocateStemInputWav(buffer: AudioBuffer): Uint8Array {
   const channels = 2;
   const bytesPerSample = 4;
   const dataSize = buffer.length * channels * bytesPerSample;
@@ -40,19 +40,38 @@ export function encodeStemInputWav(buffer: AudioBuffer): Uint8Array {
   write(36, 'data');
   view.setUint32(40, dataSize, true);
 
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
-  let offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    const l = left[i];
-    const r = right[i];
-    view.setFloat32(offset, Number.isFinite(l) ? l : 0, true);
-    view.setFloat32(offset + bytesPerSample, Number.isFinite(r) ? r : 0, true);
-    offset += bytesPerSample * 2;
-  }
-
   return wav;
 }
+
+function encodeFrames(buffer: AudioBuffer, wav: Uint8Array, start: number, end: number): void {
+  const view = new DataView(wav.buffer);
+  const left = buffer.getChannelData(0);
+  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
+  for (let i = start; i < end; i++) {
+    view.setFloat32(44 + i * 8, Number.isFinite(left[i]) ? left[i] : 0, true);
+    view.setFloat32(48 + i * 8, Number.isFinite(right[i]) ? right[i] : 0, true);
+  }
+}
+
+export function encodeStemInputWav(buffer: AudioBuffer): Uint8Array {
+  const wav = allocateStemInputWav(buffer);
+  encodeFrames(buffer, wav, 0, buffer.length);
+  return wav;
+}
+
+export interface StemInputPreparationOptions {
+  signal?: { readonly aborted: boolean };
+}
+
+function checkCancelled(signal?: { readonly aborted: boolean }): void {
+  if (signal?.aborted) {
+    throw Object.assign(new Error('Die Separation wurde abgebrochen; es wurden keine Stems übernommen.'), { code: 'INFERENCE_CANCELLED' });
+  }
+}
+
+// A macrotask lets React paint progress and lets a cancel click run between
+// bounded PCM chunks. A resolved Promise would starve both on long tracks.
+const yieldToRenderer = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /**
  * Fingerprints the complete canonical bytes consumed by stem separation.
@@ -66,8 +85,19 @@ export async function fingerprintStemInputWav(wav: Uint8Array): Promise<string> 
   return `stem-pcm-wav-v1:sha256:${digest}`;
 }
 
-export async function prepareStemInput(buffer: AudioBuffer): Promise<PreparedStemInput> {
-  const wav = encodeStemInputWav(buffer);
+export async function prepareStemInput(buffer: AudioBuffer, options: StemInputPreparationOptions = {}): Promise<PreparedStemInput> {
+  checkCancelled(options.signal);
+  await yieldToRenderer();
+  checkCancelled(options.signal);
+  const wav = allocateStemInputWav(buffer);
+  const chunkFrames = 131_072;
+  for (let start = 0; start < buffer.length; start += chunkFrames) {
+    checkCancelled(options.signal);
+    encodeFrames(buffer, wav, start, Math.min(buffer.length, start + chunkFrames));
+    await yieldToRenderer();
+  }
+  checkCancelled(options.signal);
   const fingerprint = await fingerprintStemInputWav(wav);
+  checkCancelled(options.signal);
   return { wav, fingerprint };
 }

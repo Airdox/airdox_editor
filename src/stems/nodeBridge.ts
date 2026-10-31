@@ -28,6 +28,7 @@ import type {
   StemServiceStatus,
 } from './transportTypes';
 import { isStemError } from './errors';
+import type { SavedStemQuery } from './savedStemLibrary';
 
 /** Bumped whenever the IPC payload shape changes, so the renderer can refuse a stale bridge. */
 export const STEM_BRIDGE_VERSION = 2;
@@ -42,6 +43,7 @@ function failure(error: unknown): StemBridgeError {
 export interface StemBridge {
   version: number;
   status(): Promise<StemBridgeResult<StemServiceStatus>>;
+  findSaved(query: SavedStemQuery): Promise<StemBridgeResult<StemJobView | null>>;
   start(request: StartStemJobRequest): Promise<StemBridgeResult<StemJobView>>;
   wait(jobId: string): Promise<StemBridgeResult<StemJobView>>;
   job(jobId: string): StemBridgeResult<StemJobView | null>;
@@ -122,6 +124,10 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
 
   return {
     version: STEM_BRIDGE_VERSION,
+    async findSaved(query) {
+      try { return { ok: true, data: await service.findSaved(query) }; }
+      catch (error) { return failure(error); }
+    },
     async status() {
       try {
         return { ok: true, data: await service.status() };

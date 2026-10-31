@@ -22,6 +22,7 @@ const crypto = require('node:crypto');
 /** IPC-Kanäle – der Renderer spricht ausschließlich diese. */
 const CHANNELS = {
   status: 'stems:engine-status',
+  findSaved: 'stems:find-saved',
   start: 'stems:job-start',
   wait: 'stems:job-wait',
   job: 'stems:job-get',
@@ -56,7 +57,7 @@ const PROFILES = ['PREVIEW', 'BALANCED', 'HIGH', 'HIGH_QUALITY', 'MAXIMUM_QUALIT
 // ist absichtlich dabei (der Kern lehnt es ohne allowPipelineDouble ab), damit ein
 // Test-Double-Request nicht schon hier verworfen, sondern mit dem echten Fehlercode
 // des Kerns beantwortet wird.
-const FAMILIES = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'pipeline_double'];
+const FAMILIES = ['bs_roformer', 'mel_band_roformer', 'htdemucs', 'scnet', 'pipeline_double'];
 /** Rechengeräte und Validierungstiefe, die ein Job aus dem Renderer wählen darf. */
 const DEVICES = ['auto', 'cpu', 'cuda', 'vulkan', 'metal', 'directml', 'coreml'];
 const MODES = ['fast_dj', 'studio_master'];
@@ -256,6 +257,12 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   });
 
   ipcMain.handle(CHANNELS.wait, async (_event, jobId) => bridge.wait(String(jobId)));
+  ipcMain.handle(CHANNELS.findSaved, async (_event, query) => bridge.findSaved({
+    inputFingerprint: String(query?.inputFingerprint ?? '').slice(0, 100),
+    modelId: typeof query?.modelId === 'string' ? query.modelId.slice(0, 200) : undefined,
+    family: typeof query?.family === 'string' ? query.family.slice(0, 100) : undefined,
+    profile: typeof query?.profile === 'string' ? query.profile.slice(0, 100) : undefined,
+  }));
   ipcMain.handle(CHANNELS.job, async (_event, jobId) => bridge.job(String(jobId)));
   ipcMain.handle(CHANNELS.jobs, async () => bridge.jobs());
   ipcMain.handle(CHANNELS.cancel, async (_event, jobId, reason) => bridge.cancel(String(jobId), typeof reason === 'string' ? reason.slice(0, 200) : undefined));

@@ -159,6 +159,7 @@ export const DeckStemsControl: React.FC<DeckStemsControlProps> = ({
             <Layers size={12} />
             <span>DECK A • STEMS</span>
           </div>
+          {stems?.savedDirectory && <span className="text-[10px] text-[#90d9ac]" title={stems.savedDirectory}>Auf Festplatte gespeichert</span>}
 
           <span
             className="text-[9.5px] font-mono px-2 py-0.5 rounded bg-[#121622] border border-[#232a3d] text-neutral-300 flex items-center gap-1.5"

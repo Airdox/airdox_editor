@@ -54,6 +54,8 @@ export type StemQualityMode = 'fast' | 'hq';
 export type StemTargetMode = 'local' | 'remote';
 
 export interface StemCenterProps {
+  panelOpen?: boolean;
+  onTogglePanel?: () => void;
   phase: StemCenterPhase;
 
   /* ── Zustand B: Konfiguration ─────────────────────────────────────────── */
@@ -101,6 +103,8 @@ export interface StemCenterProps {
 export const StemCenter: React.FC<StemCenterProps> = (props) => {
   const {
     phase,
+    panelOpen = true,
+    onTogglePanel,
     configOpen,
     onOpenConfig,
     onCloseConfig,
@@ -131,13 +135,25 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
     deckProps,
   } = props;
 
-  const activeRemoteJob = (remoteStatus?.jobs ?? []).find(
+  const activeRemoteJob = (targetMode === 'remote' ? remoteStatus?.jobs ?? [] : []).find(
     (job) => job.status !== 'COMPLETED' && job.status !== 'FAILED' && job.status !== 'CANCELLED'
   );
   const remoteLabel = remoteStatus?.label ?? 'Google Drive';
+  const remoteUnreachable = targetMode === 'remote' && remoteStatus?.reachable === false;
 
   return (
-    <section className="flex flex-col select-none" data-zone="2" data-stem-center={phase} aria-label="Stem-Center">
+    <section className="flex flex-col flex-shrink-0 select-none" data-zone="2" data-stem-center={phase} aria-label="Stem-Center">
+      {onTogglePanel && (
+        <button type="button" onClick={onTogglePanel} aria-expanded={panelOpen}
+          aria-controls="stem-center-content" data-stem-action="toggle-panel"
+          className="h-7 flex items-center gap-2 px-3 text-[11px] font-semibold text-[#9fdcff] bg-[#0b1520] border-b border-[#1d3444]"
+          title="Stem-Mixer und Einstellungen ein-/ausblenden; fertige Stems bleiben gespeichert">
+          <ChevronDown size={12} className={panelOpen ? '' : '-rotate-90'} />
+          <span>STEMS · {panelOpen ? 'Ausblenden' : 'Einblenden'}</span>
+          {deckProps.stems && <span className="ml-auto text-[#90d9ac]">{deckProps.stems.stemIds?.length ?? 4} Spuren bereit</span>}
+        </button>
+      )}
+      <div id="stem-center-content" hidden={!panelOpen && phase !== 'PROCESSING'}>
       {/* ── ZUSTAND A: eine einzige, unaufdringliche Zeile ─────────────────── */}
       {phase === 'IDLE' && (
         <button
@@ -291,11 +307,11 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
           </div>
 
           {/* Genau eine Zustandszeile – kein Erklärblock, kein Fortschritt */}
-          {(engineReason || remoteStatus?.reachable === false) && (
+          {(engineReason || remoteUnreachable) && (
             <div className="flex items-center gap-2 text-[10px]" style={{ color: UI_ACCENT.warning }}>
               <AlertTriangle size={11} className="flex-shrink-0" />
               <span className="truncate">
-                {remoteStatus?.reachable === false
+                {remoteUnreachable
                   ? `${remoteLabel} ist gerade nicht erreichbar – der Job bleibt erhalten und läuft weiter, sobald die Verbindung steht.`
                   : engineReason}
               </span>
@@ -393,6 +409,7 @@ export const StemCenter: React.FC<StemCenterProps> = (props) => {
           <span>Separation erneut ausführen…</span>
         </button>
       )}
+      </div>
 
       {/* Ausgelagerte Modell-Auswahl: hier – und nur hier – existieren Alternativen */}
       <StemModelPicker
@@ -441,5 +458,5 @@ export function processingPercent(
   remoteJob: RemoteStemJobView | undefined
 ): number {
   const raw = remoteJob ? remoteJob.workerPercent ?? remoteJob.percent ?? 0 : progress?.percent ?? 0;
-  return Math.max(0, Math.min(100, Math.round(raw)));
+  return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : 0;
 }

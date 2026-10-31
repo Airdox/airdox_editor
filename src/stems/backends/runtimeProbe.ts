@@ -38,7 +38,9 @@ const NEGATIVE_TTL_MS = 60 * 1000;
 const PERSISTED_POSITIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PERSISTED_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_FAST_TIMEOUT_MS = 5000;
-const DEFAULT_IMPORT_TIMEOUT_MS = 20000;
+// A measured cold import of the bundled CPU torch on Windows takes 24 s.
+// Only strict job preparation uses this budget; status remains find_spec-only.
+const DEFAULT_IMPORT_TIMEOUT_MS = 60000;
 const DEFAULT_INTERPRETER_TIMEOUT_MS = 8000;
 
 export interface CommandProbeResult {

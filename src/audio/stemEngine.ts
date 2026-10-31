@@ -65,6 +65,7 @@ export interface TrackStems {
   recombinationErrorDb?: number;
   trainedModel?: boolean;
   stemIds?: string[];
+  savedDirectory?: string;
   stemsById?: Record<string, AudioBuffer>;
   // Legacy fields kept for compatibility but no longer set to fallback
   fallbackReason?: never;
@@ -304,6 +305,55 @@ function createStemBuffer(
 }
 
 class StemEngine {
+  /** Lookup does no inference and works even when the producing model is absent. */
+  public async restoreSavedStems(sourceBuffer: AudioBuffer, trackId: string, originalSha256: string,
+    queryOptions: { modelId?: string; family?: string; profile?: string } = {}): Promise<TrackStems | null> {
+    const cached = this.getCachedStemsForBuffer(trackId, sourceBuffer, originalSha256);
+    if (cached && (!queryOptions.modelId || cached.modelId === queryOptions.modelId) &&
+      (!queryOptions.profile || cached.profile === queryOptions.profile) && !queryOptions.family) return cached;
+    let fingerprint = inputFingerprintByBuffer.get(sourceBuffer);
+    if (!fingerprint) {
+      fingerprint = (await prepareStemInput(sourceBuffer)).fingerprint;
+      inputFingerprintByBuffer.set(sourceBuffer, fingerprint);
+    }
+    return this.loadSavedStems(trackId, originalSha256, fingerprint, queryOptions);
+  }
+
+  private async loadSavedStems(trackId: string, originalSha256: string, inputFingerprint: string,
+    queryOptions: { modelId?: string; family?: string; profile?: string } = {}): Promise<TrackStems | null> {
+    const query = { inputFingerprint, ...queryOptions };
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    let job: StemJobView | null = null;
+    if (desktop?.findSavedStems) {
+      const found = await desktop.findSavedStems(query);
+      if (found.ok === false) throw new Error(found.message);
+      job = found.data;
+    } else if (!desktop) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined) as [string, string][]);
+      const response = await fetch(`/api/stems/saved?${params}`);
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload.ok) job = payload.data;
+      }
+    }
+    if (!job || job.status !== 'COMPLETED' || !job.result?.validationPass) return null;
+    const stemsById: Record<string, AudioBuffer> = {};
+    for (const stemId of job.stems) {
+      if (desktop) {
+        const read = await desktop.readStemJobStem(job.jobId, stemId);
+        if (read.ok === false) throw new Error(read.message);
+        stemsById[stemId] = await decodeWavToAudioBuffer(read.data.wav);
+      } else {
+        const response = await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}/stems/${encodeURIComponent(stemId)}`);
+        if (!response.ok) throw new Error(`Gespeicherter Stem ${stemId} konnte nicht geladen werden.`);
+        stemsById[stemId] = await decodeWavToAudioBuffer(new Uint8Array(await response.arrayBuffer()));
+      }
+    }
+    const result = buildTrackStems({ trackId, originalSha256, inputFingerprint, job, stemsById, profile: job.profile });
+    result.savedDirectory = job.result.outputDir;
+    this.cacheStems(trackId, result);
+    return result;
+  }
   /** Exact cache entries include working PCM identity and separation settings. */
   private stemsCache = new Map<string, TrackStems>();
   /** Latest completed result for a track + exact PCM input, across local/remote profiles. */
@@ -312,6 +362,7 @@ class StemEngine {
   private cachedStemBytes = 0;
   private isProcessing: boolean = false;
   private activeJobId?: string;
+  private localCancellation?: { aborted: boolean };
   /** Remote jobs need the same immediate cancel affordance as local jobs. */
   private activeRemoteJobId?: string;
 
@@ -790,17 +841,33 @@ class StemEngine {
     const profile = options.profile ?? 'HIGH';
     const cacheVariant = separationCacheVariant('local', profile, options);
     this.isProcessing = true;
+    const cancellation = { aborted: false };
+    this.localCancellation = cancellation;
+    const signal = { get aborted() { return cancellation.aborted || Boolean(options.signal?.aborted); } };
+    const checkCancelled = () => {
+      if (signal.aborted) throw Object.assign(new Error('Die Separation wurde abgebrochen; es wurden keine Stems übernommen.'), { code: 'INFERENCE_CANCELLED' });
+    };
     const startedAt = Date.now();
     try {
       options.onProgress?.({ percent: 1, phaseText: `Arbeitskopie für Profil ${profile} vorbereiten…`, processedSeconds: 0, totalSeconds: duration });
-      const preparedInput = await prepareStemInput(sourceBuffer);
+      const preparedInput = await prepareStemInput(sourceBuffer, { signal });
       inputFingerprintByBuffer.set(sourceBuffer, preparedInput.fingerprint);
       const cached = this.getCachedStems(trackId, preparedInput.fingerprint, cacheVariant, originalSha256);
+      checkCancelled();
       if (cached) {
         options.onProgress?.({ percent: 100, phaseText: 'Stems aus Cache geladen', processedSeconds: cached.duration, totalSeconds: cached.duration });
         return cached;
       }
       const wav = preparedInput.wav;
+      const saved = await this.loadSavedStems(trackId, originalSha256, preparedInput.fingerprint, {
+        modelId: options.modelId, family: options.modelId ? undefined : options.family, profile,
+      });
+      checkCancelled();
+      if (saved) {
+        this.cacheStems(trackId, saved, cacheVariant);
+        options.onProgress?.({ percent: 100, phaseText: 'Gespeicherte Stems geladen – keine neue Trennung nötig', processedSeconds: duration, totalSeconds: duration });
+        return saved;
+      }
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
       let job: StemJobView;
@@ -817,6 +884,16 @@ class StemEngine {
         if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
         job = started.data;
         this.activeJobId = job.jobId;
+        options.onProgress?.({
+          percent: Math.round(job.percent),
+          phaseText: job.phase,
+          processedSeconds: job.processedSeconds,
+          totalSeconds: job.totalSeconds || duration,
+        });
+        if (signal.aborted) {
+          await desktop.cancelStemJob(job.jobId, 'Abbruch während der Vorbereitung');
+          checkCancelled();
+        }
         const detach = desktop.onStemJobProgress?.((event) => {
           if (!event || event.job.jobId !== job.jobId) return;
           options.onProgress?.({
@@ -855,7 +932,7 @@ class StemEngine {
         job = payload.data;
         this.activeJobId = job.jobId;
         for (;;) {
-          if (options.signal?.aborted) {
+          if (signal.aborted) {
             await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}/cancel`, { method: 'POST' }).catch(() => undefined);
           }
           const poll = await fetch(`/api/stems/jobs/${encodeURIComponent(job.jobId)}`);
@@ -875,6 +952,7 @@ class StemEngine {
         }
       }
 
+      checkCancelled();
       if (job.status === 'CANCELLED') {
         throw Object.assign(new Error(job.error?.message ?? 'Die Separation wurde abgebrochen; es wurden keine Stems übernommen.'), { code: 'INFERENCE_CANCELLED' });
       }
@@ -888,6 +966,7 @@ class StemEngine {
       options.onProgress?.({ percent: 96, phaseText: `${stemIds.length} Stems dekodieren…`, processedSeconds: duration, totalSeconds: duration });
       const stemsById: Record<string, AudioBuffer> = {};
       for (const stemId of stemIds) {
+        checkCancelled();
         if (desktop) {
           const read = await desktop.readStemJobStem!(job.jobId, stemId);
           if (read.ok === false) throw Object.assign(new Error(`${read.code}: ${read.message}`), { code: read.code });
@@ -901,6 +980,7 @@ class StemEngine {
         }
       }
 
+      checkCancelled();
       const result = buildTrackStems({
         trackId,
         originalSha256,
@@ -927,6 +1007,7 @@ class StemEngine {
       });
       return result;
     } finally {
+      this.localCancellation = undefined;
       this.activeJobId = undefined;
       this.isProcessing = false;
     }
@@ -1094,7 +1175,7 @@ class StemEngine {
         processedSeconds: 0,
         totalSeconds: duration,
       });
-      const preparedInput = await prepareStemInput(sourceBuffer);
+      const preparedInput = await prepareStemInput(sourceBuffer, { signal: options.signal });
       inputFingerprintByBuffer.set(sourceBuffer, preparedInput.fingerprint);
       const cached = this.getCachedStems(trackId, preparedInput.fingerprint, cacheVariant, originalSha256);
       if (cached) {
@@ -1258,16 +1339,20 @@ class StemEngine {
   }
 
   public cancelActiveEngineJob(reason = 'Abbruch durch Benutzer'): boolean {
+    const localCancellation = this.localCancellation;
+    if (localCancellation) localCancellation.aborted = true;
     const remoteJobId = this.activeRemoteJobId;
     if (remoteJobId) {
       void this.cancelRemoteJob(remoteJobId, reason).catch(() => undefined);
       return true;
     }
     const jobId = this.activeJobId;
-    if (!jobId) return false;
+    if (!jobId) return Boolean(localCancellation);
     const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
     if (desktop?.cancelStemJob) {
-      void desktop.cancelStemJob(jobId, reason);
+      void desktop.cancelStemJob(jobId, reason).catch((error) => {
+        logger.warn('STEMS', `Abbruch konnte nicht an die Engine gemeldet werden: ${String(error)}`);
+      });
       return true;
     }
     void fetch(`/api/stems/jobs/${encodeURIComponent(jobId)}/cancel`, {
@@ -1337,7 +1422,12 @@ async function decodeWavToAudioBuffer(bytes: Uint8Array): Promise<AudioBuffer> {
   if (!AudioCtx) throw new Error('Web Audio API ist für das Dekodieren der Stem-Ausgabe erforderlich.');
   const context = new AudioCtx();
   try {
-    const exact = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    // IPC normally supplies a complete ArrayBuffer. Avoid retaining a second
+    // full-track WAV allocation while Web Audio decodes each stem. Subviews
+    // still need an exact slice so unrelated backing bytes cannot be decoded.
+    const exact = (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer
+      : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) as ArrayBuffer;
     return await context.decodeAudioData(exact);
   } finally {
     await context.close();
@@ -1378,6 +1468,7 @@ function buildTrackStems(input: {
     bass: stemsById.bass,
     other: stemsById.other,
     separatedAt: Date.now(),
+    savedDirectory: job.result?.outputDir || undefined,
     separationMethod: job.modelId.includes('bsroformer') ? 'BS_ROFORMER' : 'STEM_ENGINE_MODEL',
     stemIds: [...job.stems],
     stemsById,

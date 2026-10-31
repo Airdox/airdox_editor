@@ -1,3 +1,5 @@
+import { applyStemResultIfCurrent } from './audio/stemResultGuard';
+import { withStemPreflightTimeout } from './audio/stemPreflight';
 /**
  * @license
  * Rekordbox DJ Audio Editor - Master Application
@@ -330,7 +332,10 @@ export default function App() {
   // Stems Separation and Multi-Track Mixer state
   const [activeTrackStems, setActiveTrackStems] = useState<TrackStems | null>(null);
   const [stemsMixerState, setStemsMixerState] = useState<StemsMixerState>({ ...DEFAULT_STEMS_MIXER_STATE });
+  const [stemPanelOpen, setStemPanelOpen] = useState(true);
   const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
+  const stemStartGuardRef = useRef(false);
+  const stemPreflightAbortRef = useRef({ aborted: false });
   const [stemQualityWarning, setStemQualityWarning] = useState<string | null>(null);
   const [separationProgress, setSeparationProgress] = useState<StemSeparationProgress | null>(null);
   const [stemProfile, setStemProfile] = useState<StemQualityProfile | null>(null);
@@ -457,6 +462,8 @@ export default function App() {
 
   // Active track helper (supports empty state)
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || tracks[0] || null;
+  const stemResultTargetRef = useRef({ trackId: activeTrack?.id, buffer: workingAudioBuffer });
+  stemResultTargetRef.current = { trackId: activeTrack?.id, buffer: workingAudioBuffer };
 
   /**
    * Ein Bearbeitungsschritt hat genau zwei Wirkungen: der Track bekommt seine
@@ -717,6 +724,7 @@ export default function App() {
    * passen Wellenform und Stem-Mischung nicht mehr zueinander.
    */
   useEffect(() => {
+    let cancelled = false;
     if (activeTrack && workingAudioBuffer) {
       const cached = stemEngine.getCachedStemsForBuffer(
         activeTrack.id,
@@ -724,9 +732,15 @@ export default function App() {
         activeTrack.originalSha256
       );
       setActiveTrackStems(cached || null);
+      if (!cached) {
+        void stemEngine.restoreSavedStems(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256)
+          .then((saved) => { if (!cancelled && saved) setActiveTrackStems(saved); })
+          .catch((error) => logger.warn('STEMS', 'Gespeicherte Stems konnten nicht geladen werden', { error: String(error) }));
+      }
     } else {
       setActiveTrackStems(null);
     }
+    return () => { cancelled = true; };
   }, [activeTrackId, activeTrack, workingAudioBuffer]);
 
   // Engine-Status beim Start abfragen: die UI baut daraus Profil-Auswahl UND
@@ -911,12 +925,19 @@ export default function App() {
         ...resolveArchitectureJobOptions(effectiveArchitecture),
         onProgress: (prog) => setSeparationProgress(prog),
       });
-      setActiveTrackStems(separated);
+      if (!applyStemResultIfCurrent(
+        stemResultTargetRef.current,
+        { trackId: activeTrack.id, buffer: workingAudioBuffer },
+        () => setActiveTrackStems(separated)
+      )) {
+        logger.info('STEMS', 'Stem-Ergebnis bleibt im Cache: Track oder Arbeitskopie wurde während der Berechnung gewechselt.');
+        return;
+      }
       const stemList = (separated.stemIds ?? STEM_TYPES).join(', ');
       showOperationFeedback({
         title: `Stems getrennt – echte AI (${separated.profile})`,
         operationType: 'CUE',
-        description: `Track "${activeTrack.title}" mit ${separated.modelId} (${separated.separationMethod}) in ${separated.stemIds?.length ?? 4} Stems aufgeteilt: ${stemList}. Engine: BS-RoFormer, Device: CPU/GPU. Original SHA256 unverändert: ${activeTrack.originalSha256.slice(0,16)}. Job mit job.json reproduzierbar.`,
+        description: `Track "${activeTrack.title}" mit ${separated.modelId} (${separated.separationMethod}) in ${separated.stemIds?.length ?? 4} Stems aufgeteilt: ${stemList}. Original SHA256 unverändert: ${activeTrack.originalSha256.slice(0,16)}. Job mit job.json reproduzierbar.`,
         originalSha256: activeTrack.originalSha256,
         timestamp: Date.now(),
       });
@@ -924,7 +945,9 @@ export default function App() {
     } catch (err: any) {
       const message = err?.message || String(err);
       const code = err?.code || (message.includes('STEM_ENGINE_UNAVAILABLE') ? 'STEM_ENGINE_UNAVAILABLE' : undefined);
-      if (code === 'STEM_ENGINE_UNAVAILABLE' || message.includes('STEM_ENGINE_UNAVAILABLE') || message.includes('Spektrale Fallback')) {
+      if (code === 'INFERENCE_CANCELLED') {
+        setRemoteNotice({ tone: 'info', text: 'Stem-Separation abgebrochen. Es wurden keine Stems übernommen.' });
+      } else if (code === 'STEM_ENGINE_UNAVAILABLE' || message.includes('STEM_ENGINE_UNAVAILABLE') || message.includes('Spektrale Fallback')) {
         logger.warn('EDITING', `Stem-Separation: Engine nicht verfügbar – ${message}`);
         setStemEngineUnavailableReason(message);
         setStemQualityWarning(message);
@@ -1000,7 +1023,14 @@ export default function App() {
             onRemoteJob: (job) => { setRemoteFlowJob(job); setRemoteFlowJobId(job.jobId); },
           }
         );
-        setActiveTrackStems(separated);
+        if (!applyStemResultIfCurrent(
+          stemResultTargetRef.current,
+          { trackId: activeTrack.id, buffer: workingAudioBuffer },
+          () => setActiveTrackStems(separated)
+        )) {
+          logger.info('STEMS', 'Stem-Ergebnis bleibt im Cache: Track oder Arbeitskopie wurde während der Berechnung gewechselt.');
+          return;
+        }
         showOperationFeedback({
           title: `Stems getrennt – High Quality extern (${separated.profile})`,
           operationType: 'CUE',
@@ -1193,10 +1223,11 @@ export default function App() {
   );
 
   const handleCancelStemSeparation = useCallback(() => {
+    stemPreflightAbortRef.current.aborted = true;
     const remoteJob = (stemRemoteStatus?.jobs ?? []).find(
       (job) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.status)
     );
-    if (remoteJob) {
+    if (remoteFlowRunning && remoteJob) {
       cancelRemoteFlowJob(remoteJob.jobId);
       return;
     }
@@ -1214,7 +1245,7 @@ export default function App() {
       logger.info('STEM-REMOTE', 'Abbruch während der Vorbereitung vorgemerkt.');
       return;
     }
-    const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck');
+    const accepted = stemEngine.cancelActiveEngineJob('Abbruch über das Deck') || stemStartGuardRef.current;
     logger.warn('EDITING', accepted ? 'Stem-Separation: Abbruch angefordert.' : 'Stem-Separation: kein aktiver Job abbruchbar.');
     setSeparationProgress((prev) => (prev ? { ...prev, phaseText: 'Abbruch wird ausgeführt…' } : prev));
     // Auch lokal gilt: der Klick muss eine Antwort zeigen. „kein aktiver Job
@@ -1222,114 +1253,145 @@ export default function App() {
     // es passiert nichts“.
     setRemoteNotice(
       accepted
-        ? { tone: 'info', text: 'Abbruch angefordert: Der laufende Chunk wird zu Ende gerechnet, dann stoppt die lokale Engine.' }
+        ? { tone: 'info', text: 'Abbruch angefordert. Die lokale Verarbeitung wird beendet.' }
         : { tone: 'info', text: 'Es läuft gerade keine Stem-Separation – abgebrochen werden kann nichts.' }
     );
   }, [stemRemoteStatus, remoteFlowJobId, remoteFlowRunning, cancelRemoteFlowJob]);
 
   const handleSeparateStems = useCallback(async () => {
-    if (!activeTrack || !workingAudioBuffer) {
-      alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
-      return;
-    }
-    /*
-     * „High Quality extern“ zuerst prüfen: hier entscheidet der Transport über
-     * die Machbarkeit, nicht die lokale Engine. Ein lokaler Preflight würde die
-     * Gewichte verlangen, die der externe Rechner ohnehin selbst lädt – und
-     * damit genau den Fall blockieren, für den der Fernpfad existiert (§15).
-     */
-    if (stemRemoteEnabled && (resolvedStemProfile === 'HIGH_QUALITY' || resolvedStemProfile === 'MAXIMUM_QUALITY')) {
-      if (!stemRemoteStatus?.configured) {
-        const reason = 'Kein externer Rechenort eingerichtet (Google Drive) – High Quality läuft lokal.';
-        logger.warn('STEM-REMOTE', 'Fern-Separation angefordert, aber kein Transport konfiguriert.');
-        setStemEngineUnavailableReason(reason);
-        setStemQualityWarning(reason);
+    if (stemStartGuardRef.current || stemEngine.getIsProcessing()) return;
+    stemStartGuardRef.current = true;
+    const preflightAbort = { aborted: false };
+    stemPreflightAbortRef.current = preflightAbort;
+    try {
+      if (!activeTrack || !workingAudioBuffer) {
+        alert('Bitte lade zuerst einen Track mit Audiodaten in Deck A.');
         return;
       }
-      await runRemoteStemSeparation(resolvedStemProfile);
-      return;
-    }
-    // Feste Architektur aus dem Einstellungsmenü vor dem Preflight prüfen:
-    // lieber eine klare Ansage als ein Job, der in MODEL_MISSING endet. Wenn
-    // die gespeicherte Auswahl auf ein inzwischen fehlendes Modell zeigt, aber
-    // „Automatisch" bereits eine lauffähige Alternative hat, wird der Lauf auf
-    // Auto umgebogen; andernfalls bleibt der neue modellgenaue Installer der
-    // Hauptpfad und installiert exakt die gewählte Architektur.
-    let effectiveArchitecture = stemArchitecture;
-    if (pinnedStemArchitecture && !pinnedStemArchitecture.installed) {
-      const reason = pinnedStemArchitecture.reason ?? `Modell ${pinnedStemArchitecture.id} ist nicht installiert.`;
-      const autoArchitecture = stemArchitectures.find((entry) => entry.id === 'auto');
-      if (autoArchitecture?.installed) {
-        effectiveArchitecture = { ...stemArchitecture, architectureId: 'auto' };
-        setStemArchitecture(effectiveArchitecture);
-        logger.warn(
-          'EDITING',
-          `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}. Automatisch nutzt eine installierte Alternative.`
-        );
-      } else {
-        logger.warn('EDITING', `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}`);
+      /*
+       * „High Quality extern“ zuerst prüfen: hier entscheidet der Transport über
+       * die Machbarkeit, nicht die lokale Engine. Ein lokaler Preflight würde die
+       * Gewichte verlangen, die der externe Rechner ohnehin selbst lädt – und
+       * damit genau den Fall blockieren, für den der Fernpfad existiert (§15).
+       */
+      setIsSeparatingStems(true);
+      setSeparationProgress({ percent: 1, phaseText: 'Gespeicherte Stems suchen…', processedSeconds: 0, totalSeconds: workingAudioBuffer.duration });
+      const saved = await stemEngine.restoreSavedStems(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
+        ...resolveArchitectureJobOptions(stemArchitecture), profile: resolvedStemProfile,
+      });
+      if (preflightAbort.aborted) return;
+      if (saved) {
+        applyStemResultIfCurrent(stemResultTargetRef.current, { trackId: activeTrack.id, buffer: workingAudioBuffer },
+          () => setActiveTrackStems(saved));
+        dispatchWorkspace({ type: 'CLOSE_STEM_CONFIG' });
+        setStemPanelOpen(true);
+        setRemoteNotice({ tone: 'info', text: 'Gespeicherte Stems geladen – eine erneute Trennung war nicht nötig.' });
+        return;
+      }
+      if (stemRemoteEnabled && (resolvedStemProfile === 'HIGH_QUALITY' || resolvedStemProfile === 'MAXIMUM_QUALITY')) {
+        if (!stemRemoteStatus?.configured) {
+          const reason = 'Kein externer Rechenort eingerichtet (Google Drive) – High Quality läuft lokal.';
+          logger.warn('STEM-REMOTE', 'Fern-Separation angefordert, aber kein Transport konfiguriert.');
+          setStemEngineUnavailableReason(reason);
+          setStemQualityWarning(reason);
+          return;
+        }
+        await runRemoteStemSeparation(resolvedStemProfile);
+        return;
+      }
+      // Feste Architektur aus dem Einstellungsmenü vor dem Preflight prüfen:
+      // lieber eine klare Ansage als ein Job, der in MODEL_MISSING endet. Wenn
+      // die gespeicherte Auswahl auf ein inzwischen fehlendes Modell zeigt, aber
+      // „Automatisch" bereits eine lauffähige Alternative hat, wird der Lauf auf
+      // Auto umgebogen; andernfalls bleibt der neue modellgenaue Installer der
+      // Hauptpfad und installiert exakt die gewählte Architektur.
+      let effectiveArchitecture = stemArchitecture;
+      if (pinnedStemArchitecture && !pinnedStemArchitecture.installed) {
+        const reason = pinnedStemArchitecture.reason ?? `Modell ${pinnedStemArchitecture.id} ist nicht installiert.`;
+        const autoArchitecture = stemArchitectures.find((entry) => entry.id === 'auto');
+        if (autoArchitecture?.installed) {
+          effectiveArchitecture = { ...stemArchitecture, architectureId: 'auto' };
+          setStemArchitecture(effectiveArchitecture);
+          logger.warn(
+            'EDITING',
+            `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}. Automatisch nutzt eine installierte Alternative.`
+          );
+        } else {
+          logger.warn('EDITING', `Stem-Preflight: Architektur ${pinnedStemArchitecture.id} nicht nutzbar — ${reason}`);
+          setStemEngineUnavailableReason(reason);
+          setStemQualityWarning(
+            `Architektur „${pinnedStemArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
+              'Installation: Button „Modell installieren" im Konfigurations-Panel des Stem-Centers bzw. im Einstellungsmenü – oder auf „Automatisch" stellen.'
+          );
+          return;
+        }
+      }
+
+      // Wenn auf "Automatisch" gestellt ist: prüfen ob irgendein Modell vorhanden ist
+      const anyInstalled = stemArchitectures.some((entry) => entry.id !== 'auto' && entry.installed);
+      if (stemArchitecture.architectureId === 'auto' && stemArchitectures.length > 0 && !anyInstalled) {
+        const reason = 'Keine KI-Stem-Modelle installiert (BS-RoFormer / HT-Demucs fehlen).';
+        logger.warn('EDITING', `Stem-Preflight: Auto-Modus ohne installierte Modelle — ${reason}`);
         setStemEngineUnavailableReason(reason);
         setStemQualityWarning(
-          `Architektur „${pinnedStemArchitecture.label}" ist nicht einsatzbereit: ${reason}\n` +
-            'Installation: Button „Modell installieren" im Konfigurations-Panel des Stem-Centers bzw. im Einstellungsmenü – oder auf „Automatisch" stellen.'
+          `Keine KI-Stem-Modelle installiert: ${reason}\n` +
+            'Klicken Sie auf „BS-RoFormer installieren", um die KI-Stem-Engine jetzt einzurichten.'
         );
         return;
       }
-    }
 
-    // Wenn auf "Automatisch" gestellt ist: prüfen ob irgendein Modell vorhanden ist
-    const anyInstalled = stemArchitectures.some((entry) => entry.id !== 'auto' && entry.installed);
-    if (stemArchitecture.architectureId === 'auto' && stemArchitectures.length > 0 && !anyInstalled) {
-      const reason = 'Keine KI-Stem-Modelle installiert (BS-RoFormer / HT-Demucs fehlen).';
-      logger.warn('EDITING', `Stem-Preflight: Auto-Modus ohne installierte Modelle — ${reason}`);
-      setStemEngineUnavailableReason(reason);
-      setStemQualityWarning(
-        `Keine KI-Stem-Modelle installiert: ${reason}\n` +
-          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Stem-Engine jetzt einzurichten.'
-      );
-      return;
+      const profile = resolvedStemProfile;
+      setIsSeparatingStems(true);
+      setStemEngineUnavailableReason(null);
+      setSeparationProgress({
+        percent: 1,
+        phaseText: `KI Stem-Preflight (${architectureLabel(stemArchitecture, stemArchitectures)})…`,
+        processedSeconds: 0,
+        totalSeconds: workingAudioBuffer.duration,
+      });
+      const availability = await withStemPreflightTimeout(stemEngine.checkAvailability(), 30_000, preflightAbort);
+      if (preflightAbort.aborted) return;
+      if (!availability.available) {
+        logger.warn('EDITING', `Stem-Preflight: KI-Engine nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
+        setStemEngineUnavailableReason(availability.reason || 'STEM AI UNAVAILABLE');
+        setStemQualityWarning(availability.reason || 'STEM AI UNAVAILABLE');
+        const info = await withStemPreflightTimeout(stemEngine.getEngineInfo(), 30_000, preflightAbort).catch(() => null);
+        if (info) setStemEngineInfo(info);
+        return;
+      }
+      const info = await withStemPreflightTimeout(stemEngine.getEngineInfo(), 30_000, preflightAbort);
+      if (preflightAbort.aborted) return;
+      setStemEngineInfo(info);
+      const chosen = info.profiles.find((entry) => entry.profile === profile);
+      // Bei fest gewählter Architektur entscheidet deren Verfügbarkeit (oben
+      // geprüft) – die Profil-Reserve darf den Job nicht blockieren. Hat die UI
+      // gerade automatisch auf „Automatisch" umgeschaltet, gilt wieder die
+      // Profilprüfung.
+      const pinnedStillEffective = effectiveArchitecture.architectureId !== 'auto' ? pinnedStemArchitecture : undefined;
+      // `chosen` MUSS existieren: fehlt das Profil in der Matrix (z. B. weil der
+      // Statusaufruf nichts geliefert hat), darf der Lauf nicht „irgendwie“ starten.
+      if (!pinnedStillEffective && (!info.ok || !chosen?.available)) {
+        logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
+        setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
+        setStemQualityWarning(
+          `Profil ${profile} nicht verfügbar: ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}. ` +
+            'Klicken Sie auf „BS-RoFormer installieren", um die KI-Modelle einzurichten.'
+        );
+        return;
+      }
+      await runStemSeparation(profile, effectiveArchitecture);
+    } catch (error) {
+      if (!preflightAbort.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error('EDITING', 'Stem-Start fehlgeschlagen: ' + message);
+        setStemEngineUnavailableReason(message);
+        setStemQualityWarning(message);
+      }
+    } finally {
+      stemStartGuardRef.current = false;
+      setIsSeparatingStems(false);
+      setSeparationProgress(null);
     }
-
-    const profile = resolvedStemProfile;
-    setIsSeparatingStems(true);
-    setStemEngineUnavailableReason(null);
-    setSeparationProgress({
-      percent: 1,
-      phaseText: `KI Stem-Preflight (${architectureLabel(stemArchitecture, stemArchitectures)})…`,
-      processedSeconds: 0,
-      totalSeconds: workingAudioBuffer.duration,
-    });
-    const availability = await stemEngine.checkAvailability();
-    setIsSeparatingStems(false);
-    setSeparationProgress(null);
-    if (!availability.available) {
-      logger.warn('EDITING', `Stem-Preflight: KI-Engine nicht verfügbar — ${availability.reason}. Code: ${availability.code}`);
-      setStemEngineUnavailableReason(availability.reason || 'STEM AI UNAVAILABLE');
-      setStemQualityWarning(availability.reason || 'STEM AI UNAVAILABLE');
-      const info = await stemEngine.getEngineInfo().catch(() => null);
-      if (info) setStemEngineInfo(info);
-      return;
-    }
-    const info = await stemEngine.getEngineInfo();
-    setStemEngineInfo(info);
-    const chosen = info.profiles.find((entry) => entry.profile === profile);
-    // Bei fest gewählter Architektur entscheidet deren Verfügbarkeit (oben
-    // geprüft) – die Profil-Reserve darf den Job nicht blockieren. Hat die UI
-    // gerade automatisch auf „Automatisch" umgeschaltet, gilt wieder die
-    // Profilprüfung.
-    const pinnedStillEffective = effectiveArchitecture.architectureId !== 'auto' ? pinnedStemArchitecture : undefined;
-    // `chosen` MUSS existieren: fehlt das Profil in der Matrix (z. B. weil der
-    // Statusaufruf nichts geliefert hat), darf der Lauf nicht „irgendwie“ starten.
-    if (!pinnedStillEffective && (!info.ok || !chosen?.available)) {
-      logger.warn('EDITING', `Stem-Preflight: Profil ${profile} nicht nutzbar — ${chosen?.reason || info.reason}`);
-      setStemEngineUnavailableReason(chosen?.reason || info.reason || 'Profil nicht verfügbar');
-      setStemQualityWarning(
-        `Profil ${profile} nicht verfügbar: ${chosen?.reason || info.reason || 'Engine nicht erreichbar'}. ` +
-          'Klicken Sie auf „BS-RoFormer installieren", um die KI-Modelle einzurichten.'
-      );
-      return;
-    }
-    await runStemSeparation(profile, effectiveArchitecture);
   }, [
     activeTrack,
     workingAudioBuffer,
@@ -2948,6 +3010,11 @@ export default function App() {
         onShowInfo={() => setInfoModalOpen(true)}
         menuProps={{
           modalOpen: appModalOpen,
+          stemsOpen: stemPanelOpen && !focusMode,
+          onToggleStems: () => {
+            setStemPanelOpen(focusMode || !stemPanelOpen);
+            if (focusMode) dispatchWorkspace({ type: 'SET_FOCUS_MODE', value: false });
+          },
           onNewProject: handleNewProject,
           onSaveProject: handleSaveProject,
           onOpenProject: handleOpenProject,
@@ -3008,6 +3075,11 @@ export default function App() {
 
         {/* 4b. Dynamisches Stem-Center – Zustand A/B/C, Modell-Isolation */}
         <StemCenter
+          panelOpen={stemPanelOpen && !focusMode}
+          onTogglePanel={() => {
+            setStemPanelOpen(focusMode || !stemPanelOpen);
+            if (focusMode) dispatchWorkspace({ type: 'SET_FOCUS_MODE', value: false });
+          }}
           phase={stemCenterPhase}
           configOpen={stemConfigOpen}
           onOpenConfig={() => {
@@ -3057,7 +3129,7 @@ export default function App() {
             onOpenMidiModal: () => setMidiModalOpen(true),
             midiStatusLabel,
             isMidiConnected,
-            activeArchitectureLabel: activeModelLabel,
+            activeArchitectureLabel: activeTrackStems?.modelId ?? activeModelLabel,
           }}
         />
 

@@ -1,8 +1,10 @@
 import { access } from 'node:fs/promises';
 import path from 'node:path';
+import { availableParallelism } from 'node:os';
 import type separateFnType from '@audio/neural-separate';
 import type { BackendAvailability, BackendAvailabilityOptions, BackendCapabilities, BackendSeparationRequest, BackendSeparationResponse, IStemSeparator } from './types';
 import type { ComputeDevice, ModelDescriptor } from '../types';
+import { runScnetWorker } from './scnetWorker';
 
 type SeparateFn = typeof separateFnType;
 
@@ -66,23 +68,31 @@ export class ScnetSeparator implements IStemSeparator {
       left[frame] = request.workingSamples[frame * 2];
       right[frame] = request.workingSamples[frame * 2 + 1];
     }
-    const packageName = '@audio/neural-separate';
-    const separate = this.injectedSeparate ?? (await import(/* @vite-ignore */ packageName)).default;
-    const result = await separate([left, right], {
+    const options = {
       model: 'scnet',
       sampleRate: request.sampleRate ?? request.descriptor.sampleRate,
       weights: this.modelStoreDir,
       device: 'node',
       targets: request.stems,
+      // Reuse allocations across fixed-size SCNet windows. Measured on the
+      // target 2-core i3; leave core selection to ORT on larger machines.
+      sessionOptions: {
+        enableCpuMemArena: true,
+        enableMemPattern: true,
+        ...(availableParallelism() <= 4 ? { intraOpNumThreads: Math.min(2, availableParallelism()) } : {}),
+      },
       // SCNet's upstream default is 25% of an 11 s window (2.75 s stride),
       // which measured ~26 min for a 5 min track on the target i3. DJ profiles
       // use fewer repeated windows to stay inside the interactive time budget.
       step: request.profile === 'PREVIEW' ? 0.5 : 0.4,
-      progress: ({ chunk, totalChunks }) => {
+    };
+    const progress = ({ chunk, totalChunks }: { chunk: number; totalChunks: number }) => {
         request.token?.throwIfCancelled();
         request.onProgress?.(totalChunks ? chunk / totalChunks : 0, `SCNet: Abschnitt ${chunk}/${totalChunks}`);
-      },
-    });
+      };
+    const result = this.injectedSeparate
+      ? await this.injectedSeparate([left, right], { ...options, progress })
+      : await runScnetWorker([left, right], options, request.token, progress);
     request.token?.throwIfCancelled();
     const inlineStems = request.stems.map((stemId) => {
       const channelsOut = result.stems[stemId];

@@ -39,6 +39,8 @@ import type { Zone3SectionId } from '../ui/workspaceLayout';
 import { UI_ACTION } from '../ui/theme';
 
 export interface MenuBarProps {
+  stemsOpen?: boolean;
+  onToggleStems?: () => void;
   onNewProject: () => void;
   onSaveProject: () => void;
   onOpenProject: () => void;
@@ -96,6 +98,8 @@ const MENU_ITEM_RECORD = `${MENU_ITEM_LAYOUT} ${UI_ACTION.record}`;
 
 export const MenuBar: React.FC<MenuBarProps> = ({
   onNewProject,
+  stemsOpen,
+  onToggleStems,
   onSaveProject,
   onOpenProject,
   onImportTracks,
@@ -299,6 +303,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         {activeMenu === 'betrachten' && (
           <div className={`${dropdownClass} w-60`}>
             <div className="px-3 py-1 text-[10px] text-neutral-500 uppercase tracking-wider">Waveform-Modus</div>
+            {onToggleStems && <button type="button" aria-pressed={stemsOpen} onClick={runAndClose(onToggleStems)} className={MENU_ITEM}>
+              <span>Stem-Mixer {stemsOpen ? 'ausblenden' : 'einblenden'}</span>
+            </button>}
             {(
               [
                 ['BLUE', 'BLUE (Monochrom)', 'Monochrome blaue Rekordbox-Wellenform'],

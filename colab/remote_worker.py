@@ -360,7 +360,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         help="Stabile Kennung dieses Workers")
     parser.add_argument("--model", default="", help="Optionaler Modellfilter; abweichende Jobs werden übersprungen")
     parser.add_argument("--profile", default="", help="Optionaler Qualitätsprofilfilter")
-    parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Jobs pro Lauf; 0 bedeutet unbegrenzt")
+    parser.add_argument("--job-id", default="", help="Nur diesen ausdrücklich ausgewählten Auftrag bearbeiten")
+    parser.add_argument("--max-jobs", type=int, default=0, help="Maximale Jobs pro Scan; mit --once endet danach der Prozess")
     parser.add_argument("--idle-log-seconds", type=float, default=60,
                         help="Intervall für Lebenszeichen im Leerlauf; 0 deaktiviert")
     parser.add_argument("--retry-failed", action="store_true",
@@ -368,7 +369,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--clean-finished", action="store_true",
                         help="Bereits abgeschlossene (COMPLETED) oder abgebrochene (CANCELLED) Jobs aus der Ablage entfernen")
     parser.add_argument("--verbose", action="store_true", help="Zusätzliche Diagnoseausgabe")
-    return parser.parse_args(argv)
+    options = parser.parse_args(argv)
+    if options.job_id and not _safe_job_id(options.job_id):
+        parser.error("--job-id muss eine gültige Jobkennung ohne Pfadbestandteile sein")
+    return options
 
 
 def _say(message: str, verbose: bool = False, *, force: bool = False) -> None:
@@ -1005,6 +1009,8 @@ def run_worker_cycle(options: argparse.Namespace, root: Path) -> dict[str, int]:
     force_drive_refresh(jobs_root)
     counts = {"scanned": 0, "pending": 0, "processed": 0, "skipped": 0, "failed": 0, "cancelled": 0}
     for job_dir in sorted((entry for entry in jobs_root.iterdir() if entry.is_dir()), key=lambda entry: entry.name):
+        if getattr(options, "job_id", "") and job_dir.name != options.job_id:
+            continue
         if options.max_jobs > 0 and counts["processed"] >= options.max_jobs:
             break
         counts["scanned"] += 1
@@ -1081,6 +1087,8 @@ def check_store(root: Path, options: argparse.Namespace) -> int:
         return 0
 
     for job_dir in job_dirs:
+        if getattr(options, "job_id", "") and job_dir.name != options.job_id:
+            continue
         manifest_path = job_dir / "manifest.json"
         if not manifest_path.is_file():
             print(f"{job_dir.name}: manifest.json fehlt")

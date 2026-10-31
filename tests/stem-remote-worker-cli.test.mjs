@@ -216,6 +216,16 @@ try {
   stored.input.sha256 = createHash('sha256').update(workMix).digest('hex');
   writeFileSync(manifestPath, `${JSON.stringify(stored, null, 2)}\n`);
 
+  // A lower-sorting, otherwise matching job must remain untouched when the
+  // notebook selects one specific ID, including on subsequent notebook runs.
+  const otherId = '00000000-1111-4222-8333-444444444444';
+  const otherDir = path.join(tmp, 'jobs', otherId);
+  mkdirSync(path.join(otherDir, 'input'), { recursive: true });
+  writeFileSync(path.join(otherDir, 'input', 'mix.wav'), workMix);
+  const otherManifest = JSON.stringify({ ...stored, jobId: otherId,
+    input: { ...stored.input, relativePath: `jobs/${otherId}/input/mix.wav` } });
+  writeFileSync(path.join(otherDir, 'manifest.json'), otherManifest);
+
   const adapterPath = path.join(tmp, 'fake_adapter.py');
   writeFileSync(
     adapterPath,
@@ -248,6 +258,7 @@ try {
       '--poll', '5',
       '--cancel-poll', '5',
       '--worker', 'colab-cli-e2e',
+      '--job-id', workJobId,
       '--model', 'bsroformer-musdb18hq-4stem-zfturbo',
       '--profile', 'HIGH_QUALITY',
       '--max-jobs', '1',
@@ -262,12 +273,18 @@ try {
   assert.ok(finished.worker?.id === 'colab-cli-e2e', 'Der Worker muss als Rechner im Manifest stehen');
   assert.ok(existsSync(path.join(workJobDir, 'output', 'result.json')), 'result.json fehlt');
   assert.ok(existsSync(path.join(workJobDir, 'claim.json')), 'claim.json fehlt');
+  assert.equal(readFileSync(path.join(otherDir, 'manifest.json'), 'utf8'), otherManifest, 'Nicht ausgewählten Auftrag unverändert lassen');
+  assert.ok(!existsSync(path.join(otherDir, 'claim.json')), 'Nicht ausgewählten Auftrag nicht beanspruchen');
   console.log('  ✓ Notebook-Zeile beansprucht den Job und beendet ihn als COMPLETED (4 Stems)');
 
   // Ein zweiter Lauf darf den fertigen Job nicht erneut rechnen (§19).
   const again = await runNotebookLine();
   assert.match(again.out, /0 Job\(s\) bearbeitet – Ende \(--once\)/, `Fertige Jobs dürfen nicht erneut laufen:\n${again.out}`);
   console.log('  ✓ COMPLETED bleibt COMPLETED – kein zweiter Lauf für denselben Job');
+  assert.equal(readFileSync(path.join(otherDir, 'manifest.json'), 'utf8'), otherManifest);
+  const unsafeJob = await runCandidate(python, [WORKER, '--root', tmp, '--job-id', '../elsewhere', '--once']);
+  assert.equal(unsafeJob.code, 2, 'Unsichere Job-ID muss vor jedem Zugriff abgelehnt werden');
+  console.log('  ✓ gezielter Einzellauf lässt andere Aufträge unverändert und lehnt Pfade als IDs ab');
 
   // ── 5. `--check-store` benennt den Wartezustand und verändert nichts ──────
   const jobId = '11111111-2222-4333-8444-555555555555';
@@ -350,6 +367,15 @@ if (existsSync(ipynb)) {
   assert.ok(statSync(ipynb).size > 0, 'Das gebaute Notebook ist leer.');
   const parsedNotebook = JSON.parse(readFileSync(ipynb, 'utf8'));
   const sources = parsedNotebook.cells.map((cell) => (Array.isArray(cell.source) ? cell.source.join('') : cell.source || '')).join('\n');
+  const syntax = await runCandidate(python, ['-c', [
+    'import ast, json, sys',
+    'notebook = json.load(open(sys.argv[1], encoding="utf-8-sig"))',
+    'for i, cell in enumerate(notebook["cells"]):',
+    '    if cell["cell_type"] == "code": ast.parse("".join(cell["source"]), filename=f"cell-{i}")',
+    'print("All code cells parse")',
+  ].join('\n'), ipynb]);
+  assert.equal(syntax.code, 0, `Notebook-Codezellen müssen gültiges Python sein: ${syntax.out}`);
+  assert.ok(sources.includes('--job-id') && sources.includes('--once'), 'Colab muss gezielt und begrenzt laufen');
   assert.ok(sources.includes('--check-store'), 'Das gebaute Notebook muss den Vorflug enthalten (npm run stems:remote:notebook).');
   assert.ok(sources.includes('--model'), 'Das gebaute Notebook muss den Modellfilter enthalten.');
   console.log('  ✓ colab/airdox-stem-remote-worker.ipynb passt zur Quelle (.md)');

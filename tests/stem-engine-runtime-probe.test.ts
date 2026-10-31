@@ -44,7 +44,7 @@ function counterFileFor(mode: string): string {
 function fakeInterpreter(
   mode: 'ok' | 'missing' | 'old' | 'broken' | 'slow',
   id: string = mode
-): { command: string; argsPrefix: string[] } {
+): { command: string; argsPrefix: string[]; fastTimeoutMs: number; timeoutMs: number } {
   const counterFile = counterFileFor(id);
   // Der Aufruf entscheidet, welche Stufe läuft – nicht ein Zähler: die Probe
   // ruft den Interpreter zuerst mit dem Vorprüf-Einzeiler (find_spec) und
@@ -69,7 +69,10 @@ else if (stage === 'fast') {
   // `['-c', code]` aufgerufen, und `-c` ist für Node ein Eigenname (–check).
   const file = path.join(temp, `fake-python-${id}.js`);
   writeFileSync(file, script);
-  return { command: process.execPath, argsPrefix: [file] };
+  // This suite verifies protocol/cache behavior, not the host's cold process
+  // startup speed (Windows scanning + concurrent builds can take >5 s).
+  // The dedicated timeout case below still supplies its own short deadline.
+  return { command: process.execPath, argsPrefix: [file], fastTimeoutMs: 60_000, timeoutMs: 60_000 };
 }
 
 function spawnCount(mode = 'ok'): number {

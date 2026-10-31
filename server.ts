@@ -422,6 +422,13 @@ async function startServer() {
     }
   });
 
+  app.get('/api/stems/saved', async (req, res) => {
+    try {
+      const query = Object.fromEntries(['inputFingerprint', 'modelId', 'family', 'profile'].map(key =>
+        [key, typeof req.query[key] === 'string' ? req.query[key] : undefined]));
+      res.json({ ok: true, data: await stemJobs.findSaved({ ...query, inputFingerprint: query.inputFingerprint ?? '' }) });
+    } catch (error) { res.status(500).json({ ok: false, message: String(error) }); }
+  });
   app.get('/api/stems/jobs', (_req, res) => res.json({ ok: true, data: stemJobs.listJobs() }));
 
   app.get('/api/stems/jobs/:id', (req, res) => {

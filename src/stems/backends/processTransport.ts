@@ -42,6 +42,8 @@ export interface RunProcessOptions {
   onProgress?: (fraction: number, phase: string) => void;
   /** Milliseconds between SIGTERM and SIGKILL after a cancel. */
   killGraceMs?: number;
+  /** Native JSONL adapters require done; plain CLIs validate files after exit 0. */
+  protocol?: 'jsonl' | 'exit-code';
 }
 
 export interface ProcessResult {
@@ -172,7 +174,7 @@ export async function runBackendProcess(options: RunProcessOptions): Promise<Pro
         reject(classifyFailure(code, reportedError.message ?? 'Backend meldete einen Fehler', { code: reportedError.code }));
         return;
       }
-      if (!doneSeen) {
+      if (!doneSeen && options.protocol !== 'exit-code') {
         reject(new StemSeparationError('INFERENCE_FAILED', 'Backend beendete sich ohne done-Nachricht', { logs: logs.slice(-10) }));
         return;
       }

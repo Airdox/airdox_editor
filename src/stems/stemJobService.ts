@@ -47,6 +47,8 @@ import type {
   StemId,
 } from './types';
 import { QUALITY_PROFILES } from './types';
+import { findSavedStemResult, type SavedStemQuery } from './savedStemLibrary';
+import { createHash } from 'node:crypto';
 import type {
   StartStemJobPayload,
   StemFamilyInfo,
@@ -528,6 +530,29 @@ export class StemJobService {
     return record ? snapshot(record.view) : null;
   }
 
+  /** Reopens validated, finished files without loading a model or starting inference. */
+  async findSaved(query: SavedStemQuery): Promise<StemJobView | null> {
+    const saved = await findSavedStemResult(path.dirname(this.roots.output), query);
+    if (!saved) return null;
+    const { metadata, metadataPath, stems } = saved;
+    const jobId = `saved_${createHash('sha256').update(metadataPath).digest('hex').slice(0, 24)}`;
+    const seconds = stems[0].frames / stems[0].sampleRate;
+    const record: JobRecord = { view: {
+      jobId, status: 'COMPLETED', percent: 100, phase: 'Gespeicherte Stems geladen',
+      processedSeconds: seconds, totalSeconds: seconds, profile: metadata.settings.profile,
+      modelId: metadata.settings.modelId, family: metadata.settings.family,
+      stems: stems.map(stem => stem.id), chunkCount: metadata.chunkCount, cacheHit: true,
+      trackName: path.basename(path.dirname(metadataPath)),
+      createdAt: metadata.timing.startedAt, updatedAt: Date.now(),
+    } };
+    this.jobs.set(jobId, record);
+    return snapshot(this.finish(jobId, record, {
+      jobId: metadata.jobId, status: 'COMPLETED', metadataPath, stems, cacheHit: true,
+      validation: metadata.validation, originalIntegrity: metadata.originalIntegrity, metadata,
+      device: metadata.settings.device,
+    }));
+  }
+
   /** Starts a job and returns its view right away; progress arrives via events. */
   async start(request: StartStemJobRequest): Promise<StemJobView> {
     const profile = request.profile ?? 'HIGH_QUALITY';
@@ -611,7 +636,7 @@ export class StemJobService {
         jobId,
         status: 'PENDING',
         percent: 0,
-        phase: 'Job übernommen',
+        phase: 'Laufzeit und Modell werden vorbereitet…',
         processedSeconds: 0,
         totalSeconds: 0,
         profile,

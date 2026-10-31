@@ -23,5 +23,13 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "release",
+    "artifacts",
+    "output",
+    ".playwright-cli"
+  ]
 }

@@ -34,7 +34,7 @@ const OUT = (() => {
 })();
 
 /** Was der Freigabe-Lauf braucht – enger als das ganze Repo. */
-const INCLUDE_DIRS = ['src', 'tests', 'python', 'scripts', 'docs'];
+const INCLUDE_DIRS = ['src', 'tests', 'python', 'scripts', 'docs', 'colab'];
 const INCLUDE_FILES = ['package.json', 'package-lock.json', 'tsconfig.json'];
 /** Kein Test braucht das; spart Liste und Zeit. */
 const EXCLUDE = [
@@ -48,7 +48,9 @@ function git(...args) {
   return result.stdout;
 }
 
-const tracked = git('ls-files').split('\n').filter(Boolean);
+// Include new source files as well: local release builds may precede a commit.
+// The allowlist below still excludes audio, models, credentials and outputs.
+const tracked = git('ls-files', '--cached', '--others', '--exclude-standard').split('\n').filter(Boolean);
 const files = tracked.filter((file) => {
   if (EXCLUDE.some((pattern) => matchGlob(file, pattern))) return false;
   const [top] = file.split('/');

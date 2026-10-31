@@ -89,7 +89,7 @@ export const Zone1TopBar: React.FC<Zone1TopBarProps> = ({
 
   return (
     <header
-      className={`h-11 flex items-stretch gap-2 px-2 select-none z-40 flex-shrink-0 overflow-hidden ${ZONE_SHELL.zone1}`}
+      className={`relative h-11 flex items-stretch gap-2 px-2 select-none z-40 flex-shrink-0 overflow-visible ${ZONE_SHELL.zone1}`}
       data-zone="1"
       data-zone1="true"
       aria-label="Globale Systemleiste"

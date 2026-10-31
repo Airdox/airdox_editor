@@ -218,6 +218,7 @@ export type StemBridgeResult<T> = { ok: true; data: T } | StemBridgeError;
  * than a runtime `is not a function`.
  */
 export interface StemDesktopApi {
+  findSavedStems?(query: { inputFingerprint: string; modelId?: string; family?: string; profile?: string }): Promise<StemBridgeResult<StemJobView | null>>;
   getStemEngineStatus(): Promise<StemBridgeResult<StemServiceStatus>>;
   startStemJob(payload: StartStemJobPayload): Promise<StemBridgeResult<StemJobView>>;
   waitStemJob(jobId: string): Promise<StemBridgeResult<StemJobView>>;

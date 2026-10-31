@@ -119,6 +119,9 @@ export class HTDemucsSeparator implements IStemSeparator {
     const result = await runBackendProcess({
       command: python,
       args: this.buildArgs(request),
+      // Upstream Demucs is a plain CLI, not our RoFormer JSONL adapter.
+      // Exit zero is followed by named WAV discovery and engine validation.
+      protocol: 'exit-code',
       env: this.options.env,
       token: request.token,
       onProgress: (fraction, phase) => request.onProgress?.(fraction, phase),

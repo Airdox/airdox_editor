@@ -17,6 +17,7 @@
       "config": {
         "file": "config_bs_roformer_384_8_2_485100.yaml",
         "format": "yaml",
+        "sha256": "d8afb980318d0c08b9c2e24a7adc00d4f3150320c127a7e4de861800d1321939",
         "url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/config_bs_roformer_384_8_2_485100.yaml"
       },
       "checkpointSha256": "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb",
