@@ -1,0 +1,20 @@
+Test-Runner: 1 von 37 fehlgeschlagen
+===== tests/stem-engine-runtime-probe.test.ts =====
+═══════════════════════════════════════════════════════════════════
+  RUNTIME-PROBE: EIN PROZESS, EIN VERDIKT, GECACHT                 
+═══════════════════════════════════════════════════════════════════
+
+[ TEST ] #1–#3 fast/strict teilen Vorprüfung und Cache
+
+✘ FEHLER: AssertionError [ERR_ASSERTION]: Python/torch-Laufzeit nicht verfügbar (C:\Program Files\nodejs\node.exe)
+
+false !== true
+
+    at run (C:\Users\p_kro\airdox_editor\tests\stem-engine-runtime-probe.test.ts:86:10) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
