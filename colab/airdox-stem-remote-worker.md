@@ -34,6 +34,12 @@ Bleibt der Editor auf „Wartet auf den externen Rechner“, prüfe denselben
 Google-Account und `JOB_ORDNER`, den Uploadstatus und die Ausgabe von Zelle 5.
 Unterbrochene Inferenz beginnt beim nächsten Versuch von vorn; bereits fertige
 Jobs werden nicht erneut gerechnet.
+
+Für einen unabhängigen Praxistest `PRAKTIKUM_SELBSTTEST = True` setzen und alle
+Zellen nacheinander ausführen. Das Notebook erzeugt dann selbst einen kurzen
+Auftrag in Drive, berechnet ihn auf der GPU und prüft alle vier Ausgaben. Ein
+vorhandener Editor-Auftrag ist dafür nicht erforderlich. Danach die Einstellung
+für normale Aufträge wieder auf `False` setzen.
 >>>
 
 <<<CELL py #@param
@@ -42,14 +48,15 @@ JOB_ID = ""  # Leer nur bei genau einem offenen Auftrag; sonst vollständige ID
 FEHLGESCHLAGENE_WIEDERHOLEN = False  # Nur für den ausgewählten Job
 REPO_ARCHIV = "airdox-stem-jobs/airdox-editor-src.tar.gz"
 REPO_URL = "https://github.com/Airdox/airdox_editor.git"
-BRANCH = "stem-colab-20261101"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
+BRANCH = "stem-colab-20261101-r2"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
 MSST_COMMIT = "9cc76c03ccd4da5ddf3477e93d386a1648a77732"
 ABBRUCH_SEKUNDEN = 5
+PRAKTIKUM_SELBSTTEST = False  # True: unabhängiger kurzer GPU-/Drive-Test ohne Editor-Auftrag
 >>>
 
 <<<CELL py
 # 1 · GPU und genau einen Auftrag prüfen, bevor Modelle geladen werden
-import json, os, pathlib, re, torch
+import json, os, pathlib, re, torch, uuid
 SELECTED_JOB_ID = None  # Nach einem Fehler keine alte Auswahl weiterverwenden.
 if not torch.cuda.is_available():
     raise RuntimeError("Keine GPU verfügbar. Kostenlosen GPU-Laufzeittyp wählen oder später erneut versuchen; lokal weiterarbeiten ist möglich.")
@@ -65,34 +72,40 @@ if not job_root_path.is_relative_to(drive_root) or job_root_path == drive_root:
     raise ValueError("JOB_ORDNER muss ein Unterordner von My Drive sein.")
 JOB_ROOT = str(job_root_path)
 jobs_dir = job_root_path / "jobs"
-if not jobs_dir.is_dir():
-    raise RuntimeError("Keine Jobablage gefunden. Auftrag im Editor starten und Drive-Sync abwarten.")
-offen = {}
-for folder in sorted(jobs_dir.iterdir()):
-    if not folder.is_dir() or not re.fullmatch(r"[A-Za-z0-9_-]+", folder.name):
-        continue
-    try:
-        data = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        continue
-    print(folder.name, data.get("status"), (data.get("engine") or {}).get("modelId"))
-    if data.get("status") in {"PENDING", "PREPARING", "RUNNING"} or (FEHLGESCHLAGENE_WIEDERHOLEN and data.get("status") == "FAILED"):
-        offen[folder.name] = data
-auswahl = JOB_ID.strip()
-if not auswahl:
-    if len(offen) != 1:
-        raise RuntimeError(f"{len(offen)} offene Aufträge: einen Auftrag bereitstellen bzw. dessen vollständige JOB_ID wählen.")
-    auswahl = next(iter(offen))
-if auswahl not in offen:
-    raise RuntimeError("Auftrag fehlt, ist fertig/abgebrochen oder benötigt eine ausdrückliche Fehlerwiederholung.")
-SELECTED_MANIFEST = offen[auswahl]
-MODELL_ID = SELECTED_MANIFEST["engine"]["modelId"]
-PROFIL = SELECTED_MANIFEST["engine"]["profile"]
-input_info = SELECTED_MANIFEST["input"]
-input_path = jobs_dir / auswahl / "input" / pathlib.Path(input_info["fileName"]).name
-if not input_path.is_file() or input_path.stat().st_size != input_info["bytes"]:
-    raise RuntimeError("Audio-Upload noch nicht vollständig. Drive-Sync abwarten und Zelle 1 erneut starten.")
-SELECTED_JOB_ID = auswahl
+if PRAKTIKUM_SELBSTTEST:
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    SELECTED_JOB_ID = "colab-selftest-" + uuid.uuid4().hex[:12]
+    MODELL_ID = "bsroformer-musdb18hq-4stem-zfturbo"
+    PROFIL = "HIGH_QUALITY"
+else:
+    if not jobs_dir.is_dir():
+        raise RuntimeError("Keine Jobablage gefunden. Auftrag im Editor starten und Drive-Sync abwarten.")
+    offen = {}
+    for folder in sorted(jobs_dir.iterdir()):
+        if not folder.is_dir() or not re.fullmatch(r"[A-Za-z0-9_-]+", folder.name):
+            continue
+        try:
+            data = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        print(folder.name, data.get("status"), (data.get("engine") or {}).get("modelId"))
+        if data.get("status") in {"PENDING", "PREPARING", "RUNNING"} or (FEHLGESCHLAGENE_WIEDERHOLEN and data.get("status") == "FAILED"):
+            offen[folder.name] = data
+    auswahl = JOB_ID.strip()
+    if not auswahl:
+        if len(offen) != 1:
+            raise RuntimeError(f"{len(offen)} offene Aufträge: einen Auftrag bereitstellen bzw. dessen vollständige JOB_ID wählen.")
+        auswahl = next(iter(offen))
+    if auswahl not in offen:
+        raise RuntimeError("Auftrag fehlt, ist fertig/abgebrochen oder benötigt eine ausdrückliche Fehlerwiederholung.")
+    SELECTED_MANIFEST = offen[auswahl]
+    MODELL_ID = SELECTED_MANIFEST["engine"]["modelId"]
+    PROFIL = SELECTED_MANIFEST["engine"]["profile"]
+    input_info = SELECTED_MANIFEST["input"]
+    input_path = jobs_dir / auswahl / "input" / pathlib.Path(input_info["fileName"]).name
+    if not input_path.is_file() or input_path.stat().st_size != input_info["bytes"]:
+        raise RuntimeError("Audio-Upload noch nicht vollständig. Drive-Sync abwarten und Zelle 1 erneut starten.")
+    SELECTED_JOB_ID = auswahl
 print("Ausgewählt:", SELECTED_JOB_ID, "|", MODELL_ID, "|", PROFIL)
 >>>
 
@@ -101,7 +114,7 @@ print("Ausgewählt:", SELECTED_JOB_ID, "|", MODELL_ID, "|", PROFIL)
 import subprocess, sys, tarfile
 assert SELECTED_JOB_ID, "Zuerst Zelle 1 erfolgreich ausführen."
 REPO_DIR = "/content/airdox"
-archive = drive_root / REPO_ARCHIV if REPO_ARCHIV else None
+archive = drive_root / REPO_ARCHIV if REPO_ARCHIV and not PRAKTIKUM_SELBSTTEST else None
 if archive and archive.is_file():
     os.makedirs(REPO_DIR, exist_ok=True)
     with tarfile.open(archive, "r:gz") as bundle:
@@ -114,6 +127,7 @@ elif not os.path.isdir(REPO_DIR):
     subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, REPO_DIR], check=True)
 else:
     print("Vorhandenen Quellcode wiederverwendet. Für Versionswechsel eine frische Laufzeit starten.")
+print("AirDox-Quellstand:", subprocess.check_output(["git", "-C", REPO_DIR, "rev-parse", "HEAD"], text=True).strip() if os.path.isdir(os.path.join(REPO_DIR, ".git")) else "Drive-Archiv")
 WORKER = os.path.join(REPO_DIR, "colab", "remote_worker.py")
 ADAPTER = os.path.join(REPO_DIR, "python", "bsroformer_inference.py")
 assert os.path.isfile(WORKER) and os.path.isfile(ADAPTER), "Quellcode-Archiv unvollständig."
@@ -173,23 +187,26 @@ READY_JOB_ID = SELECTED_JOB_ID
 
 <<<CELL py #@param
 # 3b · Vollständiger Colab-Praxistest (optional, erzeugt keinen echten Editor-Auftrag)
-PRAKTIKUM_SELBSTTEST = False  # True nur für einen einmaligen GPU-/Drive-Nachweis
 if PRAKTIKUM_SELBSTTEST:
     import hashlib, math, struct, uuid, wave, time
     from datetime import datetime, timezone
     assert READY_JOB_ID == SELECTED_JOB_ID and torch.cuda.is_available(), "Zellen 1–3 zuerst erfolgreich ausführen."
-    test_id = "colab-selftest-" + uuid.uuid4().hex[:12]
+    test_id = SELECTED_JOB_ID
     test_dir = pathlib.Path(JOB_ROOT) / "jobs" / test_id
     input_dir, output_dir = test_dir / "input", test_dir / "output"
     input_dir.mkdir(parents=True, exist_ok=False)
     output_dir.mkdir(parents=True, exist_ok=True)
     wav_path = input_dir / "selftest.wav"
     rate, frames = 44100, 44100
+    pcm = bytearray()
+    for i in range(frames):
+        tone = 8500 * math.sin(2 * math.pi * 220 * i / rate) + 3500 * math.sin(2 * math.pi * 660 * i / rate)
+        beat = 7000 * math.exp(-((i % 11025) / 550) ** 2)
+        sample = max(-32768, min(32767, int(tone + beat)))
+        pcm.extend(struct.pack("<hh", sample, sample))
     with wave.open(str(wav_path), "wb") as wav:
         wav.setnchannels(2); wav.setsampwidth(2); wav.setframerate(rate)
-        for i in range(frames):
-            sample = int(12000 * math.sin(2 * math.pi * 220 * i / rate))
-            wav.writeframes(struct.pack("<hh", sample, sample))
+        wav.writeframes(pcm)
     digest = sha256(str(wav_path))
     now = datetime.now(timezone.utc).isoformat()
     manifest = {
@@ -206,9 +223,21 @@ if PRAKTIKUM_SELBSTTEST:
     started = time.monotonic(); subprocess.run(cmd, check=True)
     final = json.loads((test_dir / "manifest.json").read_text(encoding="utf-8"))
     assert final.get("status") == "COMPLETED", final
-    files = [test_dir / "output" / stem["fileName"] for stem in final["output"]["stems"]]
-    assert len(files) == 4 and all(p.is_file() and p.stat().st_size > 44 for p in files), files
-    report = {"jobId": test_id, "status": final["status"], "gpu": torch.cuda.get_device_name(0), "seconds": round(time.monotonic() - started, 1), "outputs": [p.name for p in files]}
+    import soundfile as sf
+    stems = final["output"]["stems"]
+    files = [test_dir / "output" / stem["fileName"] for stem in stems]
+    assert {stem["id"] for stem in stems} == {"drums", "bass", "other", "vocals"}, stems
+    assert len(files) == 4 and (output_dir / "result.json").is_file(), files
+    hashes = []
+    for stem, path in zip(stems, files):
+        assert path.is_file() and path.stat().st_size == stem["bytes"], path
+        actual = sha256(str(path))
+        assert actual == stem["sha256"], (stem["id"], actual)
+        info = sf.info(str(path))
+        assert info.samplerate == rate and info.channels == 2 and info.frames == frames, (stem["id"], info)
+        hashes.append(actual)
+    assert len(set(hashes)) == 4, "Vier unterschiedliche Stems erwartet"
+    report = {"jobId": test_id, "status": final["status"], "gpu": torch.cuda.get_device_name(0), "seconds": round(time.monotonic() - started, 1), "outputs": [{"name": p.name, "sha256": h} for p, h in zip(files, hashes)]}
     (test_dir / "colab-selftest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("COLAB-PRAXISTEST BESTANDEN:", json.dumps(report, ensure_ascii=False))
 >>>

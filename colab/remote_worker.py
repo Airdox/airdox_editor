@@ -801,6 +801,7 @@ def _publish_outputs(
     output_dir = job_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     published = []
+    expected_geometry = None
 
     for stem_id in stems:
         stem_id = str(stem_id)
@@ -816,6 +817,13 @@ def _publish_outputs(
         if size <= 44:
             raise ValueError(f"Adapter hat einen leeren Stem geschrieben: {file_name} ({size} Bytes)")
         frames, sample_rate, channels = _wav_info(source)
+        geometry = (frames, sample_rate, channels)
+        if expected_geometry is None:
+            expected_geometry = geometry
+        elif geometry != expected_geometry:
+            raise ValueError(
+                f"Stem {stem_id} hat abweichende WAV-Geometrie {geometry}; erwartet {expected_geometry}"
+            )
         payload_hash = sha256_file(source)
         destination = output_dir / file_name
         with open(source, "rb") as handle:

@@ -65,6 +65,16 @@ with tempfile.TemporaryDirectory(prefix='airdox-notebook-') as temp:
     state['FEHLGESCHLAGENE_WIEDERHOLEN'] = True
     attempt()
     assert state['SELECTED_JOB_ID'] == 'job-b'
+    state['PRAKTIKUM_SELBSTTEST'] = True
+    state['JOB_ID'] = ''
+    attempt()
+    assert state['SELECTED_JOB_ID'].startswith('colab-selftest-')
+    assert state['MODELL_ID'] == 'bsroformer-musdb18hq-4stem-zfturbo'
+    assert state['PROFIL'] == 'HIGH_QUALITY'
+    assert not (jobs / state['SELECTED_JOB_ID']).exists(), 'Selftest creates its manifest only after model verification'
+    state['PRAKTIKUM_SELBSTTEST'] = False
+    state['JOB_ID'] = 'job-b'
+    attempt()
     # Execute the real launch cell with subprocess and time doubles. No Drive,
     # model download or real GPU is touched by this notebook contract test.
     calls = []

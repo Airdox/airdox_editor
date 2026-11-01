@@ -281,7 +281,6 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
     num_stems = int(getattr(config.model, "num_stems", 1))
 
     estimates = np.zeros((num_stems, channels, total), dtype="float32")
-    weights = np.zeros(total, dtype="float32")
     window = separation_window(chunk_size, num_overlap)
 
     positions = list(range(0, max(1, total - chunk_size + 1), hop))
@@ -298,6 +297,8 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
     # Fensteraufrufen (hier: hunderte Chunks pro Track).
     with torch.inference_mode():
         for pass_index in range(max(1, args.ensemble_passes)):
+            pass_estimates = np.zeros_like(estimates)
+            pass_weights = np.zeros(total, dtype="float32")
             # Deterministic ensemble shifts (reproducible MAXIMUM_QUALITY runs).
             shift = 0 if pass_index == 0 else ((pass_index * 1011) % 3001) - 1500
             if shift != 0:
@@ -331,20 +332,20 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
                 length = end - start
                 window_slice = window[:length]
                 stem_count = min(num_stems, result.shape[0])
-                estimates[:stem_count, :, start:end] += result[:stem_count, :, :length] * window_slice
-                if pass_index == 0:
-                    weights[start:end] += window_slice
+                pass_estimates[:stem_count, :, start:end] += result[:stem_count, :, :length] * window_slice
+                pass_weights[start:end] += window_slice
                 processed += 1
                 emit({
                     "type": "progress",
                     "fraction": progress_offset + progress_span * (processed / total_chunks),
                     "phase": f"pass {pass_index + 1}/{args.ensemble_passes} chunk {index + 1}/{len(positions)}",
                 })
+            pass_estimates /= np.maximum(pass_weights, 1e-8)[None, None, :]
             if shift != 0:
-                estimates = np.roll(estimates, -shift, axis=2)
+                pass_estimates = np.roll(pass_estimates, -shift, axis=2)
+            estimates += pass_estimates
 
-    safe = np.maximum(weights, 1e-8)
-    estimates = estimates / safe[None, None, :]
+    estimates /= max(1, args.ensemble_passes)
     return estimates, sample_rate
 
 
@@ -365,8 +366,8 @@ def main(argv: List[str]) -> int:
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     if device.startswith("cuda") and not torch.cuda.is_available():
-        log("CUDA nicht verfügbar – CPU-Fallback", "warning")
-        device = "cpu"
+        emit({"type": "error", "code": "GPU_UNAVAILABLE", "message": "Angeforderte CUDA-GPU ist nicht verfügbar"})
+        return EXIT_MODEL
     if device.startswith("cuda"):
         # Kostenloser Speedup ohne Qualitätsänderung an der SDR-Metrik:
         # cudnn autotuned die FFT-/Conv-Kernel, TF32 beschleunigt MatMuls auf
