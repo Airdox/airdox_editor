@@ -148,9 +148,15 @@ console.log('\n[ TEST ] 2 – Zehn Stationen werden nur bei Beleg grün');
   assert.equal(complete.currentId, null, 'ein vollständiger Lauf steht an keiner Station mehr');
 
   const failed = flow(['working_copy', 'published', 'worker_seen', 'claimed'], 'FAILED');
-  assert.equal(stateOf(failed.stations, 'compute'), 'failed', 'der Fehlschlag markiert die Station, an der es endete');
+  assert.equal(stateOf(failed.stations, 'compute'), 'failed', 'ein technischer Fehler bleibt rot');
   assert.equal(failed.currentId, 'compute', 'die Endstation ist benannt');
-  console.log('  ✓ Stationen folgen Belegen, nicht dem Statuswort allein');
+
+  const cancelled = flow(['working_copy', 'published'], 'CANCELLED');
+  assert.equal(stateOf(cancelled.stations, 'published'), 'done', 'das lokale Schreiben in die Jobablage ist belegt');
+  assert.equal(stateOf(cancelled.stations, 'cloud_sync'), 'unknown', 'ein lokaler Abbruch beweist keinen Cloud-Sync');
+  assert.equal(stateOf(cancelled.stations, 'worker_seen'), 'cancelled', 'ein Abbruch vor dem Claim wird amber statt als Fehler gezeigt');
+  assert.equal(cancelled.currentId, 'worker_seen', 'der Abbruchpunkt bleibt beim fehlenden Worker');
+  console.log('  ✓ Stationen folgen Belegen; Abbruch und technischer Fehler bleiben getrennt');
 }
 
 console.log('\n[ TEST ] 3 – Der Monitor erklärt, warum 0 % korrekt ist');
@@ -171,8 +177,48 @@ console.log('\n[ TEST ] 3 – Der Monitor erklärt, warum 0 % korrekt ist');
   const running = currentExplanation(job({ status: 'RUNNING', worker: { id: 'colab-7' }, workerPercent: 55 }), undefined, false, false);
   assert.equal(running.title, 'Google Colab rechnet', 'ab dem ersten Worker-Wert läuft die Anzeige');
 
-  const cancelled = currentExplanation(job({ status: 'CANCELLED' }), undefined, false, true);
-  assert.match(cancelled.description, /keine unvollständigen Stems/, 'ein Abbruch verspricht keine halben Stems');
+  const cancelled = currentExplanation(
+    job({ status: 'CANCELLED', transport: 'Google Drive (Ordner)' }),
+    undefined,
+    false,
+    false
+  );
+  assert.match(cancelled.title, /Vor der Übernahme durch Colab abgebrochen/);
+  assert.match(cancelled.description, /kein Worker-Claim/, 'lokales Flag-Schreiben wird nicht als Worker-Bestätigung ausgegeben');
+  assert.match(cancelled.description, /Cloud-Upload/, 'der lokale Sync-Ordner wird nicht mit der Cloud gleichgesetzt');
+  assert.match(cancelled.description, /Notebook-Zelle #5/, 'der Diagnosehinweis nennt die Colab-Zelle');
+  assert.match(cancelled.description, /JOB_ORDNER/, 'der Diagnosehinweis nennt den Ordnerabgleich');
+
+  const workerCancelled = currentExplanation(
+    job({
+      status: 'CANCELLED',
+      trace: [{
+        id: 'worker-cancelled',
+        source: 'worker',
+        jobId: '9f1c1f2e-0dd0-4a3a-9a51-2f1c1f2e0dd0',
+        at: 1_700_000_000_100,
+        step: 'worker.cancelled',
+        status: 'CANCELLED',
+        level: 'warning',
+        message: 'Abbruch bestätigt',
+      }],
+    }),
+    undefined,
+    false,
+    false
+  );
+  assert.match(workerCancelled.title, /Worker bestätigt/);
+  assert.ok(modalSource.includes("station.state === 'cancelled'"), 'der Laufzettel färbt Abbruch anders als Fehler');
+
+  const waitingInSyncFolder = currentExplanation(
+    job({ status: 'RUNNING', transport: 'Google Drive (Ordner)' }),
+    undefined,
+    false,
+    false
+  );
+  assert.match(waitingInSyncFolder.title, /Sync-Ordner/);
+  assert.match(waitingInSyncFolder.description, /Cloud.*nicht messen/);
+
   assert.ok(
     modalSource.includes('0 % ist in dieser Phase korrekt'),
     'die Oberfläche sagt wörtlich, dass 0 % in dieser Phase korrekt ist'

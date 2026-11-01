@@ -73,6 +73,8 @@ function view(record: RemoteJobRecord): RemoteStemJobView {
     updatedAt: record.updatedAt,
     phaseUpdatedAt: record.phaseUpdatedAt,
     transportLabel: record.transportLabel,
+    worker: record.worker,
+    trace: record.trace,
     flow: buildRemoteDataFlow(record, { now: Date.now(), worker: null, transportLabel: record.transportLabel }),
   };
 }
@@ -164,7 +166,44 @@ assert.ok(failed.includes('hier geendet'), 'der Laufzettel markiert die Station,
 assert.ok(failed.includes('REMOTE_TIMEOUT'), 'der Grund steht an dieser Station');
 console.log('  ✓ geendeter Lauf: Station und Grund benannt');
 
-// 5. Ohne Job darf das Fenster nicht umfallen (Frischstart, nichts gewählt).
+// 5. Ein Abbruch vor dem Claim ist amber und behauptet keine Worker-Bestätigung.
+const cancelled = render(
+  view(
+    record({
+      status: 'CANCELLED',
+      cancelRequestedAt: Date.now() - 5_000,
+      finishedAt: Date.now() - 3_000,
+    })
+  )
+);
+assert.ok(cancelled.includes('Vor der Übernahme durch Colab abgebrochen'), 'der Abbruch wird nicht als technischer Fehler bezeichnet');
+assert.ok(cancelled.includes('kein Worker-Claim'), 'der fehlende Claim bleibt ausdrücklich sichtbar');
+assert.ok(cancelled.includes('Notebook-Zelle #5'), 'der Nutzer erhält den Colab-Schritt als Hinweis');
+assert.ok(cancelled.includes('abgebrochen'), 'die Station wird mit Abbruchstatus gerendert');
+
+const workerCancelled = render(
+  view(
+    record({
+      status: 'CANCELLED',
+      cancelRequestedAt: Date.now() - 5_000,
+      finishedAt: Date.now() - 3_000,
+      trace: [{
+        id: 'worker-cancelled',
+        source: 'worker',
+        jobId: JOB_ID,
+        at: Date.now() - 2_000,
+        step: 'worker.cancelled',
+        status: 'CANCELLED',
+        level: 'warning',
+        message: 'Abbruchanforderung verarbeitet.',
+      }],
+    })
+  )
+);
+assert.ok(workerCancelled.includes('Abbruch vom Colab-Worker bestätigt'), 'Worker-Bestätigung wird nur bei Worker-Ereignis angezeigt');
+console.log('  ✓ Abbruch vor Claim und Worker-Bestätigung sind getrennt');
+
+// 6. Ohne Job darf das Fenster nicht umfallen (Frischstart, nichts gewählt).
 const empty = renderToString(
   React.createElement(RemoteFlowModal, {
     open: true,
@@ -182,7 +221,7 @@ assert.ok(empty.includes('Noch kein Job'), 'ohne Job erklärt das Fenster, dass 
 assert.ok(!empty.includes('undefined'), 'auch ohne Job kein „undefined“');
 console.log('  ✓ ohne Job: verständliche Leermeldung statt Absturz');
 
-// 6. Die Lagen der Vorschau-Seite rendern ebenfalls – sonst ist der Harness
+// 7. Die Lagen der Vorschau-Seite rendern ebenfalls – sonst ist der Harness
 //    genau dann kaputt, wenn man ihn braucht (wartender Job, kein Colab-Lauf
 //    in Sicht). Die Datensätze derselben Seite, nicht nachgebaute Kopien.
 for (const id of Object.keys(PREVIEW_SCENARIOS) as FlowPreviewScenarioId[]) {

@@ -52,6 +52,7 @@ import {
   Server,
   ShieldCheck,
   X,
+  XCircle,
 } from 'lucide-react';
 import type { RemoteServiceStatus, RemoteStemJobView } from '../../stems/transportTypes';
 import type { RemoteFlowStation, RemoteFlowState, RemoteFlowWhere } from '../../stems/remote/dataFlow';
@@ -71,7 +72,7 @@ interface Props {
   running: boolean;
   error: string | null;
   phaseText?: string;
-  /** True, während der Abbruch gerade an den externen Rechner gemeldet wird. */
+  /** True, während die Abbruchfahne in die konfigurierte Jobablage geschrieben wird. */
   cancelPending?: boolean;
 }
 
@@ -82,7 +83,8 @@ const COLAB_NOTEBOOK_URL =
   'https://colab.research.google.com/github/Airdox/airdox_editor/blob/main/colab/airdox-stem-remote-worker.ipynb';
 
 const terminal = (value?: string) => value === 'COMPLETED' || value === 'FAILED' || value === 'CANCELLED';
-const failedStatus = (value?: string) => value === 'FAILED' || value === 'CANCELLED';
+const failedStatus = (value?: string) => value === 'FAILED';
+const cancelledStatus = (value?: string) => value === 'CANCELLED';
 
 /* ------------------------------------------------------------------------- *
  * Anzeige-Helfer
@@ -145,6 +147,7 @@ const STATE_CHIP: Record<RemoteFlowState, string> = {
   pending: 'bg-white/5 text-neutral-500 border-white/10',
   unknown: 'bg-amber-400/15 text-amber-200 border-amber-400/40',
   failed: 'bg-red-400/15 text-red-200 border-red-400/40',
+  cancelled: 'bg-amber-400/15 text-amber-200 border-amber-400/40',
 };
 
 const STATE_LABEL: Record<RemoteFlowState, string> = {
@@ -153,6 +156,7 @@ const STATE_LABEL: Record<RemoteFlowState, string> = {
   pending: 'wartet',
   unknown: 'nicht messbar',
   failed: 'hier geendet',
+  cancelled: 'abgebrochen',
 };
 
 /** Dauer seit der letzten Station mit Beleg (null, wenn es keine vorherige gibt). */
@@ -191,6 +195,23 @@ function statusLabel(job: RemoteStemJobView | null): string {
   }
 }
 
+function traceHas(job: RemoteStemJobView | null, ...steps: string[]): boolean {
+  return Boolean(job?.trace?.some((event) => steps.includes(event.step)));
+}
+
+function workerHasClaimed(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.worker) || traceHas(job, 'editor.worker_claim_observed', 'worker.claimed');
+}
+
+function workerHasCancelled(job: RemoteStemJobView | null): boolean {
+  return Boolean(job?.trace?.some((event) => event.source === 'worker' && (event.step === 'worker.cancelled' || event.status === 'CANCELLED')));
+}
+
+function usesLocalFolderTransport(job: RemoteStemJobView | null): boolean {
+  const transport = job?.transport?.toLocaleLowerCase('de-DE') ?? '';
+  return transport.includes('ordner') || transport.includes('folder');
+}
+
 /**
  * Eine verständliche Antwort auf „was passiert gerade?“.
  *
@@ -205,13 +226,33 @@ export function currentExplanation(
   done: boolean,
   failed: boolean
 ): { title: string; description: string; waitingForWorker: boolean } {
+  if (cancelledStatus(job?.status)) {
+    const workerAcknowledged = workerHasCancelled(job);
+    const workerClaimed = workerHasClaimed(job);
+    if (workerAcknowledged) {
+      return {
+        title: 'Abbruch vom Colab-Worker bestätigt',
+        description: 'Der Worker hat die Abbruchfahne verarbeitet. Das Ergebnis wird nicht importiert; unvollständige Stems bleiben außen vor.',
+        waitingForWorker: false,
+      };
+    }
+    if (!workerClaimed) {
+      return {
+        title: 'Vor der Übernahme durch Colab abgebrochen',
+        description: 'Der Editor hat die Abbruchfahne in die konfigurierte Jobablage geschrieben, aber in diesem Ablauf kam kein Worker-Claim an. Bei einem synchronisierten Ordner beweist das weder den Cloud-Upload noch den Empfang durch Colab. Prüfen Sie, ob die Colab-Notebook-Zelle #5 läuft, Drive gemountet ist und JOB_ORDNER auf denselben Ordner wie die Editor-Jobablage zeigt; danach den Job neu starten.',
+        waitingForWorker: false,
+      };
+    }
+    return {
+      title: 'Abbruch angefordert · Worker-Bestätigung fehlt',
+      description: 'Die Abbruchfahne wurde geschrieben, aber noch kein worker.cancelled-Ereignis empfangen. Das Ergebnis wird nicht importiert. Prüfen Sie, ob die Colab-Zelle noch läuft und der Drive-Ordner synchronisiert wird.',
+      waitingForWorker: false,
+    };
+  }
   if (failed) {
     return {
-      title: job?.status === 'CANCELLED' ? 'Abbruch ist bestätigt' : 'Vorgang wurde unterbrochen',
-      description:
-        job?.status === 'CANCELLED'
-          ? 'Der externe Rechner verwirft die Rechnung. Es werden keine unvollständigen Stems übernommen.'
-          : job?.error?.message || 'Der Ablauf konnte nicht abgeschlossen werden. Die Originaldatei bleibt unverändert.',
+      title: 'Vorgang wurde unterbrochen',
+      description: job?.error?.message || 'Der Ablauf konnte nicht abgeschlossen werden. Die Originaldatei bleibt unverändert.',
       waitingForWorker: false,
     };
   }
@@ -245,12 +286,17 @@ export function currentExplanation(
     };
   }
   if (!job.worker) {
-    return {
-      title: 'Ablage bestätigt · warte auf Google Colab',
-      description:
-        'Arbeitskopie und Steckbrief liegen in der bestätigten Jobablage (Hash wurde zurückgelesen). Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
-      waitingForWorker: true,
-    };
+    return usesLocalFolderTransport(job)
+      ? {
+        title: 'Dateien im Sync-Ordner geschrieben · warte auf Google Colab',
+        description: 'Arbeitskopie und Steckbrief wurden in den lokalen Drive-Sync-Ordner geschrieben. Der Editor kann den Upload in die Google-Cloud nicht messen und wartet auf claim.json vom Colab-Worker. Prüfen Sie die Datei auch in Drive im Web und starten Sie die Worker-Zelle im Notebook.',
+        waitingForWorker: true,
+      }
+      : {
+        title: 'Ablage bestätigt · warte auf Google Colab',
+        description: 'Arbeitskopie und Steckbrief liegen in der bestätigten Jobablage (Hash wurde zurückgelesen). Jetzt wartet der Editor auf claim.json, also das Lebenszeichen des Colab-Workers.',
+        waitingForWorker: true,
+      };
   }
   if ((job.workerPercent ?? job.percent ?? 0) <= 0) {
     return {
@@ -371,7 +417,8 @@ export const RemoteFlowModal: React.FC<Props> = ({
 
   if (!open) return null;
 
-  const failed = Boolean(error || failedStatus(job?.status));
+  const cancelled = cancelledStatus(job?.status);
+  const failed = !cancelled && Boolean(error || failedStatus(job?.status));
   const done = job?.status === 'COMPLETED' && !running && !error;
   const stations = job?.flow?.stations ?? [];
   const current = stations.find((station) => station.id === job?.flow?.currentId) ?? null;
@@ -392,7 +439,7 @@ export const RemoteFlowModal: React.FC<Props> = ({
   const workerAlive = Boolean(job?.worker && (heartbeatAge === null || heartbeatAge < WORKER_LIVENESS_SECONDS));
   const lastContact = job?.flow?.lastEvidenceAt ?? heartbeatAt ?? job?.updatedAt ?? null;
   const visibleTrace = [...(job?.trace ?? [])].slice(-14).reverse();
-  const flowStatus = done ? 'complete' : failed ? 'error' : 'active';
+  const flowStatus = done ? 'complete' : failed ? 'error' : cancelled ? 'cancelled' : 'active';
 
   const confirmCloud = async () => {
     if (!job || !onConfirmCloudSync) return;
@@ -432,10 +479,12 @@ export const RemoteFlowModal: React.FC<Props> = ({
                     ? 'bg-emerald-400/15 text-emerald-200'
                     : flowStatus === 'error'
                       ? 'bg-red-400/15 text-red-200'
-                      : 'bg-cyan-400/15 text-cyan-100'
+                      : flowStatus === 'cancelled'
+                        ? 'bg-amber-400/15 text-amber-200'
+                        : 'bg-cyan-400/15 text-cyan-100'
                 }`}
               >
-                {done ? 'fertig' : failed ? 'prüfen' : 'wird verfolgt'}
+                {done ? 'fertig' : failed ? 'prüfen' : cancelled ? 'abgebrochen' : 'wird verfolgt'}
               </span>
             </div>
             <h2 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">Was passiert mit deinen Daten?</h2>
@@ -472,7 +521,13 @@ export const RemoteFlowModal: React.FC<Props> = ({
             {/* ── Stand ───────────────────────────────────────────────────── */}
             <div
               className={`rounded-2xl border p-4 sm:p-5 ${
-                failed ? 'border-red-400/40 bg-red-400/[.08]' : done ? 'border-emerald-400/40 bg-emerald-400/[.08]' : 'border-cyan-400/35 bg-cyan-400/[.07]'
+                failed
+                  ? 'border-red-400/40 bg-red-400/[.08]'
+                  : done
+                    ? 'border-emerald-400/40 bg-emerald-400/[.08]'
+                    : cancelled
+                      ? 'border-amber-400/40 bg-amber-400/[.08]'
+                      : 'border-cyan-400/35 bg-cyan-400/[.07]'
               }`}
               aria-live="polite"
             >
@@ -480,13 +535,19 @@ export const RemoteFlowModal: React.FC<Props> = ({
                 <div className="flex min-w-0 gap-3">
                   <div
                     className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                      failed ? 'bg-red-400/15 text-red-200' : done ? 'bg-emerald-400/15 text-emerald-200' : 'bg-cyan-400/15 text-cyan-100'
+                      failed
+                        ? 'bg-red-400/15 text-red-200'
+                        : done
+                          ? 'bg-emerald-400/15 text-emerald-200'
+                          : cancelled
+                            ? 'bg-amber-400/15 text-amber-200'
+                            : 'bg-cyan-400/15 text-cyan-100'
                     }`}
                   >
-                    {failed ? <AlertTriangle size={20} /> : done ? <CheckCircle2 size={20} /> : <LoaderCircle size={20} className="animate-spin" />}
+                    {failed ? <AlertTriangle size={20} /> : done ? <CheckCircle2 size={20} /> : cancelled ? <XCircle size={20} /> : <LoaderCircle size={20} className="animate-spin" />}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruch wird an Colab gemeldet…' : explanation.title}</div>
+                    <div className="text-base font-bold sm:text-lg">{cancelPending ? 'Abbruchfahne wird in die Jobablage geschrieben…' : explanation.title}</div>
                     <p className="mt-1 max-w-2xl text-xs leading-relaxed text-neutral-300 sm:text-sm">{explanation.description}</p>
                     {current ? (
                       <p className="mt-2 text-[11px] text-neutral-400">
@@ -539,14 +600,14 @@ export const RemoteFlowModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              {explanation.waitingForWorker && !failed ? (
+              {explanation.waitingForWorker && !failed && !cancelled ? (
                 <div className="mt-3 flex gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[.08] p-3 text-xs leading-relaxed text-amber-100">
                   <Info size={16} className="mt-0.5 shrink-0" />
                   <div>
                     <strong>Warum steht hier nicht einfach mehr Prozent?</strong>
                     {job?.worker
                       ? ' Colab hat den Job bereits übernommen, aber die erste Inferenzmeldung fehlt noch.'
-                      : ' Der Upload ist bestätigt, aber Colab hat noch nicht übernommen.'}{' '}
+                      : ' Die Arbeitskopie wurde in die Jobablage geschrieben; der Cloud-Sync ist für den Editor nicht messbar.'}{' '}
                     <span className="font-semibold">0 % ist in dieser Phase korrekt</span> – es wäre unehrlich, den Download oder die
                     KI-Rechnung vorzutäuschen. Der Laufzettel unten zeigt stattdessen Station für Station, was bereits belegt ist.
                     <div className="mt-2.5">
@@ -565,7 +626,7 @@ export const RemoteFlowModal: React.FC<Props> = ({
               ) : null}
             </div>
 
-            {warning && !failed ? (
+            {warning && !failed && !cancelled ? (
               <div role="alert" className="flex gap-2 rounded-xl border border-amber-400/40 bg-amber-400/[.08] p-3 text-xs leading-relaxed text-amber-100">
                 <AlertTriangle size={17} className="mt-0.5 shrink-0" />
                 <span>{warning}</span>
@@ -616,13 +677,17 @@ export const RemoteFlowModal: React.FC<Props> = ({
                                   ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
                                   : station.state === 'failed'
                                     ? 'border-red-400/60 bg-red-400/15 text-red-200'
-                                    : 'border-white/10 bg-white/5 text-neutral-500'
+                                    : station.state === 'cancelled'
+                                      ? 'border-amber-400/60 bg-amber-400/15 text-amber-200'
+                                      : 'border-white/10 bg-white/5 text-neutral-500'
                           }`}
                         >
                           {station.state === 'done' ? (
                             <CheckCircle2 size={15} />
                           ) : station.state === 'active' ? (
                             <LoaderCircle size={14} className="animate-spin" />
+                          ) : station.state === 'cancelled' ? (
+                            <XCircle size={14} />
                           ) : (
                             <Icon size={14} />
                           )}
@@ -633,7 +698,9 @@ export const RemoteFlowModal: React.FC<Props> = ({
                               ? 'border-cyan-400/40 bg-cyan-400/[.06]'
                               : station.state === 'failed'
                                 ? 'border-red-400/40 bg-red-400/[.06]'
-                                : station.state === 'unknown'
+                                : station.state === 'cancelled'
+                                  ? 'border-amber-400/40 bg-amber-400/[.06]'
+                                  : station.state === 'unknown'
                                   ? 'border-amber-400/30 bg-amber-400/[.04]'
                                   : 'border-white/10 bg-white/[.025]'
                           }`}
