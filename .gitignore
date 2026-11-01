@@ -37,3 +37,9 @@ resources/stem-runtime/*
 # erzeugten WAV-Renderings (mehrere MB) nicht – sie entstehen per `npm run
 # stems:*-validation` neu.
 artifacts/**/*.wav
+
+# Lokale Abnahme- und Browserläufe (keine Quellcodedateien).
+artifacts/stem-*/
+artifacts/windows-build/
+.playwright-cli/
+output/
