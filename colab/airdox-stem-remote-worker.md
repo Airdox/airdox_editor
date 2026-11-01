@@ -4,9 +4,11 @@ Dieses Notebook verarbeitet **einen von dir ausgewählten Auftrag** und endet
 danach. Du startest jeden Lauf bewusst im Notebook. Der Editor importiert fertige
 Stems aus Drive und speichert sie dauerhaft auf deinem Rechner.
 
-Es werden keine kostenpflichtigen APIs, Cloud-VMs, Abos oder Compute Units
-gebucht. Verwende dein kostenloses Colab-Konto. Ohne verfügbare GPU hält der
-Ablauf an; es gibt keinen Wechsel zu einem bezahlten Angebot.
+Das Notebook löst keinen Kauf und kein Upgrade aus. Mit einem kostenlosen
+Colab-Konto fällt keine direkte Zahlung an; die GPU-Verfügbarkeit ist begrenzt.
+In einem bestehenden Colab-Pro-Konto kann die GPU vorhandene Compute Units
+verbrauchen. Ohne verfügbare GPU hält der Ablauf an; es gibt keinen Wechsel zu
+einem bezahlten Angebot.
 
 Colab Free garantiert weder GPU noch Laufzeit. Google priorisiert interaktive
 Notebooks und schränkt unter anderem verteilte Worker und Fernsteuerung ein.
@@ -48,7 +50,7 @@ JOB_ID = ""  # Leer nur bei genau einem offenen Auftrag; sonst vollständige ID
 FEHLGESCHLAGENE_WIEDERHOLEN = False  # Nur für den ausgewählten Job
 REPO_ARCHIV = ""  # Nur für bewusst bereitgestellte, aktuelle Offline-Archive setzen
 REPO_URL = "https://github.com/Airdox/airdox_editor.git"
-BRANCH = "stem-colab-20261101-r3"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
+BRANCH = "stem-colab-20261101-r4"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
 MSST_COMMIT = "9cc76c03ccd4da5ddf3477e93d386a1648a77732"
 ABBRUCH_SEKUNDEN = 5
 PRAKTIKUM_SELBSTTEST = False  # True: unabhängiger kurzer GPU-/Drive-Test ohne Editor-Auftrag

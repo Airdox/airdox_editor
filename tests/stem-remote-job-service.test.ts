@@ -292,6 +292,13 @@ async function run() {
       assert.ok(decoded.frames > 0, `Stem ${stemId} enthält Audio`);
     }
     assert.equal(await fingerprint(h1.originalPath), before, 'auch nach Import und Rechenlauf ist das Original unverändert');
+    const saved = await h1.local.findSaved({
+      inputFingerprint: `stem-pcm-wav-v1:sha256:${manifest.input.sha256}`,
+      modelId: MODEL_ID,
+      profile: PROFILE,
+    });
+    assert.deepEqual(saved?.stems, STEMS, 'die vier importierten Stems sind dauerhaft auffindbar');
+    assert.equal(saved?.cacheHit, true, 'Wiederöffnung benutzt den gespeicherten Lauf');
     console.log('  ✓ 4 Stems importiert und dekodierbar, Original-Hash stabil, Job-Id bleibt die Fern-Id');
 
     // =====================================================================

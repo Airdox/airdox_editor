@@ -32,7 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ModelRegistry } from '../modelRegistry';
 import type { StemJobService, StemServiceLogger } from '../stemJobService';
-import type { ModelDescriptor, OriginalIntegrity, SeparationJobMetadata, StemId } from '../types';
+import type { ModelDescriptor, OriginalIntegrity, SeparationJobMetadata, StemId, StemValidationReport } from '../types';
 import { JOB_SCHEMA_VERSION } from '../types';
 import { analyzeAudio, decodeWav, sha256File, parseWavLayout } from '../wavIo';
 import { jobCancelPath, jobClaimPath, jobErrorPath, jobWorkerTracePath, stemFileName } from './layout';
@@ -1250,6 +1250,7 @@ export class RemoteStemJobService {
 
     const imported: { id: StemId; filePath: string; bytes: number; sha256: string }[] = [];
     const descriptors: { id: StemId; displayName?: string; filePath: string; sha256: string; frames: number; sampleRate: number; channels: number; peak: number }[] = [];
+    const stemReports: StemValidationReport[] = [];
 
     for (const stem of manifest.output.stems) {
       const bytes = await transport.readBytes(stem.relativePath);
@@ -1280,17 +1281,12 @@ export class RemoteStemJobService {
           `Ergebnis ${stem.id} hat ${decoded.sampleRate} Hz/${decoded.channels} Kanäle, erwartet ${record.sampleRate} Hz/${record.channels}.`
         );
       }
-      /*
-       * Längenprüfung: ein abgeschnittener Stem (Sync-Abbruch, halb geladene
-       * Datei) hätte einen gültigen Header und einen passenden Hash – aber
-       * nicht die erwartete Dauer. Mehr als eine halbe Sekunde zu kurz ist
-       * kein Rundungsfehler, sondern ein kaputtes Ergebnis (§34 J).
-       */
+      // Auch bei gültigem Header und Hash muss die Samplezahl stimmen (§34 J).
       const expectedFrames = Math.round(record.durationSeconds * decoded.sampleRate);
-      if (expectedFrames > 0 && decoded.frames + decoded.sampleRate * 0.5 < expectedFrames) {
+      if (expectedFrames > 0 && Math.abs(decoded.frames - expectedFrames) > 1) {
         throw new RemoteProtocolError(
           'REMOTE_OUTPUT_INVALID',
-          `Ergebnis ${stem.id} ist unvollständig: ${decoded.frames} von ${expectedFrames} Samples.`
+          `Ergebnis ${stem.id} hat ${decoded.frames} statt ${expectedFrames} Samples.`
         );
       }
       const stats = analyzeAudio(decoded.data, decoded.channels, decoded.frames);
@@ -1313,6 +1309,12 @@ export class RemoteStemJobService {
         sampleRate: decoded.sampleRate,
         channels: decoded.channels,
         peak: stats.peak,
+      });
+      stemReports.push({
+        stemId: stem.id, pass: true, issues: [], headerOk: true,
+        sampleRateOk: true, channelCountOk: true, frameCountOk: true,
+        sizePlausible: true, sha256: actualHash, finiteSamples: true,
+        peak: stats.peak, rms: stats.rms, dcOffset: stats.dc,
       });
     }
 
@@ -1404,6 +1406,11 @@ export class RemoteStemJobService {
       settingsHash: record.idempotencyKey,
       cacheKey: record.idempotencyKey,
       cacheHit: false,
+      validation: {
+        pass: true, issues: [], stems: stemReports,
+        continuity: null, recombinationErrorDb: null,
+        fromTrainedModel: true, mode: 'fast_dj',
+      },
       chunkCount: 0,
       chunkPlan: [],
       stems: descriptors.map((stem, index) => ({

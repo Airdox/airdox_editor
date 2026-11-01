@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,5 +40,39 @@ try {
   // Same-size damage is caught by SHA-256, without discarding the stored files.
   await writeFile(path.join(dir, 'vocals.wav'), new Uint8Array(wav.length));
   assert.equal(await restarted.findSaved(query), null);
+
+  // Legacy remote imports did verify hashes during import, but old job.json
+  // files have no persisted technical validation report. Recheck once, then
+  // persist the report so subsequent sessions can reuse the result.
+  const legacyDir = path.join(root, 'Separation', 'legacy-remote');
+  await mkdir(legacyDir, { recursive: true });
+  for (const id of ids) await writeFile(path.join(legacyDir, `${id}.wav`), wav);
+  const remoteInputHash = createHash('sha256').update('distinct-remote-input').digest('hex');
+  const legacy = {
+    ...metadata,
+    jobId: 'legacy-remote-job', inputAudioHash: remoteInputHash,
+    settings: { ...metadata.settings, extras: { remote: true } },
+    validation: undefined,
+    timing: { startedAt: 3, finishedAt: 4 },
+    stems: ids.map((id, outputIndex) => ({ ...metadata.stems[outputIndex], filePath: path.join(legacyDir, `${id}.wav`) })),
+  };
+  const legacyPath = path.join(legacyDir, 'job.json');
+  await writeFile(legacyPath, JSON.stringify(legacy));
+  const legacyQuery = { inputFingerprint: `stem-pcm-wav-v1:sha256:${remoteInputHash}` };
+  const migrated = await new StemJobService({ root }).findSaved(legacyQuery);
+  assert.equal(migrated?.cacheHit, true);
+  const persisted = JSON.parse(await readFile(legacyPath, 'utf8'));
+  assert.equal(persisted.validation.pass, true);
+  assert.equal(persisted.validation.stems.length, 4);
+  assert.equal((await new StemJobService({ root }).findSaved(legacyQuery))?.cacheHit, true);
+
+  // A matching SHA and byte count alone cannot make non-finite samples valid.
+  const invalidWav = Buffer.from(wav);
+  invalidWav.writeFloatLE(Number.NaN, 44);
+  await writeFile(path.join(legacyDir, 'vocals.wav'), invalidWav);
+  const invalidHash = createHash('sha256').update(invalidWav).digest('hex');
+  legacy.stems[3].sha256 = invalidHash;
+  await writeFile(legacyPath, JSON.stringify(legacy));
+  assert.equal(await new StemJobService({ root }).findSaved(legacyQuery), null);
   console.log('Saved stem library: restart, no model/inference, exact input/profile/model, WAV readback and corruption passed.');
 } finally { await rm(root, { recursive: true, force: true }); }
