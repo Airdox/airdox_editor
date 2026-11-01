@@ -42,7 +42,7 @@ JOB_ID = ""  # Leer nur bei genau einem offenen Auftrag; sonst vollständige ID
 FEHLGESCHLAGENE_WIEDERHOLEN = False  # Nur für den ausgewählten Job
 REPO_ARCHIV = "airdox-stem-jobs/airdox-editor-src.tar.gz"
 REPO_URL = "https://github.com/Airdox/airdox_editor.git"
-BRANCH = "main"  # Falls kein Archiv: zum Editor passender Branch/Release
+BRANCH = "stem-colab-20261101"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
 MSST_COMMIT = "9cc76c03ccd4da5ddf3477e93d386a1648a77732"
 ABBRUCH_SEKUNDEN = 5
 >>>
