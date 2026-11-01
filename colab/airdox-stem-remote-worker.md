@@ -46,9 +46,9 @@ für normale Aufträge wieder auf `False` setzen.
 JOB_ORDNER = "airdox-stem-jobs"  # Unterordner in My Drive
 JOB_ID = ""  # Leer nur bei genau einem offenen Auftrag; sonst vollständige ID
 FEHLGESCHLAGENE_WIEDERHOLEN = False  # Nur für den ausgewählten Job
-REPO_ARCHIV = "airdox-stem-jobs/airdox-editor-src.tar.gz"
+REPO_ARCHIV = ""  # Nur für bewusst bereitgestellte, aktuelle Offline-Archive setzen
 REPO_URL = "https://github.com/Airdox/airdox_editor.git"
-BRANCH = "stem-colab-20261101-r2"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
+BRANCH = "stem-colab-20261101-r3"  # Fester Release-Stand passend zu dieser Windows-Ausgabe
 MSST_COMMIT = "9cc76c03ccd4da5ddf3477e93d386a1648a77732"
 ABBRUCH_SEKUNDEN = 5
 PRAKTIKUM_SELBSTTEST = False  # True: unabhängiger kurzer GPU-/Drive-Test ohne Editor-Auftrag
@@ -113,7 +113,7 @@ print("Ausgewählt:", SELECTED_JOB_ID, "|", MODELL_ID, "|", PROFIL)
 # 2 · Passenden Editor-Quellcode und Referenzarchitektur bereitstellen
 import subprocess, sys, tarfile
 assert SELECTED_JOB_ID, "Zuerst Zelle 1 erfolgreich ausführen."
-REPO_DIR = "/content/airdox"
+REPO_DIR = "/content/airdox-" + BRANCH
 archive = drive_root / REPO_ARCHIV if REPO_ARCHIV and not PRAKTIKUM_SELBSTTEST else None
 if archive and archive.is_file():
     os.makedirs(REPO_DIR, exist_ok=True)

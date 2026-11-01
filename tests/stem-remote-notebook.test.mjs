@@ -28,6 +28,9 @@ with tempfile.TemporaryDirectory(prefix='airdox-notebook-') as temp:
     state = {}
     exec(cells[0], state)
     assert state['FEHLGESCHLAGENE_WIEDERHOLEN'] is False
+    assert state['REPO_ARCHIV'] == '', 'Production must not silently prefer a stale Drive archive'
+    assert state['BRANCH'] == 'stem-colab-20261101-r3'
+    assert '"/content/airdox-" + BRANCH' in cells[2], 'Each release needs its own source directory'
     def attempt(error=None):
         if error:
             try: exec(cell, state)
