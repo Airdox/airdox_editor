@@ -41,8 +41,8 @@ export interface PersistedSettings {
 }
 
 export const DEFAULT_PERSISTED_SETTINGS: PersistedSettings = {
-  recordingSource: 'EDITOR_MASTER',
-  recordingFormat: 'WAV',
+  recordingSource: 'SYSTEM_LOOPBACK',
+  recordingFormat: 'WEBM',
   recordingSampleRate: 48000,
   recordingBitDepth: 24,
   recordingChannels: 'STEREO',

@@ -244,6 +244,13 @@ class AnalysisPathRegistry {
     this.load();
     return { version: REGISTRY_VERSION, entries: this.entries.size, filePath: this.filePath };
   }
+
+  clear() {
+    this.load();
+    this.entries.clear();
+    this.persist();
+    return this.stats();
+  }
 }
 
 module.exports = {

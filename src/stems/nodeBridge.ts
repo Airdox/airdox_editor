@@ -15,6 +15,7 @@
  */
 import { StemJobService, type StemJobServiceOptions, type StartStemJobRequest } from './stemJobService';
 import { clearRuntimeCaches } from './runtimeCaches';
+import { Top200BatchService, type BatchTrack } from './remote/top200Batch';
 import { RemoteStemJobService, type RemoteServiceEvent, type StartRemoteStemJobRequest } from './remote/remoteStemJobService';
 
 export { clearRuntimeCaches };
@@ -41,6 +42,7 @@ function failure(error: unknown): StemBridgeError {
 }
 
 export interface StemBridge {
+  top200(action: string, tracks?: BatchTrack[], id?: string, modelId?: string): Promise<StemBridgeResult<unknown>>;
   version: number;
   status(): Promise<StemBridgeResult<StemServiceStatus>>;
   findSaved(query: SavedStemQuery): Promise<StemBridgeResult<StemJobView | null>>;
@@ -112,6 +114,8 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
     ...(remoteOptions.remote ?? {}),
   });
   const remoteListeners = new Set<(event: unknown) => void>();
+  const top200 = new Top200BatchService(options.root, remote);
+  void top200.list().then(batches => batches.forEach(batch => top200.resume(batch.id))).catch(() => undefined);
   const detachRemote = remote.onEvent((event: RemoteServiceEvent) => {
     for (const listener of remoteListeners) {
       try {
@@ -123,6 +127,14 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
   });
 
   return {
+    async top200(action, tracks = [], id = '', modelId) {
+      try {
+        if (action === 'lookup') return { ok: true, data: await top200.lookup(id, tracks[0]?.id || '') };
+        if (action === 'retry') return { ok: true, data: await top200.retry(id) };
+      const data = action === 'preview' ? await top200.preview(tracks) : action === 'create' ? await top200.create(tracks, modelId) : action === 'list' ? await top200.list() : action === 'resume' ? (top200.resume(id), await top200.get(id)) : await top200.refresh(id);
+        return { ok: true, data };
+      } catch (error) { return failure(error); }
+    },
     version: STEM_BRIDGE_VERSION,
     async findSaved(query) {
       try { return { ok: true, data: await service.findSaved(query) }; }

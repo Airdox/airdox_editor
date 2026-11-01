@@ -6,6 +6,8 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { XMLFileUpdateControl } from '../XMLFileUpdateControl';
+import type { XmlUpdateCommit } from '../../features/import/xmlCollectionUpdate';
 import {
   X,
   Search,
@@ -24,6 +26,7 @@ import {
 import { TrackModel, CuePoint } from '../../types/rekordbox';
 
 export interface RekordboxXmlImportModalProps {
+  onUpdateXml?: XmlUpdateCommit;
   isOpen: boolean;
   onClose: () => void;
   xmlTracks: TrackModel[];
@@ -45,6 +48,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   analysisIndexStatus,
   onSelectTrack,
   currentTrackId,
+  onUpdateXml,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTrackId, setSelectedTrackId] = useState<string>(
@@ -256,6 +260,8 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
             <X size={15} />
           </button>
         </div>
+
+        {onUpdateXml && <div className="p-3 border-b border-[#20222d]"><XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={fileName} /></div>}
 
         {/* Top Control Bar: Search input & Filters */}
         <div className="bg-[#13151c] border-b border-[#20222d] p-3 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between flex-shrink-0">

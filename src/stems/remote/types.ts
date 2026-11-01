@@ -81,7 +81,7 @@ export interface RemoteJobEngineRef {
   device?: ComputeDevice;
   /** Checkpoint-Identität, damit der Worker keine „irgendein Modell“-Wahl trifft. */
   checkpoint?: { file: string; sha256?: string; url?: string };
-  config?: { file: string; url?: string };
+  config?: { file: string; url?: string; sha256?: string };
   numOverlap?: number;
   chunkSizeSamples?: number;
 }

@@ -1,4 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('airdoxRecorder', {
+  formats: () => ipcRenderer.invoke('recorder:formats'),
+  open: (options) => ipcRenderer.invoke('recorder:open', options),
+  append: (bytes) => ipcRenderer.invoke('recorder:append', bytes),
+  close: () => ipcRenderer.invoke('recorder:close'),
+});
 
 // Deliberately expose individual read-only operations rather than generic IPC
 // or Node APIs. Renderer code can never write an original Rekordbox source.
@@ -19,6 +25,9 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   checkRekordboxRuntime: (options) => ipcRenderer.invoke('rekordbox:runtime-check', options),
   // Eingebettete rekordbox_export2.xml als App-Ressource (kein Dateidialog).
   readBundledRekordboxXml: () => ipcRenderer.invoke('rekordbox:read-bundled-xml'),
+  chooseXmlFile: () => ipcRenderer.invoke('rekordbox:choose-xml-update'),
+  readXmlFile: (filePath) => ipcRenderer.invoke('rekordbox:read-xml-update', filePath),
+  invalidateCollectionCache: () => ipcRenderer.invoke('rekordbox:invalidate-collection-cache'),
   // Small app-owned index of track ↔ ANLZ paths. This never writes to
   // Rekordbox's master.db or source files.
   cacheAnalysisMappings: (mappings) => ipcRenderer.invoke('rekordbox:cache-analysis-mappings', mappings),
@@ -69,6 +78,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
     // Drive ist dabei reine Transportablage; die Zugangsdaten liegen im
     // Drive-Client des Nutzers (bzw. in rclone), nie in dieser App.
     remoteStatus: () => ipcRenderer.invoke('stems:remote-status'),
+    top200: (action, tracks, id, modelId) => ipcRenderer.invoke('stems:top200', action, tracks, id, modelId),
     startRemoteStemJob: (payload) => ipcRenderer.invoke('stems:remote-start', payload),
     listRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-jobs'),
     pollRemoteStemJobs: () => ipcRenderer.invoke('stems:remote-poll'),

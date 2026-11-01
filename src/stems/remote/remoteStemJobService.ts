@@ -91,6 +91,7 @@ import type {
 export { REMOTE_PHASES };
 
 export interface StartRemoteStemJobRequest extends Omit<StartRemoteStemJobPayload, 'bytes'> {
+  sourceOriginalPath?: string;
   bytes?: Uint8Array | ArrayBuffer;
 }
 
@@ -501,6 +502,10 @@ export class RemoteStemJobService {
       };
     }
     const workingBytes = await readFile(workingPath);
+    if (request.sourceOriginalPath) {
+      const source = await import('node:fs/promises').then(fs => fs.stat(request.sourceOriginalPath!));
+      originalIntegrity = { path: request.sourceOriginalPath, sha256Before: await sha256File(request.sourceOriginalPath), sizeBefore: source.size, mtimeMsBefore: source.mtimeMs, unchanged: true, checkedAt: this.now() };
+    }
     const inputSha256 = sha256Bytes(workingBytes);
     const header = this.inspectWav(workingBytes, fileName);
 
@@ -596,7 +601,7 @@ export class RemoteStemJobService {
           url: descriptor.checkpoint.url,
         },
         config: descriptor.config
-          ? { file: descriptor.config.file, url: descriptor.config.url }
+          ? { file: descriptor.config.file, url: descriptor.config.url, sha256: descriptor.config.sha256 }
           : undefined,
         numOverlap: this.registry.parametersFor(descriptor, profile).numOverlap,
         chunkSizeSamples: descriptor.chunkSizeSamples,
@@ -1593,6 +1598,11 @@ export class RemoteStemJobService {
     return [...this.records.values()]
       .sort((a, b) => b.createdAt - a.createdAt)
       .map((record) => this.toView(record));
+  }
+
+  async publishBatch(id: string, jobIds: string[]): Promise<void> {
+    const transport = this.transportFor(await this.effectiveSettings());
+    await transport.writeText(`batches/${id}.json`, JSON.stringify({ id, jobIds }));
   }
 
   get(jobId: string): RemoteStemJobView | null {

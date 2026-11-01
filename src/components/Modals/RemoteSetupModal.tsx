@@ -15,10 +15,19 @@
  */
 
 import React, { useState } from 'react';
+import { Top200Panel } from './Top200Panel';
+import { XMLFileUpdateControl } from '../XMLFileUpdateControl';
+import type { XmlUpdateCommit } from '../../features/import/xmlCollectionUpdate';
+import type { BatchTrack } from '../../stems/remote/top200Batch';
 import { X, Cloud, CloudUpload, Cpu, FolderDown, ShieldCheck, CheckCircle2, AlertTriangle, FolderOpen, Play } from 'lucide-react';
 import { stemEngine, type RemoteServiceStatus } from '../../audio/stemEngine';
 
 interface RemoteSetupModalProps {
+  onUpdateXml: XmlUpdateCommit;
+  batchModelId: string;
+  batchLibraryName: string;
+  batchLibraryRevision: number;
+  loadBatchTracks: () => Promise<BatchTrack[]>;
   isOpen: boolean;
   onClose: () => void;
   /** Aktueller Status (vorherige Einrichtung, falls vorhanden). */
@@ -36,7 +45,7 @@ interface ProbeState {
   root?: string;
 }
 
-export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onClose, remoteStatus, onStatus }) => {
+export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onClose, remoteStatus, onStatus, loadBatchTracks, batchModelId, batchLibraryName, batchLibraryRevision, onUpdateXml }) => {
   const [kind, setKind] = useState<TransportKind>(remoteStatus?.kind === 'rclone' ? 'rclone' : 'folder');
   const [root, setRoot] = useState<string>(remoteStatus?.root ?? '');
   const [probe, setProbe] = useState<ProbeState>({ state: 'idle' });
@@ -103,6 +112,8 @@ export const RemoteSetupModal: React.FC<RemoteSetupModalProps> = ({ isOpen, onCl
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={batchLibraryName} />
+          <Top200Panel loadTracks={loadBatchTracks} modelId={batchModelId} libraryName={batchLibraryName} libraryRevision={batchLibraryRevision} />
           {/* Ablauf */}
           <div className="bg-[#10131c] border border-[#1f2534] rounded p-3 space-y-2">
             <div className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold">So läuft die externe Zerlegung</div>

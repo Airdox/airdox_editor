@@ -336,6 +336,15 @@ class StemEngine {
         if (payload.ok) job = payload.data;
       }
     }
+    if (!job) {
+      const batchDesktop = desktop as typeof desktop & { top200?: (action: string, tracks: { id: string }[], id: string) => Promise<{ ok: boolean; data?: string }> };
+      const result = batchDesktop?.top200 ? await batchDesktop.top200('lookup', [{ id: originalSha256 }], trackId) : !desktop ? await fetch('/api/stems/remote/top200/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: trackId, tracks: [{ id: originalSha256 }] }) }).then(response => response.json()) : null;
+      if (result?.ok && result.data) {
+        const restored = desktop ? await desktop.getStemJob(result.data) : await fetch(`/api/stems/jobs/${encodeURIComponent(result.data)}`).then(response => response.json());
+        if (restored.ok) job = restored.data;
+      }
+    }
+    if (job && ((queryOptions.modelId && job.modelId !== queryOptions.modelId) || (queryOptions.family && job.family !== queryOptions.family) || (queryOptions.profile && job.profile !== queryOptions.profile))) return null;
     if (!job || job.status !== 'COMPLETED' || !job.result?.validationPass) return null;
     const stemsById: Record<string, AudioBuffer> = {};
     for (const stemId of job.stems) {

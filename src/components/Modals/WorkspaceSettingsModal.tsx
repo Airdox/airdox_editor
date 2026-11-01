@@ -44,7 +44,7 @@ import { Tooltip, HelpBadge, GLOSSARY } from '../Tooltip';
 import { DirectorySelector } from '../DirectorySelector';
 
 export type RecordingSource = 'EDITOR_MASTER' | 'AUDIO_INPUT' | 'SYSTEM_LOOPBACK';
-export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3';
+export type RecordingFormat = 'WAV' | 'FLAC' | 'MP3' | 'WEBM';
 
 interface WorkspaceSettingsModalProps {
   isOpen: boolean;

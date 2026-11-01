@@ -1,0 +1,21 @@
+{
+  "all": true,
+  "src": ["."],
+  "include": ["**/*.js", "**/*.jsx", "**/*.cjs", "**/*.mjs", "**/*.ts", "**/*.tsx"],
+  "extension": [".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx"],
+  "exclude": [
+    "**/test/**", "**/tests/**", "**/fixtures/**", "**/support/**",
+    "**/node_modules/**", "**/dist/**", "**/release/**", "**/artifacts/**",
+    "**/output/**", "**/reports/**", "**/resources/**", "**/.git/**",
+    "**/*.test.*", "**/*.helper.*", "**/*.d.ts", "**/*coverage*"
+  ],
+  "exclude-after-remap": true,
+  "reporter": ["text", "json", "json-summary", "lcov"],
+  "reports-dir": "reports/coverage-project-js",
+  "temp-directory": "reports/coverage-project-js/coverage-raw",
+  "check-coverage": true,
+  "lines": 90,
+  "statements": 90,
+  "functions": 90,
+  "branches": 90
+}

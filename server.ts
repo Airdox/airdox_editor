@@ -11,6 +11,7 @@ import dotenv from 'dotenv';
 import demucsRunner from './electron/demucsRunner.cjs';
 import { StemJobService } from './src/stems/stemJobService';
 import { RemoteStemJobService } from './src/stems/remote/remoteStemJobService';
+import { Top200BatchService } from './src/stems/remote/top200Batch';
 import { clearRuntimeCaches } from './src/stems/runtimeCaches';
 // Gemeinsamer dateibasierter Logger mit dem Electron-Main-Prozess. Der
 // Default-Import eines .cjs-Moduls funktioniert gleichermaßen unter tsx (ESM)
@@ -263,6 +264,8 @@ async function startServer() {
     return service;
   };
   let remoteStemJobs = createRemoteJobs();
+  const top200 = new Top200BatchService(stemsDataRoot, remoteStemJobs);
+  void top200.list().then(batches => batches.forEach(batch => top200.resume(batch.id))).catch(() => undefined);
 
   app.use('/api/stems/jobs', express.json({ limit: '500mb' }));
   // Der Fern-Job-Start trägt dieselbe Arbeitskopie (base64) wie der lokale
@@ -370,6 +373,16 @@ async function startServer() {
   });
 
   app.get('/api/stems/remote/jobs', (_req, res) => res.json({ ok: true, data: remoteStemJobs.list() }));
+  app.post('/api/stems/remote/top200/:action', async (req, res) => {
+    try {
+      const { tracks, id, modelId } = req.body;
+      const action = req.params.action;
+      if (action === 'lookup') return res.json({ ok: true, data: await top200.lookup(id, tracks?.[0]?.id || '') });
+      if (action === 'retry') return res.json({ ok: true, data: await top200.retry(id) });
+      const data = action === 'preview' ? await top200.preview(tracks) : action === 'create' ? await top200.create(tracks, modelId) : action === 'list' ? await top200.list() : action === 'resume' ? (top200.resume(id), await top200.get(id)) : await top200.refresh(id);
+      return res.json({ ok: true, data });
+    } catch (error) { return res.status(400).json(stemErrorPayload(error)); }
+  });
 
   app.post('/api/stems/remote/poll', async (_req, res) => {
     try {

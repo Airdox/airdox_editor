@@ -275,6 +275,7 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   // Wie beim lokalen Job gilt: nur Bytes oder Pfade innerhalb des
   // Engine-Datenordners. Die Arbeitskopie entsteht ausschließlich dort.
   ipcMain.handle(CHANNELS.remoteStatus, async () => bridge.remoteStatus());
+  ipcMain.handle('stems:top200', async (_event, action, tracks, id, modelId) => bridge.top200(action, tracks, id, modelId));
   ipcMain.handle(CHANNELS.remoteStart, async (_event, payload) => {
     const input = payload && typeof payload === 'object' ? payload : {};
     const bytes = toBytes(input.bytes);

@@ -1,0 +1,3296 @@
+{
+  "at": "2026-11-01T15:41:03.770Z",
+  "libraries": [
+    {
+      "path": "E:\\PIONEER\\Master\\master.db",
+      "count": 10911,
+      "selected": 200,
+      "reachable": 67,
+      "totalSeconds": 69463,
+      "tracks": [
+        {
+          "id": "123289417",
+          "title": "Koffee  Toast Yungness  Jaminn Remix",
+          "playCount": 120,
+          "seconds": 368,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/koffee  toast yungness  jaminn remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "139679550",
+          "title": "Talk of the Town (Original Mix)",
+          "playCount": 81,
+          "seconds": 193,
+          "inputPath": "D:/beatport neu/01. Sammy Virji, Fred again.., Reggie - Talk of the Town (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "205580900",
+          "title": "Hilit Kolet featuring Kay Elizabeth  Techno Disco Extended Mix",
+          "playCount": 75,
+          "seconds": 294,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/hilit kolet featuring kay elizabeth  techno .mp3",
+          "reachable": false
+        },
+        {
+          "id": "36378610",
+          "title": "RibCage (Dense & Pika Remix)",
+          "playCount": 72,
+          "seconds": 440,
+          "inputPath": "D:/beatport neu/01. Dubfire - RibCage (Dense & Pika Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "136478995",
+          "title": "Dennis Cruz snatch",
+          "playCount": 67,
+          "seconds": 396,
+          "inputPath": "M:/Mukke Komplett/mucke/Dennis Cruz  New Life Snatch Records.mp3",
+          "reachable": false
+        },
+        {
+          "id": "42070151",
+          "title": "martin Books - Age",
+          "playCount": 66,
+          "seconds": 252,
+          "inputPath": "G:/import/martin Books - Age.mp3",
+          "reachable": true
+        },
+        {
+          "id": "73381820",
+          "title": "Gorgon City  Lick Shot Visualiser",
+          "playCount": 63,
+          "seconds": 235,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/gorgon city  lick shot visualiser.mp3",
+          "reachable": false
+        },
+        {
+          "id": "87868672",
+          "title": "La Roux - Quicksand (Boy 8 Bit mix)",
+          "playCount": 60,
+          "seconds": 356,
+          "inputPath": "G:/mp3 traktor/neu 2015/La Roux - Quicksand (Boy 8 Bit mix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "95681193",
+          "title": "Passion (R U Satisfied) (Extended Mix)",
+          "playCount": 57,
+          "seconds": 303,
+          "inputPath": "D:/beatport neu/01. The Flirts, Beltran (BR) - Passion (R U Satisfied) (Extended Mix) (1).flac",
+          "reachable": false
+        },
+        {
+          "id": "152780580",
+          "title": "Authentic Computers 2.0 (Original Mix)",
+          "playCount": 56,
+          "seconds": 376,
+          "inputPath": "D:/beatport neu/01. Kolter - Authentic Computers 2.0 (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "74600470",
+          "title": "Terminator X (Original Mix)",
+          "playCount": 56,
+          "seconds": 341,
+          "inputPath": "D:/beatport neu/02. Mike Mair - Terminator X (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "24095639",
+          "title": "Dance With Ugly Girl (Original Mix)",
+          "playCount": 52,
+          "seconds": 406,
+          "inputPath": "D:/beatport neu/01. Gorb - Dance With Ugly Girl (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "73234695",
+          "title": "Alan Braxe Fred Falke  Intro Official Audio",
+          "playCount": 52,
+          "seconds": 295,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/alan braxe fred falke  intro official audio.mp3",
+          "reachable": false
+        },
+        {
+          "id": "200086379",
+          "title": "The Creeps (feat. Barry Drift) (Original Mix)",
+          "playCount": 51,
+          "seconds": 365,
+          "inputPath": "D:/beatport neu/01. Claude VonStroke - The Creeps (feat. Barry Drift) (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "102075780",
+          "title": "My Body Talks (Extended Mix)",
+          "playCount": 47,
+          "seconds": 240,
+          "inputPath": "D:/beatport neu/01. BRANDON (DE) - My Body Talks (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "252451126",
+          "title": "Ghetto Kraviz (Original Mix)",
+          "playCount": 47,
+          "seconds": 224,
+          "inputPath": "D:/beatport neu/03. Nina Kraviz - Ghetto Kraviz (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "191869322",
+          "title": "Victor Ruiz  Scorpio Original Mix  Noir Music",
+          "playCount": 46,
+          "seconds": 457,
+          "inputPath": "M:/Mukke Komplett/mucke/Victor Ruiz  Scorpio Original Mix  Noir Music.mp3",
+          "reachable": false
+        },
+        {
+          "id": "45596408",
+          "title": "Brothers Black  Bloodhound BADE014",
+          "playCount": 41,
+          "seconds": 338,
+          "inputPath": "M:/Mukke Komplett/mucke/Brothers Black  Bloodhound BADE014.mp3",
+          "reachable": false
+        },
+        {
+          "id": "53295770",
+          "title": "Tiger Blood (Extended Mix)",
+          "playCount": 41,
+          "seconds": 427,
+          "inputPath": "G:/mukke beatport/02. Prok & Fitch - Tiger Blood (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "61609240",
+          "title": "Daaance Daance (Original mix)",
+          "playCount": 41,
+          "seconds": 389,
+          "inputPath": "D:/beatport neu/08. David Phillips - Daaance Daance (Original mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "110766587",
+          "title": "Dense  Pika  Colt HF041 Official Audio",
+          "playCount": 40,
+          "seconds": 386,
+          "inputPath": "M:/Mukke Komplett/mucke/Dense  Pika  Colt HF041 Official Audio.mp3",
+          "reachable": false
+        },
+        {
+          "id": "64836351",
+          "title": "Simon Bailes (Original Mix)",
+          "playCount": 40,
+          "seconds": 362,
+          "inputPath": "D:/beatport neu/01. Trallez, Abbud - Simon Bailes (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "7922500",
+          "title": "Catz n Dogz  Drop It",
+          "playCount": 39,
+          "seconds": 292,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/catz n dogz  drop it.mp3",
+          "reachable": false
+        },
+        {
+          "id": "142225026",
+          "title": "Andreas Henneberg  Skirmish Original Mix",
+          "playCount": 37,
+          "seconds": 425,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/andreas henneberg  skirmish original mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "42934280",
+          "title": "Silver Surfer feat. Hardy Hard (Dub Mix)",
+          "playCount": 37,
+          "seconds": 330,
+          "inputPath": "D:/beatport neu/04. Hardy Hard, Dave Darell - Silver Surfer feat. Hardy Hard (Dub Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "27256942",
+          "title": "Live (Kotelett & Zadak Remix)",
+          "playCount": 34,
+          "seconds": 398,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Live (Kotelett & Zadak Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "117239683",
+          "title": "K.E.T. (Amine Mix)",
+          "playCount": 33,
+          "seconds": 267,
+          "inputPath": "G:/mukke beatport/02. SLAMM, Dan Molinari - K.E.T. (Amine Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "224176211",
+          "title": "In This Bih' (Extended Mix)",
+          "playCount": 33,
+          "seconds": 266,
+          "inputPath": "D:/beatport neu/01. Chris Lorenzo, Kah-lo - In This Bih' (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "70868560",
+          "title": "Who's Afraid Of Detroit (Original Mix)",
+          "playCount": 33,
+          "seconds": 364,
+          "inputPath": "D:/beatport neu/10. Claude VonStroke - Who's Afraid Of Detroit (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "217837611",
+          "title": "Escape (Extended)",
+          "playCount": 31,
+          "seconds": 300,
+          "inputPath": "D:/beatport neu/01. Jordan Peak - Escape (Extended).flac",
+          "reachable": false
+        },
+        {
+          "id": "71475963",
+          "title": "Carti House (Original Mix)",
+          "playCount": 31,
+          "seconds": 399,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Carti House (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "140259476",
+          "title": "Simone feat. Signalfarbe Schwarz (Original Mix)",
+          "playCount": 30,
+          "seconds": 489,
+          "inputPath": "G:/mukke beatport/10. Martin Books, Signalfarbe Schwarz - Simone feat. Signalfarbe Schwarz (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "208685258",
+          "title": "David Phillips  Girls Wanna Grab Me Original",
+          "playCount": 30,
+          "seconds": 427,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/david phillips  girls wanna grab me original.mp3",
+          "reachable": false
+        },
+        {
+          "id": "239248908",
+          "title": "Fallin' (Nils Ohrmann Remix)",
+          "playCount": 29,
+          "seconds": 377,
+          "inputPath": "D:/beatport neu/01. Ode To 75 - Fallin' (Nils Ohrmann Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "139854589",
+          "title": "Substance (Extended Mix)",
+          "playCount": 27,
+          "seconds": 252,
+          "inputPath": "D:/beatport neu/01. Alok, FAANGS, SCRIPT - Substance (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "155598665",
+          "title": "Girl On The Beat (Extended Mix)",
+          "playCount": 27,
+          "seconds": 227,
+          "inputPath": "D:/beatport neu/01. Shermanology - Girl On The Beat (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "220797802",
+          "title": "BLOW (WHITE GIRL IN TOWN) [feat. Kilo Ali] (WHITE GIRL IN TOWN)",
+          "playCount": 27,
+          "seconds": 366,
+          "inputPath": "G:/mukke beatport/01. SOSA (UK), Kilo Ali - BLOW (WHITE GIRL IN TOWN) [feat. Kilo Ali] (WHITE GIRL IN TOWN).flac",
+          "reachable": true
+        },
+        {
+          "id": "224563357",
+          "title": "Dapayk & Padberg - Fishin For Your Love [minimal]",
+          "playCount": 27,
+          "seconds": 354,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/dapayk & padberg - fishin for your love [min.mp3",
+          "reachable": false
+        },
+        {
+          "id": "16080095",
+          "title": "Doris (Original Mix)",
+          "playCount": 26,
+          "seconds": 489,
+          "inputPath": "G:/mukke beatport/06. Martin Books - Doris (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "153181450",
+          "title": "Bootay (Original Mix)",
+          "playCount": 25,
+          "seconds": 319,
+          "inputPath": "D:/beatport neu/01. San Pacho - Bootay (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "65252610",
+          "title": "Dennis Cruz  Better Than Me Original Mix",
+          "playCount": 25,
+          "seconds": 354,
+          "inputPath": "M:/Mukke Komplett/mucke/Dennis Cruz  Better Than Me Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "8180557",
+          "title": "Francesco Parente Rich Forever  Inside Original Mix",
+          "playCount": 25,
+          "seconds": 349,
+          "inputPath": "M:/Mukke Komplett/mucke/Francesco Parente Rich Forever  Inside Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "100696976",
+          "title": "Rene Bourgeois - 4 My Recordz",
+          "playCount": 24,
+          "seconds": 385,
+          "inputPath": "G:/mp3 traktor/classica/Plattenbox/Rene Bourgeois - 4 My Recordz.mp3",
+          "reachable": true
+        },
+        {
+          "id": "136120444",
+          "title": "Hater Content (Original Mix)",
+          "playCount": 24,
+          "seconds": 337,
+          "inputPath": "D:/beatport neu/05. Patrick Arbez - Hater Content (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "217555277",
+          "title": "Losing My Mind (Original Mix)",
+          "playCount": 24,
+          "seconds": 299,
+          "inputPath": "G:/mukke beatport/02. Void - Losing My Mind (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "258382999",
+          "title": "Danny Fontana  Chromosome Bolster Remix",
+          "playCount": 24,
+          "seconds": 526,
+          "inputPath": "M:/Mukke Komplett/mucke/Danny Fontana  Chromosome Bolster Remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "178704625",
+          "title": "Jawseekers Allowance (Original Mix)",
+          "playCount": 23,
+          "seconds": 471,
+          "inputPath": "D:/beatport neu/01. 3 Shits On A Sofa - Jawseekers Allowance (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "194560481",
+          "title": "3. Seance (Original Mix)",
+          "playCount": 23,
+          "seconds": 432,
+          "inputPath": "D:/beatport neu/07. Patrick Arbez - 3. Seance (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "221080308",
+          "title": "Bom Dia (Extended Mix)",
+          "playCount": 23,
+          "seconds": 243,
+          "inputPath": "D:/beatport neu/01. Breaking Beattz, Adam Sellouk - Bom Dia (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "223819122",
+          "title": "Slob (Nick Curly Remix)",
+          "playCount": 23,
+          "seconds": 412,
+          "inputPath": "D:/beatport neu/06. Zoo Brazil - Slob (Nick Curly Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "54411638",
+          "title": "Face2Face With My Demon (Original Mix)",
+          "playCount": 23,
+          "seconds": 466,
+          "inputPath": "D:/beatport neu/03. Rene Bourgeois - Face2Face With My Demon (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "127646602",
+          "title": "Ben Dust  Homeless",
+          "playCount": 22,
+          "seconds": 462,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/ben dust  homeless.mp3",
+          "reachable": false
+        },
+        {
+          "id": "132536136",
+          "title": "People In The House (Extended Mix)",
+          "playCount": 22,
+          "seconds": 266,
+          "inputPath": "D:/beatport neu/01. Breaking Beattz, Almanac - People In The House (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "219048602",
+          "title": "Boom Boom Pow (Extended Mix)",
+          "playCount": 22,
+          "seconds": 319,
+          "inputPath": "G:/mukke beatport/35. Sonata Collective - Boom Boom Pow (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "236667416",
+          "title": "La La Land (Extended Mix)",
+          "playCount": 22,
+          "seconds": 331,
+          "inputPath": "D:/beatport neu/01. VA - La La Land (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "228972613",
+          "title": "Stephanie (Extended Mix)",
+          "playCount": 21,
+          "seconds": 359,
+          "inputPath": "G:/mukke beatport/01. Young M.A, Cloonee, Inntraw - Stephanie (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "49987723",
+          "title": "Marcel Dettmann - Push",
+          "playCount": 21,
+          "seconds": 343,
+          "inputPath": "G:/beuth62/Berghain music/Marcel Dettmann - Push.mp3",
+          "reachable": true
+        },
+        {
+          "id": "123007470",
+          "title": "When I Die (DJ Disciple Le Souk Mix)",
+          "playCount": 20,
+          "seconds": 420,
+          "inputPath": "D:/beatport neu/05. DJ Disciple - When I Die (DJ Disciple Le Souk Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "167446127",
+          "title": "Der rote Rabauke (deKai (Berlin) Remix)",
+          "playCount": 19,
+          "seconds": 395,
+          "inputPath": "D:/beatport neu/02. Patrick Arbez - Der rote Rabauke (deKai (Berlin) Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "187487621",
+          "title": "Get Out of My Mind (Version 1)",
+          "playCount": 19,
+          "seconds": 292,
+          "inputPath": "G:/mukke beatport/01. TWR72 - Get Out of My Mind (Version 1).flac",
+          "reachable": true
+        },
+        {
+          "id": "187808264",
+          "title": "Sian  Shame Cube Oliver Huntemann Remix",
+          "playCount": 19,
+          "seconds": 450,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/sian  shame cube oliver huntemann remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "195477963",
+          "title": "Not Easy (David Phillips Remix)",
+          "playCount": 19,
+          "seconds": 434,
+          "inputPath": "D:/beatport neu/04. The Glitz - Not Easy (David Phillips Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "257491722",
+          "title": "Who's Afraid Of Detroit? (Original Mix)",
+          "playCount": 19,
+          "seconds": 364,
+          "inputPath": "D:/beatport neu/06. Claude VonStroke - Who's Afraid Of Detroit (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "261476675",
+          "title": "Teenage Mutants  Real Original Mix  Noir Music",
+          "playCount": 19,
+          "seconds": 377,
+          "inputPath": "M:/Mukke Komplett/mucke/Teenage Mutants  Real Original Mix  Noir Music.mp3",
+          "reachable": false
+        },
+        {
+          "id": "266991867",
+          "title": "Lakritz (Original Mix)",
+          "playCount": 19,
+          "seconds": 384,
+          "inputPath": "D:/beatport neu/04. Torsten Kanzler, MoMo, Dominik Vaillant - Lakritz (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "86750845",
+          "title": "cocaina ",
+          "playCount": 19,
+          "seconds": 226,
+          "inputPath": "G:/import/Cocaina.mp3",
+          "reachable": true
+        },
+        {
+          "id": "213939225",
+          "title": "French Fries - Bug Noticed",
+          "playCount": 18,
+          "seconds": 288,
+          "inputPath": "G:/beuth62/French Fries - Bug Noticed.mp3",
+          "reachable": true
+        },
+        {
+          "id": "163858652",
+          "title": "martin kleinert-Enraged Girl",
+          "playCount": 17,
+          "seconds": 537,
+          "inputPath": "G:/import/martin kleinert-Enraged Girl.mp3",
+          "reachable": true
+        },
+        {
+          "id": "16590905",
+          "title": "Dirty Techno Talk (Original Mix)",
+          "playCount": 17,
+          "seconds": 382,
+          "inputPath": "D:/beatport neu/03. deKai (Berlin) - Dirty Techno Talk (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "206612290",
+          "title": "Love Missile F1-11 (Westbam Remix Short Version)",
+          "playCount": 17,
+          "seconds": 209,
+          "inputPath": "D:/beatport neu/08. Sigue Sigue Sputnik - Love Missile F1-11 (Westbam Remix Short Version).flac",
+          "reachable": false
+        },
+        {
+          "id": "228603781",
+          "title": "I Kissed A Girl",
+          "playCount": 17,
+          "seconds": 176,
+          "inputPath": "D:/mucke/pop/Katy Perry - I Kissed A Girl.mp3",
+          "reachable": false
+        },
+        {
+          "id": "231841835",
+          "title": "Heater (Claude VonStroke Remix)",
+          "playCount": 17,
+          "seconds": 422,
+          "inputPath": "D:/beatport neu/02. Samim - Heater (Claude VonStroke Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "254523824",
+          "title": "Work (Extended Mix)",
+          "playCount": 17,
+          "seconds": 348,
+          "inputPath": "D:/beatport neu/01. Kevin McKay, Pupa Nas T, Denise Belfon - Work (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "167675193",
+          "title": "Reload The Renegade Master (feat. A.D.O.R.) (Extended Mix)",
+          "playCount": 16,
+          "seconds": 332,
+          "inputPath": "D:/beatport neu/01. Ben Kim, A.D.O.R. - Reload The Renegade Master (feat. A.D.O.R.) (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "53286158",
+          "title": "Nasty (Deep Inside)",
+          "playCount": 16,
+          "seconds": 295,
+          "inputPath": "D:/beatport neu/01. Nico Falla, Chris Candela - Nasty (Deep Inside).flac",
+          "reachable": false
+        },
+        {
+          "id": "101488456",
+          "title": "Freaky 1 (Original Mix)",
+          "playCount": 15,
+          "seconds": 298,
+          "inputPath": "D:/beatport neu/01. Ali Love, Vintage Culture, Max Styler - Freaky 1 (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "113311412",
+          "title": "Gnarls Barkley - Crazy LYRICS",
+          "playCount": 15,
+          "seconds": 175,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/soundcloud downloads/Gnarls Barkley - Crazy LYRICS.mp3",
+          "reachable": true
+        },
+        {
+          "id": "204976964",
+          "title": "Meet Her At The Loveparade (Nalin & Kane Remix)",
+          "playCount": 15,
+          "seconds": 594,
+          "inputPath": "D:/beatport neu/03. Da Hool - Meet Her At The Loveparade (Nalin & Kane Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "71556613",
+          "title": "Sweet Dreams (Instrumental)",
+          "playCount": 15,
+          "seconds": 281,
+          "inputPath": "G:/mukke beatport/02. POLOVICH - Sweet Dreams (Instrumental).flac",
+          "reachable": true
+        },
+        {
+          "id": "144553994",
+          "title": "STEP LIKE (Original Mix)",
+          "playCount": 14,
+          "seconds": 449,
+          "inputPath": "G:/mukke beatport/01. Roddy Lima - STEP LIKE (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "165752157",
+          "title": "Gaga - Naughty (Philipp Centro Remix)",
+          "playCount": 14,
+          "seconds": 413,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/01_2013/Gaga - Naughty (Philipp Centro Remix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "170723848",
+          "title": "Game (Original Mix)",
+          "playCount": 14,
+          "seconds": 284,
+          "inputPath": "D:/beatport neu/02. Martin Books - Game (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "175307755",
+          "title": "Gets Like That (Jamie Jones Remix)",
+          "playCount": 14,
+          "seconds": 356,
+          "inputPath": "D:/beatport neu/01. Jamie Jones, Max Dean, Luke Dean - Gets Like That (Jamie Jones Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "212767530",
+          "title": "Playd (Original Mix)",
+          "playCount": 14,
+          "seconds": 324,
+          "inputPath": "G:/mukke beatport/12. Alfred Heinrichs - Playd (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "30624857",
+          "title": "Blow My Mind (Extended Mix)",
+          "playCount": 14,
+          "seconds": 330,
+          "inputPath": "G:/mukke beatport/01. GHSTGHSTGHST, Arielle Free - Blow My Mind (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "32326650",
+          "title": "Be Like That (Extended Mix)",
+          "playCount": 14,
+          "seconds": 284,
+          "inputPath": "D:/beatport neu/01. Shiba San - Be Like That (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "46450632",
+          "title": "I Choose to Dance (Original Mix)",
+          "playCount": 14,
+          "seconds": 293,
+          "inputPath": "D:/beatport neu/01. Jill Stanley - I Choose to Dance (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "88489741",
+          "title": "Naughty Girl (Kevin McKay Extended ViP)",
+          "playCount": 14,
+          "seconds": 275,
+          "inputPath": "G:/mukke beatport/07. Skylin3, Nicole Del Prete - Naughty Girl (Kevin McKay Extended ViP).flac",
+          "reachable": true
+        },
+        {
+          "id": "107914487",
+          "title": "Bitch (Original Mix)",
+          "playCount": 13,
+          "seconds": 404,
+          "inputPath": "G:/mukke beatport/10. Alfred Heinrichs - Bitch (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "114690834",
+          "title": "Dense & Pika - Crispy Duck",
+          "playCount": 13,
+          "seconds": 212,
+          "inputPath": "G:/beuth62/Mix – Dense & Pika - Triangle/Dense & Pika - Crispy Duck.mp3",
+          "reachable": true
+        },
+        {
+          "id": "142446048",
+          "title": "Connection (Original Mix)",
+          "playCount": 13,
+          "seconds": 269,
+          "inputPath": "G:/mukke beatport/01. YAZMIN (MT) - Connection (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "15802267",
+          "title": "No Guestlist (Extended Mix)",
+          "playCount": 13,
+          "seconds": 335,
+          "inputPath": "D:/beatport neu/01. T78, Angelala - No Guestlist (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "183678930",
+          "title": "Psycho (Original Mix)",
+          "playCount": 13,
+          "seconds": 295,
+          "inputPath": "G:/mukke beatport/01. Solardo - Psycho (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "201255375",
+          "title": "Secret (Original Mix)",
+          "playCount": 13,
+          "seconds": 347,
+          "inputPath": "D:/beatport neu/01. Martin Books - Secret (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "221885935",
+          "title": "Sebastian Ledher A Bianchi  Beat Again Original Mix",
+          "playCount": 13,
+          "seconds": 405,
+          "inputPath": "M:/Mukke Komplett/mucke/Sebastian Ledher A Bianchi  Beat Again Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "250510632",
+          "title": "Terminator (Original Mix)",
+          "playCount": 13,
+          "seconds": 325,
+          "inputPath": "D:/beatport neu/01. JB Martinz - Terminator (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "262070660",
+          "title": "RED LINE (Extended Mix)",
+          "playCount": 13,
+          "seconds": 310,
+          "inputPath": "D:/beatport neu/01. SONNIY - RED LINE (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "9003661",
+          "title": "I'm Black And I'm Proud - Say It Loud (Original Mix)",
+          "playCount": 13,
+          "seconds": 260,
+          "inputPath": "G:/mukke beatport/01. James Brown, Carl Cox - I'm Black And I'm Proud - Say It Loud (Carl Cox Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "121504499",
+          "title": "Randomer - Bring",
+          "playCount": 12,
+          "seconds": 294,
+          "inputPath": "G:/beuth62/Randomer - Bring.mp3",
+          "reachable": true
+        },
+        {
+          "id": "206481404",
+          "title": "I Call It Energy feat. That Kid Is You (RIKO & GUGGA Remix)",
+          "playCount": 12,
+          "seconds": 355,
+          "inputPath": "D:/beatport neu/02. Tomy Wahl, Cloz - I Call It Energy feat. That Kid Is You (RIKO & GUGGA Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "209376618",
+          "title": "Black Church (Original Mix)",
+          "playCount": 12,
+          "seconds": 360,
+          "inputPath": "D:/beatport neu/08. Patrick Arbez - Black Church (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "25775547",
+          "title": "Beatbox Rocker (Extended Mix)",
+          "playCount": 12,
+          "seconds": 190,
+          "inputPath": "D:/beatport neu/02. Beachbag - Beatbox Rocker (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "266028768",
+          "title": "Paralyse (Original Mix)",
+          "playCount": 12,
+          "seconds": 363,
+          "inputPath": "D:/beatport neu/06. Patrick Arbez - Paralyse (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "33425807",
+          "title": "Catz n Dogz  Gerd Janson  Modern Romance",
+          "playCount": 12,
+          "seconds": 214,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/catz n dogz  gerd janson  modern romance.mp3",
+          "reachable": false
+        },
+        {
+          "id": "83330804",
+          "title": "D4VID  LD 25",
+          "playCount": 12,
+          "seconds": 307,
+          "inputPath": "G:/import/D4VID  LD 25.mp3",
+          "reachable": true
+        },
+        {
+          "id": "111444526",
+          "title": "Clubbing (Dub Mix)",
+          "playCount": 11,
+          "seconds": 345,
+          "inputPath": "G:/mukke beatport/02. Martin Books - Clubbing (Dub Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "12853953",
+          "title": "Turn (Original Mix)",
+          "playCount": 11,
+          "seconds": 283,
+          "inputPath": "D:/beatport neu/01. Martin Books - Turn (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "135987124",
+          "title": "Can You Feel The Beat (Original Mix)",
+          "playCount": 11,
+          "seconds": 173,
+          "inputPath": "G:/mukke beatport/01. RSCL - Can You Feel The Beat (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "138871437",
+          "title": "Sweat (Extended Mix)",
+          "playCount": 11,
+          "seconds": 330,
+          "inputPath": "D:/beatport neu/01. Alaia & Gallo - Sweat (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "175831207",
+          "title": "Carla Next Door (Original Mix)",
+          "playCount": 11,
+          "seconds": 333,
+          "inputPath": "D:/beatport neu/07. SNOOKO, Zack Darza - Carla Next Door (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "182762536",
+          "title": "MJ Lan - Generate Bodies (2000)",
+          "playCount": 11,
+          "seconds": 208,
+          "inputPath": "G:/mp3 traktor/MJ Lan - Generate Bodies (2000).mp3",
+          "reachable": true
+        },
+        {
+          "id": "256700180",
+          "title": "Boss Level B (Original Mix)",
+          "playCount": 11,
+          "seconds": 363,
+          "inputPath": "D:/beatport neu/22. Vadz - Boss Level B (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "261082355",
+          "title": "Martin books -Perfection",
+          "playCount": 11,
+          "seconds": 288,
+          "inputPath": "G:/import/Martin books -Perfection.mp3",
+          "reachable": true
+        },
+        {
+          "id": "31087691",
+          "title": "Controller (Extended Mix)",
+          "playCount": 11,
+          "seconds": 383,
+          "inputPath": "D:/beatport neu/01. Tony Romera - Controller (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "4450141",
+          "title": "Beat Conductor Original Mix",
+          "playCount": 11,
+          "seconds": 466,
+          "inputPath": "G:/mucke1/Beat Conductor Original Mix.mp3",
+          "reachable": true
+        },
+        {
+          "id": "80392507",
+          "title": "Fatal Blows (Original Mix)",
+          "playCount": 11,
+          "seconds": 342,
+          "inputPath": "G:/mukke beatport/02. Balanka - Fatal Blows (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "177086602",
+          "title": "Dream Steppin' (Extended)",
+          "playCount": 10,
+          "seconds": 303,
+          "inputPath": "D:/beatport neu/01. Ragie Ban - Dream Steppin' (Extended).flac",
+          "reachable": false
+        },
+        {
+          "id": "254682306",
+          "title": "Rub Anotha Dub (Original Mix)",
+          "playCount": 10,
+          "seconds": 415,
+          "inputPath": "D:/beatport neu/01. Green Velvet, Walker & Royce - Rub Anotha Dub (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "27185102",
+          "title": "Oh Na Na (Extended Mix)",
+          "playCount": 10,
+          "seconds": 345,
+          "inputPath": "G:/mukke beatport/03. PEACE MAKER!, Viv Castle - Oh Na Na (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "39064712",
+          "title": "Ghost (Extended Mix)",
+          "playCount": 10,
+          "seconds": 324,
+          "inputPath": "D:/beatport neu/01. Luigi Rocca - Ghost (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "5527026",
+          "title": "Mari Kvien Brunvoll  Everywhere You Go Villalobos Celestial Voice Resurrection Mix",
+          "playCount": 10,
+          "seconds": 1702,
+          "inputPath": "M:/Mukke Komplett/mucke/Mari Kvien Brunvoll  Everywhere You Go Villalobos Celestial Voice Resurrection Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "65635429",
+          "title": "Primal Beat - Blowing My Head Up (Diatek Remix)",
+          "playCount": 10,
+          "seconds": 523,
+          "inputPath": "G:/mp3 traktor/neu 2015/Primal Beat - Blowing My Head Up (Diatek Remix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "132871368",
+          "title": "Work (CVMPANILE & Draxx Extended Remix)",
+          "playCount": 9,
+          "seconds": 371,
+          "inputPath": "G:/mukke beatport/25. Kevin McKay, Pupa Nas T, Denise Belfon - Work (CVMPANILE & Draxx Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "16155906",
+          "title": "Let's Freak (Original Mix)",
+          "playCount": 9,
+          "seconds": 329,
+          "inputPath": "D:/beatport neu/01. RSquared, Iglesias - Let's Freak (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "164600226",
+          "title": "Lazer Beams (Adam Beyer & Massano Remix)",
+          "playCount": 9,
+          "seconds": 302,
+          "inputPath": "D:/beatport neu/01. Green Velvet, Harvard Bass - Lazer Beams (Adam Beyer & Massano Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "168090535",
+          "title": "Late Night Talk (BLR Extended Edit)",
+          "playCount": 9,
+          "seconds": 290,
+          "inputPath": "D:/beatport neu/01. Laidback Luke, Bolier, AMRV - Late Night Talk (BLR Extended Edit).flac",
+          "reachable": false
+        },
+        {
+          "id": "169979215",
+          "title": "Good Girl (Extended Mix)",
+          "playCount": 9,
+          "seconds": 270,
+          "inputPath": "D:/beatport neu/01. Tristan Henry, Cloonee, Prospa - Good Girl (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "194295465",
+          "title": "Knockin (First Radio Mix)",
+          "playCount": 9,
+          "seconds": 326,
+          "inputPath": "D:/beatport neu/01. Double Vision - Knockin (First Radio Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "212396628",
+          "title": "1995 (Original Mix)",
+          "playCount": 9,
+          "seconds": 429,
+          "inputPath": "D:/beatport neu/01. Patrick Arbez - 1995 (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "237027828",
+          "title": "Bugatti (CID Extended Remix)",
+          "playCount": 9,
+          "seconds": 282,
+          "inputPath": "G:/mukke beatport/01. Tiga - Bugatti (CID Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "237786647",
+          "title": "Route 27 (Alex Stein & Victor Ruiz Remix)",
+          "playCount": 9,
+          "seconds": 326,
+          "inputPath": "D:/beatport neu/01. Monika Kruse, Voodooamt - Route 27 (Alex Stein & Victor Ruiz Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "24845687",
+          "title": "How Does It Feel (Extended)",
+          "playCount": 9,
+          "seconds": 316,
+          "inputPath": "D:/beatport neu/01. Fezzo, Dubdogz, Zaark - How Does It Feel (Extended).flac",
+          "reachable": false
+        },
+        {
+          "id": "52406372",
+          "title": "Fancy $hit (Skepsis Remix)",
+          "playCount": 9,
+          "seconds": 157,
+          "inputPath": "G:/mukke beatport/01. Taylr Renee, CID - Fancy $hit (Skepsis Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "99211309",
+          "title": "Mothers Slap (Original Mix)",
+          "playCount": 9,
+          "seconds": 329,
+          "inputPath": "G:/mukke beatport/06. Alfred Heinrichs, Martin Books - Mothers Slap (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "127299662",
+          "title": "Geffen",
+          "playCount": 8,
+          "seconds": 488,
+          "inputPath": "G:/mp3 traktor/Barnt - Geffen.mp3",
+          "reachable": true
+        },
+        {
+          "id": "18038018",
+          "title": "No Sex",
+          "playCount": 8,
+          "seconds": 266,
+          "inputPath": "G:/beuth62/Bretter techno 2015/green_velvet_no_sex.mp3",
+          "reachable": true
+        },
+        {
+          "id": "186421656",
+          "title": "In The Beginning",
+          "playCount": 8,
+          "seconds": 415,
+          "inputPath": "G:/new mp3/Playlist Sep 2015/Alan Fitzpatrick-In The Beginning (Original Mix) [Drumcode] [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "196732607",
+          "title": "randomer ",
+          "playCount": 8,
+          "seconds": 294,
+          "inputPath": "G:/Deep techno/Randomer-Bring (Original Mix) [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "204964014",
+          "title": "Lisbon Cluster (Original Mix)",
+          "playCount": 8,
+          "seconds": 332,
+          "inputPath": "D:/beatport neu/01. KICA - Lisbon Cluster (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "225972709",
+          "title": "03. Rene Bourgeois - Jimmy Closed The Club (Beatamines Remix)",
+          "playCount": 8,
+          "seconds": 417,
+          "inputPath": "D:/beatport neu/03. Rene Bourgeois - Jimmy Closed The Club (Beatamines Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "235277684",
+          "title": "Merengue (Original Mix)",
+          "playCount": 8,
+          "seconds": 365,
+          "inputPath": "D:/beatport neu/01. Trallez - Merengue (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "263276908",
+          "title": "Catch (Extended)",
+          "playCount": 8,
+          "seconds": 227,
+          "inputPath": "G:/mukke beatport/01. Will Sparks - Catch (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "263558880",
+          "title": "Johnny_Cash_-_Walk_The_Line_Romano_Meinert_Edit",
+          "playCount": 8,
+          "seconds": 397,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/Dark/Johnny_Cash_-_Walk_The_Line_Romano_Meinert_Edit.mp3",
+          "reachable": true
+        },
+        {
+          "id": "49224306",
+          "title": "Mind Alert (Extended Mix)",
+          "playCount": 8,
+          "seconds": 317,
+          "inputPath": "D:/beatport neu/01. Caique Carvalho, Mojjo - Mind Alert (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "70397408",
+          "title": "El Supremo (Extended Mix)",
+          "playCount": 8,
+          "seconds": 294,
+          "inputPath": "D:/beatport neu/01. PAULY! - El Supremo (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "86920033",
+          "title": "Wadenschwinger (Original Mix)",
+          "playCount": 8,
+          "seconds": 375,
+          "inputPath": "D:/beatport neu/03. Rich Vom Dorf - Wadenschwinger (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "94315299",
+          "title": "Tribesmen (10 Years On Remix)",
+          "playCount": 8,
+          "seconds": 322,
+          "inputPath": "D:/beatport neu/01. Solardo - Tribesmen (10 Years On Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "102704075",
+          "title": "This Beat (Original Mix)",
+          "playCount": 7,
+          "seconds": 299,
+          "inputPath": "D:/beatport neu/01. TOYZZ - This Beat (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "105073778",
+          "title": "Motor City (Original Mix)",
+          "playCount": 7,
+          "seconds": 420,
+          "inputPath": "G:/mukke beatport/03. Prok & Fitch - Motor City (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "110668978",
+          "title": "beach",
+          "playCount": 7,
+          "seconds": 262,
+          "inputPath": "G:/import/Beach Original Mix.mp3",
+          "reachable": true
+        },
+        {
+          "id": "113681837",
+          "title": "Smoke On The Water (Original Mix)",
+          "playCount": 7,
+          "seconds": 217,
+          "inputPath": "D:/beatport neu/01. Saint Amour - Smoke On The Water (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "130194215",
+          "title": "Family Affair (Extended Mix)",
+          "playCount": 7,
+          "seconds": 224,
+          "inputPath": "D:/beatport neu/01. Samuele Sartini - Family Affair (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "135927995",
+          "title": "Boombots (Original Mix)",
+          "playCount": 7,
+          "seconds": 125,
+          "inputPath": "G:/mukke beatport/01. Robin Aristo, Reebs - Boombots (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "139304225",
+          "title": "Pop in Pop Out (Original Mix)",
+          "playCount": 7,
+          "seconds": 227,
+          "inputPath": "G:/mukke beatport/01. Prok & Fitch - Pop in Pop Out (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "150905459",
+          "title": "Fall Apart (Original Mix)",
+          "playCount": 7,
+          "seconds": 325,
+          "inputPath": "G:/mukke beatport/02. Solardo - Fall Apart (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "153556192",
+          "title": "Not Be Aggressive (Original Mix)",
+          "playCount": 7,
+          "seconds": 365,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Not Be Aggressive (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "153988337",
+          "title": "Suspenders (AKA AKA & Thalstroem Remix)",
+          "playCount": 7,
+          "seconds": 417,
+          "inputPath": "D:/beatport neu/01. Oliver Klein - Suspenders (AKA AKA & Thalstroem Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "159726852",
+          "title": "The Observer (Daniel Steinberg & Nils Ohrmann Remix)",
+          "playCount": 7,
+          "seconds": 374,
+          "inputPath": "D:/beatport neu/02. Ema Remedi - The Observer (Daniel Steinberg & Nils Ohrmann Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "169103057",
+          "title": "Come On (Neelix Remix)",
+          "playCount": 7,
+          "seconds": 264,
+          "inputPath": "D:/beatport neu/01. Javi Mula - Come On (Neelix Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "173208736",
+          "title": "Kickdrum (Original Mix)",
+          "playCount": 7,
+          "seconds": 351,
+          "inputPath": "D:/beatport neu/04. CVMPANILE, Draxx (ITA) - Kickdrum (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "180671440",
+          "title": "Bass Hit Thick (Original Mix)",
+          "playCount": 7,
+          "seconds": 299,
+          "inputPath": "G:/mukke beatport/01. Void - Bass Hit Thick (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "183280978",
+          "title": "Pornojoy (Jack Mazzoni Extended Remix)",
+          "playCount": 7,
+          "seconds": 322,
+          "inputPath": "D:/beatport neu/01. Joy Kitikonti - Pornojoy (Jack Mazzoni Extended Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "194232886",
+          "title": "Perfect (Exceeder) (Oliver Heldens Extended Remix)",
+          "playCount": 7,
+          "seconds": 311,
+          "inputPath": "G:/mukke beatport/01. Mason, Princess Superstar - Perfect (Exceeder) (Oliver Heldens Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "198538341",
+          "title": "D-Deck-Secret Dumb (Original Mix) [Agile Recordings] [myfreemp3.eu]",
+          "playCount": 7,
+          "seconds": 413,
+          "inputPath": "G:/Deep techno/D-Deck-Secret Dumb (Original Mix) [Agile Recordings] [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "29810199",
+          "title": "Right Move (Extended Mix)",
+          "playCount": 7,
+          "seconds": 343,
+          "inputPath": "D:/beatport neu/01. Wade - Right Move (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "41194852",
+          "title": "Je Danse feat. Elke Brauweiler (Dan Caster & Rene Bougeois Club Mix)",
+          "playCount": 7,
+          "seconds": 539,
+          "inputPath": "D:/beatport neu/03. Rene Bourgeois, Elke Brauweiler - Je Danse feat. Elke Brauweiler (Dan Caster & Rene Bougeois Club Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "48033961",
+          "title": "Face Bass (Original Mix)",
+          "playCount": 7,
+          "seconds": 324,
+          "inputPath": "D:/beatport neu/01. East End Dubs, Di Chiara Brothers - Face Bass (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "62521004",
+          "title": "Enrico Sangiuliano  Astral Projection  Drumcode  DC176",
+          "playCount": 7,
+          "seconds": 484,
+          "inputPath": "M:/Mukke Komplett/mucke/Enrico Sangiuliano  Astral Projection  Drumcode  DC176.mp3",
+          "reachable": false
+        },
+        {
+          "id": "63989743",
+          "title": "Soul Sounds (Dirt Crew Solid Diamond Rmx)",
+          "playCount": 7,
+          "seconds": 538,
+          "inputPath": "D:/mucke/neu/sasse_-_soul_sounds_(dirt_crew_solid_diamond_rmx).mp3",
+          "reachable": false
+        },
+        {
+          "id": "92195597",
+          "title": "Don't Want None (Extended)",
+          "playCount": 7,
+          "seconds": 310,
+          "inputPath": "D:/beatport neu/01. AYYBO, Dale Move - Don't Want None (Extended).flac",
+          "reachable": false
+        },
+        {
+          "id": "95647819",
+          "title": "All That She Wants (Extended Mix)",
+          "playCount": 7,
+          "seconds": 355,
+          "inputPath": "G:/mukke beatport/45. Skylin3, Terri-Anne - All That She Wants (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "10010837",
+          "title": "Le Funk Fatale (feat. Karas Day) (Rimini Sunset Remix)",
+          "playCount": 6,
+          "seconds": 386,
+          "inputPath": "D:/beatport neu/04. Nils Ohrmann - Le Funk Fatale (feat. Karas Day) (Rimini Sunset Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "123347569",
+          "title": "RITZ (Original Mix)",
+          "playCount": 6,
+          "seconds": 357,
+          "inputPath": "D:/beatport neu/01. Ragie Ban - RITZ (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "127592380",
+          "title": "Turn Around (Eric Powell's Kiss Ya Mix)",
+          "playCount": 6,
+          "seconds": 324,
+          "inputPath": "D:/beatport neu/02. Michele Conte, VICTORIA WHYNOT - Turn Around (Eric Powell's Kiss Ya Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "12793356",
+          "title": "Cognitive Shift (Original Mix)",
+          "playCount": 6,
+          "seconds": 326,
+          "inputPath": "D:/beatport neu/01. Jody 6 - Cognitive Shift (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "136811314",
+          "title": "Yelling at the Ghost (Extended Mix)",
+          "playCount": 6,
+          "seconds": 362,
+          "inputPath": "D:/beatport neu/03. Plastic Robots, Fab Massimo - Yelling at the Ghost (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "139481095",
+          "title": "Glob (Claude VonStroke Remix)",
+          "playCount": 6,
+          "seconds": 552,
+          "inputPath": "D:/beatport neu/01. Kenny Larkin - Glob (Claude VonStroke Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "173817984",
+          "title": "Change (Heinrich & Heine Remix)",
+          "playCount": 6,
+          "seconds": 389,
+          "inputPath": "D:/beatport neu/03. Leo, Dan Caster - Change (Heinrich & Heine Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "175942805",
+          "title": "Stop Talking (Extended Mix)",
+          "playCount": 6,
+          "seconds": 298,
+          "inputPath": "D:/beatport neu/02. ATLAC - Stop Talking (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "183273375",
+          "title": "Release Yourself (Original Mix)",
+          "playCount": 6,
+          "seconds": 327,
+          "inputPath": "D:/beatport neu/04. Mandiz - Release Yourself (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "191523421",
+          "title": "neonman - future is pussy (northern lite mix)",
+          "playCount": 6,
+          "seconds": 407,
+          "inputPath": "G:/mp3 traktor/classica/neonman - future is pussy (northern lite mix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "202580657",
+          "title": "Noche Clara (Original Mix)",
+          "playCount": 6,
+          "seconds": 372,
+          "inputPath": "D:/beatport neu/01. Claude VonStroke - Noche Clara (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "205387929",
+          "title": "Kellerkinder (Original Mix)",
+          "playCount": 6,
+          "seconds": 468,
+          "inputPath": "D:/beatport neu/01. Holger Nielson, deKai (Berlin) - Kellerkinder (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "207469901",
+          "title": "Do It To It",
+          "playCount": 6,
+          "seconds": 157,
+          "inputPath": "G:/import/Do It To It.mp3",
+          "reachable": true
+        },
+        {
+          "id": "229601624",
+          "title": "Nailgun (Patrick Arbez Remix)",
+          "playCount": 6,
+          "seconds": 339,
+          "inputPath": "D:/beatport neu/06. deKai (Berlin) - Nailgun (Patrick Arbez Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "267025709",
+          "title": "Jewel Kid-My Reaction (Vox Mix) [Suara]  [myfreemp3.eu]",
+          "playCount": 6,
+          "seconds": 429,
+          "inputPath": "G:/Deep techno/Jewel Kid-My Reaction (Vox Mix) [Suara]  [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "35073583",
+          "title": "Red Ryder (2026 Remix)",
+          "playCount": 6,
+          "seconds": 359,
+          "inputPath": "D:/beatport neu/01. Hertz - Red Ryder (2026 Remix).flac",
+          "reachable": false
+        },
+        {
+          "id": "46526906",
+          "title": "Der rote Rabauke (2024 Rework)",
+          "playCount": 6,
+          "seconds": 317,
+          "inputPath": "D:/beatport neu/05. Patrick Arbez - Der rote Rabauke (2024 Rework).flac",
+          "reachable": false
+        },
+        {
+          "id": "7402424",
+          "title": "1000 Places (Original Mix)",
+          "playCount": 6,
+          "seconds": 303,
+          "inputPath": "D:/beatport neu/01. DJ Dextro - 1000 Places (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "96077321",
+          "title": "Wild West (Original Mix)",
+          "playCount": 6,
+          "seconds": 196,
+          "inputPath": "G:/mukke beatport/01. Pickle - Wild West (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "98759205",
+          "title": "When It Kicks (Rebūke Extended Remix)",
+          "playCount": 6,
+          "seconds": 244,
+          "inputPath": "G:/mukke beatport/02. Green Velvet, Layton Giordani - When It Kicks (Rebūke Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "107004541",
+          "title": "Lipstick (Extended Mix)",
+          "playCount": 5,
+          "seconds": 338,
+          "inputPath": "G:/mukke beatport/01. Alaia & Gallo - Lipstick (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "113887451",
+          "title": "Pop That (Extended Mix)",
+          "playCount": 5,
+          "seconds": 264,
+          "inputPath": "D:/beatport neu/01. Patrick Topping - Pop That (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "115355548",
+          "title": "Let Me Move (Extended Mix)",
+          "playCount": 5,
+          "seconds": 364,
+          "inputPath": "D:/beatport neu/01. Alessandro Diruggiero, Tomi&Kesh - Let Me Move (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "140552740",
+          "title": "Mike Dehnert - Chardon",
+          "playCount": 5,
+          "seconds": 421,
+          "inputPath": "D:/mucke/The Ocean.mp3",
+          "reachable": false
+        },
+        {
+          "id": "14789258",
+          "title": "Art Form (Original Mix)",
+          "playCount": 5,
+          "seconds": 252,
+          "inputPath": "D:/beatport neu/01. Robert Hood - Art Form (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "150744218",
+          "title": "In The Ghetto (Extended Mix)",
+          "playCount": 5,
+          "seconds": 330,
+          "inputPath": "D:/beatport neu/01. Reebs - In The Ghetto (Extended Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "156275686",
+          "title": "Set Back (Original Mix)",
+          "playCount": 5,
+          "seconds": 371,
+          "inputPath": "D:/beatport neu/02. Drumsauw - Set Back (Original Mix).flac",
+          "reachable": false
+        },
+        {
+          "id": "157057802",
+          "title": "Feel The Laugh (Original Mix)",
+          "playCount": 5,
+          "seconds": 340,
+          "inputPath": "G:/mukke beatport/01. Taranco, ANTO ZAGU - Feel The Laugh (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "163615531",
+          "title": "Work It (Original Mix)",
+          "playCount": 5,
+          "seconds": 331,
+          "inputPath": "D:/beatport neu/02. Jill Stanley - Work It (Original Mix).flac",
+          "reachable": false
+        }
+      ]
+    },
+    {
+      "path": "G:\\PIONEER\\Master\\master.db",
+      "count": 10921,
+      "selected": 200,
+      "reachable": 178,
+      "totalSeconds": 69634,
+      "tracks": [
+        {
+          "id": "123289417",
+          "title": "Koffee  Toast Yungness  Jaminn Remix",
+          "playCount": 120,
+          "seconds": 368,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/koffee  toast yungness  jaminn remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "139679550",
+          "title": "Talk of the Town (Original Mix)",
+          "playCount": 89,
+          "seconds": 193,
+          "inputPath": "E:/beatport neu/01. Sammy Virji, Fred again.., Reggie - Talk of the Town (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "87868672",
+          "title": "La Roux - Quicksand (Boy 8 Bit mix)",
+          "playCount": 78,
+          "seconds": 356,
+          "inputPath": "G:/mp3 traktor/neu 2015/La Roux - Quicksand (Boy 8 Bit mix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "205580900",
+          "title": "Hilit Kolet featuring Kay Elizabeth  Techno Disco Extended Mix",
+          "playCount": 75,
+          "seconds": 294,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/hilit kolet featuring kay elizabeth  techno .mp3",
+          "reachable": false
+        },
+        {
+          "id": "36378610",
+          "title": "RibCage (Dense & Pika Remix)",
+          "playCount": 75,
+          "seconds": 440,
+          "inputPath": "E:/beatport neu/01. Dubfire - RibCage (Dense & Pika Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "136478995",
+          "title": "Dennis Cruz snatch",
+          "playCount": 67,
+          "seconds": 396,
+          "inputPath": "M:/Mukke Komplett/mucke/Dennis Cruz  New Life Snatch Records.mp3",
+          "reachable": false
+        },
+        {
+          "id": "42070151",
+          "title": "martin Books - Age",
+          "playCount": 66,
+          "seconds": 252,
+          "inputPath": "G:/import/martin Books - Age.mp3",
+          "reachable": true
+        },
+        {
+          "id": "95681193",
+          "title": "Passion (R U Satisfied) (Extended Mix)",
+          "playCount": 66,
+          "seconds": 303,
+          "inputPath": "E:/beatport neu/01. The Flirts, Beltran (BR) - Passion (R U Satisfied) (Extended Mix) (1).flac",
+          "reachable": true
+        },
+        {
+          "id": "74600470",
+          "title": "Terminator X (Original Mix)",
+          "playCount": 65,
+          "seconds": 341,
+          "inputPath": "E:/beatport neu/02. Mike Mair - Terminator X (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "252451126",
+          "title": "Ghetto Kraviz (Original Mix)",
+          "playCount": 64,
+          "seconds": 224,
+          "inputPath": "E:/beatport neu/03. Nina Kraviz - Ghetto Kraviz (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "24095639",
+          "title": "Dance With Ugly Girl (Original Mix)",
+          "playCount": 63,
+          "seconds": 406,
+          "inputPath": "E:/beatport neu/01. Gorb - Dance With Ugly Girl (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "73381820",
+          "title": "Gorgon City  Lick Shot Visualiser",
+          "playCount": 63,
+          "seconds": 235,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/gorgon city  lick shot visualiser.mp3",
+          "reachable": false
+        },
+        {
+          "id": "152780580",
+          "title": "Authentic Computers 2.0 (Original Mix)",
+          "playCount": 60,
+          "seconds": 376,
+          "inputPath": "E:/beatport neu/01. Kolter - Authentic Computers 2.0 (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "200086379",
+          "title": "The Creeps (feat. Barry Drift) (Original Mix)",
+          "playCount": 55,
+          "seconds": 365,
+          "inputPath": "E:/beatport neu/01. Claude VonStroke - The Creeps (feat. Barry Drift) (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "73234695",
+          "title": "Alan Braxe Fred Falke  Intro Official Audio",
+          "playCount": 52,
+          "seconds": 295,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/alan braxe fred falke  intro official audio.mp3",
+          "reachable": false
+        },
+        {
+          "id": "102075780",
+          "title": "My Body Talks (Extended Mix)",
+          "playCount": 51,
+          "seconds": 240,
+          "inputPath": "E:/beatport neu/01. BRANDON (DE) - My Body Talks (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "64836351",
+          "title": "Simon Bailes (Original Mix)",
+          "playCount": 51,
+          "seconds": 362,
+          "inputPath": "E:/beatport neu/01. Trallez, Abbud - Simon Bailes (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "191869322",
+          "title": "Victor Ruiz  Scorpio Original Mix  Noir Music",
+          "playCount": 46,
+          "seconds": 457,
+          "inputPath": "M:/Mukke Komplett/mucke/Victor Ruiz  Scorpio Original Mix  Noir Music.mp3",
+          "reachable": false
+        },
+        {
+          "id": "61609240",
+          "title": "Daaance Daance (Original mix)",
+          "playCount": 42,
+          "seconds": 389,
+          "inputPath": "E:/beatport neu/08. David Phillips - Daaance Daance (Original mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "45596408",
+          "title": "Brothers Black  Bloodhound BADE014",
+          "playCount": 41,
+          "seconds": 338,
+          "inputPath": "M:/Mukke Komplett/mucke/Brothers Black  Bloodhound BADE014.mp3",
+          "reachable": false
+        },
+        {
+          "id": "53295770",
+          "title": "Tiger Blood (Extended Mix)",
+          "playCount": 41,
+          "seconds": 427,
+          "inputPath": "G:/mukke beatport/02. Prok & Fitch - Tiger Blood (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "110766587",
+          "title": "Dense  Pika  Colt HF041 Official Audio",
+          "playCount": 40,
+          "seconds": 386,
+          "inputPath": "M:/Mukke Komplett/mucke/Dense  Pika  Colt HF041 Official Audio.mp3",
+          "reachable": false
+        },
+        {
+          "id": "117239683",
+          "title": "K.E.T. (Amine Mix)",
+          "playCount": 40,
+          "seconds": 267,
+          "inputPath": "G:/mukke beatport/02. SLAMM, Dan Molinari - K.E.T. (Amine Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "224176211",
+          "title": "In This Bih' (Extended Mix)",
+          "playCount": 40,
+          "seconds": 266,
+          "inputPath": "E:/beatport neu/01. Chris Lorenzo, Kah-lo - In This Bih' (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "70868560",
+          "title": "Who's Afraid Of Detroit (Original Mix)",
+          "playCount": 40,
+          "seconds": 364,
+          "inputPath": "E:/beatport neu/10. Claude VonStroke - Who's Afraid Of Detroit (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "42934280",
+          "title": "Silver Surfer feat. Hardy Hard (Dub Mix)",
+          "playCount": 39,
+          "seconds": 330,
+          "inputPath": "E:/beatport neu/04. Hardy Hard, Dave Darell - Silver Surfer feat. Hardy Hard (Dub Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "7922500",
+          "title": "Catz n Dogz  Drop It",
+          "playCount": 39,
+          "seconds": 292,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/catz n dogz  drop it.mp3",
+          "reachable": false
+        },
+        {
+          "id": "142225026",
+          "title": "Andreas Henneberg  Skirmish Original Mix",
+          "playCount": 37,
+          "seconds": 425,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/andreas henneberg  skirmish original mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "27256942",
+          "title": "Live (Kotelett & Zadak Remix)",
+          "playCount": 36,
+          "seconds": 398,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Live (Kotelett & Zadak Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "239248908",
+          "title": "Fallin' (Nils Ohrmann Remix)",
+          "playCount": 35,
+          "seconds": 377,
+          "inputPath": "E:/beatport neu/01. Ode To 75 - Fallin' (Nils Ohrmann Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "217837611",
+          "title": "Escape (Extended)",
+          "playCount": 31,
+          "seconds": 300,
+          "inputPath": "E:/beatport neu/01. Jordan Peak - Escape (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "71475963",
+          "title": "Carti House (Original Mix)",
+          "playCount": 31,
+          "seconds": 399,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Carti House (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "140259476",
+          "title": "Simone feat. Signalfarbe Schwarz (Original Mix)",
+          "playCount": 30,
+          "seconds": 489,
+          "inputPath": "G:/mukke beatport/10. Martin Books, Signalfarbe Schwarz - Simone feat. Signalfarbe Schwarz (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "16080095",
+          "title": "Doris (Original Mix)",
+          "playCount": 30,
+          "seconds": 489,
+          "inputPath": "G:/mukke beatport/06. Martin Books - Doris (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "208685258",
+          "title": "David Phillips  Girls Wanna Grab Me Original",
+          "playCount": 30,
+          "seconds": 427,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/david phillips  girls wanna grab me original.mp3",
+          "reachable": false
+        },
+        {
+          "id": "86750845",
+          "title": "cocaina ",
+          "playCount": 28,
+          "seconds": 226,
+          "inputPath": "G:/import/Cocaina.mp3",
+          "reachable": true
+        },
+        {
+          "id": "139854589",
+          "title": "Substance (Extended Mix)",
+          "playCount": 27,
+          "seconds": 252,
+          "inputPath": "E:/beatport neu/01. Alok, FAANGS, SCRIPT - Substance (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "155598665",
+          "title": "Girl On The Beat (Extended Mix)",
+          "playCount": 27,
+          "seconds": 227,
+          "inputPath": "E:/beatport neu/01. Shermanology - Girl On The Beat (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "220797802",
+          "title": "BLOW (WHITE GIRL IN TOWN) [feat. Kilo Ali] (WHITE GIRL IN TOWN)",
+          "playCount": 27,
+          "seconds": 366,
+          "inputPath": "G:/mukke beatport/01. SOSA (UK), Kilo Ali - BLOW (WHITE GIRL IN TOWN) [feat. Kilo Ali] (WHITE GIRL IN TOWN).flac",
+          "reachable": true
+        },
+        {
+          "id": "224563357",
+          "title": "Dapayk & Padberg - Fishin For Your Love [minimal]",
+          "playCount": 27,
+          "seconds": 354,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/dapayk & padberg - fishin for your love [min.mp3",
+          "reachable": false
+        },
+        {
+          "id": "153181450",
+          "title": "Bootay (Original Mix)",
+          "playCount": 25,
+          "seconds": 319,
+          "inputPath": "E:/beatport neu/01. San Pacho - Bootay (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "65252610",
+          "title": "Dennis Cruz  Better Than Me Original Mix",
+          "playCount": 25,
+          "seconds": 354,
+          "inputPath": "M:/Mukke Komplett/mucke/Dennis Cruz  Better Than Me Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "8180557",
+          "title": "Francesco Parente Rich Forever  Inside Original Mix",
+          "playCount": 25,
+          "seconds": 349,
+          "inputPath": "M:/Mukke Komplett/mucke/Francesco Parente Rich Forever  Inside Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "100696976",
+          "title": "Rene Bourgeois - 4 My Recordz",
+          "playCount": 24,
+          "seconds": 385,
+          "inputPath": "G:/mp3 traktor/classica/Plattenbox/Rene Bourgeois - 4 My Recordz.mp3",
+          "reachable": true
+        },
+        {
+          "id": "136120444",
+          "title": "Hater Content (Original Mix)",
+          "playCount": 24,
+          "seconds": 337,
+          "inputPath": "E:/beatport neu/05. Patrick Arbez - Hater Content (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "217555277",
+          "title": "Losing My Mind (Original Mix)",
+          "playCount": 24,
+          "seconds": 299,
+          "inputPath": "G:/mukke beatport/02. Void - Losing My Mind (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "258382999",
+          "title": "Danny Fontana  Chromosome Bolster Remix",
+          "playCount": 24,
+          "seconds": 526,
+          "inputPath": "M:/Mukke Komplett/mucke/Danny Fontana  Chromosome Bolster Remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "16590905",
+          "title": "Dirty Techno Talk (Original Mix)",
+          "playCount": 23,
+          "seconds": 382,
+          "inputPath": "E:/beatport neu/03. deKai (Berlin) - Dirty Techno Talk (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "178704625",
+          "title": "Jawseekers Allowance (Original Mix)",
+          "playCount": 23,
+          "seconds": 471,
+          "inputPath": "E:/beatport neu/01. 3 Shits On A Sofa - Jawseekers Allowance (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "194560481",
+          "title": "3. Seance (Original Mix)",
+          "playCount": 23,
+          "seconds": 432,
+          "inputPath": "E:/beatport neu/07. Patrick Arbez - 3. Seance (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "221080308",
+          "title": "Bom Dia (Extended Mix)",
+          "playCount": 23,
+          "seconds": 243,
+          "inputPath": "E:/beatport neu/01. Breaking Beattz, Adam Sellouk - Bom Dia (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "223819122",
+          "title": "Slob (Nick Curly Remix)",
+          "playCount": 23,
+          "seconds": 412,
+          "inputPath": "E:/beatport neu/06. Zoo Brazil - Slob (Nick Curly Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "54411638",
+          "title": "Face2Face With My Demon (Original Mix)",
+          "playCount": 23,
+          "seconds": 466,
+          "inputPath": "E:/beatport neu/03. Rene Bourgeois - Face2Face With My Demon (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "127646602",
+          "title": "Ben Dust  Homeless",
+          "playCount": 22,
+          "seconds": 462,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/ben dust  homeless.mp3",
+          "reachable": false
+        },
+        {
+          "id": "132536136",
+          "title": "People In The House (Extended Mix)",
+          "playCount": 22,
+          "seconds": 266,
+          "inputPath": "E:/beatport neu/01. Breaking Beattz, Almanac - People In The House (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "204976964",
+          "title": "Meet Her At The Loveparade (Nalin & Kane Remix)",
+          "playCount": 22,
+          "seconds": 594,
+          "inputPath": "E:/beatport neu/03. Da Hool - Meet Her At The Loveparade (Nalin & Kane Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "219048602",
+          "title": "Boom Boom Pow (Extended Mix)",
+          "playCount": 22,
+          "seconds": 319,
+          "inputPath": "G:/mukke beatport/35. Sonata Collective - Boom Boom Pow (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "236667416",
+          "title": "La La Land (Extended Mix)",
+          "playCount": 22,
+          "seconds": 331,
+          "inputPath": "E:/beatport neu/01. VA - La La Land (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "228972613",
+          "title": "Stephanie (Extended Mix)",
+          "playCount": 21,
+          "seconds": 359,
+          "inputPath": "G:/mukke beatport/01. Young M.A, Cloonee, Inntraw - Stephanie (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "49987723",
+          "title": "Marcel Dettmann - Push",
+          "playCount": 21,
+          "seconds": 343,
+          "inputPath": "G:/beuth62/Berghain music/Marcel Dettmann - Push.mp3",
+          "reachable": true
+        },
+        {
+          "id": "123007470",
+          "title": "When I Die (DJ Disciple Le Souk Mix)",
+          "playCount": 20,
+          "seconds": 420,
+          "inputPath": "E:/beatport neu/05. DJ Disciple - When I Die (DJ Disciple Le Souk Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "163858652",
+          "title": "martin kleinert-Enraged Girl",
+          "playCount": 20,
+          "seconds": 537,
+          "inputPath": "G:/import/martin kleinert-Enraged Girl.mp3",
+          "reachable": true
+        },
+        {
+          "id": "167446127",
+          "title": "Der rote Rabauke (deKai (Berlin) Remix)",
+          "playCount": 19,
+          "seconds": 395,
+          "inputPath": "E:/beatport neu/02. Patrick Arbez - Der rote Rabauke (deKai (Berlin) Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "183678930",
+          "title": "Psycho (Original Mix)",
+          "playCount": 19,
+          "seconds": 295,
+          "inputPath": "G:/mukke beatport/01. Solardo - Psycho (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "187487621",
+          "title": "Get Out of My Mind (Version 1)",
+          "playCount": 19,
+          "seconds": 292,
+          "inputPath": "G:/mukke beatport/01. TWR72 - Get Out of My Mind (Version 1).flac",
+          "reachable": true
+        },
+        {
+          "id": "187683833",
+          "title": "Diva (Original Mix)",
+          "playCount": 19,
+          "seconds": 381,
+          "inputPath": "E:/beatport neu/02. Marco Strous - Diva (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "187808264",
+          "title": "Sian  Shame Cube Oliver Huntemann Remix",
+          "playCount": 19,
+          "seconds": 450,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/sian  shame cube oliver huntemann remix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "195477963",
+          "title": "Not Easy (David Phillips Remix)",
+          "playCount": 19,
+          "seconds": 434,
+          "inputPath": "E:/beatport neu/04. The Glitz - Not Easy (David Phillips Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "257491722",
+          "title": "Who's Afraid Of Detroit? (Original Mix)",
+          "playCount": 19,
+          "seconds": 364,
+          "inputPath": "E:/beatport neu/06. Claude VonStroke - Who's Afraid Of Detroit (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "261476675",
+          "title": "Teenage Mutants  Real Original Mix  Noir Music",
+          "playCount": 19,
+          "seconds": 377,
+          "inputPath": "M:/Mukke Komplett/mucke/Teenage Mutants  Real Original Mix  Noir Music.mp3",
+          "reachable": false
+        },
+        {
+          "id": "266991867",
+          "title": "Lakritz (Original Mix)",
+          "playCount": 19,
+          "seconds": 384,
+          "inputPath": "E:/beatport neu/04. Torsten Kanzler, MoMo, Dominik Vaillant - Lakritz (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "213939225",
+          "title": "French Fries - Bug Noticed",
+          "playCount": 18,
+          "seconds": 288,
+          "inputPath": "G:/beuth62/French Fries - Bug Noticed.mp3",
+          "reachable": true
+        },
+        {
+          "id": "113311412",
+          "title": "Gnarls Barkley - Crazy LYRICS",
+          "playCount": 17,
+          "seconds": 175,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/soundcloud downloads/Gnarls Barkley - Crazy LYRICS.mp3",
+          "reachable": true
+        },
+        {
+          "id": "206612290",
+          "title": "Love Missile F1-11 (Westbam Remix Short Version)",
+          "playCount": 17,
+          "seconds": 209,
+          "inputPath": "E:/beatport neu/08. Sigue Sigue Sputnik - Love Missile F1-11 (Westbam Remix Short Version).flac",
+          "reachable": true
+        },
+        {
+          "id": "212767530",
+          "title": "Playd (Original Mix)",
+          "playCount": 17,
+          "seconds": 324,
+          "inputPath": "G:/mukke beatport/12. Alfred Heinrichs - Playd (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "228603781",
+          "title": "I Kissed A Girl",
+          "playCount": 17,
+          "seconds": 176,
+          "inputPath": "G:/mucke1/pop/Katy Perry - I Kissed A Girl.mp3",
+          "reachable": true
+        },
+        {
+          "id": "231841835",
+          "title": "Heater (Claude VonStroke Remix)",
+          "playCount": 17,
+          "seconds": 422,
+          "inputPath": "E:/beatport neu/02. Samim - Heater (Claude VonStroke Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "254523824",
+          "title": "Work (Extended Mix)",
+          "playCount": 17,
+          "seconds": 348,
+          "inputPath": "E:/beatport neu/01. Kevin McKay, Pupa Nas T, Denise Belfon - Work (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "167675193",
+          "title": "Reload The Renegade Master (feat. A.D.O.R.) (Extended Mix)",
+          "playCount": 16,
+          "seconds": 332,
+          "inputPath": "E:/beatport neu/01. Ben Kim, A.D.O.R. - Reload The Renegade Master (feat. A.D.O.R.) (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "212396628",
+          "title": "1995 (Original Mix)",
+          "playCount": 16,
+          "seconds": 429,
+          "inputPath": "E:/beatport neu/01. Patrick Arbez - 1995 (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "256700180",
+          "title": "Boss Level B (Original Mix)",
+          "playCount": 16,
+          "seconds": 363,
+          "inputPath": "E:/beatport neu/22. Vadz - Boss Level B (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "53286158",
+          "title": "Nasty (Deep Inside)",
+          "playCount": 16,
+          "seconds": 295,
+          "inputPath": "E:/beatport neu/01. Nico Falla, Chris Candela - Nasty (Deep Inside).flac",
+          "reachable": true
+        },
+        {
+          "id": "101488456",
+          "title": "Freaky 1 (Original Mix)",
+          "playCount": 15,
+          "seconds": 298,
+          "inputPath": "E:/beatport neu/01. Ali Love, Vintage Culture, Max Styler - Freaky 1 (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "71556613",
+          "title": "Sweet Dreams (Instrumental)",
+          "playCount": 15,
+          "seconds": 281,
+          "inputPath": "G:/mukke beatport/02. POLOVICH - Sweet Dreams (Instrumental).flac",
+          "reachable": true
+        },
+        {
+          "id": "144553994",
+          "title": "STEP LIKE (Original Mix)",
+          "playCount": 14,
+          "seconds": 449,
+          "inputPath": "G:/mukke beatport/01. Roddy Lima - STEP LIKE (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "165752157",
+          "title": "Gaga - Naughty (Philipp Centro Remix)",
+          "playCount": 14,
+          "seconds": 413,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/01_2013/Gaga - Naughty (Philipp Centro Remix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "170723848",
+          "title": "Game (Original Mix)",
+          "playCount": 14,
+          "seconds": 284,
+          "inputPath": "E:/beatport neu/02. Martin Books - Game (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "175307755",
+          "title": "Gets Like That (Jamie Jones Remix)",
+          "playCount": 14,
+          "seconds": 356,
+          "inputPath": "E:/beatport neu/01. Jamie Jones, Max Dean, Luke Dean - Gets Like That (Jamie Jones Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "209376618",
+          "title": "Black Church (Original Mix)",
+          "playCount": 14,
+          "seconds": 360,
+          "inputPath": "E:/beatport neu/08. Patrick Arbez - Black Church (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "30624857",
+          "title": "Blow My Mind (Extended Mix)",
+          "playCount": 14,
+          "seconds": 330,
+          "inputPath": "G:/mukke beatport/01. GHSTGHSTGHST, Arielle Free - Blow My Mind (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "32326650",
+          "title": "Be Like That (Extended Mix)",
+          "playCount": 14,
+          "seconds": 284,
+          "inputPath": "E:/beatport neu/01. Shiba San - Be Like That (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "46450632",
+          "title": "I Choose to Dance (Original Mix)",
+          "playCount": 14,
+          "seconds": 293,
+          "inputPath": "E:/beatport neu/01. Jill Stanley - I Choose to Dance (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "88489741",
+          "title": "Naughty Girl (Kevin McKay Extended ViP)",
+          "playCount": 14,
+          "seconds": 275,
+          "inputPath": "G:/mukke beatport/07. Skylin3, Nicole Del Prete - Naughty Girl (Kevin McKay Extended ViP).flac",
+          "reachable": true
+        },
+        {
+          "id": "107914487",
+          "title": "Bitch (Original Mix)",
+          "playCount": 13,
+          "seconds": 404,
+          "inputPath": "G:/mukke beatport/10. Alfred Heinrichs - Bitch (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "114690834",
+          "title": "Dense & Pika - Crispy Duck",
+          "playCount": 13,
+          "seconds": 212,
+          "inputPath": "G:/beuth62/Mix – Dense & Pika - Triangle/Dense & Pika - Crispy Duck.mp3",
+          "reachable": true
+        },
+        {
+          "id": "135987124",
+          "title": "Can You Feel The Beat (Original Mix)",
+          "playCount": 13,
+          "seconds": 173,
+          "inputPath": "G:/mukke beatport/01. RSCL - Can You Feel The Beat (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "142446048",
+          "title": "Connection (Original Mix)",
+          "playCount": 13,
+          "seconds": 269,
+          "inputPath": "G:/mukke beatport/01. YAZMIN (MT) - Connection (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "15802267",
+          "title": "No Guestlist (Extended Mix)",
+          "playCount": 13,
+          "seconds": 335,
+          "inputPath": "E:/beatport neu/01. T78, Angelala - No Guestlist (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "186220702",
+          "title": "Nailgun (Orginal Version)",
+          "playCount": 13,
+          "seconds": 338,
+          "inputPath": "E:/beatport neu/03. deKai (Berlin) - Nailgun (Orginal Version).flac",
+          "reachable": true
+        },
+        {
+          "id": "201255375",
+          "title": "Secret (Original Mix)",
+          "playCount": 13,
+          "seconds": 347,
+          "inputPath": "E:/beatport neu/01. Martin Books - Secret (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "221885935",
+          "title": "Sebastian Ledher A Bianchi  Beat Again Original Mix",
+          "playCount": 13,
+          "seconds": 405,
+          "inputPath": "M:/Mukke Komplett/mucke/Sebastian Ledher A Bianchi  Beat Again Original Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "250510632",
+          "title": "Terminator (Original Mix)",
+          "playCount": 13,
+          "seconds": 325,
+          "inputPath": "E:/beatport neu/01. JB Martinz - Terminator (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "262070660",
+          "title": "RED LINE (Extended Mix)",
+          "playCount": 13,
+          "seconds": 310,
+          "inputPath": "E:/beatport neu/01. SONNIY - RED LINE (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "266028768",
+          "title": "Paralyse (Original Mix)",
+          "playCount": 13,
+          "seconds": 363,
+          "inputPath": "E:/beatport neu/06. Patrick Arbez - Paralyse (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "9003661",
+          "title": "I'm Black And I'm Proud - Say It Loud (Original Mix)",
+          "playCount": 13,
+          "seconds": 260,
+          "inputPath": "G:/mukke beatport/01. James Brown, Carl Cox - I'm Black And I'm Proud - Say It Loud (Carl Cox Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "121504499",
+          "title": "Randomer - Bring",
+          "playCount": 12,
+          "seconds": 294,
+          "inputPath": "G:/beuth62/Randomer - Bring.mp3",
+          "reachable": true
+        },
+        {
+          "id": "205387929",
+          "title": "Kellerkinder (Original Mix)",
+          "playCount": 12,
+          "seconds": 468,
+          "inputPath": "E:/beatport neu/01. Holger Nielson, deKai (Berlin) - Kellerkinder (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "206481404",
+          "title": "I Call It Energy feat. That Kid Is You (RIKO & GUGGA Remix)",
+          "playCount": 12,
+          "seconds": 355,
+          "inputPath": "E:/beatport neu/02. Tomy Wahl, Cloz - I Call It Energy feat. That Kid Is You (RIKO & GUGGA Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "225972709",
+          "title": "03. Rene Bourgeois - Jimmy Closed The Club (Beatamines Remix)",
+          "playCount": 12,
+          "seconds": 417,
+          "inputPath": "E:/beatport neu/03. Rene Bourgeois - Jimmy Closed The Club (Beatamines Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "25775547",
+          "title": "Beatbox Rocker (Extended Mix)",
+          "playCount": 12,
+          "seconds": 190,
+          "inputPath": "E:/beatport neu/02. Beachbag - Beatbox Rocker (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "33425807",
+          "title": "Catz n Dogz  Gerd Janson  Modern Romance",
+          "playCount": 12,
+          "seconds": 214,
+          "inputPath": "/contents_4136090260/unknownartist/unknownalbum/catz n dogz  gerd janson  modern romance.mp3",
+          "reachable": false
+        },
+        {
+          "id": "76421553",
+          "title": "Patrick_Coutin_-_J_Aime_Regarder_Les_Filles_Thomas_Schumacher_Remix",
+          "playCount": 12,
+          "seconds": 306,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/Dark/Patrick_Coutin_-_J_Aime_Regarder_Les_Filles_Thomas_Schumacher_Remix.mp3",
+          "reachable": true
+        },
+        {
+          "id": "83330804",
+          "title": "D4VID  LD 25",
+          "playCount": 12,
+          "seconds": 307,
+          "inputPath": "G:/import/D4VID  LD 25.mp3",
+          "reachable": true
+        },
+        {
+          "id": "111444526",
+          "title": "Clubbing (Dub Mix)",
+          "playCount": 11,
+          "seconds": 345,
+          "inputPath": "G:/mukke beatport/02. Martin Books - Clubbing (Dub Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "12853953",
+          "title": "Turn (Original Mix)",
+          "playCount": 11,
+          "seconds": 283,
+          "inputPath": "E:/beatport neu/01. Martin Books - Turn (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "138871437",
+          "title": "Sweat (Extended Mix)",
+          "playCount": 11,
+          "seconds": 330,
+          "inputPath": "E:/beatport neu/01. Alaia & Gallo - Sweat (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "175831207",
+          "title": "Carla Next Door (Original Mix)",
+          "playCount": 11,
+          "seconds": 333,
+          "inputPath": "E:/beatport neu/07. SNOOKO, Zack Darza - Carla Next Door (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "182762536",
+          "title": "MJ Lan - Generate Bodies (2000)",
+          "playCount": 11,
+          "seconds": 208,
+          "inputPath": "G:/mp3 traktor/MJ Lan - Generate Bodies (2000).mp3",
+          "reachable": true
+        },
+        {
+          "id": "240081149",
+          "title": "Crazy (Extended Mix)",
+          "playCount": 11,
+          "seconds": 275,
+          "inputPath": "E:/beatport neu/01. Pavel Petrov, Monophase (IT) - Crazy (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "254682306",
+          "title": "Rub Anotha Dub (Original Mix)",
+          "playCount": 11,
+          "seconds": 415,
+          "inputPath": "E:/beatport neu/01. Green Velvet, Walker & Royce - Rub Anotha Dub (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "261082355",
+          "title": "Martin books -Perfection",
+          "playCount": 11,
+          "seconds": 288,
+          "inputPath": "G:/import/Martin books -Perfection.mp3",
+          "reachable": true
+        },
+        {
+          "id": "31087691",
+          "title": "Controller (Extended Mix)",
+          "playCount": 11,
+          "seconds": 383,
+          "inputPath": "E:/beatport neu/01. Tony Romera - Controller (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "4450141",
+          "title": "Beat Conductor Original Mix",
+          "playCount": 11,
+          "seconds": 466,
+          "inputPath": "G:/mucke1/Beat Conductor Original Mix.mp3",
+          "reachable": true
+        },
+        {
+          "id": "80392507",
+          "title": "Fatal Blows (Original Mix)",
+          "playCount": 11,
+          "seconds": 342,
+          "inputPath": "G:/mukke beatport/02. Balanka - Fatal Blows (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "177086602",
+          "title": "Dream Steppin' (Extended)",
+          "playCount": 10,
+          "seconds": 303,
+          "inputPath": "E:/beatport neu/01. Ragie Ban - Dream Steppin' (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "194295465",
+          "title": "Knockin (First Radio Mix)",
+          "playCount": 10,
+          "seconds": 326,
+          "inputPath": "E:/beatport neu/01. Double Vision - Knockin (First Radio Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "27185102",
+          "title": "Oh Na Na (Extended Mix)",
+          "playCount": 10,
+          "seconds": 345,
+          "inputPath": "G:/mukke beatport/03. PEACE MAKER!, Viv Castle - Oh Na Na (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "39064712",
+          "title": "Ghost (Extended Mix)",
+          "playCount": 10,
+          "seconds": 324,
+          "inputPath": "E:/beatport neu/01. Luigi Rocca - Ghost (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "5527026",
+          "title": "Mari Kvien Brunvoll  Everywhere You Go Villalobos Celestial Voice Resurrection Mix",
+          "playCount": 10,
+          "seconds": 1702,
+          "inputPath": "M:/Mukke Komplett/mucke/Mari Kvien Brunvoll  Everywhere You Go Villalobos Celestial Voice Resurrection Mix.mp3",
+          "reachable": false
+        },
+        {
+          "id": "65635429",
+          "title": "Primal Beat - Blowing My Head Up (Diatek Remix)",
+          "playCount": 10,
+          "seconds": 523,
+          "inputPath": "G:/mp3 traktor/neu 2015/Primal Beat - Blowing My Head Up (Diatek Remix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "132871368",
+          "title": "Work (CVMPANILE & Draxx Extended Remix)",
+          "playCount": 9,
+          "seconds": 371,
+          "inputPath": "G:/mukke beatport/25. Kevin McKay, Pupa Nas T, Denise Belfon - Work (CVMPANILE & Draxx Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "16155906",
+          "title": "Let's Freak (Original Mix)",
+          "playCount": 9,
+          "seconds": 329,
+          "inputPath": "E:/beatport neu/01. RSquared, Iglesias - Let's Freak (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "164600226",
+          "title": "Lazer Beams (Adam Beyer & Massano Remix)",
+          "playCount": 9,
+          "seconds": 302,
+          "inputPath": "E:/beatport neu/01. Green Velvet, Harvard Bass - Lazer Beams (Adam Beyer & Massano Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "168090535",
+          "title": "Late Night Talk (BLR Extended Edit)",
+          "playCount": 9,
+          "seconds": 290,
+          "inputPath": "E:/beatport neu/01. Laidback Luke, Bolier, AMRV - Late Night Talk (BLR Extended Edit).flac",
+          "reachable": true
+        },
+        {
+          "id": "169979215",
+          "title": "Good Girl (Extended Mix)",
+          "playCount": 9,
+          "seconds": 270,
+          "inputPath": "E:/beatport neu/01. Tristan Henry, Cloonee, Prospa - Good Girl (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "231043863",
+          "title": "Mach Dich Locker (Original Mix)",
+          "playCount": 9,
+          "seconds": 234,
+          "inputPath": "E:/beatport neu/01. Da Hool - Mach Dich Locker (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "237027828",
+          "title": "Bugatti (CID Extended Remix)",
+          "playCount": 9,
+          "seconds": 282,
+          "inputPath": "G:/mukke beatport/01. Tiga - Bugatti (CID Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "237786647",
+          "title": "Route 27 (Alex Stein & Victor Ruiz Remix)",
+          "playCount": 9,
+          "seconds": 326,
+          "inputPath": "E:/beatport neu/01. Monika Kruse, Voodooamt - Route 27 (Alex Stein & Victor Ruiz Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "24845687",
+          "title": "How Does It Feel (Extended)",
+          "playCount": 9,
+          "seconds": 316,
+          "inputPath": "E:/beatport neu/01. Fezzo, Dubdogz, Zaark - How Does It Feel (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "52406372",
+          "title": "Fancy $hit (Skepsis Remix)",
+          "playCount": 9,
+          "seconds": 157,
+          "inputPath": "G:/mukke beatport/01. Taylr Renee, CID - Fancy $hit (Skepsis Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "99211309",
+          "title": "Mothers Slap (Original Mix)",
+          "playCount": 9,
+          "seconds": 329,
+          "inputPath": "G:/mukke beatport/06. Alfred Heinrichs, Martin Books - Mothers Slap (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "113667583",
+          "title": "Closed Circuit (Original Mix)",
+          "playCount": 8,
+          "seconds": 497,
+          "inputPath": "E:/beatport neu/01. Drumcomplex - Closed Circuit (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "127299662",
+          "title": "Geffen",
+          "playCount": 8,
+          "seconds": 488,
+          "inputPath": "G:/mp3 traktor/Barnt - Geffen.mp3",
+          "reachable": true
+        },
+        {
+          "id": "130194215",
+          "title": "Family Affair (Extended Mix)",
+          "playCount": 8,
+          "seconds": 224,
+          "inputPath": "E:/beatport neu/01. Samuele Sartini - Family Affair (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "18038018",
+          "title": "No Sex",
+          "playCount": 8,
+          "seconds": 266,
+          "inputPath": "G:/beuth62/Bretter techno 2015/green_velvet_no_sex.mp3",
+          "reachable": true
+        },
+        {
+          "id": "186421656",
+          "title": "In The Beginning",
+          "playCount": 8,
+          "seconds": 415,
+          "inputPath": "G:/new mp3/Playlist Sep 2015/Alan Fitzpatrick-In The Beginning (Original Mix) [Drumcode] [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "196732607",
+          "title": "randomer ",
+          "playCount": 8,
+          "seconds": 294,
+          "inputPath": "G:/Deep techno/Randomer-Bring (Original Mix) [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "204964014",
+          "title": "Lisbon Cluster (Original Mix)",
+          "playCount": 8,
+          "seconds": 332,
+          "inputPath": "E:/beatport neu/01. KICA - Lisbon Cluster (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "218611783",
+          "title": "Kopfnicker",
+          "playCount": 8,
+          "seconds": 434,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/patrick Arabez/Patrick Arbez - Kopfnicker.mp3",
+          "reachable": true
+        },
+        {
+          "id": "232649264",
+          "title": "Pressure Loop (Original Mix)",
+          "playCount": 8,
+          "seconds": 363,
+          "inputPath": "E:/beatport neu/01. Omari, Le Modo - Pressure Loop (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "235277684",
+          "title": "Merengue (Original Mix)",
+          "playCount": 8,
+          "seconds": 365,
+          "inputPath": "E:/beatport neu/01. Trallez - Merengue (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "263276908",
+          "title": "Catch (Extended)",
+          "playCount": 8,
+          "seconds": 227,
+          "inputPath": "G:/mukke beatport/01. Will Sparks - Catch (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "263558880",
+          "title": "Johnny_Cash_-_Walk_The_Line_Romano_Meinert_Edit",
+          "playCount": 8,
+          "seconds": 397,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/Dark/Johnny_Cash_-_Walk_The_Line_Romano_Meinert_Edit.mp3",
+          "reachable": true
+        },
+        {
+          "id": "49224306",
+          "title": "Mind Alert (Extended Mix)",
+          "playCount": 8,
+          "seconds": 317,
+          "inputPath": "E:/beatport neu/01. Caique Carvalho, Mojjo - Mind Alert (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "70397408",
+          "title": "El Supremo (Extended Mix)",
+          "playCount": 8,
+          "seconds": 294,
+          "inputPath": "E:/beatport neu/01. PAULY! - El Supremo (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "86920033",
+          "title": "Wadenschwinger (Original Mix)",
+          "playCount": 8,
+          "seconds": 375,
+          "inputPath": "E:/beatport neu/03. Rich Vom Dorf - Wadenschwinger (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "94315299",
+          "title": "Tribesmen (10 Years On Remix)",
+          "playCount": 8,
+          "seconds": 322,
+          "inputPath": "E:/beatport neu/01. Solardo - Tribesmen (10 Years On Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "102704075",
+          "title": "This Beat (Original Mix)",
+          "playCount": 7,
+          "seconds": 299,
+          "inputPath": "E:/beatport neu/01. TOYZZ - This Beat (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "105073778",
+          "title": "Motor City (Original Mix)",
+          "playCount": 7,
+          "seconds": 420,
+          "inputPath": "G:/mukke beatport/03. Prok & Fitch - Motor City (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "110668978",
+          "title": "beach",
+          "playCount": 7,
+          "seconds": 262,
+          "inputPath": "G:/import/Beach Original Mix.mp3",
+          "reachable": true
+        },
+        {
+          "id": "113681837",
+          "title": "Smoke On The Water (Original Mix)",
+          "playCount": 7,
+          "seconds": 217,
+          "inputPath": "E:/beatport neu/01. Saint Amour - Smoke On The Water (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "135927995",
+          "title": "Boombots (Original Mix)",
+          "playCount": 7,
+          "seconds": 125,
+          "inputPath": "G:/mukke beatport/01. Robin Aristo, Reebs - Boombots (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "139304225",
+          "title": "Pop in Pop Out (Original Mix)",
+          "playCount": 7,
+          "seconds": 227,
+          "inputPath": "G:/mukke beatport/01. Prok & Fitch - Pop in Pop Out (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "150905459",
+          "title": "Fall Apart (Original Mix)",
+          "playCount": 7,
+          "seconds": 325,
+          "inputPath": "G:/mukke beatport/02. Solardo - Fall Apart (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "153556192",
+          "title": "Not Be Aggressive (Original Mix)",
+          "playCount": 7,
+          "seconds": 365,
+          "inputPath": "G:/mukke beatport/03. Martin Books - Not Be Aggressive (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "153988337",
+          "title": "Suspenders (AKA AKA & Thalstroem Remix)",
+          "playCount": 7,
+          "seconds": 417,
+          "inputPath": "E:/beatport neu/01. Oliver Klein - Suspenders (AKA AKA & Thalstroem Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "159726852",
+          "title": "The Observer (Daniel Steinberg & Nils Ohrmann Remix)",
+          "playCount": 7,
+          "seconds": 374,
+          "inputPath": "E:/beatport neu/02. Ema Remedi - The Observer (Daniel Steinberg & Nils Ohrmann Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "169103057",
+          "title": "Come On (Neelix Remix)",
+          "playCount": 7,
+          "seconds": 264,
+          "inputPath": "E:/beatport neu/01. Javi Mula - Come On (Neelix Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "172350555",
+          "title": "Go (Extended Mix)",
+          "playCount": 7,
+          "seconds": 294,
+          "inputPath": "E:/beatport neu/01. AJ Moreno, Jayn Jones - Go (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "173208736",
+          "title": "Kickdrum (Original Mix)",
+          "playCount": 7,
+          "seconds": 351,
+          "inputPath": "E:/beatport neu/04. CVMPANILE, Draxx (ITA) - Kickdrum (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "180671440",
+          "title": "Bass Hit Thick (Original Mix)",
+          "playCount": 7,
+          "seconds": 299,
+          "inputPath": "G:/mukke beatport/01. Void - Bass Hit Thick (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "183280978",
+          "title": "Pornojoy (Jack Mazzoni Extended Remix)",
+          "playCount": 7,
+          "seconds": 322,
+          "inputPath": "E:/beatport neu/01. Joy Kitikonti - Pornojoy (Jack Mazzoni Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "194232886",
+          "title": "Perfect (Exceeder) (Oliver Heldens Extended Remix)",
+          "playCount": 7,
+          "seconds": 311,
+          "inputPath": "G:/mukke beatport/01. Mason, Princess Superstar - Perfect (Exceeder) (Oliver Heldens Extended Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "198538341",
+          "title": "D-Deck-Secret Dumb (Original Mix) [Agile Recordings] [myfreemp3.eu]",
+          "playCount": 7,
+          "seconds": 413,
+          "inputPath": "G:/Deep techno/D-Deck-Secret Dumb (Original Mix) [Agile Recordings] [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "198822357",
+          "title": "3D (Extended Mix)",
+          "playCount": 7,
+          "seconds": 260,
+          "inputPath": "E:/beatport neu/01. NIIKO X SWAE, Luke Alexander - 3D (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "220209545",
+          "title": "Kinda New",
+          "playCount": 7,
+          "seconds": 269,
+          "inputPath": "G:/mucke1/Best Torrentz pres. Elektronische Tanzmusik PT.3 [by ~LOTUS]/08 - Spektrum - Kinda new (Tiefschwarz dub RMX).mp3",
+          "reachable": true
+        },
+        {
+          "id": "29810199",
+          "title": "Right Move (Extended Mix)",
+          "playCount": 7,
+          "seconds": 343,
+          "inputPath": "E:/beatport neu/01. Wade - Right Move (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "41194852",
+          "title": "Je Danse feat. Elke Brauweiler (Dan Caster & Rene Bougeois Club Mix)",
+          "playCount": 7,
+          "seconds": 539,
+          "inputPath": "E:/beatport neu/03. Rene Bourgeois, Elke Brauweiler - Je Danse feat. Elke Brauweiler (Dan Caster & Rene Bougeois Club Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "48033961",
+          "title": "Face Bass (Original Mix)",
+          "playCount": 7,
+          "seconds": 324,
+          "inputPath": "E:/beatport neu/01. East End Dubs, Di Chiara Brothers - Face Bass (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "62521004",
+          "title": "Enrico Sangiuliano  Astral Projection  Drumcode  DC176",
+          "playCount": 7,
+          "seconds": 484,
+          "inputPath": "M:/Mukke Komplett/mucke/Enrico Sangiuliano  Astral Projection  Drumcode  DC176.mp3",
+          "reachable": false
+        },
+        {
+          "id": "63989743",
+          "title": "Soul Sounds (Dirt Crew Solid Diamond Rmx)",
+          "playCount": 7,
+          "seconds": 538,
+          "inputPath": "G:/mucke1/neu/sasse_-_soul_sounds_(dirt_crew_solid_diamond_rmx).mp3",
+          "reachable": true
+        },
+        {
+          "id": "92195597",
+          "title": "Don't Want None (Extended)",
+          "playCount": 7,
+          "seconds": 310,
+          "inputPath": "E:/beatport neu/01. AYYBO, Dale Move - Don't Want None (Extended).flac",
+          "reachable": true
+        },
+        {
+          "id": "95647819",
+          "title": "All That She Wants (Extended Mix)",
+          "playCount": 7,
+          "seconds": 355,
+          "inputPath": "G:/mukke beatport/45. Skylin3, Terri-Anne - All That She Wants (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "10010837",
+          "title": "Le Funk Fatale (feat. Karas Day) (Rimini Sunset Remix)",
+          "playCount": 6,
+          "seconds": 386,
+          "inputPath": "E:/beatport neu/04. Nils Ohrmann - Le Funk Fatale (feat. Karas Day) (Rimini Sunset Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "123347569",
+          "title": "RITZ (Original Mix)",
+          "playCount": 6,
+          "seconds": 357,
+          "inputPath": "E:/beatport neu/01. Ragie Ban - RITZ (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "127592380",
+          "title": "Turn Around (Eric Powell's Kiss Ya Mix)",
+          "playCount": 6,
+          "seconds": 324,
+          "inputPath": "E:/beatport neu/02. Michele Conte, VICTORIA WHYNOT - Turn Around (Eric Powell's Kiss Ya Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "12793356",
+          "title": "Cognitive Shift (Original Mix)",
+          "playCount": 6,
+          "seconds": 326,
+          "inputPath": "E:/beatport neu/01. Jody 6 - Cognitive Shift (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "136811314",
+          "title": "Yelling at the Ghost (Extended Mix)",
+          "playCount": 6,
+          "seconds": 362,
+          "inputPath": "E:/beatport neu/03. Plastic Robots, Fab Massimo - Yelling at the Ghost (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "139481095",
+          "title": "Glob (Claude VonStroke Remix)",
+          "playCount": 6,
+          "seconds": 552,
+          "inputPath": "E:/beatport neu/01. Kenny Larkin - Glob (Claude VonStroke Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "173817984",
+          "title": "Change (Heinrich & Heine Remix)",
+          "playCount": 6,
+          "seconds": 389,
+          "inputPath": "E:/beatport neu/03. Leo, Dan Caster - Change (Heinrich & Heine Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "175942805",
+          "title": "Stop Talking (Extended Mix)",
+          "playCount": 6,
+          "seconds": 298,
+          "inputPath": "E:/beatport neu/02. ATLAC - Stop Talking (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "183273375",
+          "title": "Release Yourself (Original Mix)",
+          "playCount": 6,
+          "seconds": 327,
+          "inputPath": "E:/beatport neu/04. Mandiz - Release Yourself (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "191523421",
+          "title": "neonman - future is pussy (northern lite mix)",
+          "playCount": 6,
+          "seconds": 407,
+          "inputPath": "G:/mp3 traktor/classica/neonman - future is pussy (northern lite mix).mp3",
+          "reachable": true
+        },
+        {
+          "id": "192191488",
+          "title": "Patrick Arbez - Psalm 1",
+          "playCount": 6,
+          "seconds": 292,
+          "inputPath": "G:/mucke1/Dark Techno platten traktor/patrick Arabez/Patrick Arbez - Psalm 1.mp3",
+          "reachable": true
+        },
+        {
+          "id": "202580657",
+          "title": "Noche Clara (Original Mix)",
+          "playCount": 6,
+          "seconds": 372,
+          "inputPath": "E:/beatport neu/01. Claude VonStroke - Noche Clara (Original Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "207469901",
+          "title": "Do It To It",
+          "playCount": 6,
+          "seconds": 157,
+          "inputPath": "G:/import/Do It To It.mp3",
+          "reachable": true
+        },
+        {
+          "id": "224445029",
+          "title": "Never Crash (Extended Mix)",
+          "playCount": 6,
+          "seconds": 299,
+          "inputPath": "E:/beatport neu/01. Rafael Cerato - Never Crash (Extended Mix).flac",
+          "reachable": true
+        },
+        {
+          "id": "229601624",
+          "title": "Nailgun (Patrick Arbez Remix)",
+          "playCount": 6,
+          "seconds": 339,
+          "inputPath": "E:/beatport neu/06. deKai (Berlin) - Nailgun (Patrick Arbez Remix).flac",
+          "reachable": true
+        },
+        {
+          "id": "267025709",
+          "title": "Jewel Kid-My Reaction (Vox Mix) [Suara]  [myfreemp3.eu]",
+          "playCount": 6,
+          "seconds": 429,
+          "inputPath": "G:/Deep techno/Jewel Kid-My Reaction (Vox Mix) [Suara]  [myfreemp3.eu].mp3",
+          "reachable": true
+        },
+        {
+          "id": "35073583",
+          "title": "Red Ryder (2026 Remix)",
+          "playCount": 6,
+          "seconds": 359,
+          "inputPath": "E:/beatport neu/01. Hertz - Red Ryder (2026 Remix).flac",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "path": "C:\\Users\\p_kro\\AppData\\Roaming\\Pioneer\\rekordbox\\master.db",
+      "count": 8,
+      "selected": 8,
+      "reachable": 8,
+      "totalSeconds": 55,
+      "tracks": [
+        {
+          "id": "118726020",
+          "title": "Breaks 3",
+          "playCount": 0,
+          "seconds": 7,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/Breaks3.wav",
+          "reachable": true
+        },
+        {
+          "id": "123229219",
+          "title": "Breaks 1",
+          "playCount": 0,
+          "seconds": 7,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/Breaks1.wav",
+          "reachable": true
+        },
+        {
+          "id": "156461577",
+          "title": "House 1",
+          "playCount": 0,
+          "seconds": 1,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/House1.wav",
+          "reachable": true
+        },
+        {
+          "id": "214598999",
+          "title": "House 4",
+          "playCount": 0,
+          "seconds": 12,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/House4.wav",
+          "reachable": true
+        },
+        {
+          "id": "26414669",
+          "title": "Techno 1",
+          "playCount": 0,
+          "seconds": 1,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/Techno1.wav",
+          "reachable": true
+        },
+        {
+          "id": "265880419",
+          "title": "Breaks 2",
+          "playCount": 0,
+          "seconds": 13,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/Breaks2.wav",
+          "reachable": true
+        },
+        {
+          "id": "56872709",
+          "title": "House 2",
+          "playCount": 0,
+          "seconds": 1,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/House2.wav",
+          "reachable": true
+        },
+        {
+          "id": "66157284",
+          "title": "House 3",
+          "playCount": 0,
+          "seconds": 13,
+          "inputPath": "C:/Users/p_kro/Music/rekordbox/Sampler/GROOVE CIRCUIT/PRESET/4-Floor Breaks Kit/House3.wav",
+          "reachable": true
+        }
+      ]
+    }
+  ]
+}

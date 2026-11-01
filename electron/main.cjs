@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol, net, shell, session, desktopCapturer } = require('electron');
 const { access, readFile, stat, writeFile } = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
@@ -652,6 +652,26 @@ ipcMain.handle('rekordbox:read-bundled-xml', async () => {
   }
 });
 
+const selectedXmlUpdateSources = new Set();
+ipcMain.handle('rekordbox:choose-xml-update', async () => {
+  const chosen = await dialog.showOpenDialog({ title: 'XML-Datei-Update', properties: ['openFile'], filters: [{ name: 'Rekordbox XML', extensions: ['xml'] }] });
+  if (chosen.canceled || !chosen.filePaths.length) return null;
+  const selected = path.resolve(chosen.filePaths[0]);
+  selectedXmlUpdateSources.add(selected);
+  return { path: selected };
+});
+ipcMain.handle('rekordbox:read-xml-update', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !selectedXmlUpdateSources.has(path.resolve(filePath))) throw new Error('XML-Quelldatei zuerst auswählen.');
+  const selected = path.resolve(filePath);
+  const before = await stat(selected);
+  if (!before.isFile() || before.size > 100 * 1024 * 1024) throw new Error('XML-Datei ist nicht lesbar oder zu groß.');
+  const data = await readFile(selected, 'utf8');
+  const after = await stat(selected);
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('XML wurde während des Lesens verändert. Bitte erneut aktualisieren.');
+  originalSourceRegistry.register(selected);
+  return { data, path: selected, modifiedAt: after.mtimeMs };
+});
+
 // Persistent, app-owned association index. It intentionally stores neither
 // decrypted master.db rows nor audio/waveform bytes: only read-only paths and
 // compact track identifiers required to reopen an already known ANLZ file.
@@ -670,6 +690,7 @@ ipcMain.handle('rekordbox:find-analysis-mapping', async (_event, query) => {
 ipcMain.handle('rekordbox:analysis-mapping-stats', async () => {
   return getAnalysisPathRegistry().stats();
 });
+ipcMain.handle('rekordbox:invalidate-collection-cache', async () => getAnalysisPathRegistry().clear());
 
 ipcMain.handle('rekordbox:read-analysis-file', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath.trim()) {
@@ -903,6 +924,31 @@ ipcMain.handle('system:open-path', async (_event, targetPath) => {
 });
 
 app.whenReady().then(() => {
+  require('./recorder.cjs').registerRecorder({ ipcMain, app, powerSaveBlocker: require('electron').powerSaveBlocker });
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    const owner = BrowserWindow.getAllWindows().find((window) => window.webContents.mainFrame === request.frame);
+    if (!owner || request.frame !== owner.webContents.mainFrame) {
+      callback({});
+      return;
+    }
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      if (!sources.length) return callback({});
+      const result = await dialog.showMessageBox(owner, {
+        type: 'question',
+        title: 'Systemaudio aufnehmen',
+        message: 'AirDox darf den Systemton aufnehmen?',
+        detail: 'Erfasst den Windows-Systemmix. Rekordbox mit exklusivem ASIO-Ausgang benötigt einen separaten Loopback- oder Line-Eingang.',
+        buttons: ['Abbrechen', 'Systemaudio aufnehmen'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      callback(result.response === 1 ? { video: sources[0], audio: 'loopback' } : {});
+    } catch (error) {
+      logger.error('RECORDER', 'Systemaudio-Freigabe fehlgeschlagen', error);
+      callback({});
+    }
+  });
   // Offizielles userData-Logverzeichnis übernehmen, falls es beim Boot noch
   // nicht zur Verfügung stand (Normalfall: beide Pfade sind identisch).
   const officialDir = path.join(app.getPath('userData'), 'logs');

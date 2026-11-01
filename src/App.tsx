@@ -1,4 +1,5 @@
 import { applyStemResultIfCurrent } from './audio/stemResultGuard';
+import { batchTracksFromImportedCollection } from './stems/remote/batchCollection';
 import { withStemPreflightTimeout } from './audio/stemPreflight';
 /**
  * @license
@@ -303,6 +304,7 @@ export default function App() {
   const [dbExtractionModalOpen, setDbExtractionModalOpen] = useState<boolean>(false);
   const [xmlCollectionModalOpen, setXmlCollectionModalOpen] = useState<boolean>(false);
   const [xmlImportedTracks, setXmlImportedTracks] = useState<TrackModel[]>([]);
+  const [xmlCollectionRevision, setXmlCollectionRevision] = useState(0);
   const [xmlFileName, setXmlFileName] = useState<string>(BUNDLED_REKORDBOX_XML_FILENAME);
   const [trackImportLoading, setTrackImportLoading] = useState(false);
   const [analysisIndexStatus, setAnalysisIndexStatus] = useState('');
@@ -310,6 +312,15 @@ export default function App() {
   // The bundled collection is parsed once. Rekordbox DB/ANLZ data is resolved
   // only for the explicitly selected TrackID through the targeted read-only gate.
   const bundledCollectionPromiseRef = useRef<Promise<TrackModel[]> | null>(null);
+  const applyXmlCollectionUpdate = useCallback(async (updated: TrackModel[], sourceLabel: string) => {
+    const desktop = window.rekordboxDesktop as typeof window.rekordboxDesktop & { invalidateCollectionCache?: () => Promise<unknown> };
+    await desktop?.invalidateCollectionCache?.();
+    bundledCollectionPromiseRef.current = Promise.resolve(updated);
+    setXmlImportedTracks(updated);
+    setXmlFileName(sourceLabel);
+    setXmlCollectionRevision(previous => previous + 1);
+    setAnalysisIndexStatus('XML-Datei-Update: bisherige Sammlung vollständig ersetzt; Pfadindex wird für die neue Quelle aufgebaut.');
+  }, []);
 
   // Operation feedback
   const [feedbackTelemetry, setFeedbackTelemetry] = useState<OperationTelemetry | null>(null);
@@ -2587,7 +2598,7 @@ export default function App() {
     setViewOffset,
     setXmlCollectionModalOpen,
     setXmlFileName,
-    setXmlImportedTracks,
+    setXmlImportedTracks: (updated) => { setXmlImportedTracks(updated); setXmlCollectionRevision(previous => previous + 1); },
     setTrackImportLoading,
     trackImportLoading,
     xmlFileName,
@@ -3375,6 +3386,13 @@ export default function App() {
         cancelPending={Boolean(remoteFlowJobId && remoteCancelPendingJobId === remoteFlowJobId)}
       />
       <LazyRemoteSetupModal
+        onUpdateXml={applyXmlCollectionUpdate}
+        batchModelId={stemArchitecture.architectureId && stemArchitecture.architectureId !== 'auto' ? stemArchitecture.architectureId : 'bsroformer-musdb18hq-4stem-zfturbo'}
+        loadBatchTracks={async () => {
+          return batchTracksFromImportedCollection(xmlImportedTracks, tracks);
+        }}
+        batchLibraryName={xmlFileName}
+        batchLibraryRevision={xmlCollectionRevision}
         isOpen={remoteSetupOpen}
         onClose={() => setRemoteSetupOpen(false)}
         remoteStatus={stemRemoteStatus}
@@ -3467,6 +3485,7 @@ export default function App() {
 
       {/* Rekordbox XML Track-Auswahl Modal with Search Bar */}
       <LazyRekordboxXmlImportModal
+        onUpdateXml={applyXmlCollectionUpdate}
         isOpen={xmlCollectionModalOpen}
         onClose={() => setXmlCollectionModalOpen(false)}
         xmlTracks={xmlImportedTracks}

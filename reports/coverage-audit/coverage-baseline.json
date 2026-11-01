@@ -1,0 +1,1957 @@
+{
+  "startedAt": "2026-11-01T15:51:11.002Z",
+  "completedAt": "2026-11-01T15:54:05.056Z",
+  "node": "v22.23.2",
+  "revision": "7792beba003bede46402b576ee7021d274321207",
+  "scope": "All tracked and nonignored untracked first-party JS/TS/Python/C/C++/header/PowerShell/shell source; excludes test/fixture/support trees, declarations, generated/build/resource/report trees and coverage tooling. Includes scripts, tools and root configuration code. Exact denominator candidates are inventory[].file.",
+  "exclusions": [
+    "native/stem_engine/tests/mock_ort/onnxruntime_cxx_api.h",
+    "native/stem_engine/tests/test_manager_lifecycle.cpp",
+    "native/stem_engine/tests/test_ring_buffer_and_ola.cpp",
+    "scripts/audit-coverage.mjs",
+    "src/types/assets.d.ts",
+    "src/types/desktop.d.ts",
+    "tests/analysis-path-registry.test.mjs",
+    "tests/anlz-real-format.test.ts",
+    "tests/anlz-structure-parity.test.ts",
+    "tests/app-render-smoke.test.tsx",
+    "tests/audio-export.test.ts",
+    "tests/auto-cue.test.ts",
+    "tests/bundled-rekordbox-xml.test.ts",
+    "tests/clip-waveform-detail.test.ts",
+    "tests/collapsible-palette.test.ts",
+    "tests/db-reader-keys.test.mjs",
+    "tests/delete-mode.test.ts",
+    "tests/demucs-environment-preflight.test.cjs",
+    "tests/demucs-quality-profile.test.cjs",
+    "tests/drive-remote-bridge.test.ts",
+    "tests/edit-assistant.test.ts",
+    "tests/edit-command-contracts.test.ts",
+    "tests/edit-command-matrix.test.ts",
+    "tests/edit-history.test.ts",
+    "tests/editing-waveform-causality.test.ts",
+    "tests/file-logger.test.mjs",
+    "tests/fixtures/backends/stub_separator.py",
+    "tests/fixtures/onnx/make_tiny_stem_separator.py",
+    "tests/import-simulation.test.ts",
+    "tests/initial-setup-and-benchmarks.test.ts",
+    "tests/large-xml-import.test.ts",
+    "tests/logger-storage-batching.test.ts",
+    "tests/master-db-gate.test.mjs",
+    "tests/midi-exhaustive-matrix.test.ts",
+    "tests/onnx-ep-selection.test.ts",
+    "tests/onnx-fast-separation-live.test.ts",
+    "tests/onnx-fixture-python-ort.test.ts",
+    "tests/onnx-separator-inmemory.test.ts",
+    "tests/palette-drag-drop.test.ts",
+    "tests/part-detection.test.ts",
+    "tests/path-guard.test.mjs",
+    "tests/pioneer-midi.test.ts",
+    "tests/pitch-tempo.test.ts",
+    "tests/project-file.test.ts",
+    "tests/rekordbox-db-env-pipeline.test.ts",
+    "tests/rekordbox-db-import.test.ts",
+    "tests/rekordbox-gate-hardening.test.mjs",
+    "tests/rekordbox-gate-integration.test.mjs",
+    "tests/rekordbox-locate-options.test.mjs",
+    "tests/rekordbox-runtime-smoke.mjs",
+    "tests/rekordbox-track-import-pipeline.test.ts",
+    "tests/remote-flow-visibility.test.ts",
+    "tests/ripple-delete-original-integrity.test.ts",
+    "tests/scnet-separator-live.test.ts",
+    "tests/scnet-separator.test.ts",
+    "tests/scnet-worker.test.ts",
+    "tests/seek-scheduler.test.ts",
+    "tests/settings-store.test.ts",
+    "tests/sha256.test.ts",
+    "tests/stem-asar-unpack.test.ts",
+    "tests/stem-bundle-weights.test.ts",
+    "tests/stem-engine-architecture-switcher.test.ts",
+    "tests/stem-engine-architecture.test.ts",
+    "tests/stem-engine-center-state.test.tsx",
+    "tests/stem-engine-cold-import.test.ts",
+    "tests/stem-engine-ipc-contract.test.ts",
+    "tests/stem-engine-renderer-responsiveness.test.ts",
+    "tests/stem-engine-runnable-selection.test.ts",
+    "tests/stem-engine-runtime-probe.test.ts",
+    "tests/stem-engine-status-latency.test.ts",
+    "tests/stem-engine.test.ts",
+    "tests/stem-input-fingerprint.test.ts",
+    "tests/stem-installer-download.test.cjs",
+    "tests/stem-installer-model-selection.test.cjs",
+    "tests/stem-installer-onnx-honesty.test.cjs",
+    "tests/stem-installer-paths.test.ts",
+    "tests/stem-installer-regression.test.cjs",
+    "tests/stem-isolation-gate-live.test.ts",
+    "tests/stem-isolation-gate.test.ts",
+    "tests/stem-job-service-fail-fast.test.ts",
+    "tests/stem-job-service.test.ts",
+    "tests/stem-live-acapella.test.ts",
+    "tests/stem-negative-unavailable.test.ts",
+    "tests/stem-peak-headroom.test.ts",
+    "tests/stem-preflight-diagnostics.test.ts",
+    "tests/stem-production-fallback-matrix.test.ts",
+    "tests/stem-real-audio.test.cjs",
+    "tests/stem-real-mixed-track.test.ts",
+    "tests/stem-remote-cancel-request-guard.test.ts",
+    "tests/stem-remote-data-flow.test.ts",
+    "tests/stem-remote-flow-modal.test.tsx",
+    "tests/stem-remote-job-service.test.ts",
+    "tests/stem-remote-manifest-python.test.mjs",
+    "tests/stem-remote-manifest.test.ts",
+    "tests/stem-remote-notebook.test.mjs",
+    "tests/stem-remote-setup-config.test.ts",
+    "tests/stem-remote-state-machine.test.ts",
+    "tests/stem-remote-worker-cli.test.mjs",
+    "tests/stem-remote-worker-selftest.test.mjs",
+    "tests/stem-remote-worker-trace.test.ts",
+    "tests/stem-saved-library.test.ts",
+    "tests/stem-separation-backend-contract.test.ts",
+    "tests/stem-separation-bsroformer-live.test.ts",
+    "tests/stem-separation-demucs-cli.test.ts",
+    "tests/stem-separation-engine-gate.test.ts",
+    "tests/stem-separation-profile-fallback.test.ts",
+    "tests/stem-separation-registry.test.ts",
+    "tests/stem-separation-transport-errors.test.ts",
+    "tests/stem-separation-working-copy-speed.test.ts",
+    "tests/stem-top200-batch.test.ts",
+    "tests/stem-top200-convert.test.ts",
+    "tests/stem-top200-worker.test.mjs",
+    "tests/stems-exhaustive-causality.test.ts",
+    "tests/support/editingHarness.ts",
+    "tests/support/permissionProbe.ts",
+    "tests/support/rekordboxDbEnv.mjs",
+    "tests/test_bsroformer_ensemble.py",
+    "tests/test_colab_master_plan.py",
+    "tests/top200_batch_test.py",
+    "tests/track-updates.test.ts",
+    "tests/transport-playhead-driver.test.ts",
+    "tests/ui-v2-three-zone-layout.test.ts",
+    "tests/waveform-canvas-layers.test.ts",
+    "tests/waveform-layer-scheduler.test.ts",
+    "tools/legacy/analysisPath.test.cjs"
+  ],
+  "unmeasuredArtifacts": [
+    "colab/airdox-stem-gate.ipynb",
+    "colab/airdox-stem-remote-worker.ipynb",
+    "colab/airdox-top200-batch.ipynb",
+    "flow-preview.html",
+    "index.html",
+    "native/stem_engine/CMakeLists.txt",
+    "src/index.css",
+    "tools/code_analysis/visualization.html",
+    "tools/code_analysis/visualization_template.html"
+  ],
+  "sourceFileCount": 245,
+  "byExtension": {
+    ".py": {
+      "files": 14,
+      "observedExecutedFiles": 0
+    },
+    ".cjs": {
+      "files": 26,
+      "observedExecutedFiles": 0
+    },
+    ".h": {
+      "files": 8,
+      "observedExecutedFiles": 0
+    },
+    ".cpp": {
+      "files": 3,
+      "observedExecutedFiles": 0
+    },
+    ".ts": {
+      "files": 124,
+      "observedExecutedFiles": 4
+    },
+    ".mjs": {
+      "files": 19,
+      "observedExecutedFiles": 0
+    },
+    ".sh": {
+      "files": 3,
+      "observedExecutedFiles": 0
+    },
+    ".ps1": {
+      "files": 6,
+      "observedExecutedFiles": 0
+    },
+    ".tsx": {
+      "files": 42,
+      "observedExecutedFiles": 0
+    }
+  },
+  "changedDuringCapture": [
+    "electron/main.cjs",
+    "electron/preload.cjs",
+    "src/App.tsx",
+    "src/components/Modals/RecorderModal.tsx",
+    "src/components/Modals/RemoteSetupModal.tsx",
+    "src/components/Modals/Top200Panel.tsx",
+    "src/components/Modals/WorkspaceSettingsModal.tsx",
+    "src/features/recorder/useRecorder.ts",
+    "src/state/settingsStore.ts"
+  ],
+  "coverage": {
+    "lines": null,
+    "statements": null,
+    "branches": null,
+    "functions": null,
+    "reason": "No installed source-map-aware V8-to-Istanbul reporter. File execution observations and physical line counts are NOT coverage. Python/native/browser execution is uninstrumented."
+  },
+  "gate": {
+    "requiredTotalPercent": 90,
+    "requiredCriticalPercent": 100,
+    "satisfied": false,
+    "status": "NOT_ESTABLISHED"
+  },
+  "rawDirectory": "reports/coverage-audit/coverage-raw-1793548271009",
+  "rawFileCount": 5,
+  "results": [
+    {
+      "file": "tests/stem-top200-batch.test.ts",
+      "durationMs": 91041,
+      "exitCode": null,
+      "output": "",
+      "timedOut": true
+    },
+    {
+      "file": "tests/stem-top200-worker.test.mjs",
+      "durationMs": 17187,
+      "exitCode": 0,
+      "output": "completed-job COMPLETED\r\nDurchsatz (inkl. Modellstart und I/O): {'modelId': None, 'workerSucceeded': False, 'audioSeconds': 0, 'workerWallSeconds': 0.001216700009535998, 'audioSecondsPerSecond': None, 'tracksPerHour': None, 'gpuSamples': 0, 'gpuUtilizationMeanPercent': None, 'peakVramMiB': None}\r\npending-job1 GPU failure\r\nDurchsatz (inkl. Modellstart und I/O): {'modelId': None, 'workerSucceeded': True, 'audioSeconds': 0, 'workerWallSeconds': 0.0032398999901488423, 'audioSecondsPerSecond': 0.0, 'tracksPerHour': 1111145.4091009193, 'gpuSamples': 0, 'gpuUtilizationMeanPercent': None, 'peakVramMiB': None}\r\npending-job2 COMPLETED\r\n\n",
+      "timedOut": false
+    },
+    {
+      "file": "tests/stem-remote-manifest.test.ts",
+      "durationMs": 22428,
+      "exitCode": 0,
+      "output": "═══════════════════════════════════════════════════════════════════\n  FERN-JOB-MANIFEST – SCHEMA, IDEMPOTENZ, VOLLSTÄNDIGKEIT         \n═══════════════════════════════════════════════════════════════════\n\n[ TEST ] #1 Manifest bauen: Schema, Id, Zeiten, Idempotenzschlüssel\n  ✓ Manifest 2bf3726f… serialisiert und wieder gelesen\n  ✓ Gemeinsame v1-Fixture wird vom TypeScript-Editor akzeptiert\n\n[ TEST ] #2 Kaputte/fremde Manifeste werden abgelehnt\n  ✓ Schema, Id-Abgleich, Pfad-Ausbruch und JSON-Fehler sind harte Fehler\n\n[ TEST ] #3 Idempotenzschlüssel: gleiche Arbeit ⇒ gleicher Schlüssel (§19)\n  ✓ Schlüssel hängt an Input-Hash, Modell und Profil – nicht an Dateinamen oder Zeit\n\n[ TEST ] #4 „COMPLETED“ ohne alle Stems ist kein Erfolg (§34 K)\n  ✓ fehlende Stems ⇒ REMOTE_OUTPUT_INCOMPLETE mit Klartext-Liste\n\n[ TEST ] #5 Leere Outputs sind kein Erfolg (§34 I/J)\n  ✓ 44-Byte-„WAV“ zählt nicht als Stem; Vollständigkeit wird erzwungen\n\n[ TEST ] #6 Layout bleibt in der Ablage; Ergebnisdokument ist lesbar\n  ✓ Pfade normalisiert, Ergebnisdokument trägt Job-Id und Stem-Liste\n\n═══════════════════════════════════════════════════════════════════\n  ALLE MANIFEST-PRÜFUNGEN BESTANDEN\n═══════════════════════════════════════════════════════════════════\n",
+      "timedOut": false
+    },
+    {
+      "file": "tests/stem-remote-state-machine.test.ts",
+      "durationMs": 23104,
+      "exitCode": 0,
+      "output": "[PASS] Phase 2-10 — State-Machine transitions + messages\n\n=== ALLE STATE-MACHINE-TESTS BESTANDEN ===\n",
+      "timedOut": false
+    }
+  ],
+  "inventory": [
+    {
+      "file": "colab/remote_worker.py",
+      "sha256": "37809671f112a9dc9946f9376855fb2a130924ebe78e21ddf3f02da3f0873dcd",
+      "bytes": 56569,
+      "physicalLines": 1303,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "colab/top200_batch.py",
+      "sha256": "4e2f9f5fd168d1cdb0786e07a42147000b112943ebc54e6ed93e9263512314ee",
+      "bytes": 5788,
+      "physicalLines": 100,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/analysisRegistry.cjs",
+      "sha256": "b65eedbfa030b82d1da9a0a95086b4af6762bdd21146bed77f36200dad340b56",
+      "bytes": 9052,
+      "physicalLines": 255,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/dbReader.cjs",
+      "sha256": "a3990268fe22998418650bdf126ac2524dbd07e72334566981b61bc7576dd91c",
+      "bytes": 26596,
+      "physicalLines": 686,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/demucsRunner.cjs",
+      "sha256": "53fa9a42bebaf7257439a98c5894c4cefa31e9fa39969952c1090ec244223dca",
+      "bytes": 14618,
+      "physicalLines": 346,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/generated/anlzStructure.cjs",
+      "sha256": "604e0115e281a8a72f1debc8a63cd1648b599581250970b2950f7c114cec0dfc",
+      "bytes": 11483,
+      "physicalLines": 334,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/logger.cjs",
+      "sha256": "c4aea492624c3ac5652326639d527d33a94652cea42d68e8a0c3d6a0696b560b",
+      "bytes": 18396,
+      "physicalLines": 551,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/main.cjs",
+      "sha256": "887b070ae8061b17a26ea00fdaa8d87ad5bfc43a9a52472e42fe1f8b40cdd479",
+      "bytes": 37337,
+      "physicalLines": 947,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/masterDbGate.cjs",
+      "sha256": "140a27aeb9b909660999baaeb0eea3d4f2bac72bcdc47771ba9aeefad60f20ef",
+      "bytes": 28716,
+      "physicalLines": 732,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/pathGuard.cjs",
+      "sha256": "2c2c85034ae983f1fe8ff416674d6fc6b5cac8db02542085cff2c0f98d38455e",
+      "bytes": 2170,
+      "physicalLines": 62,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/preload.cjs",
+      "sha256": "c75acc563535f4be64eef279efce686d2dc8e20cf95080f0b721f98586661e16",
+      "bytes": 7232,
+      "physicalLines": 106,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/rekordboxCipherProbe.cjs",
+      "sha256": "4e3f73e51d481a4ac7fe0c782e24139a86f8bcbb67fea43e5e552a4907ab348b",
+      "bytes": 3745,
+      "physicalLines": 90,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/rekordboxRuntimeCheck.cjs",
+      "sha256": "7bfb6173907d5791cd92d080c4fc97d4a1e100bf04ccf687d8a0a10e4166ee37",
+      "bytes": 14447,
+      "physicalLines": 356,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/stemEngineBridge.cjs",
+      "sha256": "ecc20e708a22f7fa4a5ae485f859a9880b7c77e44f2ed0f05540bb68f9927548",
+      "bytes": 24894,
+      "physicalLines": 534,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/stemInstaller.cjs",
+      "sha256": "74df16ae2921b07b5b5b27f769ba2ae06bc1f9c7998663f2ce0e1e9b832eb4f9",
+      "bytes": 17959,
+      "physicalLines": 396,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "electron/stemRuntime.cjs",
+      "sha256": "fd0fb095b880e8f11d581c59191e2e3db7b993e6866399d132bbf1e7ce88ab7e",
+      "bytes": 18213,
+      "physicalLines": 510,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/examples/JuceIntegrationExample.h",
+      "sha256": "6ad555f80ab35e1b634ba43d96791ed51f358882869a6d5e4ab91d871773a36e",
+      "bytes": 4653,
+      "physicalLines": 91,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/AudioRingBuffer.h",
+      "sha256": "b71727dce272605c665bbef63fa902cb9358c8f551336aa14f114594b758540b",
+      "bytes": 9262,
+      "physicalLines": 196,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/HighQualityStemCache.h",
+      "sha256": "eb315d387b5831c6ef5020d2abfbb91c7de050b0abddba97350de39cca7c91af",
+      "bytes": 6051,
+      "physicalLines": 143,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/OverlapAddProcessor.h",
+      "sha256": "05a24b131d268fc54c226f35c43d7bd509123d721c51e372c5213103a57ab634",
+      "bytes": 7958,
+      "physicalLines": 170,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/StemEngine.h",
+      "sha256": "62e5f49d034f1409d562fa21a5c7005a39693f6064edd3dc2def413fba8cd4cc",
+      "bytes": 1175,
+      "physicalLines": 25,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/StemEngineManager.h",
+      "sha256": "55feda836bbc9e0631af0074b4a4b127cc413122b77c2b29912bc798da1b3786",
+      "bytes": 9120,
+      "physicalLines": 187,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/StemInferenceWorker.h",
+      "sha256": "68f7348f4033f3ee23ec8315a400d4096d0c24555e0f5f20a460d70d1e756448",
+      "bytes": 6939,
+      "physicalLines": 145,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/include/stem_engine/StemTypes.h",
+      "sha256": "de81893405cb21565a182f930985f636425474563f57d235040a2d2594dff6b5",
+      "bytes": 5497,
+      "physicalLines": 113,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/src/HighQualityStemCache.cpp",
+      "sha256": "058b77755427787412b5360bee06231db35c972a4bf765efcdcc7818165de8ac",
+      "bytes": 7914,
+      "physicalLines": 182,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/src/StemEngineManager.cpp",
+      "sha256": "3c9583b6159ba3dc403b31f3d6364044c691be3ca54ba9c979892f646adab886",
+      "bytes": 21725,
+      "physicalLines": 436,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "native/stem_engine/src/StemInferenceWorker.cpp",
+      "sha256": "1bcd823494b302d65b8fb47231883861639ca25a60448ce7d832cd5ac8507d31",
+      "bytes": 11663,
+      "physicalLines": 249,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "python/bsroformer_inference.py",
+      "sha256": "1e49291f5bf5ba75ff47bd32adb9556b8571df6d19975e98e79572397a4c66e0",
+      "bytes": 26376,
+      "physicalLines": 612,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "python/install_bsroformer.py",
+      "sha256": "6a1daefc7b2123b8d9d7da925b4f8a507dd8d45a65e44518565c01b7d81b5188",
+      "bytes": 12345,
+      "physicalLines": 289,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/bench-audio-analysis.ts",
+      "sha256": "56ee9e67e7127eca38a25fee5763e8a4dc5cdb0e99a170f3e54903237593ee72",
+      "bytes": 2505,
+      "physicalLines": 66,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/bench-scnet.mjs",
+      "sha256": "637f325bbd980a7bc4866624081c515809f774e1f5d12dbb177905e717a51f2b",
+      "bytes": 1693,
+      "physicalLines": 35,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/bench-stem-cpu.ts",
+      "sha256": "f78a93b1d28d0af5775b2c42f57244e3a4f6ffea6a1c0540b3b343377a1bca2d",
+      "bytes": 3887,
+      "physicalLines": 64,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/bench-waveform.mjs",
+      "sha256": "316b0441697863323708284b48b5b2d98f6b94dc4fe2b4e40602a100a24bc006",
+      "bytes": 6527,
+      "physicalLines": 152,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/build-anlz-structure.mjs",
+      "sha256": "1474cabd2e4a4151e0f2c096685e0ce5f5e9a2e4446e7751407b38e5853c04bc",
+      "bytes": 2682,
+      "physicalLines": 73,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/build-rekordbox-db-env.mjs",
+      "sha256": "b1b11c03479c0046b95d4e72316a4bcf284bf21c12dd2b165fb8a4aa01fa7d9b",
+      "bytes": 2467,
+      "physicalLines": 61,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/build-stem-gate-tarball.mjs",
+      "sha256": "fb1cc837cf380b15f93d88f00b0b1ca5325a5678620c9619f6c2ce249b339d3b",
+      "bytes": 4775,
+      "physicalLines": 105,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/bundle-stem-engine.ts",
+      "sha256": "fb0f813fb209a343a6f72e4d5817dfc1100d50dade35334cd1d398e02db5fa1e",
+      "bytes": 17259,
+      "physicalLines": 379,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/check-bundle-budget.mjs",
+      "sha256": "6b3b926869f73fc764f7aec68e8d9e5199e4b456a7b057f1c925cbdc878f8c4b",
+      "bytes": 3550,
+      "physicalLines": 97,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/electron-builder-hooks.cjs",
+      "sha256": "f95e75cf6badd4938d0a66de11fdc36a4647761d515cc891b022dd421d9ba5e1",
+      "bytes": 11510,
+      "physicalLines": 276,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/md-to-notebook.mjs",
+      "sha256": "79c720de748a35fa6475a404e6b7b8e5ecd9188f87ceb16ff8834567ab1d2117",
+      "bytes": 4784,
+      "physicalLines": 137,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/rebuild-native-sqlcipher.mjs",
+      "sha256": "051e63b382dad00bf5fc91f447425e76eee0651016be0beeedd26dfa444d8ada",
+      "bytes": 6981,
+      "physicalLines": 194,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/rekordbox-gate-doctor.mjs",
+      "sha256": "ef8815219760525a9cf47a306d3cc71d6468174a98d582e0a496b5b3d10b1810",
+      "bytes": 8719,
+      "physicalLines": 230,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/rekordbox-preflight.mjs",
+      "sha256": "5ec0fb13247aca116d2562557243a099792d35ec618a9813167c2fc47e684b66",
+      "bytes": 3082,
+      "physicalLines": 76,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/remote-evidence.mjs",
+      "sha256": "b1cab65e1d05c84dee7645d591ff90741df86c6f7370e7aa7d2c1d6779e0d0ce",
+      "bytes": 3798,
+      "physicalLines": 91,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/run-electron-node.mjs",
+      "sha256": "9905fd587d79c07309a8cda933ff1de038b301354f9f4d6d39451520685ad5b0",
+      "bytes": 2384,
+      "physicalLines": 64,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/run-tests.mjs",
+      "sha256": "d91d527ad4f3b2fa8f963bc8237b288ca3a889a0868dbc208e295e030b2c8db8",
+      "bytes": 23051,
+      "physicalLines": 513,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/setup-bsroformer-model.sh",
+      "sha256": "5f779cade7b11817dd03af9c4a0d259f06f5abec95edd321062b220f5f423e71",
+      "bytes": 10396,
+      "physicalLines": 243,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/setup-stem-model.ps1",
+      "sha256": "2850175b8a79f53bc1bae092b6ce2da36842cd373ee5ab087d49449577d3a871",
+      "bytes": 1231,
+      "physicalLines": 27,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/setup-stem-model.sh",
+      "sha256": "cba13cc73b9b53dade1f487582b454acf36eaebbc26fb3009c165a4542db1dae",
+      "bytes": 817,
+      "physicalLines": 18,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/setup-stem-runtime.mjs",
+      "sha256": "7fd603d0f6dc2b8efbe809d2f191da83ba9d1209c5a7b542a9946ed19f7b4571",
+      "bytes": 14016,
+      "physicalLines": 316,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/stem-onnx-doctor.mjs",
+      "sha256": "e3180d296bd536bc996220200a365cc2dbb1818422055859182a9e8be8c94f5e",
+      "bytes": 11780,
+      "physicalLines": 236,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/stem-remote-worker.ts",
+      "sha256": "21ab94ab85daff311bcb97e3edf7906c425d4e9fe671673302bd1c0cba86d4cd",
+      "bytes": 26220,
+      "physicalLines": 665,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/stems-diagnose.mjs",
+      "sha256": "c42bb367bd6b734d7e6e036dc7750f5e42e694c5cc3721ee412e63694b860df8",
+      "bytes": 499,
+      "physicalLines": 13,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/stems-diagnose.ts",
+      "sha256": "4898a0824229e2605fba2f9b255b1aa98e3b1014afe2a87f5f9f3eff3933d6eb",
+      "bytes": 4497,
+      "physicalLines": 110,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/stems-live-preflight.mjs",
+      "sha256": "6df82613ce53304e0eb813d6dacb78d903265f3f09cfda2b870467c59c13294f",
+      "bytes": 5123,
+      "physicalLines": 104,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/top200-preflight.mjs",
+      "sha256": "47a6984161620e51daa27af2af1652ea17538e45a85b2fb29dfd62dac4902336",
+      "bytes": 1749,
+      "physicalLines": 23,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-packaged-scnet.cjs",
+      "sha256": "63e3f64f21e3d461c63a7af61a0570491008008f90e1b9e12c0d112937caf3ef",
+      "bytes": 3686,
+      "physicalLines": 67,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-stem-library-desktop.cjs",
+      "sha256": "cb56abcb6a9d6fe43568ba98ee018cfb4453d47e4b90477036e7d03fe0f1aa77",
+      "bytes": 4449,
+      "physicalLines": 70,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-stem-model-matrix.ts",
+      "sha256": "6181f5d7fca62d12a6ebf09190f3d18a174af8f87ebeaccfa896b239f9de1275",
+      "bytes": 6018,
+      "physicalLines": 90,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-stems-desktop.cjs",
+      "sha256": "28a312628f76ff806422c8f82f5aa3b970ef820c23257ac526685a18e8bebeb7",
+      "bytes": 11120,
+      "physicalLines": 172,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-stems-results.ts",
+      "sha256": "6285461246e5489f0352183d2f7034284d4deccc34f45fe5d9d9f1a2e54b22b4",
+      "bytes": 2005,
+      "physicalLines": 32,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "scripts/verify-stems-workflow.ts",
+      "sha256": "47ddcd9a336c0f94c7eea8fbee2455a36883b4642de0050f55fa1e4a9b4e64ba",
+      "bytes": 4455,
+      "physicalLines": 62,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "server.ts",
+      "sha256": "f17264e598c0f162baa99380bfa0699ae6b3e0b462416069ed8f20497ca25acb",
+      "bytes": 42807,
+      "physicalLines": 1012,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/App.tsx",
+      "sha256": "91005c6cc1c3e01d2ce2daed28f81559663bf13cc2dc16929691f9a7a3b70a09",
+      "bytes": 154033,
+      "physicalLines": 3639,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/audioEngine.ts",
+      "sha256": "b390c39a77305284f89d6f1841c17ab7a21ca109b3778ed2b99e845361a75a0e",
+      "bytes": 21408,
+      "physicalLines": 632,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/audioExporter.ts",
+      "sha256": "88c649f1852fa9beb100fe4d7f4f6253c6b6c956b2ec14917c79af172630871b",
+      "bytes": 4447,
+      "physicalLines": 121,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/editAssistant.ts",
+      "sha256": "ed9134d447c9c23b625fc214fcc4c8a92a0f6456a9441dbdb90d48a8f9d1ea8c",
+      "bytes": 17010,
+      "physicalLines": 541,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/editHistory.ts",
+      "sha256": "184ddc999caf12f35f75caff2f294baf322add9193ac891115027608575edb32",
+      "bytes": 2735,
+      "physicalLines": 74,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/editHistoryState.ts",
+      "sha256": "b23738a5dc2212264005d4caaad768056c74d8c6ea21260b0c22fb476017b6eb",
+      "bytes": 2126,
+      "physicalLines": 64,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/editingEngine.ts",
+      "sha256": "e7d5e86368e5b3296c8587670397065df083b8b1aa3550be510bfbf3354b44da",
+      "bytes": 47911,
+      "physicalLines": 1257,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/mixAnalysis.ts",
+      "sha256": "3f1676cbfebe23a8d5aedeccfadf119bc03dfcca0f93e3c63960bf3215fa0279",
+      "bytes": 22255,
+      "physicalLines": 591,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/phraseDetection.ts",
+      "sha256": "36e0ff057527434d8684dbb0d1b79496d47375b5b321f69209d10145a1cc8aa3",
+      "bytes": 8988,
+      "physicalLines": 278,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/pitchTempoEngine.ts",
+      "sha256": "3e58886c71532bc5c09b039bf5ac84871b2ce19cb3d1d66814ecec9d86b9f701",
+      "bytes": 13373,
+      "physicalLines": 434,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/recordingProcessor.ts",
+      "sha256": "271315995c6da4d030e01a0c326f4e5ace93ab342ec013fb75e5e49a0eb6250d",
+      "bytes": 5988,
+      "physicalLines": 156,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemArchitectures.ts",
+      "sha256": "eee1ff1106bf395ccecb40171ebb114bf506bdb7bb5820359809824312d61de8",
+      "bytes": 19836,
+      "physicalLines": 467,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemEngine.ts",
+      "sha256": "b25c377870d5226677611809921b2f43c667ebbfe540fe204a90a32d4cb27fab",
+      "bytes": 62985,
+      "physicalLines": 1493,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemEngineInstaller.ts",
+      "sha256": "25a31645529d6cba2b45446ad75c1ee7e0831e49287af1f244aaaa053a693815",
+      "bytes": 4200,
+      "physicalLines": 119,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemInput.ts",
+      "sha256": "d09a6d7c643890f56699c54e91cbf0278ce13b7207618550334eaabdef1aa9e8",
+      "bytes": 4051,
+      "physicalLines": 104,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemPlayback.ts",
+      "sha256": "f975f7b8ea19e92f4f3805b15e2ce0189ddc180ffef8d61805f68efbf9531694",
+      "bytes": 2206,
+      "physicalLines": 75,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemPreflight.ts",
+      "sha256": "c24d21634b916ba1569af1f6875bcf371c982bbbf1bf1400f6b711b5339ae3b8",
+      "bytes": 1044,
+      "physicalLines": 23,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/audio/stemResultGuard.ts",
+      "sha256": "bc7abe6a47a7ca5737b94a9ce519c6ee4bf4fbf9bb62451fc3c368c4d0a60cab",
+      "bytes": 449,
+      "physicalLines": 16,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/bridge/DriveRemoteBridge.ts",
+      "sha256": "2367848dff470042cf642f6d2317ffeca424a9deab59f86fc35244413f7dd90c",
+      "bytes": 15153,
+      "physicalLines": 467,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/BrowserMultiTrackBar.tsx",
+      "sha256": "d4fb760b7ee9dbd1001ab5b31c039e1130bc803a8c001ec19b02b3c5805fca9e",
+      "bytes": 17853,
+      "physicalLines": 387,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/ChatbotPalette.tsx",
+      "sha256": "215763da7018d6fdb02e0561965273648912b87039be6fede2797b19b85f7617",
+      "bytes": 23266,
+      "physicalLines": 583,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/ClipDeckView.tsx",
+      "sha256": "5060b03eb326ca95e2bfc71f41059e69fc850159f340760b137bd9d29235cf72",
+      "bytes": 24693,
+      "physicalLines": 619,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/ClipWaveform.tsx",
+      "sha256": "522e9a73a0fb1d8504d680b29c5584348126707c76046cf8fdeedeba4a765ae5",
+      "bytes": 8809,
+      "physicalLines": 250,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/DeckStemsControl.tsx",
+      "sha256": "08ba77368143a7003c723770c943e01e90ef6569d1688a30f5c8537ddffabfe5",
+      "bytes": 12965,
+      "physicalLines": 307,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/DetailWaveform.tsx",
+      "sha256": "a827780d4b7ac147faa5b5956140267a00a39e08b8084f3728ce9f79dd087948",
+      "bytes": 57821,
+      "physicalLines": 1435,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/DirectorySelector.tsx",
+      "sha256": "1ac978d62f9e8eafbb40ae25704ea22e22ff0cb666b529e5d6f89473388ef106",
+      "bytes": 5305,
+      "physicalLines": 156,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/ErrorBoundary.tsx",
+      "sha256": "b2466ead17d2e8a73efacb2995d2267e1825bc52108d2809779244b157f4b6e1",
+      "bytes": 7930,
+      "physicalLines": 199,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/MenuBar.tsx",
+      "sha256": "c17966f3b9b806df94ec5db16f2f7892de1b9c6f86afc388df90b7a45670cc6c",
+      "bytes": 20812,
+      "physicalLines": 401,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/ClearHistoryModal.tsx",
+      "sha256": "c37c2f85de8f1c9addb66527b62c4f0c029e520dba59bd4ad13bc372bcfee0cb",
+      "bytes": 6373,
+      "physicalLines": 156,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/DatabaseExtractionModal.tsx",
+      "sha256": "e51555612b3617adb459f4eaf54007c3ed25f1cca125be4da9242dbdb486932d",
+      "bytes": 35893,
+      "physicalLines": 736,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/DeleteModeModal.tsx",
+      "sha256": "b6aeefd6b934768e336b7aa3da576cdea9e3f644f55910f9ba3e232482114996",
+      "bytes": 4388,
+      "physicalLines": 103,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/EditAssistantModal.tsx",
+      "sha256": "a56f335389e3b80dbfd9a5c537bc7c6b24b98cdfc66ec4404364ecb227143bcd",
+      "bytes": 10177,
+      "physicalLines": 234,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/ExportModal.tsx",
+      "sha256": "623591f9ebf37d346532506ddd0433cd937945fad4ab4cc987fe25010741ebce",
+      "bytes": 19053,
+      "physicalLines": 461,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/InitialSetupModal.tsx",
+      "sha256": "57d2a40489445b5f990a7426535435ea3a3f0ab8cf63b9f657e62810de5af135",
+      "bytes": 17690,
+      "physicalLines": 387,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/MidiControllerModal.tsx",
+      "sha256": "e1516a3cb36f47e8cf84af521d91e420a9f9b4197e80c2339b67e551a5808636",
+      "bytes": 13003,
+      "physicalLines": 287,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/MultiLayer3DVisualizer.tsx",
+      "sha256": "4a5389f870a0afde0ae3011417f292a2bc2659ec31760bd4770fda098de52d08",
+      "bytes": 6627,
+      "physicalLines": 198,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/MultiLayerRenderInspector.tsx",
+      "sha256": "3af37eec1c86e1eaad2ead78437dd822311a45e45f6c9882aac01cc0168bd800",
+      "bytes": 19410,
+      "physicalLines": 434,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/OperationFeedbackModal.tsx",
+      "sha256": "503a27345608144c322b098af2422868018d48dcdf1832c3e3f020d2f8faf4da",
+      "bytes": 6642,
+      "physicalLines": 172,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/ProjectInfoModal.tsx",
+      "sha256": "06c244e7121039934dce0cb7144095b76db2d8cf0ceb0f4f31a5c443522d71ca",
+      "bytes": 6431,
+      "physicalLines": 137,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/RecorderModal.tsx",
+      "sha256": "424aee98f8c5ff0b4dc9458e71074785c1bafe9accab88dad90a17e9cb81f0d4",
+      "bytes": 15814,
+      "physicalLines": 245,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/RekordboxXmlImportModal.tsx",
+      "sha256": "55733b6966fba6c92db432ffc8e0687306b594be3a3ee4f9a6b962a1e3f44f87",
+      "bytes": 30167,
+      "physicalLines": 668,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/RemoteFlowModal.tsx",
+      "sha256": "049e29831ecf09b49b36edfa36d8fdf40da6761503abfdf5f6c5422c38fcfcdf",
+      "bytes": 54581,
+      "physicalLines": 1044,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/RemoteSetupModal.tsx",
+      "sha256": "0a512ffaa82c8e8b9fba62947187baa7c1533c3ebda3b407e6fe671ae9c7c38d",
+      "bytes": 14822,
+      "physicalLines": 273,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/StemModelInstallModal.tsx",
+      "sha256": "546dc21a79ec94cc9c6d533fb733b0a122d6153f2a58e13e1fec57d529dc8927",
+      "bytes": 11692,
+      "physicalLines": 248,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/StemQualityWarningModal.tsx",
+      "sha256": "b3877259067f2f557a9b001bebeb2497f7ed652b892b62613847a3f0f821d99f",
+      "bytes": 12905,
+      "physicalLines": 251,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/SystemLogModal.tsx",
+      "sha256": "81f331df55b728d7669f032dc53adfcc96577df5dc660e878d26d94c5f3be18e",
+      "bytes": 13880,
+      "physicalLines": 351,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/Top200Panel.tsx",
+      "sha256": "c5c9c74705bc136dedf540951d36d735e1a5432e2e03146e7e13b7ca7802801b",
+      "bytes": 4294,
+      "physicalLines": 50,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/WorkspaceSettingsModal.tsx",
+      "sha256": "27cbb980a776b42440f1be3663a1362ecf7ddc85f5a0dd54f03dc32521a30b20",
+      "bytes": 33344,
+      "physicalLines": 658,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Modals/lazyModals.ts",
+      "sha256": "8a0dfea305c94f29c3394742883d9722d9e45c0a8edb198c4674bae36b52ed00",
+      "bytes": 2696,
+      "physicalLines": 36,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/PalettePanel.tsx",
+      "sha256": "10227efc015a3aa9dc021273b86bda023725397deaca68710882deb10b3e7f21",
+      "bytes": 10816,
+      "physicalLines": 262,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/Tooltip.tsx",
+      "sha256": "174973f174a92d2af0126df224d27aaa0a76e0d0cb2a25fca4eb840acb778c52",
+      "bytes": 4503,
+      "physicalLines": 124,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/TrackHeader.tsx",
+      "sha256": "acfd4f7bd7d04f6e32b0332cdb52acedb77733fbb68ecf61660de41070b75174",
+      "bytes": 8896,
+      "physicalLines": 200,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/TrackOverview.tsx",
+      "sha256": "fd673cd948267e85a0be2f1818164bfb431bf1702776b6ab5276cd5baa9d8d2d",
+      "bytes": 7015,
+      "physicalLines": 227,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/StemCenter.tsx",
+      "sha256": "2aab5f729a43321381d80f67ad4ddf2e52cded2b5ceffcc5079a7d018912daa2",
+      "bytes": 21279,
+      "physicalLines": 463,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/StemModelPicker.tsx",
+      "sha256": "7e7b99461e1b265c7dad619bb148d1dc13a3edd1a515f37f697830f927b3477f",
+      "bytes": 6943,
+      "physicalLines": 166,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/TransientStatusToast.tsx",
+      "sha256": "6f008806ba73f061f66d658d17d237b1a5763a3e083816bff5632e999f051d83",
+      "bytes": 4025,
+      "physicalLines": 112,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/Zone1TopBar.tsx",
+      "sha256": "19b1eda24d086e6df5f941bfb21e5f22fd28b1256c2d1d0cfe173b2be038eb7a",
+      "bytes": 12047,
+      "physicalLines": 297,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/Zone1Transport.tsx",
+      "sha256": "dd234f875e5ce2173228ba9e5666a08cd16d6c319f8ce06e51ca4e97ffeb3875",
+      "bytes": 7646,
+      "physicalLines": 208,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/components/zones/Zone3Footer.tsx",
+      "sha256": "accc3eba70386b5e0de9f3b1477701aafac069d9489b2f639c8e70b3716fd744",
+      "bytes": 17178,
+      "physicalLines": 401,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/import/useTrackImport.ts",
+      "sha256": "29007b05f89e204f44d2af731fc3b0d8bbc286e79e24a5ea30e77f0facae6022",
+      "bytes": 32682,
+      "physicalLines": 767,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/project/projectModel.ts",
+      "sha256": "2be15a4e16cc8002e4bd670fe2be34f7e2588cd36b70faaabdb7d3921d7826b6",
+      "bytes": 10700,
+      "physicalLines": 303,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/project/useProjectFiles.ts",
+      "sha256": "eaa9a104c366634ce3d84916d5122618841e97844478c5cd1069f1253f511621",
+      "bytes": 22058,
+      "physicalLines": 551,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/recorder/useRecorder.ts",
+      "sha256": "80c58497a08c165732352559b23e0f6a157d67b5ce33f21b0254acd7bb26be05",
+      "bytes": 14721,
+      "physicalLines": 355,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/transport/playheadDriver.ts",
+      "sha256": "22f861204f6875235bf672707e81dddf11737b2e5bca0089cfc2d750dd0bfa26",
+      "bytes": 4326,
+      "physicalLines": 126,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/transport/seekScheduler.ts",
+      "sha256": "14be42f338cf70b9df480fd453e48deb5e3d5d7eca7deae5a4eea4a93d006329",
+      "bytes": 6162,
+      "physicalLines": 172,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/transport/useMidiBridge.ts",
+      "sha256": "c74f1893fedf67d3e9c16b5645feede5cedd2ad821bce1b132812a254641fa29",
+      "bytes": 3286,
+      "physicalLines": 108,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/features/transport/useTransportControls.ts",
+      "sha256": "9fd2c1692b2efbcb239c85a2ab426d7ffa899ee4ab2c5e77fa2e16b368fcac64",
+      "bytes": 10611,
+      "physicalLines": 305,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/flowPreview.tsx",
+      "sha256": "101b70b58d8bac38e3a97f80cd8dfe649ede87b0edda1738b3ca3242d05dfc0e",
+      "bytes": 4829,
+      "physicalLines": 112,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/flowPreviewScenarios.ts",
+      "sha256": "4b753f30be6e7037a6af80680c40e2944c3d46b28dd9b0e6c172fc44966061e0",
+      "bytes": 12025,
+      "physicalLines": 322,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/hooks/useEditAssistant.ts",
+      "sha256": "72b7a51617d19b4baaf2a02aad5324a4d48fa818b1db7c4b0bd65112b792fd4a",
+      "bytes": 2349,
+      "physicalLines": 93,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/hooks/useEditHistory.ts",
+      "sha256": "633d4735e11271e197fdc8533df0310cd3403cc9ceccd2ea8004c2af62856ce5",
+      "bytes": 1823,
+      "physicalLines": 49,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/main.tsx",
+      "sha256": "e65d3da3b962712255c7cfa07bca3fa11ddefa915cef67cae2069ebd2ed61839",
+      "bytes": 338,
+      "physicalLines": 14,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/midi/midiManager.ts",
+      "sha256": "be091c276593bc207179599299abaf768dfaca456fd1bc00a5355ec1619dddab",
+      "bytes": 10274,
+      "physicalLines": 336,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/midi/pioneerMappings.ts",
+      "sha256": "8f18b2ffee43b172801199369f5baf314282e7d189c42c89ff4751b81c290fcf",
+      "bytes": 6164,
+      "physicalLines": 205,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/anlzParser.ts",
+      "sha256": "fcb4035260d44e8e2972c1a8e83bce9e3773a97658003c2c199559e0277fabda",
+      "bytes": 23057,
+      "physicalLines": 654,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/anlzStructure.ts",
+      "sha256": "0bc15435024afc9b4b73ecd8911f314905fee31af2dc9d5041fbf5146a252510",
+      "bytes": 16522,
+      "physicalLines": 483,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/bundledCollection.ts",
+      "sha256": "bc72339ff23a9322c333af7b5a8bc6be8bc9dd4802717bb3e7f31fd42af38c7c",
+      "bytes": 194,
+      "physicalLines": 5,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/databaseExtractor.ts",
+      "sha256": "715363513ca8df47c8c331fcc2a8386f5a634b75472e8d52344a22dd4ca8c6fd",
+      "bytes": 13209,
+      "physicalLines": 370,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/dbParser.ts",
+      "sha256": "87e0808155244d88f24ce32643c738e4af6d07bd2b30e26db187387518e296f2",
+      "bytes": 12272,
+      "physicalLines": 355,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/projectFile.ts",
+      "sha256": "b10dc7227beb10ffa2529493c3da631932f01d05fa5bf5fa9efff1d17d01f94f",
+      "bytes": 13306,
+      "physicalLines": 397,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/testDatasets.ts",
+      "sha256": "19f80a9dcdd45695d1fff2e069ffd9ef9b5e7a415fd97d52a6409a1d0a4c7b58",
+      "bytes": 27788,
+      "physicalLines": 755,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/rekordbox/xmlParser.ts",
+      "sha256": "b3e314f0d541c0a9b00591070ea0c1488a471169763b7a2f1c7fde53f14c5eea",
+      "bytes": 20238,
+      "physicalLines": 609,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/state/StemRemoteStateMachine.ts",
+      "sha256": "a5ddd159fb16d777d53f6939ad672d29503c67629bc0972b5b6ad8758748d8e9",
+      "bytes": 12290,
+      "physicalLines": 312,
+      "observedExecutedByV8": true
+    },
+    {
+      "file": "src/state/settingsStore.ts",
+      "sha256": "10c4ad5e56310d9000f6c52409a86e028de8ba46f0bf079840ac3fcad264f5e5",
+      "bytes": 7625,
+      "physicalLines": 205,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/state/trackUpdates.ts",
+      "sha256": "947ea0293053e500c2b1dc27ae5f0131753331ba1698128ec588ccd9bd8cb827",
+      "bytes": 503,
+      "physicalLines": 18,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/state/transportStore.ts",
+      "sha256": "24a8343dc3fc647d57dbbf996bd3b284f507e00dafebf74d786a90a8b1d305b9",
+      "bytes": 5477,
+      "physicalLines": 175,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/availabilityCache.ts",
+      "sha256": "8ab71838c2ac3348e958ee4ca304e3a5cc0d5ec05e6aeaf9e589e1c9da82ff17",
+      "bytes": 4377,
+      "physicalLines": 116,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/htDemucsSeparator.ts",
+      "sha256": "a5c4e4db1f6aa969ded39047a0a0dc383bfbb8a82dee496602718d5bdf3d4c4c",
+      "bytes": 6273,
+      "physicalLines": 160,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/onnxSeparator.ts",
+      "sha256": "a2a245685dc63835f88e94ed726c365d62a4930349b177c13a5b4f5d8178d009",
+      "bytes": 36685,
+      "physicalLines": 845,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/pipelineDoubleSeparator.ts",
+      "sha256": "be74276f1d2e36bcc3edad9a4be45feb2b6f5ac79f4cc1eabc20b5952861d014",
+      "bytes": 8613,
+      "physicalLines": 200,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/processTransport.ts",
+      "sha256": "63adc8180f263e28eb9f6c2c7406fb6ee5e8ef2403ec664bed6e31cff8f1743d",
+      "bytes": 11954,
+      "physicalLines": 317,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/roformerSeparator.ts",
+      "sha256": "eb4a70b37a0fffd689b1b10a6044c2b8fcca1dc0deccefdfba9b8502522c0a50",
+      "bytes": 17404,
+      "physicalLines": 423,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/runtimeProbe.ts",
+      "sha256": "b5c7cad7de6b6b79c3ddc7041b3ccbbda103041a09fefbe61226c3e859bdfa03",
+      "bytes": 23401,
+      "physicalLines": 593,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/scnetSeparator.ts",
+      "sha256": "e319267fba48e4bead5445596c5f2f144d9fd763086aee99dbc4e4d6d581d84f",
+      "bytes": 5553,
+      "physicalLines": 114,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/scnetWorker.ts",
+      "sha256": "f3d83fdf9d51c71ee86d00ea3d979a3b563a8b4da3b5aacb7fe57d715f84c8b5",
+      "bytes": 4397,
+      "physicalLines": 92,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/backends/types.ts",
+      "sha256": "b4d80d768a6d64783c08b9882ecd2855117c472f52dd89ed77ab9921c7771b11",
+      "bytes": 5767,
+      "physicalLines": 161,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/chunkProcessor.ts",
+      "sha256": "3759892552a573282e79e2578f3dee3a8213fc94a2a4808b591f12489cdb2b2e",
+      "bytes": 7429,
+      "physicalLines": 214,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/dsp.ts",
+      "sha256": "883f97d5bf8e296a323871face2cb8d4cc71ff96e537264da87664b3a08e0a3d",
+      "bytes": 7768,
+      "physicalLines": 230,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/errors.ts",
+      "sha256": "4616be7b1009f745a8a648d8ea108be6b198f4098be12aa9925f9dfc2c695fd7",
+      "bytes": 3096,
+      "physicalLines": 78,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/goldStandard.ts",
+      "sha256": "65cce848b75bfae79346fa8e94f707b378acbeec10d6dc72613efedd7672964c",
+      "bytes": 24404,
+      "physicalLines": 528,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/goldStandardVariants.ts",
+      "sha256": "578aa24fa16304a711d1af793d54a165778f312d6b5bbb253067fed4617ba0e4",
+      "bytes": 5916,
+      "physicalLines": 162,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/metrics.ts",
+      "sha256": "2178602e3a35c4956d85e851b239d8c90ca10aca1734131569350451cc1b8372",
+      "bytes": 17276,
+      "physicalLines": 444,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/mixEffects.ts",
+      "sha256": "06df35c61901a01715149c87dc66b98c55f0cd6a68da65beb155620fac210a41",
+      "bytes": 10588,
+      "physicalLines": 280,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/modelManager.ts",
+      "sha256": "8e47bf1191aff1f61c27a714ed7f78ccef863cfef3cfb06ba438b822186923cc",
+      "bytes": 17355,
+      "physicalLines": 453,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/modelRegistry.ts",
+      "sha256": "0389dea9b1d1dfcde1021de3c002b2375a0f8ba8932b68fc83675394572475e0",
+      "bytes": 14034,
+      "physicalLines": 299,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/nodeBridge.ts",
+      "sha256": "66faa6c4a9c0bf2b9364f82ee0f85335d7ad72ad44d1756aa45a245fb3cc9b98",
+      "bytes": 10347,
+      "physicalLines": 276,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/preprocessor.ts",
+      "sha256": "061759a15a42a5eeab7b297ca36d34aeed8d4adc1bab116aa89d81266489b890",
+      "bytes": 9618,
+      "physicalLines": 254,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/qualityGate.ts",
+      "sha256": "917603cd9cede458be51b3da9d26b610813d69b0202ed8331e0f638f5e699cbc",
+      "bytes": 10895,
+      "physicalLines": 268,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/qualityValidator.ts",
+      "sha256": "f72e4a68955ebcfb19ed36648aa7cc0fe62d63e5f1982e99e7e4729415d9c1a0",
+      "bytes": 14838,
+      "physicalLines": 348,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/reconstructor.ts",
+      "sha256": "377af15e36b8dbb8576be2823db14038d1c99cad8f20220e17b7a3d9880505b1",
+      "bytes": 13999,
+      "physicalLines": 365,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/dataFlow.ts",
+      "sha256": "04cba8520397489bcccbc77067648a1f1d457669033d0144d2e333ea2dab7471",
+      "bytes": 25804,
+      "physicalLines": 647,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/diagnostics.ts",
+      "sha256": "e1fb2c5e1b640910e8e08b8c129760aa392479cb9264942842d1e5d79a9b385f",
+      "bytes": 1785,
+      "physicalLines": 31,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/layout.ts",
+      "sha256": "5deefec916148c7dca2eecf6ce0c081d289a9fbb29d49541b0fe0e3c69e0b986",
+      "bytes": 4155,
+      "physicalLines": 101,
+      "observedExecutedByV8": true
+    },
+    {
+      "file": "src/stems/remote/manifest.ts",
+      "sha256": "cc74b58b67b67647a8d2b1011d184315e591e2616c288c645875ccc634c518b0",
+      "bytes": 9743,
+      "physicalLines": 274,
+      "observedExecutedByV8": true
+    },
+    {
+      "file": "src/stems/remote/remoteCancelRequestGuard.ts",
+      "sha256": "9bfa9edca5cfc9f46a431c7dd7d491c0d97288f828391d08b8cbf0a3aab5ba03",
+      "bytes": 2238,
+      "physicalLines": 67,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/remoteStemJobService.ts",
+      "sha256": "b2217560d6c0aac0c57805a8facf5e53b7314f67ee0e7f9d4980cac165520548",
+      "bytes": 80801,
+      "physicalLines": 1837,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/settings.ts",
+      "sha256": "135f61b36161fa49d4b6b9997afd158ec702e22bb4906aa60178b03a4a55c856",
+      "bytes": 3713,
+      "physicalLines": 96,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/top200Batch.ts",
+      "sha256": "28c2a153e2b283ee57faffce40047f3be9d516c6d45f6ecc27d631b6c0405cc9",
+      "bytes": 7664,
+      "physicalLines": 152,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/transport.ts",
+      "sha256": "87bef14e87286a9e33a976fc804473a0abb5aeeaca9e5156645c4a7a72f5ebdf",
+      "bytes": 14127,
+      "physicalLines": 375,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/remote/types.ts",
+      "sha256": "27e06866c4770f9b67ea880d30ec47098be9fd0701176367ffed62cc647c1b75",
+      "bytes": 9551,
+      "physicalLines": 248,
+      "observedExecutedByV8": true
+    },
+    {
+      "file": "src/stems/runtime/checkpointIntegrity.ts",
+      "sha256": "6a020d937f72c73a7082cbca35ebb3942420d0974505c7b0bde0a9a2d47598ea",
+      "bytes": 5324,
+      "physicalLines": 168,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/diagnostics.ts",
+      "sha256": "da2941e652a5bc6da3988be528a4613500f557080a264f6a37ca8d54fc4bfbdb",
+      "bytes": 9910,
+      "physicalLines": 319,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/errors.ts",
+      "sha256": "ec2f339c05f5005f40a96d340e4f32c7e71b28932adf7c8006432e78f876ad96",
+      "bytes": 1276,
+      "physicalLines": 52,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/modelRegistry.ts",
+      "sha256": "f5c179df0587d84d2c63cd7563a2a22fdf665b721f8382fdbef2660a75041461",
+      "bytes": 9890,
+      "physicalLines": 311,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/pathResolver.ts",
+      "sha256": "c533909543f76a65a5b560bac7114f19aa494fdb6eaa08b93107e1fdbbcda519",
+      "bytes": 12335,
+      "physicalLines": 374,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/preflight.ts",
+      "sha256": "f87a9b9046dfdf31235bf102c6d345c27f3af4807660fb152a136e3edafd9079",
+      "bytes": 11608,
+      "physicalLines": 275,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/pythonRuntime.ts",
+      "sha256": "a0064306e1ba5d137a6d91dea9e3b3d331d124eef2d0b66938776463a0460f27",
+      "bytes": 6099,
+      "physicalLines": 209,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtime/types.ts",
+      "sha256": "68c4f4267c8f74c110dc9a9a7f930adf5debe1b0619cd20ff2441f9656bfb1f2",
+      "bytes": 2017,
+      "physicalLines": 73,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/runtimeCaches.ts",
+      "sha256": "6a38f3a16e94f81f01730ec4b0cf10cfc85ce7ad38b7a307ec698146bf3c1d9c",
+      "bytes": 1160,
+      "physicalLines": 26,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/savedStemLibrary.ts",
+      "sha256": "990314cd7319a5fb744a5e17aae1b77b2f3c51f722741ccd54855ed8b1036ac7",
+      "bytes": 5741,
+      "physicalLines": 106,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/separationCache.ts",
+      "sha256": "4a049540f2f8633a5e78900981d4c86daeeed244b6228dae8a100562d86c04f0",
+      "bytes": 7374,
+      "physicalLines": 187,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/separationJob.ts",
+      "sha256": "8b6d7e53e4887e2668ae5b7a227fbf360af113c7e693e0abd1d3fe798c6c4a9f",
+      "bytes": 6449,
+      "physicalLines": 185,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/stemGroupMapping.ts",
+      "sha256": "75f8d11ba34856ce3637d54b51e51588ef4701c059af7fb10f4c6b42f850d864",
+      "bytes": 2765,
+      "physicalLines": 68,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/stemIsolationGate.ts",
+      "sha256": "75480477a3e2151da592e2b69b620b451196fdb62b29cc4be4a5b181f10329a6",
+      "bytes": 21828,
+      "physicalLines": 495,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/stemJobService.ts",
+      "sha256": "c9ee47537bb59047b5694e6750e4af8bff343257513c7c9c2228efd52981d5ec",
+      "bytes": 45676,
+      "physicalLines": 1073,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/stemRegistry.ts",
+      "sha256": "990d307b46b78195f0763053497db1811bfc4c530e4ec1dadee84bd6de74c510",
+      "bytes": 5277,
+      "physicalLines": 149,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/stemSeparationEngine.ts",
+      "sha256": "4915fd36f6e6dce937be0d8e2152be20ee0537ac4f13518dc366a3aa2647e82b",
+      "bytes": 44476,
+      "physicalLines": 940,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/testAudioGenerator.ts",
+      "sha256": "bd4cf2edaaf0cdb9e80ceb8bcca845ed9bbcfea28e992feaf9c662b82927e813",
+      "bytes": 11003,
+      "physicalLines": 271,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/transportTypes.ts",
+      "sha256": "f06b02f50dc4eeab216543e79a4eeec66f1e0ebee411e6a06b15be4c25abe1fd",
+      "bytes": 17557,
+      "physicalLines": 439,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/types.ts",
+      "sha256": "a5f40b0e6203ae80c75c9c869492acb8ff6fe6afcb224c9bcbcf8d070ea1a0b9",
+      "bytes": 12261,
+      "physicalLines": 388,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/stems/wavIo.ts",
+      "sha256": "b9b195e863cb123055d824f3315eb134aaf3047293dfd05092dc4c7695504a27",
+      "bytes": 21682,
+      "physicalLines": 570,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/types/chatbot.ts",
+      "sha256": "f114897fcb88e06ac712bed1a40f186b4ee5aef09d2b05d36d9f6afa8d25376a",
+      "bytes": 1265,
+      "physicalLines": 64,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/types/editAssistant.ts",
+      "sha256": "9fbd3ba8791c67685f867c800854c48168aa1aa74daa39c6a22fb52ad390be3d",
+      "bytes": 2003,
+      "physicalLines": 83,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/types/rekordbox.ts",
+      "sha256": "a89aadb2c8e0cc0646e21fc14b59ed799cef8a5bb5b3d8fc503039c728f9bf8c",
+      "bytes": 10795,
+      "physicalLines": 356,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/types/selection.ts",
+      "sha256": "9d5166ef9be840935b994ee59e9bb1bb8465bb016d9da007dd2645ff6c0c0c77",
+      "bytes": 267,
+      "physicalLines": 11,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/ui/theme.ts",
+      "sha256": "dbd388b69d12e7d111bf07d2d70508b4b2e466efad965e01ce9488b016013912",
+      "bytes": 7719,
+      "physicalLines": 129,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/ui/workspaceLayout.ts",
+      "sha256": "1fd219b6eaa64741d4c19ad0cdca380dc4d546c4f368781ebb6b171b3bafc88e",
+      "bytes": 9901,
+      "physicalLines": 255,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/utils/logger.ts",
+      "sha256": "f6bfc0741c8ee41b8ecc53ef4e3b038aa356c3f9630af15a382e3e696fe63023",
+      "bytes": 25653,
+      "physicalLines": 724,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/utils/paletteDrag.ts",
+      "sha256": "964ac0f7497ee550aad32758fb264f2107e38aff5c030393b173f189a3f87741",
+      "bytes": 1717,
+      "physicalLines": 41,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/utils/sha256.ts",
+      "sha256": "28b123ab84849ad35c61de577bc8d7f7b00cf02d51803afdcd48b0f02cfc9f71",
+      "bytes": 523,
+      "physicalLines": 14,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/waveform/analysisComposer.ts",
+      "sha256": "407b37bc6ef93b97cc22166fb9a9cebd0ca452b1f66c66555fc139e9d705a8c6",
+      "bytes": 16466,
+      "physicalLines": 412,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/waveform/analyzer.ts",
+      "sha256": "2678f672b7f706e38d4583ed82f011aeb15ff93c01075bd92e9f6eab0bc68928",
+      "bytes": 8867,
+      "physicalLines": 279,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/waveform/canvasLayers.ts",
+      "sha256": "bdc95a9ef7f47f41035daa5f83686b71184ab6cb79ccd00b4cddaff473b338c4",
+      "bytes": 6335,
+      "physicalLines": 184,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/waveform/layerScheduler.ts",
+      "sha256": "0c2338ad445b7e15c01cc5e0fba2ed353f3cd0d03cebc627e462ba14ec9f2fc7",
+      "bytes": 2096,
+      "physicalLines": 63,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "src/waveform/spectralColor.ts",
+      "sha256": "bb108ec03485f8a33023687fe6a7c20b50fd6b6938b196f26a0dd05b8e377d3a",
+      "bytes": 18497,
+      "physicalLines": 486,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/code_analysis/analyze_repo.py",
+      "sha256": "02abeb9e0d5c2ea75592be9f0dd5260a4d3d30b37c43f8a3ce6b2deba4b1a5de",
+      "bytes": 33207,
+      "physicalLines": 692,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/code_analysis/run_gitlog_analysis.sh",
+      "sha256": "35c6f67074ba8f6c1361a4e06fac6d8a00a2a460f49ce44339e567b58b7ed543",
+      "bytes": 1996,
+      "physicalLines": 44,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/analysisPath.cjs",
+      "sha256": "9a1b83f8d07367dfb0942f71b5caaf2f988331c4d7696ac299a1cea75eda1346",
+      "bytes": 1506,
+      "physicalLines": 31,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/build_installer_only.py",
+      "sha256": "6652f0c12dfbe0af73c175aab908ab407da4b49130cd2b6f4a2c9605650628b7",
+      "bytes": 534,
+      "physicalLines": 11,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/build_pipeline.py",
+      "sha256": "d24d23339709e57f748e9f149c6e37c8a6f93fe65d882d028dfb63bdd31c1e2b",
+      "bytes": 4889,
+      "physicalLines": 155,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/clean_fix.cjs",
+      "sha256": "7a285b5ae2ed6efc3f5f8005cf3be0f19f5c6c9e4d18659f472fa1cb3a6c31ea",
+      "bytes": 2838,
+      "physicalLines": 73,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/collect_for_claude.ps1",
+      "sha256": "d3e164cd4a899192eab03b173f2d43a040c96301a365181690ee09656539068e",
+      "bytes": 6911,
+      "physicalLines": 138,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/diagnose_and_fix.ps1",
+      "sha256": "3add04bcf8375a44954e2cc8b1a1af1edf07463cbff9cb0b71699d86567aa642",
+      "bytes": 738,
+      "physicalLines": 15,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/final_fix.ps1",
+      "sha256": "1cfeb8f9339cd2b2550fc90146f9ed160df29e9f66dc02544f2a8a4f7f8215e5",
+      "bytes": 1841,
+      "physicalLines": 48,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/fix-typo.cjs",
+      "sha256": "a5aee67c1829074a5ce26244ae878caebc0f266995a24a32cef0c3dcbabbae60",
+      "bytes": 2286,
+      "physicalLines": 47,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/fix.cjs",
+      "sha256": "008ca61cbf28aa60bd1e8c726c59f9a0cc36cba14ce3c9a9211678d38fe51b5a",
+      "bytes": 4231,
+      "physicalLines": 109,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/fix_and_force_push.cjs",
+      "sha256": "6e3b444266ce88ebb24ab5fd36ba55b727609f64c86f4d1037b2d4eec7d5d663",
+      "bytes": 2445,
+      "physicalLines": 63,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/fix_context_syntax.cjs",
+      "sha256": "a9d00fe905b31574fc0bfb037ff3d9f359d6f72037c7f5c039d97b93f0ead0b7",
+      "bytes": 1242,
+      "physicalLines": 30,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/fix_sqlcipher.ps1",
+      "sha256": "21a89a9cead2bc632239b229da34056194d5defeb9dc91e58e8382f2b137c3bc",
+      "bytes": 3049,
+      "physicalLines": 54,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/full_auto_fix.mjs",
+      "sha256": "ae41cfff8f09867a1fb9f6fedea7b08495f4784518b65b1394e0faea854b5cbe",
+      "bytes": 5453,
+      "physicalLines": 166,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/main.py",
+      "sha256": "4797ef757dbac2730a7cac6a9a1707f2d8d4a1ece42a429a76c37e7e3926353c",
+      "bytes": 96,
+      "physicalLines": 4,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/master-fix-and-push.cjs",
+      "sha256": "0958fb3a9e9bc488e184e1a9b358e3c135d8d5e450e9defa8f58b871c164a922",
+      "bytes": 4932,
+      "physicalLines": 122,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/patch_app.py",
+      "sha256": "e73f9e4fb0fc44e80cf0378626352f780fafb3c9b87a115c751e8747491effbe",
+      "bytes": 215,
+      "physicalLines": 6,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/patch_masterDbGate.ps1",
+      "sha256": "54ad845c91a7f58c0319c40476447f6de66dd68c2b5991984efbad30b4c29525",
+      "bytes": 3610,
+      "physicalLines": 84,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/rb_diagnose.py",
+      "sha256": "7d78d47107a583d440d2a48356c6ad927a3938edda4bef83a55cc99508b87890",
+      "bytes": 20889,
+      "physicalLines": 475,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/rb_link.py",
+      "sha256": "350052194473200ab37c45cd9cfe41bdb683911e96dd1adedbb06f15a317d3ac",
+      "bytes": 8330,
+      "physicalLines": 202,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/rb_probe.py",
+      "sha256": "e98113a9d8e8336971b04359fd24e0bda3ef3eb5129f4bd2205b7545759fd0d2",
+      "bytes": 10707,
+      "physicalLines": 228,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/rekordbox_parser.py",
+      "sha256": "c30ba4aaa49897155652a569c58e548e68d36c07f955f8d4f4be546b9b1ab135",
+      "bytes": 1267,
+      "physicalLines": 38,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/setup-installer-pipeline.cjs",
+      "sha256": "d12b5c1f04b5e09a17238b3df5596bdfb8712bd7033e6794a1d7f4e18c933572",
+      "bytes": 3855,
+      "physicalLines": 134,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/test_analysis.ts",
+      "sha256": "fecc15fe9c1bcd9e3d7564ab257555392ce7ea95fcb5f4cb63267cf999543716",
+      "bytes": 26,
+      "physicalLines": 2,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "tools/legacy/waveform_renderer.py",
+      "sha256": "ac91a01fead9a0a0598c0f59977138e8daa8bd5f9b641e388276a8eb1359b215",
+      "bytes": 984,
+      "physicalLines": 29,
+      "observedExecutedByV8": false
+    },
+    {
+      "file": "vite.config.ts",
+      "sha256": "9fc85ada8611de61139a3acaf4c3cc2ee8e086351f5d968c3058d8c341282939",
+      "bytes": 4083,
+      "physicalLines": 109,
+      "observedExecutedByV8": false
+    }
+  ]
+}
