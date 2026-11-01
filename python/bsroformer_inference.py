@@ -77,6 +77,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--stems", required=False, default="")
     parser.add_argument("--chunk-size", type=int, required=True)
     parser.add_argument("--num-overlap", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=1,
+                        help="Windows per model call; 0 selects CUDA batches automatically (up to 16)")
     parser.add_argument("--ensemble-passes", type=int, default=1)
     parser.add_argument("--precision", default="f32", choices=["native", "f32", "f16", "bf16", "q8_0"])
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "cuda:0", "mps"])
@@ -88,7 +90,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="DEVELOPMENT ONLY: build the architecture without trained weights. "
         "The result is NOT a separation and is reported as weights=random.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.batch_size < 0:
+        parser.error("--batch-size must be >= 0")
+    return args
 
 
 def load_config_dict(config_path: str):
@@ -291,6 +296,34 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
 
     dtype = {"f16": torch.float16, "bf16": torch.bfloat16}.get(args.precision)
     autocast = dtype is not None and str(device).startswith("cuda")
+    cuda = str(device).startswith("cuda")
+    requested_batch = getattr(args, "batch_size", 1)
+    automatic_batch = requested_batch == 0 and cuda
+    batch_size = max(1, requested_batch)
+    baseline_memory = 0
+    if cuda:
+        torch.cuda.reset_peak_memory_stats(device)
+        baseline_memory = torch.cuda.memory_allocated(device)
+    inference_started = time.monotonic()
+    last_metrics = inference_started
+    largest_batch = 0
+    oom_retries = 0
+    log(f"Inferenz: device={device}, precision={args.precision}, "
+        f"batch={'auto (1–16)' if automatic_batch else batch_size}, windows={total_chunks}")
+
+    def predict(segments):
+        # Keep CUDA tensors in this frame: an OOM unwinds it before empty_cache.
+        tensor = torch.from_numpy(np.stack(segments)).float().to(device, non_blocking=True)
+        if dtype is not None and not autocast:
+            tensor = tensor.to(dtype)
+        if autocast:
+            with torch.autocast(device_type="cuda", dtype=dtype):
+                output = model(tensor)
+        else:
+            output = model(tensor)
+        if not isinstance(output, torch.Tensor):
+            output = output[0]
+        return output.float().cpu().numpy()
 
     # inference_mode statt no_grad: deaktiviert zusätzlich die Version-Counter-
     # Buchführung pro Tensor – messbar weniger Overhead bei vielen kleinen
@@ -305,47 +338,82 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
                 shifted = np.roll(mix, shift, axis=1)
             else:
                 shifted = mix
-            for index, start in enumerate(positions):
+            index = 0
+            while index < len(positions):
                 check_cancelled()
-                end = min(start + chunk_size, total)
-                segment = shifted[:, start:end]
-                if segment.shape[1] < chunk_size:
-                    pad = chunk_size - segment.shape[1]
-                    segment = np.pad(segment, ((0, 0), (0, pad)), mode="reflect")
-                # from_numpy auf einem nicht-kontiguierlichen View zahlt bei
-                # .float()/.to(device) einen versteckten Kopiervorgang nach dem
-                # anderen – einmal sauber anlegen ist schneller.
-                segment = np.ascontiguousarray(segment)
-                tensor = torch.from_numpy(segment).float().unsqueeze(0).to(device, non_blocking=True)
-                if dtype is not None and not autocast:
-                    tensor = tensor.to(dtype)
-                if autocast:
-                    with torch.autocast(device_type="cuda", dtype=dtype):
-                        output = model(tensor)
-                else:
-                    output = model(tensor)
-                if not isinstance(output, torch.Tensor):
-                    output = output[0]
-                result = output.float().cpu().numpy()[0]  # (num_stems, channels, chunk)
-                if result.ndim == 2:  # single stem model may drop the stem axis
-                    result = result[None, ...]
-                length = end - start
-                window_slice = window[:length]
-                stem_count = min(num_stems, result.shape[0])
-                pass_estimates[:stem_count, :, start:end] += result[:stem_count, :, :length] * window_slice
-                pass_weights[start:end] += window_slice
-                processed += 1
+                starts = positions[index:index + batch_size]
+                segments = []
+                for start in starts:
+                    segment = shifted[:, start:min(start + chunk_size, total)]
+                    if segment.shape[1] < chunk_size:
+                        segment = np.pad(segment, ((0, 0), (0, chunk_size - segment.shape[1])), mode="reflect")
+                    segments.append(segment)
+                retry_oom = False
+                try:
+                    results = predict(segments)
+                except torch.cuda.OutOfMemoryError:
+                    if not cuda or len(starts) == 1:
+                        raise
+                    retry_oom = True
+                if retry_oom:
+                    # Outside the except block so the failed frame is released.
+                    torch.cuda.empty_cache()
+                    batch_size = max(1, len(starts) // 2)
+                    automatic_batch = False
+                    oom_retries += 1
+                    log(f"GPU-Speicher knapp: Batch auf {batch_size} reduziert; gleiche Fenster erneut.", "warning")
+                    continue
+                check_cancelled()
+                largest_batch = max(largest_batch, len(starts))
+                for start, result in zip(starts, results):
+                    if result.ndim == 2:  # single stem model may drop the stem axis
+                        result = result[None, ...]
+                    end = min(start + chunk_size, total)
+                    length = end - start
+                    window_slice = window[:length]
+                    stem_count = min(num_stems, result.shape[0])
+                    pass_estimates[:stem_count, :, start:end] += result[:stem_count, :, :length] * window_slice
+                    pass_weights[start:end] += window_slice
+                index += len(starts)
+                processed += len(starts)
+                if automatic_batch:
+                    # Estimate activation cost from one real window, leaving
+                    # 20% of total VRAM plus an extra 20% estimation margin.
+                    peak = torch.cuda.max_memory_allocated(device)
+                    activation = max(1, peak - baseline_memory)
+                    free, capacity = torch.cuda.mem_get_info(device)
+                    budget = max(0, free - capacity * 0.2)
+                    batch_size = max(1, min(16, int(0.8 * budget / activation), len(positions)))
+                    automatic_batch = False
+                    log(f"CUDA-Autobatch: {batch_size} Fenster pro Aufruf (mit Speicherreserve)")
                 emit({
                     "type": "progress",
                     "fraction": progress_offset + progress_span * (processed / total_chunks),
-                    "phase": f"pass {pass_index + 1}/{args.ensemble_passes} chunk {index + 1}/{len(positions)}",
+                    "phase": f"pass {pass_index + 1}/{args.ensemble_passes} chunk {index}/{len(positions)} batch {len(starts)}",
                 })
+                now = time.monotonic()
+                if cuda and (now - last_metrics >= 5 or processed == total_chunks):
+                    log(f"CUDA: {processed / max(now - inference_started, 1e-6):.2f} Fenster/s | "
+                        f"VRAM peak={torch.cuda.max_memory_allocated(device) / 2**30:.2f} GiB | "
+                        f"allocated={torch.cuda.memory_allocated(device) / 2**30:.2f} GiB")
+                    last_metrics = now
             pass_estimates /= np.maximum(pass_weights, 1e-8)[None, None, :]
             if shift != 0:
                 pass_estimates = np.roll(pass_estimates, -shift, axis=2)
             estimates += pass_estimates
 
     estimates /= max(1, args.ensemble_passes)
+    elapsed = time.monotonic() - inference_started
+    args.inference_report = {
+        "batchSizeRequested": requested_batch, "largestBatch": largest_batch,
+        "oomRetries": oom_retries, "windows": processed,
+        "inferenceSeconds": round(elapsed, 3),
+        "windowsPerSecond": round(processed / max(elapsed, 1e-6), 3),
+        "audioSecondsPerSecond": round((total / sample_rate) / max(elapsed, 1e-6), 3),
+    }
+    if cuda:
+        args.inference_report["gpuName"] = torch.cuda.get_device_name(device)
+        args.inference_report["peakVramBytes"] = torch.cuda.max_memory_allocated(device)
     return estimates, sample_rate
 
 
@@ -514,6 +582,7 @@ def main(argv: List[str]) -> int:
         "device": device,
         "stems": written,
         "report": {
+            **args.inference_report,
             "family": args.family,
             "weights": weight_state,
             "configStemOrder": config_instruments,

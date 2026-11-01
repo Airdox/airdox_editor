@@ -54,6 +54,7 @@ BRANCH = "stem-colab-20261101-r4"  # Fester Release-Stand passend zu dieser Wind
 MSST_COMMIT = "9cc76c03ccd4da5ddf3477e93d386a1648a77732"
 ABBRUCH_SEKUNDEN = 5
 PRAKTIKUM_SELBSTTEST = False  # True: unabhängiger kurzer GPU-/Drive-Test ohne Editor-Auftrag
+GPU_BATCH_GROESSE = 0  # 0: automatisch bis 16 Fenster; 1: seriell zum Vergleich; z.B. 4: fest
 >>>
 
 <<<CELL py
@@ -135,6 +136,9 @@ ADAPTER = os.path.join(REPO_DIR, "python", "bsroformer_inference.py")
 assert os.path.isfile(WORKER) and os.path.isfile(ADAPTER), "Quellcode-Archiv unvollständig."
 help_result = subprocess.run([sys.executable, WORKER, "--help"], capture_output=True, text=True, check=True)
 assert "--job-id" in help_result.stdout, "Archiv/Branch ist zu alt: neuen Quellcode mit --job-id bereitstellen."
+assert "--batch-size" in help_result.stdout, "Worker zu alt: aktuellen Quellcode als Drive-Archiv bereitstellen."
+adapter_help = subprocess.run([sys.executable, ADAPTER, "--help"], capture_output=True, text=True, check=True)
+assert "--batch-size" in adapter_help.stdout, "Adapter zu alt: aktuelles Archiv mit npm run stems:gate:archive bauen und REPO_ARCHIV setzen."
 # Colabs CUDA-fähiges PyTorch beibehalten; nur benötigte Zusatzpakete installieren.
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "numpy<=2.2.0",
     "soundfile", "pyyaml", "ml-collections", "einops", "rotary-embedding-torch", "beartype"], check=True)
@@ -221,7 +225,7 @@ if PRAKTIKUM_SELBSTTEST:
         "output": {"stems": []}
     }
     (test_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    cmd = [sys.executable, WORKER, "--root", JOB_ROOT, "--job-id", test_id, "--once", "--max-jobs", "1", "--model-dir", MODELL_DIR, "--adapter", ADAPTER, "--work-dir", "/content/airdox-selftest-work", "--device", "cuda", "--model", modell["id"], "--profile", "HIGH_QUALITY", "--worker", f"colab-selftest-{os.getpid()}"]
+    cmd = [sys.executable, WORKER, "--root", JOB_ROOT, "--job-id", test_id, "--once", "--max-jobs", "1", "--model-dir", MODELL_DIR, "--adapter", ADAPTER, "--work-dir", "/content/airdox-selftest-work", "--device", "cuda", "--batch-size", str(GPU_BATCH_GROESSE), "--model", modell["id"], "--profile", "HIGH_QUALITY", "--worker", f"colab-selftest-{os.getpid()}"]
     started = time.monotonic(); subprocess.run(cmd, check=True)
     final = json.loads((test_dir / "manifest.json").read_text(encoding="utf-8"))
     assert final.get("status") == "COMPLETED", final
@@ -261,6 +265,7 @@ kommando = [sys.executable, WORKER, "--root", JOB_ROOT,
     "--job-id", SELECTED_JOB_ID, "--once", "--max-jobs", "1",
     "--model-dir", MODELL_DIR, "--adapter", ADAPTER,
     "--work-dir", "/content/airdox-work", "--device", "cuda",
+    "--batch-size", str(GPU_BATCH_GROESSE),
     "--model", MODELL_ID, "--profile", PROFIL,
     "--cancel-poll", str(ABBRUCH_SEKUNDEN), "--worker", f"colab-{os.getpid()}"]
 if FEHLGESCHLAGENE_WIEDERHOLEN:
@@ -291,4 +296,26 @@ benötigt weder GPU-Zeit noch einen erneuten Upload.
 
 Die Python-Abhängigkeiten und GPU-Inferenz müssen in der tatsächlich zugeteilten
 Colab-Laufzeit geprüft werden. Lokale Protokolltests ersetzen diesen Test nicht.
+
+### GPU-Durchsatz prüfen
+
+`GPU_BATCH_GROESSE = 0` misst den Speicherbedarf eines echten Audiofensters und
+verarbeitet danach bis zu 16 Fenster gleichzeitig auf CUDA. Eine Speicherreserve
+bleibt frei; bei CUDA-Speichermangel wird der Batch halbiert und dieselbe Stelle
+erneut verarbeitet. Auch bei Batchgröße 1 bleibt die Berechnung auf der GPU.
+Fensterlänge, Überlappung und Rechengenauigkeit werden dabei nicht verändert.
+
+Die Ausgabe zeigt Gerät, gewählte Batchgröße, Fenster/s und VRAM-Spitzenwert.
+Der Abschlussbericht enthält außerdem `audioSecondsPerSecond` (größer ist
+schneller). Zum Vergleich denselben Track und dasselbe Profil mit Batchgröße 1
+und 0 in separaten Aufträgen messen. Der einsekündige Selbsttest ist zu kurz für
+einen aussagekräftigen Batch-Benchmark. Belegter GPU-Speicher allein misst keine
+Rechenauslastung. Während eines längeren Laufs kann eine weitere Zelle mit
+`!nvidia-smi` die GPU-Rechenauslastung anzeigen.
+
+Für noch nicht auf GitHub veröffentlichte Änderungen zuerst lokal
+`npm run stems:gate:archive` ausführen, das erzeugte `stem-gate-colab.tar.gz`
+nach My Drive kopieren und `REPO_ARCHIV = "stem-gate-colab.tar.gz"` setzen.
+Das aktuelle Notebook ebenfalls neu öffnen/hochladen und Zellen 1–5 ausführen.
+Der feste Release-Branch enthält lokale Änderungen nicht automatisch.
 >>>

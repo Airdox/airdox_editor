@@ -353,6 +353,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--work-dir", default=str(Path(tempfile.gettempdir()) / "airdox-remote-worker"),
                         help="Lokaler, temporärer Arbeitsordner")
     parser.add_argument("--device", default="auto", help="Rechengerät (auto, cuda oder cpu)")
+    parser.add_argument("--batch-size", type=int, default=1,
+                        help="Audiofenster pro Modellaufruf; 0 = automatische CUDA-Batchgröße")
     parser.add_argument("--poll", type=float, default=15, help="Sekunden zwischen Jobscans")
     parser.add_argument("--cancel-poll", type=float, default=5,
                         help="Sekunden zwischen Abbruchprüfungen während der Separation")
@@ -370,6 +372,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         help="Bereits abgeschlossene (COMPLETED) oder abgebrochene (CANCELLED) Jobs aus der Ablage entfernen")
     parser.add_argument("--verbose", action="store_true", help="Zusätzliche Diagnoseausgabe")
     options = parser.parse_args(argv)
+    if options.batch_size < 0:
+        parser.error("--batch-size muss >= 0 sein")
     if options.job_id and not _safe_job_id(options.job_id):
         parser.error("--job-id muss eine gültige Jobkennung ohne Pfadbestandteile sein")
     return options
@@ -672,8 +676,9 @@ def _run_adapter(
                     _say(f"[adapter] {last_progress:.1f}% ({phase})", bool(options.verbose))
                     now_m = time.monotonic()
                     pending_progress_write = True
+                    last_phase = phase
                     # Google Drive FUSE Throttling: höchstens alle 3 Sekunden auf Platte schreiben
-                    if force_flush or (now_m - last_progress_write >= 3.0) or (phase != last_phase):
+                    if force_flush or (now_m - last_progress_write >= 3.0):
                         try:
                             updated = _set_manifest(
                                 job_dir, manifest, status="RUNNING", phase=phase,
@@ -688,6 +693,13 @@ def _run_adapter(
                         last_progress_write = now_m
                         last_phase = phase
                         pending_progress_write = False
+                elif isinstance(event, dict) and event.get("type") == "log":
+                    _say(f"[adapter] {event.get('message', '')}", force=True)
+                elif isinstance(event, dict) and event.get("type") == "done":
+                    report = event.get("report")
+                    if isinstance(report, dict):
+                        _say(f"[adapter] Ergebnis: {json.dumps(report, ensure_ascii=False)}", force=True)
+                        _append_job_log(job_dir, "worker.inference_metrics", "Inferenz-Messwerte", report=report)
                 else:
                     _say(f"[adapter] {line}", bool(options.verbose))
         if force_flush and pending_progress_write:
@@ -785,6 +797,10 @@ def _resolve_adapter_command(
         "--num-overlap", str(int(overlap)),
         "--device", str(options.device or "auto"),
     ]
+    # Leave legacy/custom adapter contracts unchanged for explicit serial runs.
+    batch_size = getattr(options, "batch_size", 1)
+    if batch_size != 1:
+        command.extend(["--batch-size", str(batch_size)])
     if config_path is not None:
         command.extend(["--config", str(config_path)])
     return command
