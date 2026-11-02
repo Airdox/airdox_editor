@@ -24,11 +24,13 @@ sample format handling, chunking with overlap-add and file IO.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
 import sys
 import time
+import threading
 from typing import Dict, List, Optional
 
 EXIT_OK = 0
@@ -417,7 +419,101 @@ def run_inference(model, mix, args, config, device: str, progress_offset: float,
     return estimates, sample_rate
 
 
-def main(argv: List[str]) -> int:
+def model_identity(args, model_id=""):
+    """Content identity, including execution settings; paths alone are insufficient."""
+    def artifact(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return (os.path.realpath(path), digest.hexdigest())
+    return (model_id, args.family, artifact(args.checkpoint), artifact(args.config),
+            args.device, args.precision, args.reference_source_dir,
+            args.allow_random_weights, args.stem_order)
+
+
+class ModelSession:
+    """One model only. Identity changes require a new process (including imports)."""
+    def __init__(self):
+        self.identity = None
+        self.loaded = None
+        self.device = None
+        self.expected_artifacts = None
+
+    def get(self, args, device, model_id):
+        identity = model_identity(args, model_id) + (device,)
+        if self.expected_artifacts is not None:
+            actual = {"checkpoint": identity[2][1], "config": identity[3][1]}
+            if actual != self.expected_artifacts:
+                raise ValueError("MODEL_IDENTITY_CHANGED: artifacts differ from the owner's verified hashes")
+        if self.identity is not None and identity != self.identity:
+            raise ValueError("MODEL_IDENTITY_CHANGED: restart the adapter for another model/config/hash")
+        if self.loaded is None:
+            config = load_config_dict(args.config)
+            model = build_model(args.family, config, args.reference_source_dir, device, args.precision)
+            weights = load_checkpoint(model, args.checkpoint, args.allow_random_weights, device)
+            if model_identity(args, model_id) + (device,) != identity:
+                raise ValueError("MODEL_IDENTITY_CHANGED during loading")
+            self.loaded = (config, model, weights)
+            self.identity = identity
+            self.device = device
+            import torch
+            facts = {"device": device, "modelId": model_id,
+                     "checkpointSha256": identity[2][1], "configSha256": identity[3][1],
+                     "family": args.family, "precision": args.precision,
+                     "torchVersion": torch.__version__,
+                     "cudaVersion": getattr(getattr(torch, "version", None), "cuda", None)}
+            if str(device).startswith("cuda"):
+                facts["gpuName"] = torch.cuda.get_device_name(device)
+            emit({"type": "runtime", "facts": facts})
+        return self.loaded
+
+
+def serve() -> int:
+    """Sequential JSONL requests; job_end is the only per-request commit marker.
+
+    EOF means the owner disappeared: exit even during a blocked GPU call. The
+    owner sends shutdown when idle for orderly normal teardown.
+    """
+    import queue
+    requests = queue.Queue(maxsize=1)
+
+    def read_requests():
+        for line in sys.stdin:
+            requests.put(line)
+        os._exit(EXIT_CANCELLED)
+
+    threading.Thread(target=read_requests, daemon=True).start()
+    session = ModelSession()
+    while True:
+        request_id = None
+        code = EXIT_BAD_ARGS
+        try:
+            request = json.loads(requests.get())
+            if request.get("type") == "shutdown":
+                emit({"type": "shutdown"})
+                return EXIT_OK
+            request_id = request["id"]
+            if request.get("type") != "run" or not isinstance(request.get("argv"), list):
+                raise ValueError("Expected run with id and argv")
+            artifacts = request.get("artifacts")
+            if not isinstance(artifacts, dict) or set(artifacts) != {"checkpoint", "config"}:
+                raise ValueError("run requires checkpoint/config hashes")
+            session.expected_artifacts = artifacts
+            code = main(request["argv"], session, request.get("modelId", ""))
+        except SystemExit as error:
+            code = int(error.code or 0)
+        except Cancelled:
+            code = EXIT_CANCELLED
+        except Exception as error:
+            emit({"type": "error", "code": "PERSISTENT_JOB_FAILED", "message": str(error)})
+            code = EXIT_MODEL
+        emit({"type": "job_end", "id": request_id, "exitCode": code})
+        if code != EXIT_OK:
+            return code
+
+
+def main(argv: List[str], session=None, model_id="") -> int:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
     args = parse_args(argv)
@@ -430,10 +526,10 @@ def main(argv: List[str]) -> int:
         emit({"type": "error", "code": "BACKEND_UNAVAILABLE", "message": f"PyTorch nicht verfügbar: {error}"})
         return EXIT_MODEL
 
-    device = args.device
+    device = session.device if session is not None and session.loaded is not None else args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device.startswith("cuda") and not torch.cuda.is_available():
+    if device.startswith("cuda") and (session is None or session.loaded is None) and not torch.cuda.is_available():
         emit({"type": "error", "code": "GPU_UNAVAILABLE", "message": "Angeforderte CUDA-GPU ist nicht verfügbar"})
         return EXIT_MODEL
     if device.startswith("cuda"):
@@ -451,18 +547,15 @@ def main(argv: List[str]) -> int:
         return EXIT_BAD_ARGS
 
     try:
-        config = load_config_dict(args.config)
-    except Exception as error:  # noqa: BLE001
-        emit({"type": "error", "code": "MODEL_CORRUPT", "message": f"Config nicht lesbar: {error}"})
-        return EXIT_MODEL
-
-    try:
-        model = build_model(args.family, config, args.reference_source_dir, device, args.precision)
+        if session is not None:
+            config, model, weight_state = session.get(args, device, model_id)
+        else:
+            config = load_config_dict(args.config)
+            model = build_model(args.family, config, args.reference_source_dir, device, args.precision)
+            weight_state = load_checkpoint(model, args.checkpoint, args.allow_random_weights, device)
     except Exception as error:  # noqa: BLE001
         emit({"type": "error", "code": "MODEL_CORRUPT", "message": f"Modell konnte nicht aufgebaut werden: {error}"})
         return EXIT_MODEL
-
-    weight_state = load_checkpoint(model, args.checkpoint, args.allow_random_weights, device)
 
     try:
         mix, file_rate, original_frames, original_mix = read_audio(
@@ -554,6 +647,7 @@ def main(argv: List[str]) -> int:
     # produce `instrumental.wav` next to `vocals.wav`).
     derived_residual = None
     for index, stem_id in enumerate(stem_order):
+        check_cancelled()
         if requested and stem_id.lower() not in requested:
             continue
         if index < model_stems:
@@ -604,7 +698,7 @@ def main(argv: List[str]) -> int:
 
 if __name__ == "__main__":
     try:
-        sys.exit(main(sys.argv[1:]))
+        sys.exit(serve() if sys.argv[1:] == ["--persistent"] else main(sys.argv[1:]))
     except Cancelled:
         sys.exit(EXIT_CANCELLED)
     except BrokenPipeError:

@@ -9,7 +9,8 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node scripts/build-anlz-structure.mjs && vite build && npm run build:stems-bridge && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node scripts/build-anlz-structure.mjs && npm run build:colab && vite build && npm run build:stems-bridge && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:colab": "node scripts/build-stem-gate-tarball.mjs --out resources/colab/stem-gate-colab.tar.gz",
     "build:stems-bridge": "esbuild src/stems/nodeBridge.ts --bundle --platform=node --format=cjs --outfile=dist/stems/node-bridge.cjs",
     "build:anlz-structure": "node scripts/build-anlz-structure.mjs",
     "build:anlz-structure:check": "node scripts/build-anlz-structure.mjs --check",
@@ -129,6 +130,17 @@
       {
         "from": "src/stems/modelCatalog.json",
         "to": "modelCatalog.json"
+      },
+      {
+        "from": "resources/colab",
+        "to": "colab",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "colab/batch_setup.py",
+        "to": "colab/airdox-batch-setup.py"
       }
     ],
     "asar": true,

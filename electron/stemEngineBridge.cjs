@@ -23,6 +23,7 @@ const crypto = require('node:crypto');
 const CHANNELS = {
   status: 'stems:engine-status',
   findSaved: 'stems:find-saved',
+  library: 'stems:library-probe',
   start: 'stems:job-start',
   wait: 'stems:job-wait',
   job: 'stems:job-get',
@@ -225,6 +226,15 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     }
   }
   attachEvents();
+
+  ipcMain.handle(CHANNELS.library, async (_event, requests) => {
+    if (!Array.isArray(requests) || requests.length > 100000 || requests.some(request =>
+      !request || typeof request.trackId !== 'string' || typeof request.sourcePath !== 'string' ||
+      request.trackId.length > 512 || request.sourcePath.length > 32768)) {
+      return { ok: false, code: 'INVALID_REQUEST', message: 'Ungültige Library-Anfrage.' };
+    }
+    return bridge.probeLibraryStems(requests);
+  });
 
   ipcMain.handle(CHANNELS.status, async () => {
     const status = await bridge.status();

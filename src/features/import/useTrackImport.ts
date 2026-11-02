@@ -21,6 +21,8 @@ import { audioEngine } from '../../audio/audioEngine';
 import { buildCues, mapRekordboxDatabaseRows } from '../../rekordbox/dbParser';
 import { applyAnlzExtractionToTrack, parseAnlzBinary } from '../../rekordbox/databaseExtractor';
 import { parseRekordboxXmlAsync } from '../../rekordbox/xmlParser';
+import { prepareXmlCollectionUpdate } from './xmlCollectionUpdate';
+import { buildCollectionTrackModel } from './collectionTrackModel';
 import { isNativeRekordboxWaveform } from '../../waveform/analysisComposer';
 import { setPosition } from '../../state/transportStore';
 import { DataOrigin, type RekordboxCueSource, type SelectionRange, type TrackModel } from '../../types/rekordbox';
@@ -29,7 +31,6 @@ import { logger } from '../../utils/logger';
 import {
   BUNDLED_REKORDBOX_XML_FILENAME,
   areSameMediaPath,
-  buildCollectionTrackModel,
 } from '../project/projectModel';
 
 export interface TrackImportDependencies {
@@ -326,13 +327,16 @@ const handleLocateRekordboxDatabases = async () => {
 const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => {
   if (!bundledCollectionPromiseRef.current) {
     const loading = (async () => {
-      // Verbindliche Quelle in der Desktop-App: die app-eigene Ressource
-      // (resources/rekordbox/rekordbox_export2.xml bzw. Repo-Root im
-      // Entwicklungsmodus), ausschließlich lesend über den Main-Prozess.
-      // Kein Dateidialog, keine Benutzerdatei, keine zweite XML.
       let xml = '';
       let source: 'DESKTOP_RESOURCE' | 'BUNDLED_ASSET' = 'BUNDLED_ASSET';
       const bridge = window.rekordboxDesktop;
+      const active = await bridge?.readActiveXmlLibrary?.();
+      if (active) {
+        const restored = await prepareXmlCollectionUpdate(active);
+        setXmlFileName(restored.sourceLabel);
+        logger.info('XML_IMPORT', `Aktive XML-Sammlung wiederhergestellt: ${restored.tracks.length} Tracks`, { path: restored.sourceLabel });
+        return restored.tracks;
+      }
       if (bridge?.readBundledRekordboxXml) {
         try {
           const bundled = await bridge.readBundledRekordboxXml();
@@ -363,6 +367,7 @@ const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => 
       }
       const { tracks } = await parseRekordboxXmlAsync(xml);
       if (tracks.length === 0) throw new Error('Die eingebettete Rekordbox-Sammlung enthält keine Tracks.');
+      setXmlFileName(BUNDLED_REKORDBOX_XML_FILENAME);
       logger.info('XML_IMPORT', `Eingebettete Sammlung dekodiert (${source}): ${tracks.length} Tracks`, {
         source,
         tracks: tracks.length,
@@ -385,7 +390,7 @@ const loadBundledRekordboxCollection = useCallback((): Promise<TrackModel[]> => 
 
 const handleTrackImport = useCallback(async () => {
   if (trackImportLoading) return;
-  if (xmlFileName === BUNDLED_REKORDBOX_XML_FILENAME && xmlImportedTracks.length > 0) {
+  if (xmlImportedTracks.length > 0) {
     setXmlCollectionModalOpen(true);
     return;
   }
@@ -394,7 +399,6 @@ const handleTrackImport = useCallback(async () => {
   try {
     const tracks = await loadBundledRekordboxCollection();
     setXmlImportedTracks(tracks);
-    setXmlFileName(BUNDLED_REKORDBOX_XML_FILENAME);
     setAnalysisIndexStatus(
       window.rekordboxDesktop
         ? 'Die Master-Datenbank wird nach Auswahl gezielt nur für diese TrackID gelesen (read-only).'

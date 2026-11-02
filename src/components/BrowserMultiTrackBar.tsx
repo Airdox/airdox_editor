@@ -12,7 +12,10 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { TrackModel } from '../types/rekordbox';
+import { TrackModel, PartialTrackModel } from '../types/rekordbox';
+import { DEFAULT_LIBRARY_FILTERS, filterLibraryTracks, getLibraryFilterOptions, getLibraryStemStatus, type LibraryFilters, type LibraryStemSnapshot } from '../features/library';
+import { BrowserLibraryFilters } from './BrowserLibraryFilters';
+import { BrowserLibraryMetadataCells } from './BrowserLibraryMetadataCells';
 import {
   ChevronUp,
   ChevronDown,
@@ -32,6 +35,9 @@ interface BrowserBarProps {
   isOpen: boolean;
   onToggle: () => void;
   tracks: TrackModel[];
+  collectionTracks?: readonly PartialTrackModel[];
+  libraryStems?: LibraryStemSnapshot;
+  libraryStemsLoading?: boolean;
   activeTrackId: string;
   onSelectTrack: (trackId: string) => void;
   onImportTracks: () => void;
@@ -44,6 +50,9 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
   isOpen,
   onToggle,
   tracks,
+  collectionTracks,
+  libraryStems,
+  libraryStemsLoading = false,
   activeTrackId,
   onSelectTrack,
   onImportTracks,
@@ -52,10 +61,15 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
 }) => {
   const [selectedFolder, setSelectedFolder] = useState<'ALL' | 'XML' | 'AUDIO' | 'PLAYLIST'>('ALL');
   const [browserSearchQuery, setBrowserSearchQuery] = useState<string>('');
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>({ ...DEFAULT_LIBRARY_FILTERS });
+  const [visibleTrackLimit, setVisibleTrackLimit] = useState(200);
+  const collection: readonly PartialTrackModel[] = collectionTracks ?? tracks;
+  const filterOptions = useMemo(() => getLibraryFilterOptions(collection), [collection]);
+  const filtersActive = selectedFolder !== 'ALL' || !!browserSearchQuery || Object.entries(libraryFilters).some(([key, value]) => value && !(key === 'stems' && value === 'all'));
 
   // Filter tracks by selected tree folder and search query
   const filteredTracks = useMemo(() => {
-    return tracks.filter((t) => {
+    return filterLibraryTracks(collection, libraryFilters, libraryStems).filter((t) => {
       // Folder filter
       if (selectedFolder === 'XML' && t.origin !== 'REKORDBOX_XML') return false;
       if (selectedFolder === 'AUDIO' && t.origin !== 'LOCAL_ANALYSIS') return false;
@@ -64,15 +78,16 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
       const q = browserSearchQuery.trim().toLowerCase();
       if (!q) return true;
 
-      const titleMatch = t.title.toLowerCase().includes(q);
+      const titleMatch = (t.title || '').toLowerCase().includes(q);
       const artistMatch = (t.artist || '').toLowerCase().includes(q);
-      const bpmMatch = t.bpm.toFixed(2).includes(q);
+      const bpmMatch = t.bpm?.toFixed(2).includes(q);
       const keyMatch = (t.key || '').toLowerCase().includes(q);
       const albumMatch = (t.album || '').toLowerCase().includes(q);
 
       return titleMatch || artistMatch || bpmMatch || keyMatch || albumMatch;
     });
-  }, [tracks, selectedFolder, browserSearchQuery]);
+  }, [collection, libraryFilters, libraryStems, selectedFolder, browserSearchQuery]);
+  React.useEffect(() => { setVisibleTrackLimit(200); }, [collection, libraryFilters, libraryStems, selectedFolder, browserSearchQuery]);
 
   const formatTime = (seconds: number) => {
     if (!seconds || isNaN(seconds)) return '00:00';
@@ -109,7 +124,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
           {/* Quick status label */}
           {isOpen && (
             <span className="text-[10.5px] text-neutral-400 font-mono pl-3 hidden sm:inline">
-              Sammlung: <strong>{filteredTracks.length}</strong> Tracks
+              Sammlung: <strong>{filteredTracks.length}</strong> / {collection.length} Tracks
             </span>
           )}
         </div>
@@ -147,7 +162,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
 
       {/* Expanded Browser Content (Pioneer Rekordbox Collection View) */}
       {isOpen && (
-        <div className="h-56 bg-[#0b0c0f] flex border-t border-[#14151a] overflow-hidden text-xs">
+        <div className="h-[min(28rem,65vh)] bg-[#0b0c0f] flex border-t border-[#14151a] overflow-hidden text-xs">
           {/* Left Tree Navigator */}
           <div className="w-52 bg-[#0d0e13] border-r border-[#1a1c25] p-2 flex flex-col space-y-1 overflow-y-auto select-none flex-shrink-0">
             <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider px-2 py-1">
@@ -168,7 +183,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                 <Folder size={13} className="text-neutral-500" />
               )}
               <span>Sammlung (Alle)</span>
-              <span className="ml-auto text-[9.5px] font-mono text-neutral-500">{tracks.length}</span>
+              <span className="ml-auto text-[9.5px] font-mono text-neutral-500">{collection.length}</span>
             </button>
 
             <button
@@ -182,7 +197,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
               <Disc size={13} className={selectedFolder === 'XML' ? 'text-[#00e5ff]' : 'text-neutral-500'} />
               <span>Rekordbox XML</span>
               <span className="ml-auto text-[9.5px] font-mono text-neutral-500">
-                {tracks.filter((t) => t.origin === 'REKORDBOX_XML').length}
+                {collection.filter((t) => t.origin === 'REKORDBOX_XML').length}
               </span>
             </button>
 
@@ -197,7 +212,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
               <FileAudio size={13} className={selectedFolder === 'AUDIO' ? 'text-[#00a2ff]' : 'text-neutral-500'} />
               <span>Audio-Dateien</span>
               <span className="ml-auto text-[9.5px] font-mono text-neutral-500">
-                {tracks.filter((t) => t.origin === 'LOCAL_ANALYSIS').length}
+                {collection.filter((t) => t.origin === 'LOCAL_ANALYSIS').length}
               </span>
             </button>
 
@@ -222,6 +237,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                 <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
                 <input
                   type="text"
+                  aria-label="Sammlung durchsuchen"
                   value={browserSearchQuery}
                   onChange={(e) => setBrowserSearchQuery(e.target.value)}
                   placeholder="In Sammlung suchen (Titel, Artist, BPM...)"
@@ -230,6 +246,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                 {browserSearchQuery && (
                   <button
                     onClick={() => setBrowserSearchQuery('')}
+                    aria-label="Suche zurücksetzen"
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
                   >
                     <X size={11} />
@@ -242,6 +259,9 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
               </div>
             </div>
 
+            <BrowserLibraryFilters filters={libraryFilters} {...filterOptions} active={filtersActive}
+              onChange={setLibraryFilters} onReset={() => { setLibraryFilters({ ...DEFAULT_LIBRARY_FILTERS }); setBrowserSearchQuery(''); setSelectedFolder('ALL'); }} />
+            <p role="status" className="px-3 py-1 text-[10px] text-neutral-400">{filteredTracks.length} von {collection.length} Tracks · {libraryStemsLoading ? 'Stems werden geprüft…' : 'Stems: nur geprüfte, nutzbare Dateien gelten als vorhanden.'} Ungeprüfte Stems passen zu keinem Verfügbarkeitsfilter.</p>
             {/* Track Table */}
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-left border-collapse">
@@ -251,7 +271,11 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                     <th className="py-1.5 px-3">TITEL</th>
                     <th className="py-1.5 px-3">INTERPRET</th>
                     <th className="py-1.5 px-3 w-20 text-right">BPM</th>
-                    <th className="py-1.5 px-3 w-16 text-center">KEY</th>
+                    <th className="py-1.5 px-3 w-16 text-center">TONART</th>
+                    <th className="py-1.5 px-3">GENRE</th>
+                    <th className="py-1.5 px-3">STEMS</th>
+                    <th className="py-1.5 px-3">ERSTELLT</th>
+                    <th className="py-1.5 px-3">GEÄNDERT</th>
                     <th className="py-1.5 px-3 w-18 text-center">ZEIT</th>
                     <th className="py-1.5 px-3 w-24 text-center">MEMORY CUES</th>
                     <th className="py-1.5 px-3 w-28 text-right">AKTION</th>
@@ -260,20 +284,21 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                 <tbody className="divide-y divide-[#151722]">
                   {filteredTracks.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="text-center py-8 text-neutral-500 text-xs">
+                      <td colSpan={12} className="text-center py-8 text-neutral-500 text-xs">
                         Keine Tracks in der ausgewählten Ansicht gefunden.
                       </td>
                     </tr>
                   ) : (
-                    filteredTracks.map((t, idx) => {
+                    filteredTracks.slice(0, visibleTrackLimit).map((t, idx) => {
                       const isActive = t.id === activeTrackId;
-                      const memCuesCount = t.cues.filter((c) => c.type === 'MEMORY').length;
+                      const memCuesCount = (t.cues || []).filter((c) => c.type === 'MEMORY').length;
+                      const select = () => { if (t.id) onSelectTrack(t.id); };
 
                       return (
                         <tr
-                          key={t.id}
-                          onClick={() => onSelectTrack(t.id)}
-                          onDoubleClick={() => onSelectTrack(t.id)}
+                          key={t.id || `unidentified-${idx}`}
+                          onClick={select}
+                          onDoubleClick={select}
                           className={`cursor-pointer transition-colors group text-xs ${
                             isActive
                               ? 'bg-[#0088ff]/15 border-l-2 border-[#0088ff]'
@@ -293,7 +318,7 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                                 className={isActive ? 'text-[#0088ff]' : 'text-neutral-500'}
                               />
                               <span className={`font-semibold ${isActive ? 'text-white' : 'text-neutral-200'} group-hover:text-white`}>
-                                {t.title}
+                                {t.title || 'Titel unbekannt'}
                               </span>
                               {t.audioBuffer ? (
                                 <span className="px-1.5 py-0.2 rounded-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[9px] font-mono">
@@ -319,19 +344,20 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
 
                           {/* BPM */}
                           <td className="py-2 px-3 text-right font-mono font-bold text-[#00a2ff] text-[11.5px]">
-                            {t.bpm.toFixed(2)}
+                            {t.bpm == null ? 'Unbekannt' : t.bpm.toFixed(2)}
                           </td>
 
                           {/* Key */}
                           <td className="py-2 px-3 text-center">
                             <span className="px-1.5 py-0.5 rounded-xs bg-[#1a1c26] text-neutral-200 font-mono text-[10px]">
-                              {t.key || '--'}
+                              {t.key || 'Unbekannt'}
                             </span>
                           </td>
 
+                          <BrowserLibraryMetadataCells track={t} status={getLibraryStemStatus(t, libraryStems)} />
                           {/* Time */}
                           <td className="py-2 px-3 text-center font-mono text-neutral-400 text-[11px]">
-                            {formatTime(t.duration)}
+                            {t.duration == null ? 'Unbekannt' : formatTime(t.duration)}
                           </td>
 
                           {/* Memory Cues count */}
@@ -350,8 +376,9 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onSelectTrack(t.id);
+                                select();
                               }}
+                              disabled={!t.id}
                               className={`px-2.5 py-1 rounded-xs font-semibold text-[10.5px] transition-colors inline-flex items-center space-x-1 ${
                                 isActive
                                   ? 'bg-[#00c853]/20 text-[#00e676] border border-[#00c853]/40'
@@ -377,6 +404,8 @@ export const BrowserMultiTrackBar: React.FC<BrowserBarProps> = ({
                   )}
                 </tbody>
               </table>
+              {filteredTracks.length > visibleTrackLimit && <button type="button" onClick={() => setVisibleTrackLimit((limit) => limit + 200)}
+                className="px-3 py-2 text-[#00a2ff] hover:text-white">Weitere 200 Tracks anzeigen ({visibleTrackLimit} von {filteredTracks.length})</button>}
             </div>
           </div>
         </div>

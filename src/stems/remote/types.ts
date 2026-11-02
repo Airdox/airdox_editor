@@ -156,6 +156,7 @@ export interface RemoteJobManifest {
  * zweiten Job für dieselbe Datei zu erzeugen.
  */
 export interface RemoteJobRecord {
+  queueWaitTimeoutMs?: number;
   schemaVersion: number;
   jobId: string;
   createdAt: number;

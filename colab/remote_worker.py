@@ -355,6 +355,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto", help="Rechengerät (auto, cuda oder cpu)")
     parser.add_argument("--batch-size", type=int, default=1,
                         help="Audiofenster pro Modellaufruf; 0 = automatische CUDA-Batchgröße")
+    parser.add_argument("--persistent-adapter", action="store_true",
+                        help="Optional: ein langlebiger Adapter mit genau einem Modell pro Worker")
     parser.add_argument("--poll", type=float, default=15, help="Sekunden zwischen Jobscans")
     parser.add_argument("--cancel-poll", type=float, default=5,
                         help="Sekunden zwischen Abbruchprüfungen während der Separation")
@@ -398,6 +400,14 @@ def _write_worker_status(root: Path, options: argparse.Namespace, status: str, j
         "phase": "Inferenz läuft" if status == "PROCESSING" else "Warte auf Jobs",
         "pollSeconds": options.poll,
         "modelId": options.model or None,
+        "capabilities": {
+            "protocol": "airdox-worker/2",
+            "backend": "bsroformer-python",
+            "persistentAdapter": bool(getattr(options, "persistent_adapter", False)),
+            "adapterProtocol": "airdox-separator-jsonl/1" if getattr(options, "persistent_adapter", False) else None,
+            "pythonVersion": sys.version.split()[0],
+            "runtime": getattr(getattr(options, "_adapter_session", None), "runtime", None),
+        },
     })
 
 
@@ -579,6 +589,10 @@ class WorkerCancelled(Exception):
     pass
 
 
+class AdapterStopFailed(BaseException):
+    """Fatal: never start another GPU job while the old child might be alive."""
+
+
 def _terminate_process(process: subprocess.Popen[str], grace_seconds: float = 1.0) -> None:
     if process.poll() is not None:
         return
@@ -596,7 +610,107 @@ def _terminate_process(process: subprocess.Popen[str], grace_seconds: float = 1.
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            pass
+            raise AdapterStopFailed("Adapter did not exit after kill")
+
+
+class PersistentAdapter:
+    """Own one sequential child. Any failure or cancellation destroys it."""
+    def __init__(self):
+        self.process = None
+        self.identity = None
+        self.lines = None
+        self.reader = None
+        self.runtime = None
+        self.reader_stop = None
+
+    def close(self):
+        process = self.process
+        if process is None:
+            return
+        if self.reader_stop:
+            self.reader_stop.set()
+        try:
+            if process.poll() is None and process.stdin:
+                try:
+                    process.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
+                    process.stdin.flush()
+                    process.wait(timeout=1)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    _terminate_process(process)
+            if process.poll() is None:
+                _terminate_process(process)
+            if process.poll() is None:
+                raise AdapterStopFailed("Adapter could not be stopped; refusing to continue")
+        finally:
+            for stream in (process.stdin, process.stdout):
+                if stream:
+                    stream.close()
+            if self.reader:
+                self.reader.join(timeout=1)
+            self.process = None
+            self.identity = None
+            self.runtime = None
+
+    def start_job(self, command, manifest):
+        identity = [manifest["engine"]["modelId"], command[:2]]
+        artifacts = {}
+        for flag, value in zip(command[2::2], command[3::2]):
+            if flag in ("--input", "--output-dir"):
+                continue
+            if flag in ("--checkpoint", "--config"):
+                digest = sha256_file(Path(value))
+                kind = flag[2:]
+                artifacts[kind] = digest
+                expected = manifest["engine"].get(kind, {}).get("sha256")
+                if expected and digest.lower() != expected.lower():
+                    self.close()
+                    raise ValueError(f"{kind} SHA-256 mismatch")
+                identity.append((flag, str(Path(value).resolve()), digest))
+            else:
+                identity.append((flag, value))
+        if self.process is not None and (self.identity != identity or self.process.poll() is not None):
+            self.close()
+        if self.process is None:
+            env = os.environ.copy()
+            env.setdefault("PYTHONIOENCODING", "utf-8")
+            self.process = subprocess.Popen(
+                command[:2] + ["--persistent"], cwd=str(Path(command[1]).resolve().parent),
+                env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+            )
+            self.lines = queue.Queue(maxsize=256)
+            process, lines = self.process, self.lines
+            self.reader_stop = threading.Event()
+            reader_stop = self.reader_stop
+
+            def enqueue(line):
+                while not reader_stop.is_set():
+                    try:
+                        lines.put(line, timeout=0.1)
+                        return
+                    except queue.Full:
+                        pass
+
+            def collect():
+                try:
+                    for line in process.stdout:
+                        enqueue(line.rstrip("\r\n"))
+                        if reader_stop.is_set():
+                            break
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    enqueue(None)
+
+            self.reader = threading.Thread(target=collect, daemon=True)
+            self.reader.start()
+            self.identity = identity
+        request_id = uuid.uuid4().hex
+        self.process.stdin.write(json.dumps({"type": "run", "id": request_id,
+                                           "modelId": manifest["engine"]["modelId"], "argv": command[2:],
+                                           "artifacts": artifacts}) + "\n")
+        self.process.stdin.flush()
+        return self.process, self.lines, request_id
 
 
 def _run_adapter(
@@ -609,6 +723,15 @@ def _run_adapter(
     local_output: Path,
 ) -> tuple[int, str]:
     """Run the adapter while polling cancel.flag and refreshing its lease."""
+    if getattr(options, "persistent_adapter", False):
+        session = getattr(options, "_adapter_session", None)
+        if session is None:
+            session = options._adapter_session = PersistentAdapter()
+        try:
+            return _run_persistent_adapter(session, command, options, root, job_dir, manifest, claim)
+        except BaseException:
+            session.close()
+            raise
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
@@ -754,6 +877,73 @@ def _run_adapter(
             except OSError:
                 pass
         reader.join(timeout=1)
+
+
+def _run_persistent_adapter(session, command, options, root, job_dir, manifest, claim):
+    process, lines, request_id = session.start_job(command, manifest)
+    output = []
+    last_heartbeat = 0
+    last_progress = 0
+    done = False
+    interval = min(1.0, max(0.05, float(options.cancel_poll)))
+    while True:
+        if _cancel_requested(job_dir, manifest):
+            _terminate_process(process, grace_seconds=min(1.0, interval))
+            session.close()
+            raise WorkerCancelled("Der Editor hat den Abbruch während der Separation angefordert")
+        now = time.monotonic()
+        if now - last_heartbeat >= 5:
+            claim["heartbeatAt"] = _now_ms()
+            atomic_write_json(job_dir / "claim.json", claim)
+            _write_worker_status(root, options, "PROCESSING", manifest["jobId"])
+            last_heartbeat = now
+        try:
+            line = lines.get(timeout=interval)
+        except queue.Empty:
+            if process.poll() is not None:
+                session.close()
+                return 3, "Adapter exited without job_end"
+            continue
+        if line is None:
+            session.close()
+            return 3, "Adapter EOF without job_end"
+        output.append(line[-4096:])
+        if len(output) > 128:
+            del output[0]
+        try:
+            event = json.loads(line)
+        except ValueError:
+            _say(line, bool(options.verbose))
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "job_end":
+            if event.get("id") != request_id:
+                raise RuntimeError("Persistent adapter response identity mismatch")
+            code = event.get("exitCode")
+            if type(code) is not int or (code == 0 and not done):
+                raise RuntimeError("Persistent adapter returned an invalid completion")
+            if code != 0:
+                session.close()
+            return code, "\n".join(output)
+        if kind == "done":
+            done = True
+            report = event.get("report")
+            if isinstance(report, dict):
+                _append_job_log(job_dir, "worker.inference_metrics", "Inferenz-Messwerte", report=report)
+        elif kind == "runtime":
+            session.runtime = event.get("facts")
+        elif kind == "progress" and now - last_progress >= 3:
+            fraction = event.get("fraction", 0)
+            if isinstance(fraction, (int, float)):
+                percent = 3 + max(0, min(1, fraction)) * 90
+                phase = str(event.get("phase") or "Inferenz läuft")
+                manifest.update(_set_manifest(job_dir, manifest, phase=phase, percent=int(percent)))
+                _write_progress(job_dir, percent, phase)
+                last_progress = now
+        elif kind in ("log", "error"):
+            _say(str(event.get("message", "")), force=True)
 
 
 def _resolve_adapter_command(
@@ -980,7 +1170,7 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
 
         return_code, output = _run_adapter(command, options, root, job_dir, manifest, claim, local_output)
         if return_code != 0:
-            if "Numba needs NumPy 2.2 or less" in output or "No module named 'ml_collections'" in output:
+            if not getattr(options, "persistent_adapter", False) and ("Numba needs NumPy 2.2 or less" in output or "No module named 'ml_collections'" in output):
                 _say("Fehlende oder inkompatible Abhängigkeit erkannt – installiere numpy<=2.2.0 / ml-collections automatisch …", force=True)
                 subprocess.run(
                     [sys.executable, "-m", "pip", "install", "-q", "numpy<=2.2.0", "ml-collections"],
@@ -1003,6 +1193,9 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
         _say(f"Job {job_id}: COMPLETED ({', '.join(stem['id'] for stem in completed['output']['stems'])})", force=True)
         return "completed"
     except WorkerCancelled:
+        session = getattr(options, "_adapter_session", None)
+        if session:
+            session.close()
         _remove_partial_outputs(local_output, list(manifest["engine"].get("stems") or DEFAULT_STEMS))
         _remove_partial_outputs(output_dir, list(manifest["engine"].get("stems") or DEFAULT_STEMS))
         _mark_cancelled(job_dir, manifest, claim)
@@ -1025,6 +1218,8 @@ def _process_job(options: argparse.Namespace, root: Path, job_dir: Path, manifes
             atomic_write_json(job_dir / "claim.json", claim)
         except OSError:
             pass
+        if getattr(options, "persistent_adapter", False):
+            shutil.rmtree(work_root, ignore_errors=True)
 
 
 def run_worker_cycle(options: argparse.Namespace, root: Path) -> dict[str, int]:
@@ -1270,6 +1465,15 @@ def self_test() -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     options = parse_args(argv)
+    try:
+        return _worker_main(options)
+    finally:
+        session = getattr(options, "_adapter_session", None)
+        if session:
+            session.close()
+
+
+def _worker_main(options) -> int:
     if options.self_test:
         return self_test()
 

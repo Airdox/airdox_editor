@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   chooseXmlFile: () => ipcRenderer.invoke('rekordbox:choose-xml-update'),
   readXmlFile: (filePath) => ipcRenderer.invoke('rekordbox:read-xml-update', filePath),
   invalidateCollectionCache: () => ipcRenderer.invoke('rekordbox:invalidate-collection-cache'),
+  activateXmlLibrary: (filePath, sourceToken) => ipcRenderer.invoke('rekordbox:activate-xml-library', filePath, sourceToken),
+  readActiveXmlLibrary: () => ipcRenderer.invoke('rekordbox:read-active-xml-library'),
   // Small app-owned index of track ↔ ANLZ paths. This never writes to
   // Rekordbox's master.db or source files.
   cacheAnalysisMappings: (mappings) => ipcRenderer.invoke('rekordbox:cache-analysis-mappings', mappings),
@@ -56,6 +58,7 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // onStemJobProgress, Stems werden einzeln geladen (kein 4-fach-Buffer-Payload).
   stemEngine: {
     findSavedStems: (query) => ipcRenderer.invoke('stems:find-saved', query),
+    probeLibraryStems: (requests) => ipcRenderer.invoke('stems:library-probe', requests),
     getStemEngineStatus: () => ipcRenderer.invoke('stems:engine-status'),
     startStemJob: (payload) => ipcRenderer.invoke('stems:job-start', payload),
     waitStemJob: (jobId) => ipcRenderer.invoke('stems:job-wait', jobId),

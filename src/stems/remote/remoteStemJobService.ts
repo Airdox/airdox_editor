@@ -92,6 +92,7 @@ export { REMOTE_PHASES };
 
 export interface StartRemoteStemJobRequest extends Omit<StartRemoteStemJobPayload, 'bytes'> {
   sourceOriginalPath?: string;
+  queueWaitTimeoutMs?: number;
   bytes?: Uint8Array | ArrayBuffer;
 }
 
@@ -526,6 +527,7 @@ export class RemoteStemJobService {
 
     const now = this.now();
     const record: RemoteJobRecord = {
+      queueWaitTimeoutMs: request.queueWaitTimeoutMs === undefined ? undefined : Math.max(this.jobTimeoutMs(), Math.min(7 * 24 * 60 * 60_000, request.queueWaitTimeoutMs)),
       schemaVersion: REMOTE_JOB_SCHEMA_VERSION,
       jobId,
       createdAt: now,
@@ -777,6 +779,34 @@ export class RemoteStemJobService {
       this.polling = undefined;
     });
     return this.polling;
+  }
+
+  async retryImport(jobId: string): Promise<RemoteStemJobView> {
+    await this.ensureLoaded();
+    if (this.polling) await this.polling;
+    const record = this.records.get(jobId);
+    if (!record) throw new RemoteProtocolError('REMOTE_JOB_MISSING', 'Fernauftrag ist lokal nicht bekannt.');
+    if (record.cancelRequestedAt || record.status === 'CANCELLED') throw new RemoteProtocolError('REMOTE_CANCELLED', 'Abgebrochene Aufträge werden nicht erneut importiert.');
+    if (record.localJobId && record.status === 'COMPLETED') return this.toView(record);
+    const transport = this.transportFor(await this.effectiveSettings());
+    const raw = await transport.readText(`jobs/${jobId}/manifest.json`);
+    const manifest = raw ? parseManifest(raw, jobId) : null;
+    if (!manifest || manifest.status !== 'COMPLETED') throw new RemoteProtocolError('REMOTE_RESULT_NOT_READY', 'In der Ablage liegt noch kein fertiges Ergebnis.');
+    if (manifest.input.sha256 !== record.workingCopySha256 || manifest.engine.modelId !== record.modelId) throw new RemoteProtocolError('REMOTE_RESULT_INVALID', 'Ergebnisidentität stimmt nicht mit dem Originalauftrag überein.');
+    record.error = undefined;
+    record.status = 'VALIDATING';
+    record.phase = 'Fertige Ergebnisse erneut importieren';
+    this.addTrace(record, 'editor.result_import_retry', 'Fertiges Ergebnis wird mit derselben Job-ID erneut geprüft und importiert; keine neue Inferenz.');
+    await this.persist(record);
+    try {
+      await this.syncRecord(record, transport);
+    } catch (error) {
+      record.status = 'FAILED';
+      record.error = { code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : 'REMOTE_FAILED', message: error instanceof Error ? error.message : String(error) };
+      await this.persist(record);
+      this.emitEvent('failed', record);
+    }
+    return this.toView(record);
   }
 
   private async runPollCycle(): Promise<RemoteServiceStatus> {
@@ -1116,10 +1146,12 @@ export class RemoteStemJobService {
     }
 
     // Zeitüberschreitung: kein Worker, kein Ergebnis, zu lange her (§21 E).
-    if (this.now() - record.createdAt > this.jobTimeoutMs()) {
+    const timeoutMs = record.queueWaitTimeoutMs && !record.worker ? record.queueWaitTimeoutMs : this.jobTimeoutMs();
+    const timeoutStart = record.queueWaitTimeoutMs && record.worker ? record.worker.claimedAt : record.createdAt;
+    if (this.now() - timeoutStart > timeoutMs) {
       record.error = {
         code: 'REMOTE_TIMEOUT',
-        message: `Fern-Job ${record.jobId} hat nach ${Math.round(this.jobTimeoutMs() / 60_000)} Minuten kein Ergebnis geliefert.`,
+        message: `Fern-Job ${record.jobId} hat nach ${Math.round(timeoutMs / 60_000)} Minuten kein Ergebnis geliefert.`,
       };
       this.setState(record, { status: 'FAILED', phase: 'Zeitüberschreitung – kein Worker-Ergebnis' });
       record.finishedAt = this.now();
@@ -1600,9 +1632,9 @@ export class RemoteStemJobService {
       .map((record) => this.toView(record));
   }
 
-  async publishBatch(id: string, jobIds: string[]): Promise<void> {
+  async publishBatch(id: string, jobIds: string[], uploadComplete = true): Promise<void> {
     const transport = this.transportFor(await this.effectiveSettings());
-    await transport.writeText(`batches/${id}.json`, JSON.stringify({ id, jobIds }));
+    await transport.writeText(`batches/${id}.json`, JSON.stringify({ id, jobIds, uploadComplete, checkpointedAt: new Date(this.now()).toISOString() }));
   }
 
   get(jobId: string): RemoteStemJobView | null {

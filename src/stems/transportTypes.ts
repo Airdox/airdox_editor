@@ -173,6 +173,8 @@ export interface StemServiceEvent {
 }
 
 export interface StartStemJobPayload {
+  /** Original-source provenance retained alongside a separately staged PCM input. */
+  extras?: Record<string, string | number | boolean>;
   /** WAV bytes of the working copy; staged by the engine, never next to the original. */
   bytes?: Uint8Array;
   /** Alternative to `bytes`: a file inside the engine data directory. */
@@ -218,6 +220,7 @@ export type StemBridgeResult<T> = { ok: true; data: T } | StemBridgeError;
  * than a runtime `is not a function`.
  */
 export interface StemDesktopApi {
+  probeLibraryStems?(requests: import('../features/library/stems').LibraryStemRequest[]): Promise<StemBridgeResult<import('../features/library/stems').LibraryStemSnapshot>>;
   findSavedStems?(query: { inputFingerprint: string; modelId?: string; family?: string; profile?: string }): Promise<StemBridgeResult<StemJobView | null>>;
   getStemEngineStatus(): Promise<StemBridgeResult<StemServiceStatus>>;
   startStemJob(payload: StartStemJobPayload): Promise<StemBridgeResult<StemJobView>>;
@@ -386,6 +389,9 @@ export interface RemoteSettings {
 }
 
 export interface StartRemoteStemJobPayload {
+  /** Verified renderer source binding; adapter derives sourceOriginalPath from this. */
+  extras?: Record<string, string | number | boolean>;
+  sourceOriginalPath?: string;
   /** Arbeitskopie (WAV) – wird hochgeladen, das Original bleibt unberührt. */
   bytes?: Uint8Array;
   /** Alternative: Pfad im Engine-Datenordner (dann wird eine Arbeitskopie gezogen). */

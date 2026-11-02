@@ -253,7 +253,7 @@ export function mapRekordboxDatabaseRows(
       genre: genres.get(genreId || '') || undefined,
       label: labels.get(labelId || '') || undefined,
       bpm,
-      key: keys.get(keyId || '') || '2A',
+      key: keys.get(keyId || '') || '',
       duration,
       sampleRate: asNumber(row.SampleRate ?? row.samplingRate) ?? 44100,
       channels: 2,
@@ -276,6 +276,11 @@ export function mapRekordboxDatabaseRows(
       origin: DataOrigin.REKORDBOX_DB,
       rawXmlAttributes: {
         databaseType: dbType,
+        // These describe the DB content row, not audio-file birth/mtime.
+        created_at: asString(row.created_at) || '',
+        updated_at: asString(row.updated_at) || '',
+        dateCreated: asString(row.dateCreated) || '',
+        dateModified: asString(row.dateModified) || '',
         analysisDataPath: analysisDataPath || '',
         folderPath: folderPath || '',
         fileName: fileName || '',

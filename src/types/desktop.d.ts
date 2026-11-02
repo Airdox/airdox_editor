@@ -54,6 +54,11 @@ declare global {
        * dialog): im Paket als Ressource, im Entwicklungsmodus aus dem Repo.
        */
       readBundledRekordboxXml(): Promise<RekordboxBundledXmlResult>;
+      chooseXmlFile?(): Promise<{ path: string } | null>;
+      readXmlFile?(path: string): Promise<{ data: string; path: string; modifiedAt?: number; sourceToken?: string }>;
+      readActiveXmlLibrary?(): Promise<{ data: string; path: string; modifiedAt?: number; sourceToken?: string } | null>;
+      activateXmlLibrary?(path: string, sourceToken: string): Promise<unknown>;
+      invalidateCollectionCache?(): Promise<unknown>;
       cacheAnalysisMappings(mappings: RekordboxAnalysisPathMapping[]): Promise<{
         accepted: number;
         updated: number;

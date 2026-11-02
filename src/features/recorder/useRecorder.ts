@@ -66,6 +66,8 @@ const diskQueue = useRef<Promise<void>>(Promise.resolve());
 const diskActive = useRef(false);
 const pendingBytes = useRef(0);
 const captureStarting = useRef(false);
+const captureGeneration = useRef(0);
+const captureFailure = useRef<string | null>(null);
 const normalStop = useRef(false);
 const [recorderStage, setRecorderStage] = useState<RecorderStage>('IDLE');
 const [recorderElapsed, setRecorderElapsed] = useState<number>(0);
@@ -91,6 +93,7 @@ const recorderSessionRef = useRef<{
 }>({ mediaRecorder: null, chunks: [], inputStream: null, processedStream: null, dispose: null, timer: null, countdown: null, startedAt: 0 });
 
 const clearRecorderResources = useCallback(() => {
+  captureGeneration.current++;
   captureStarting.current = false;
   const session = recorderSessionRef.current;
   if (session.timer !== null) window.clearInterval(session.timer);
@@ -172,6 +175,16 @@ const handleRecorderStart = useCallback(async () => {
   }
 
   clearRecorderResources();
+  const generation = captureGeneration.current;
+  const cancelled = () => generation !== captureGeneration.current;
+  const requestedAt = Date.now();
+  const diagnostic = (phase: string) => {
+    const detail = { phase, at: Date.now(), requestedAt, elapsedMs: Date.now() - requestedAt, source: recorderSource };
+    logger.info('RECORDER', phase, detail);
+    window.dispatchEvent(new CustomEvent('airdox-recorder-diagnostic', { detail }));
+  };
+  diagnostic('Aufnahmestart angefordert');
+  captureFailure.current = null;
   captureStarting.current = true;
   setRecorderStage('PREROLL');
   setRecorderError(null);
@@ -180,11 +193,12 @@ const handleRecorderStart = useCallback(async () => {
   setRecorderElapsed(0);
 
   const beginCapture = async () => {
+    let ownedInput: MediaStream | null = null;
+    let dispose: (() => void) | null = null;
     try {
       await audioEngine.getContext().resume();
+      if (cancelled()) return;
       let capturedStream: MediaStream;
-      let ownedInput: MediaStream | null = null;
-      let dispose: (() => void) | null = null;
 
       if (recorderSource === 'EDITOR_MASTER') {
         // This is already post master-limiter and therefore the cleanest
@@ -195,6 +209,7 @@ const handleRecorderStart = useCallback(async () => {
           audio: { ...(localStorage.getItem('airdox.recorderInput') ? { deviceId: { exact: localStorage.getItem('airdox.recorderInput')! } } : {}), channelCount: 2, echoCancellation: false, autoGainControl: false, noiseSuppression: false },
           video: false,
         });
+        if (cancelled()) { ownedInput.getTracks().forEach(track => track.stop()); return; }
         recorderSessionRef.current.inputStream = ownedInput;
         const processed = audioEngine.createInputRecordingStream(ownedInput, recordingLimiter);
         capturedStream = processed.stream;
@@ -206,6 +221,7 @@ const handleRecorderStart = useCallback(async () => {
           video: true,
           audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         } as DisplayMediaStreamOptions);
+        if (cancelled()) { ownedInput.getTracks().forEach(track => track.stop()); return; }
         recorderSessionRef.current.inputStream = ownedInput;
         if (ownedInput.getAudioTracks().length === 0) {
           ownedInput.getTracks().forEach((track) => track.stop());
@@ -215,7 +231,8 @@ const handleRecorderStart = useCallback(async () => {
         capturedStream = processed.stream;
         dispose = processed.dispose;
       }
-      if (!captureStarting.current) { ownedInput?.getTracks().forEach((track) => track.stop()); return; }
+      if (cancelled()) { dispose?.(); ownedInput?.getTracks().forEach((track) => track.stop()); return; }
+      diagnostic('Audioquelle bereit');
       const context = audioEngine.getContext();
       const meterSource = context.createMediaStreamSource(capturedStream);
       const analyser = context.createAnalyser();
@@ -236,9 +253,11 @@ const handleRecorderStart = useCallback(async () => {
       if (window.airdoxRecorder || recordingFormat === 'WEBM') {
         if (!window.airdoxRecorder || !recorder.mimeType.includes('webm')) throw new Error('WebM-Streaming benötigt die Desktop-App mit Opus-Encoder.');
         const formats = await window.airdoxRecorder.formats();
+        if (cancelled()) return;
         if (!formats.includes(recordingFormat)) throw new Error('Gewählter Encoder nicht verfügbar. Bitte WebM/Opus wählen.');
-        setRecorderSavedPath(await window.airdoxRecorder.open({ format: recordingFormat, sampleRate: recordingSampleRate, channels: recordingChannels, name: recorderFileName, bitDepth: recordingBitDepth }));
-        if (!captureStarting.current) { await window.airdoxRecorder.close(); clearRecorderResources(); return; }
+        const capturePath = await window.airdoxRecorder.open({ format: recordingFormat, sampleRate: recordingSampleRate, channels: recordingChannels, name: recorderFileName, bitDepth: recordingBitDepth });
+        if (cancelled()) { await window.airdoxRecorder.close(); return; }
+        setRecorderSavedPath(capturePath);
         diskActive.current = true;
         diskQueue.current = Promise.resolve();
         pendingBytes.current = 0;
@@ -250,20 +269,24 @@ const handleRecorderStart = useCallback(async () => {
       session.processedStream = capturedStream;
       session.dispose = dispose;
       session.startedAt = Date.now();
+      let firstBlock = true;
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0 && diskActive.current) {
           pendingBytes.current += event.data.size;
           if (pendingBytes.current > 32 * 1024 * 1024) {
-            setRecorderError('Datenträger zu langsam. Aufnahme gestoppt; bereits geschriebene Daten bleiben erhalten.');
+            captureFailure.current = 'Datenträger zu langsam. Aufnahme gestoppt; bereits geschriebene Daten bleiben erhalten.';
+            setRecorderError(captureFailure.current);
             if (recorder.state !== 'inactive') recorder.stop();
             setRecorderStage('ERROR');
             return;
           }
           diskQueue.current = diskQueue.current.then(async () => {
             await window.airdoxRecorder!.append(new Uint8Array(await event.data.arrayBuffer()));
+            if (firstBlock) { firstBlock = false; diagnostic('Erster Audioblock gesichert'); }
             pendingBytes.current -= event.data.size;
           });
           void diskQueue.current.catch((error) => {
+            captureFailure.current = String(error);
             setRecorderError(String(error));
             if (recorder.state !== 'inactive') recorder.stop();
             setRecorderStage('ERROR');
@@ -271,7 +294,9 @@ const handleRecorderStart = useCallback(async () => {
         } else if (event.data.size > 0) session.chunks.push(event.data);
       };
       recorder.onerror = () => {
-        setRecorderError('Aufnahmefehler. Bitte Aufnahme stoppen und vorhandene Audiodaten speichern.');
+        captureFailure.current = 'Aufnahmefehler. Bereits geschriebene Daten bleiben erhalten. Quelle und freien Speicher prüfen.';
+        setRecorderError(captureFailure.current);
+        if (recorder.state !== 'inactive') recorder.stop();
       };
       recorder.addEventListener('stop', () => {
         if (!normalStop.current && diskActive.current) {
@@ -280,7 +305,11 @@ const handleRecorderStart = useCallback(async () => {
             catch (error) { setRecorderError(String(error)); }
             finally { diskActive.current = false; clearRecorderResources(); }
           });
-          setRecorderError('Aufnahme unerwartet beendet. Bereits geschriebene Daten bleiben erhalten.');
+          setRecorderError(captureFailure.current || 'Quelle getrennt oder Aufnahme unerwartet beendet. Bereits geschriebene Daten bleiben erhalten.');
+          setRecorderStage('ERROR');
+        } else if (!normalStop.current) {
+          clearRecorderResources();
+          setRecorderError(captureFailure.current || 'Quelle getrennt. Aufnahme wurde unerwartet beendet.');
           setRecorderStage('ERROR');
         }
       });
@@ -288,6 +317,7 @@ const handleRecorderStart = useCallback(async () => {
         if (recorder.state !== 'inactive') recorder.stop();
       }, { once: true }));
       recorder.start(1000);
+      diagnostic('MediaRecorder gestartet');
       captureStarting.current = false;
       setRecorderStage('RECORDING');
       session.timer = window.setInterval(() => {
@@ -296,9 +326,15 @@ const handleRecorderStart = useCallback(async () => {
         let peak = 0;
         let squares = 0;
         for (const sample of meterData) { peak = Math.max(peak, Math.abs(sample)); squares += sample * sample; }
-        window.dispatchEvent(new CustomEvent('airdox-recorder-meter', { detail: { peak, rms: Math.sqrt(squares / meterData.length) } }));
+        const track = (ownedInput || capturedStream).getAudioTracks()[0];
+        window.dispatchEvent(new CustomEvent('airdox-recorder-meter', { detail: {
+          peak, rms: Math.sqrt(squares / meterData.length),
+          label: recorderSource === 'EDITOR_MASTER' ? 'airdox Editor Master · nach Master-Limiter' : track?.label || 'Freigegebene Audioquelle',
+          muted: track?.muted || false, sampleRate: track?.getSettings().sampleRate || context.sampleRate,
+        } }));
       }, 250);
     } catch (error) {
+      if (cancelled()) { dispose?.(); ownedInput?.getTracks().forEach(track => track.stop()); return; }
       captureStarting.current = false;
       clearRecorderResources();
       setRecorderError(error instanceof Error ? error.message : String(error));
@@ -330,7 +366,7 @@ const handleRecorderStop = useCallback(async () => {
 
   const mediaRecorder = session.mediaRecorder;
   normalStop.current = true;
-  setRecorderStage('OPTIMIZING');
+  setRecorderStage(diskActive.current ? 'SAVING' : 'OPTIMIZING');
   if (session.timer !== null) window.clearInterval(session.timer);
   session.timer = null;
 

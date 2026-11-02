@@ -30,6 +30,8 @@ import type {
 } from './transportTypes';
 import { isStemError } from './errors';
 import type { SavedStemQuery } from './savedStemLibrary';
+import { createLibraryStemProbe } from '../features/library/probeLibraryStems';
+import type { LibraryStemRequest, LibraryStemSnapshot } from '../features/library/stems';
 
 /** Bumped whenever the IPC payload shape changes, so the renderer can refuse a stale bridge. */
 export const STEM_BRIDGE_VERSION = 2;
@@ -42,6 +44,7 @@ function failure(error: unknown): StemBridgeError {
 }
 
 export interface StemBridge {
+  probeLibraryStems(requests: LibraryStemRequest[]): Promise<StemBridgeResult<LibraryStemSnapshot>>;
   top200(action: string, tracks?: BatchTrack[], id?: string, modelId?: string): Promise<StemBridgeResult<unknown>>;
   version: number;
   status(): Promise<StemBridgeResult<StemServiceStatus>>;
@@ -84,6 +87,7 @@ export interface StemBridge {
  */
 export function createStemBridge(options: StemJobServiceOptions): StemBridge {
   const service = new StemJobService(options);
+  const probeLibraryStems = createLibraryStemProbe(options.root);
   const listeners = new Set<(event: unknown) => void>();
   const detach = service.onEvent((event) => {
     for (const listener of listeners) {
@@ -127,6 +131,10 @@ export function createStemBridge(options: StemJobServiceOptions): StemBridge {
   });
 
   return {
+    async probeLibraryStems(requests) {
+      try { return { ok: true, data: await probeLibraryStems(requests) }; }
+      catch (error) { return failure(error); }
+    },
     async top200(action, tracks = [], id = '', modelId) {
       try {
         if (action === 'lookup') return { ok: true, data: await top200.lookup(id, tracks[0]?.id || '') };
