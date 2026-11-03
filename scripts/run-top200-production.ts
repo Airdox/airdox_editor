@@ -27,9 +27,9 @@ async function importReadyResults() {
   try {
     await remote.poll();
     for (const job of remote.list()) {
-      if (job.status === 'FAILED' && job.error?.message?.includes('ENOSPC')) {
+      if (job.status === 'FAILED') {
         try { await remote.retryImport(job.jobId); }
-        catch (error) { console.error(String(error)); }
+        catch (error) { if ((error as { code?: string }).code !== 'REMOTE_RESULT_NOT_READY') console.error(String(error)); }
       }
     }
     const jobs = remote.list();
