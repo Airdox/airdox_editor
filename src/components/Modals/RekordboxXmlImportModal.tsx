@@ -249,7 +249,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 select-none p-3 sm:p-5">
-      <div className="w-full max-w-[96rem] bg-[#101116] border border-[#262834] rounded-sm shadow-2xl overflow-hidden flex flex-col max-h-[92vh] text-neutral-200 text-xs">
+      <div className="w-full h-[92vh] max-w-[96rem] bg-[#101116] border border-[#262834] rounded-sm shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs">
         {/* Modal Header */}
         <div className="h-10 bg-[#161720] border-b border-[#242735] flex items-center justify-between px-4 flex-shrink-0">
           <div className="flex items-center space-x-2.5">
@@ -272,10 +272,17 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
           </button>
         </div>
 
-        {onUpdateXml && <div className="p-3 border-b border-[#20222d]"><XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={fileName} /></div>}
+        {onUpdateXml && (
+          <details className="shrink-0 border-b border-[#20222d] px-4 py-1">
+            <summary className="cursor-pointer text-neutral-300">Rekordbox-XML aktualisieren</summary>
+            <div className="max-h-[20vh] overflow-y-auto py-2">
+              <XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={fileName} />
+            </div>
+          </details>
+        )}
 
         {/* Top Control Bar: Search input & Filters */}
-        <div className="bg-[#13151c] border-b border-[#20222d] p-3 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between flex-shrink-0">
+        <div className="bg-[#13151c] border-b border-[#20222d] px-3 py-1.5 flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between flex-shrink-0">
           {/* Search bar */}
           <div className="relative flex-1 max-w-xl">
             <Search
@@ -569,7 +576,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
 
           {/* Selected Track Deep Preview Panel */}
           {selectedTrack && (
-            <div className="border-t border-[#222533] bg-[#0e0f14] p-3 flex flex-col sm:flex-row gap-3 items-start justify-between flex-shrink-0 text-xs">
+            <div className="border-t border-[#222533] bg-[#0e0f14] p-2 flex flex-col sm:flex-row gap-3 items-start justify-between flex-shrink-0 max-h-[20vh] overflow-auto text-xs">
               {/* Left Column: Metadata summary */}
               <div className="space-y-1 min-w-[280px]">
                 <div className="flex items-center space-x-2">

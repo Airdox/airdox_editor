@@ -1,4 +1,5 @@
 import React from 'react';
+import { Check } from 'lucide-react';
 import type { LibraryDateValue, PartialTrackModel } from '../types/rekordbox';
 import { getLibraryTrackDates, libraryDateDay } from '../features/library';
 
@@ -22,7 +23,12 @@ export function BrowserLibraryMetadataCells({ track, status }: { track: PartialT
   }[status];
   return <>
     <td className="py-2 px-3 text-[11px] text-neutral-300">{track.genre || <span className="text-neutral-500">Unbekannt</span>}</td>
-    <td className={`py-2 px-3 text-[10px] whitespace-nowrap ${stem.color}`} title={stem.help}>{stem.label}</td>
+    <td className={`py-2 px-3 text-[10px] whitespace-nowrap ${stem.color}`} title={stem.help}>
+      <span className="inline-flex items-center gap-1">
+        {status === 'available' && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+        {stem.label}
+      </span>
+    </td>
     <td className="py-2 px-3 text-[10px] text-neutral-300 whitespace-nowrap">{date(dates.created)}</td>
     <td className="py-2 px-3 text-[10px] text-neutral-300 whitespace-nowrap">{date(dates.modified)}</td>
   </>;
