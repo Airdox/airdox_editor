@@ -37,6 +37,7 @@ const batchRemote = {
   start: (request: any) => remote.start({ ...request, profile: 'PREVIEW', modelId: 'pipeline-double-v1' }),
   get: remote.get.bind(remote), poll: remote.poll.bind(remote), publishBatch: remote.publishBatch.bind(remote),
   retryImport: remote.retryImport.bind(remote),
+  restoreCompletedJob: remote.restoreCompletedJob.bind(remote),
 } as RemoteStemJobService;
 try {
   const first = await writeTestAudio(path.join(base, 'audio'), 'first', generateEdmTestTrack({ seconds: 1 }));
@@ -78,11 +79,16 @@ try {
   await restarted.wait(batch.id);
   assert.equal(remote.list().length, 2, 'Import-only retry must not dispatch another separation');
   const imported = await restarted.refresh(batch.id);
+  const coldLocal = new StemJobService({ root, allowPipelineDouble: true });
+  const coldRemote = new RemoteStemJobService({ root, localService: coldLocal, disableBackgroundPolling: true, env: {} });
+  const coldBatch = new Top200BatchService(root, coldRemote, copyFile);
   for (const entry of imported.entries.slice(1)) {
     assert.equal(entry.status, 'COMPLETED');
     assert.equal(entry.localJobId, entry.jobId);
     assert.equal(await restarted.lookup(entry.track.id, entry.originalSha256!), entry.jobId);
     assert.equal(await restarted.lookup(entry.track.id, 'wrong-hash'), null);
+    const restoredId = await coldBatch.lookup(entry.track.id, entry.originalSha256!);
+    assert.ok(restoredId && coldLocal.getJob(restoredId)?.result?.validationPass);
   }
   assert.deepEqual(await readFile(first.mixPath), originals[0]);
   assert.deepEqual(await readFile(second.mixPath), originals[1]);

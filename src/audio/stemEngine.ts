@@ -21,7 +21,7 @@ import { prepareStemInput } from './stemInput';
 import { sanitizeLibrarySourceExtras, type LibrarySourceExtras } from '../features/library/stems';
 import type { TrackModel } from '../types/rekordbox';
 import { logger } from '../utils/logger';
-import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
+import type { StemComputeDevice, StemJobView, StemServiceStatus, StemStorageRootStatus, StemValidationMode } from '../stems/transportTypes';
 // Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
 // Vertragstest („Renderer importiert den Vertrag typ-only“) unverändert gilt.
 import type { RemoteCancelResult, RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
@@ -1096,6 +1096,23 @@ class StemEngine {
     });
     const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; data?: RemoteServiceStatus };
     return payload.ok && payload.data ? payload.data : null;
+  }
+
+  /** Persistenter lokaler Ergebnispfad für GUI-Rückimport und Wiedergabe. */
+  public async storageRoot(): Promise<StemStorageRootStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (!desktop?.getStorageRoot) return null;
+    const result = await desktop.getStorageRoot();
+    return result.ok === true ? result.data : null;
+  }
+
+  /** Ändert den Stem-Datenpfad ohne Audio- oder Projektdateien zu verschieben. */
+  public async configureStorageRoot(root: string): Promise<StemStorageRootStatus> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (!desktop?.configureStorageRoot) throw new Error('Lokale Stem-Speicherortauswahl ist in dieser Laufzeit nicht verfügbar.');
+    const result = await desktop.configureStorageRoot(root);
+    if (result.ok !== true) throw new Error(result.message);
+    return result.data;
   }
 
   /**

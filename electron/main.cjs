@@ -16,10 +16,23 @@ const { inspectStemRuntime } = require('./stemRuntime.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
 const { installStemEngine } = require('./stemInstaller.cjs');
 const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
+const {
+  describeStemDataRoot,
+  directoryCheck,
+  resolveStemDataRoot,
+  saveStemDataRoot,
+} = require('./stemStorageRoot.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
 const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
+const appDataDir = path.join(app.getPath('appData'), app.getName());
+const userDataDir = app.getPath('userData');
+const initialStemStorage = resolveStemDataRoot({
+  appData: app.getPath('appData'),
+  appName: app.getName(),
+  userDataDir,
+});
 
 // ---------------------------------------------------------------------------
 // Logging-System so früh wie möglich aktivieren – noch vor dem ersten
@@ -422,7 +435,7 @@ ipcMain.handle('stems:install-engine', async (event, options) => {
       try {
         event.sender.send('stems:install-progress', progress);
       } catch { /* window may be closing */ }
-    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems'), ...(modelId ? { modelId } : {}) });
+    }, { stemsRoot: stemEngineHost.root || initialStemStorage.root, ...(modelId ? { modelId } : {}) });
     if (result.ok && stemEngineHost.refreshRuntime && !stemEngineHost.refreshRuntime()) {
       return { ...result, restartRequired: true };
     }
@@ -466,8 +479,8 @@ ipcMain.handle('stems:separate', async (_event, wavBytes) => {
 // bekommt Fortschritt über `stems:job-progress` und lädt Stems einzeln.
 const stemEngineHost = registerStemEngineIpc({
   repoRoot: path.join(__dirname, '..'),
-  // Dieselbe Lage wie der Log-Ordner: %APPDATA%/airdox_SMART_Editor/stems/…
-  userDataDir: path.join(app.getPath('appData'), app.getName()),
+  userDataDir: appDataDir,
+  stemRoot: initialStemStorage.root,
   logger,
   ipcMain,
   broadcast: (channel, payload) => {
@@ -482,7 +495,36 @@ const stemEngineHost = registerStemEngineIpc({
 });
 logger.info('SYSTEM', stemEngineHost.available ? 'Stem-Engine (Teil-1-Kern) aktiv' : 'Stem-Engine-Kern nicht verfügbar', {
   bundle: stemEngineHost.bundlePath,
+  stemRoot: stemEngineHost.root || initialStemStorage.root,
+  stemRootSource: initialStemStorage.source,
   reason: stemEngineHost.reason,
+});
+
+function storageRootStatus() {
+  const root = stemEngineHost.root || initialStemStorage.root;
+  const resolved = describeStemDataRoot({
+    appData: app.getPath('appData'),
+    appName: app.getName(),
+    userDataDir,
+  });
+  return {
+    root,
+    source: root === resolved.root ? resolved.source : 'configured',
+    configPath: resolved.configPath,
+    writable: directoryCheck(root).ok,
+    reason: resolved.reason,
+    pendingRoot: root === resolved.root ? undefined : resolved.root,
+  };
+}
+
+ipcMain.handle('stems:storage-root', async () => ({ ok: true, data: storageRootStatus() }));
+ipcMain.handle('stems:storage-root-configure', async (_event, requestedRoot) => {
+  if (typeof requestedRoot !== 'string' || requestedRoot.trim().length === 0) {
+    return { ok: false, code: 'STEM_ROOT_INVALID', message: 'Bitte einen Stem-Datenordner auswählen.' };
+  }
+  const saved = saveStemDataRoot(userDataDir, requestedRoot);
+  if (!saved.ok) return saved;
+  return { ok: true, data: storageRootStatus() };
 });
 
 // --- IPC-Handler bleiben unverändert ---

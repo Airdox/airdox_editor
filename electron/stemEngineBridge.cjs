@@ -158,16 +158,17 @@ function sanitizeRequest(raw) {
  *
  * @param {object} options
  * @param {string} options.repoRoot      Root der App (enthält dist/)
- * @param {string} options.userDataDir   Schreibbarer Datenordner der Engine
+ * @param {string} options.userDataDir   Schreibbarer App-Datenordner der Engine
+ * @param {string} [options.stemRoot]    Persistenter Stem-Datenordner
  * @param {object} [options.logger]      mainLogger mit debug/info/warn/error
  * @param {object} options.ipcMain       Electron ipcMain
  * @param {(channel: string, payload: unknown) => void} [options.broadcast]
  *        Verteilt Fortschritts-Events an alle Fenster.
  */
-function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadcast }) {
+function registerStemEngineIpc({ repoRoot, userDataDir, stemRoot, logger, ipcMain, broadcast }) {
   const loaded = loadStemBridge(repoRoot, logger);
   const roots = {
-    root: path.join(userDataDir, 'stems'),
+    root: path.resolve(stemRoot || path.join(userDataDir, 'stems')),
   };
 
   if (!loaded.bridge) {
@@ -348,6 +349,7 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   log(logger, 'info', 'Stem-Engine IPC registriert', { bundle: loaded.bundlePath, root: roots.root });
 
   return { available: true, reason: undefined, bundlePath: loaded.bundlePath, channels: CHANNELS, get bridge() { return bridge; },
+    get root() { return roots.root; },
     refreshRuntime() {
       // Keep active job handles alive; completed/failed jobs must not force a
       // full app restart after an engine install because the renderer can read

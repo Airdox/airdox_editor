@@ -5,7 +5,7 @@
  * 5-Minute Reference Benchmarks, Path Configuration, and System Diagnostics.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Settings,
@@ -39,7 +39,7 @@ import {
   type StemArchitectureViewState,
   type WorkspacePathSettings,
 } from '../../audio/stemArchitectures';
-import type { StemComputeDevice, StemValidationMode } from '../../stems/transportTypes';
+import type { StemComputeDevice, StemStorageRootStatus, StemValidationMode } from '../../stems/transportTypes';
 import { Tooltip, HelpBadge, GLOSSARY } from '../Tooltip';
 import { DirectorySelector } from '../DirectorySelector';
 
@@ -99,6 +99,8 @@ interface WorkspaceSettingsModalProps {
   onRefreshStemArchitectures?: () => void;
   workspacePaths?: WorkspacePathSettings;
   onSetWorkspacePaths?: (paths: WorkspacePathSettings) => void;
+  stemStorageRoot?: StemStorageRootStatus | null;
+  onConfigureStemStorageRoot?: (root: string) => Promise<StemStorageRootStatus>;
 }
 
 export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
@@ -148,9 +150,18 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
   onRefreshStemArchitectures,
   workspacePaths,
   onSetWorkspacePaths,
+  stemStorageRoot,
+  onConfigureStemStorageRoot,
 }) => {
   const [showBenchmarkComparison, setShowBenchmarkComparison] = useState<boolean>(false);
   const [showPathSettings, setShowPathSettings] = useState<boolean>(false);
+  const [stemRootDraft, setStemRootDraft] = useState('');
+  const [stemRootBusy, setStemRootBusy] = useState(false);
+  const [stemRootError, setStemRootError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (stemStorageRoot?.root) setStemRootDraft(stemStorageRoot.pendingRoot ?? stemStorageRoot.root);
+  }, [stemStorageRoot?.root, stemStorageRoot?.pendingRoot]);
 
   const stemDeviceOptions = deviceChoices(stemEngineState?.onnx);
   const activeDevice = stemDeviceOptions.find((choice) => choice.id === stemDevice);
@@ -536,6 +547,64 @@ export const WorkspaceSettingsModal: React.FC<WorkspaceSettingsModalProps> = ({
                   icon={<Cpu size={12} className="text-[#00e5ff]" />}
                   badgeText="SSD empfohlen"
                 />
+
+                {onConfigureStemStorageRoot && <div className="space-y-1.5 border-t border-[#252834] pt-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-semibold text-neutral-200">Stem-Ergebnisse &amp; GUI-Rückimport:</label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      value={stemRootDraft}
+                      onChange={(event) => { setStemRootDraft(event.target.value); setStemRootError(null); }}
+                      className="flex-1 bg-[#0f1015] border border-[#2a2d3a] rounded-xs px-2 py-1.5 text-[11px] font-mono text-neutral-200 focus:outline-none focus:border-[#00a2ff]"
+                      placeholder="F:\\AirDox\\Top200"
+                      aria-label="Stem-Ergebnisordner"
+                    />
+                    {typeof window !== 'undefined' && window.rekordboxDesktop?.chooseDirectory && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const chosen = await window.rekordboxDesktop?.chooseDirectory({ title: 'Stem-Ergebnisordner auswählen' });
+                          if (chosen) { setStemRootDraft(chosen); setStemRootError(null); }
+                        }}
+                        className="px-2 py-1.5 rounded-xs bg-[#1b1e28] border border-[#2a2d3a] text-neutral-300 hover:text-white hover:border-[#0088ff]"
+                        title="Stem-Ergebnisordner auswählen"
+                      >
+                        <Folder size={12} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={stemRootBusy || !onConfigureStemStorageRoot || !stemRootDraft.trim()}
+                      onClick={async () => {
+                        if (!onConfigureStemStorageRoot) return;
+                        setStemRootBusy(true);
+                        setStemRootError(null);
+                        try {
+                          await onConfigureStemStorageRoot(stemRootDraft.trim());
+                        } catch (error) {
+                          setStemRootError(error instanceof Error ? error.message : String(error));
+                        } finally {
+                          setStemRootBusy(false);
+                        }
+                      }}
+                      className="px-2.5 py-1.5 rounded-xs bg-[#003b2d] border border-[#10b981]/50 text-[#6ee7b7] hover:bg-[#00543f] disabled:opacity-50"
+                    >
+                      {stemRootBusy ? 'Prüfe…' : 'Speichern'}
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-neutral-500 leading-snug">
+                    Wähle den Basisordner, der „Separation“ enthält. Die Auswahl gilt nach dem nächsten App-Start.
+                  </div>
+                  {stemStorageRoot && (
+                    <div className={`text-[10px] ${stemStorageRoot.writable ? 'text-[#6ee7b7]' : 'text-[#fca5a5]'}`}>
+                      {stemStorageRoot.writable ? `Aktiv: ${stemStorageRoot.root}` : 'Pfad ist nicht les-/schreibbar.'}
+                    </div>
+                  )}
+                  {stemRootError && <div className="text-[10px] text-[#fca5a5]">{stemRootError}</div>}
+                  {stemStorageRoot?.reason && <div role="alert" className="text-[#fca5a5]">{stemStorageRoot.reason}</div>}
+                  {stemStorageRoot?.pendingRoot && <div role="status">Gespeichert für den nächsten Start: {stemStorageRoot.pendingRoot}</div>}
+                </div>}
               </div>
             )}
           </div>

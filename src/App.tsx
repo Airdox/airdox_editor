@@ -457,6 +457,7 @@ export default function App() {
   const [workspacePaths, setWorkspacePaths] = useState<WorkspacePathSettings>(() =>
     loadWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage)
   );
+  const [stemStorageRoot, setStemStorageRoot] = useState<Awaited<ReturnType<typeof stemEngine.storageRoot>>>(null);
   const [initialSetupOpen, setInitialSetupOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const done = window.localStorage?.getItem('airdox.initialSetupCompleted');
@@ -943,6 +944,7 @@ export default function App() {
   // Installationslage kann sich zwischenzeitlich geändert haben.
   useEffect(() => {
     if (!settingsModalOpen) return;
+    void stemEngine.storageRoot().then(setStemStorageRoot).catch(() => setStemStorageRoot(null));
     void refreshStemArchitectures();
   }, [settingsModalOpen, refreshStemArchitectures]);
 
@@ -3483,6 +3485,12 @@ export default function App() {
         stemArchitecturesLoading={stemArchitecturesLoading}
         onRefreshStemArchitectures={() => { void refreshStemArchitectures(); }}
         workspacePaths={workspacePaths}
+        stemStorageRoot={stemStorageRoot}
+        onConfigureStemStorageRoot={stemStorageRoot ? async (root) => {
+          const status = await stemEngine.configureStorageRoot(root);
+          setStemStorageRoot(status);
+          return status;
+        } : undefined}
         onSetWorkspacePaths={(paths) => {
           setWorkspacePaths(paths);
           saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, paths);

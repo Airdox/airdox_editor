@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('rekordboxDesktop', {
   // startStemJob() gibt sofort eine jobId zurück, Fortschritt kommt über
   // onStemJobProgress, Stems werden einzeln geladen (kein 4-fach-Buffer-Payload).
   stemEngine: {
+    getStorageRoot: () => ipcRenderer.invoke('stems:storage-root'),
+    configureStorageRoot: (root) => ipcRenderer.invoke('stems:storage-root-configure', root),
     findSavedStems: (query) => ipcRenderer.invoke('stems:find-saved', query),
     probeLibraryStems: (requests) => ipcRenderer.invoke('stems:library-probe', requests),
     getStemEngineStatus: () => ipcRenderer.invoke('stems:engine-status'),

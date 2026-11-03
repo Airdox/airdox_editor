@@ -255,6 +255,28 @@ export class RemoteStemJobService {
     await rename(tmp, file);
   }
 
+  /** Reopens a completed batch result from this registry without contacting Drive. */
+  async restoreCompletedJob(jobId: string, originalSha256: string): Promise<string | null> {
+    if (!JOB_ID_RE.test(jobId)) return null;
+    let record: RemoteJobRecord;
+    try {
+      record = JSON.parse(await readFile(path.join(this.recordsDir, `${jobId}.json`), 'utf8'));
+    } catch {
+      return null;
+    }
+    if (record?.jobId !== jobId || record.status !== 'COMPLETED' ||
+        record.originalSha256 !== originalSha256 || !record.localJobId) return null;
+    const existing = this.local.getJob(record.localJobId);
+    if (existing?.result?.validationPass) return existing.jobId;
+    const saved = await this.local.findSaved({
+      inputFingerprint: `stem-pcm-wav-v1:sha256:${record.workingCopySha256}`,
+      modelId: record.modelId,
+      family: record.family,
+      profile: record.profile,
+    });
+    return saved?.jobId ?? null;
+  }
+
   private now(): number {
     return this.options.now ? this.options.now() : Date.now();
   }

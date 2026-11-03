@@ -66,8 +66,8 @@ export class Top200BatchService {
     for (const batch of await this.list()) {
       for (const entry of batch.entries) {
         if (entry.track.id === trackId && entry.originalSha256 === hash && entry.jobId) {
-          const job = this.remote.get(entry.jobId);
-          if (job?.status === 'COMPLETED' && job.localJobId) return job.localJobId;
+          const localJobId = await this.remote.restoreCompletedJob(entry.jobId, hash);
+          if (localJobId) return localJobId;
         }
       }
     }

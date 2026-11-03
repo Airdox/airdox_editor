@@ -214,12 +214,23 @@ export interface StartStemJobPayload {
 export type StemBridgeError = { ok: false; code: string; message: string; details?: Record<string, unknown> };
 export type StemBridgeResult<T> = { ok: true; data: T } | StemBridgeError;
 
+export interface StemStorageRootStatus {
+  root: string;
+  source: 'configured' | 'appdata-default';
+  configPath?: string;
+  writable: boolean;
+  pendingRoot?: string;
+  reason?: string;
+}
+
 /**
  * What `electron/preload.cjs` exposes and what `src/audio/stemEngine.ts`
  * expects. Kept as one interface so a missing method is a compile error rather
  * than a runtime `is not a function`.
  */
 export interface StemDesktopApi {
+  getStorageRoot?(): Promise<StemBridgeResult<StemStorageRootStatus>>;
+  configureStorageRoot?(root: string): Promise<StemBridgeResult<StemStorageRootStatus>>;
   probeLibraryStems?(requests: import('../features/library/stems').LibraryStemRequest[]): Promise<StemBridgeResult<import('../features/library/stems').LibraryStemSnapshot>>;
   findSavedStems?(query: { inputFingerprint: string; modelId?: string; family?: string; profile?: string }): Promise<StemBridgeResult<StemJobView | null>>;
   getStemEngineStatus(): Promise<StemBridgeResult<StemServiceStatus>>;
