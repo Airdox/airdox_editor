@@ -21,7 +21,8 @@ import { prepareStemInput } from './stemInput';
 import { sanitizeLibrarySourceExtras, type LibrarySourceExtras } from '../features/library/stems';
 import type { TrackModel } from '../types/rekordbox';
 import { logger } from '../utils/logger';
-import type { StemComputeDevice, StemJobView, StemServiceStatus, StemStorageRootStatus, StemValidationMode } from '../stems/transportTypes';
+import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
+import type { StemStorageRootStatus } from '../stems/transportTypes';
 // Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
 // Vertragstest („Renderer importiert den Vertrag typ-only“) unverändert gilt.
 import type { RemoteCancelResult, RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
