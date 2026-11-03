@@ -181,9 +181,9 @@ function parseSingleTrackNode(
   const title = el.getAttribute('Name') || 'Untitled Track';
   const artist = el.getAttribute('Artist') || 'Unknown Artist';
   const album = el.getAttribute('Album') || '';
-  const genre = el.getAttribute('Genre') || 'Electronic';
+  const genre = el.getAttribute('Genre') || '';
   const bpm = parseFloat(el.getAttribute('AverageBpm') || '130.00');
-  const key = el.getAttribute('Tonality') || '2A';
+  const key = el.getAttribute('Tonality') || '';
   const duration = parseFloat(el.getAttribute('TotalTime') || '300.0');
   const comments = el.getAttribute('Comments') || '';
   const year = el.getAttribute('Year') || '';

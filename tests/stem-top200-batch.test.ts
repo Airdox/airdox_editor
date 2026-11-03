@@ -36,6 +36,8 @@ const remote = new RemoteStemJobService({ root, localService: local, transport, 
 const batchRemote = {
   start: (request: any) => remote.start({ ...request, profile: 'PREVIEW', modelId: 'pipeline-double-v1' }),
   get: remote.get.bind(remote), poll: remote.poll.bind(remote), publishBatch: remote.publishBatch.bind(remote),
+  retryImport: remote.retryImport.bind(remote),
+  restoreCompletedJob: remote.restoreCompletedJob.bind(remote),
 } as RemoteStemJobService;
 try {
   const first = await writeTestAudio(path.join(base, 'audio'), 'first', generateEdmTestTrack({ seconds: 1 }));
@@ -61,12 +63,32 @@ try {
   await restarted.wait(batch.id);
   assert.equal(remote.list().length, 2);
   await runWorkerCycle({ root: drive, kind: 'folder', workDir: path.join(base, 'worker'), workerId: 'batch-test', once: true, pollMs: 1000, maxJobs: 2, allowPipelineDouble: true, quiet: true }, transport);
+  const readBytes = transport.readBytes.bind(transport);
+  let simulatedFullDisk = true;
+  transport.readBytes = async relative => {
+    if (simulatedFullDisk && relative.includes('/output/') && relative.endsWith('.wav')) {
+      simulatedFullDisk = false;
+      throw Object.assign(new Error('ENOSPC: synthetic import-read failure'), { code: 'ENOSPC' });
+    }
+    return readBytes(relative);
+  };
+  const firstImport = await restarted.refresh(batch.id);
+  assert.ok(firstImport.entries.some(entry => entry.jobId && entry.status === 'FAILED'));
+  transport.readBytes = readBytes;
+  await restarted.retry(batch.id);
+  await restarted.wait(batch.id);
+  assert.equal(remote.list().length, 2, 'Import-only retry must not dispatch another separation');
   const imported = await restarted.refresh(batch.id);
+  const coldLocal = new StemJobService({ root, allowPipelineDouble: true });
+  const coldRemote = new RemoteStemJobService({ root, localService: coldLocal, disableBackgroundPolling: true, env: {} });
+  const coldBatch = new Top200BatchService(root, coldRemote, copyFile);
   for (const entry of imported.entries.slice(1)) {
     assert.equal(entry.status, 'COMPLETED');
     assert.equal(entry.localJobId, entry.jobId);
     assert.equal(await restarted.lookup(entry.track.id, entry.originalSha256!), entry.jobId);
     assert.equal(await restarted.lookup(entry.track.id, 'wrong-hash'), null);
+    const restoredId = await coldBatch.lookup(entry.track.id, entry.originalSha256!);
+    assert.ok(restoredId && coldLocal.getJob(restoredId)?.result?.validationPass);
   }
   assert.deepEqual(await readFile(first.mixPath), originals[0]);
   assert.deepEqual(await readFile(second.mixPath), originals[1]);

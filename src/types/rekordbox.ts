@@ -293,6 +293,8 @@ export interface TrackModel {
   year?: string;
   comments?: string;
   dateAdded?: string;
+  /** Source dates only; ingestion timestamps must never populate these. */
+  libraryDates?: { created?: LibraryDateValue; modified?: LibraryDateValue };
   remixer?: string;
   isrc?: string;
   bpm: number;
@@ -315,6 +317,13 @@ export interface TrackModel {
   /** Optional persistent, read-only pointer to the native Rekordbox analysis. */
   analysisSource?: AnalysisFileReference;
   workingSegments: EditSegment[];
+}
+
+export interface LibraryDateValue {
+  value: string;
+  source: 'REKORDBOX_XML' | 'REKORDBOX_DB' | 'AUDIO_FILE';
+  field: string;
+  precision: 'day' | 'instant';
 }
 
 /**

@@ -7,6 +7,9 @@
 
 import React, { useState, useMemo } from 'react';
 import { XMLFileUpdateControl } from '../XMLFileUpdateControl';
+import { BrowserLibraryFilters } from '../BrowserLibraryFilters';
+import { BrowserLibraryMetadataCells } from '../BrowserLibraryMetadataCells';
+import { DEFAULT_LIBRARY_FILTERS, filterLibraryTracks, getLibraryFilterOptions, getLibraryStemStatus, type LibraryFilters, type LibraryStemSnapshot } from '../../features/library';
 import type { XmlUpdateCommit } from '../../features/import/xmlCollectionUpdate';
 import {
   X,
@@ -30,6 +33,8 @@ export interface RekordboxXmlImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   xmlTracks: TrackModel[];
+  libraryStems?: LibraryStemSnapshot;
+  libraryStemsLoading?: boolean;
   fileName?: string;
   analysisIndexStatus?: string;
   onSelectTrack: (track: TrackModel) => void | Promise<void>;
@@ -44,6 +49,8 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   isOpen,
   onClose,
   xmlTracks,
+  libraryStems,
+  libraryStemsLoading = false,
   fileName = 'Rekordbox XML Collection',
   analysisIndexStatus,
   onSelectTrack,
@@ -51,15 +58,19 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   onUpdateXml,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [libraryFilters, setLibraryFilters] = useState<LibraryFilters>({ ...DEFAULT_LIBRARY_FILTERS });
+  const filterOptions = useMemo(() => getLibraryFilterOptions(xmlTracks), [xmlTracks]);
   const [selectedTrackId, setSelectedTrackId] = useState<string>(
     xmlTracks.length > 0 ? (currentTrackId || xmlTracks[0].id) : ''
   );
   const [sortField, setSortField] = useState<SortField>('id');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [cueFilter, setCueFilter] = useState<CueFilter>('all');
+  const filtersActive = !!searchQuery || cueFilter !== 'all' || Object.entries(libraryFilters).some(([key, value]) => value && !(key === 'stems' && value === 'all'));
   const [visibleTrackLimit, setVisibleTrackLimit] = useState(200);
   const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const resetFilters = () => { setSearchQuery(''); setCueFilter('all'); setLibraryFilters({ ...DEFAULT_LIBRARY_FILTERS }); setVisibleTrackLimit(200); };
   const [sourceStatus, setSourceStatus] = useState<{
     kind: 'NOT_PROVIDED' | 'CHECKING' | 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE';
     detail: string;
@@ -80,7 +91,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
   // the complete collection, and the user can reveal additional pages.
   React.useEffect(() => {
     setVisibleTrackLimit(200);
-  }, [searchQuery, cueFilter, sortField, sortOrder, xmlTracks]);
+  }, [searchQuery, cueFilter, sortField, sortOrder, xmlTracks, libraryFilters, libraryStems]);
 
   // Format seconds to mm:ss
   const formatTime = (seconds: number) => {
@@ -100,7 +111,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
 
   // Filtered & Sorted tracks
   const filteredTracks = useMemo(() => {
-    return xmlTracks
+    return filterLibraryTracks(xmlTracks, libraryFilters, libraryStems)
       .filter((track) => {
         // Text search across multiple fields
         const query = searchQuery.trim().toLowerCase();
@@ -165,11 +176,11 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
         }
         return sortOrder === 'asc' ? cmp : -cmp;
       });
-  }, [xmlTracks, searchQuery, cueFilter, sortField, sortOrder]);
+  }, [xmlTracks, searchQuery, cueFilter, sortField, sortOrder, libraryFilters, libraryStems]);
 
   const selectedTrack = useMemo(() => {
-    return xmlTracks.find((t) => t.id === selectedTrackId) || filteredTracks[0] || null;
-  }, [xmlTracks, selectedTrackId, filteredTracks]);
+    return filteredTracks.find((t) => t.id === selectedTrackId) || filteredTracks[0] || null;
+  }, [selectedTrackId, filteredTracks]);
 
   const visibleTracks = useMemo(
     () => filteredTracks.slice(0, visibleTrackLimit),
@@ -238,7 +249,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center z-50 select-none p-3 sm:p-5">
-      <div className="w-full max-w-5xl bg-[#101116] border border-[#262834] rounded-sm shadow-2xl overflow-hidden flex flex-col max-h-[92vh] text-neutral-200 text-xs">
+      <div className="w-full h-[92vh] max-w-[96rem] bg-[#101116] border border-[#262834] rounded-sm shadow-2xl overflow-hidden flex flex-col text-neutral-200 text-xs">
         {/* Modal Header */}
         <div className="h-10 bg-[#161720] border-b border-[#242735] flex items-center justify-between px-4 flex-shrink-0">
           <div className="flex items-center space-x-2.5">
@@ -261,10 +272,17 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
           </button>
         </div>
 
-        {onUpdateXml && <div className="p-3 border-b border-[#20222d]"><XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={fileName} /></div>}
+        {onUpdateXml && (
+          <details className="shrink-0 border-b border-[#20222d] px-4 py-1">
+            <summary className="cursor-pointer text-neutral-300">Rekordbox-XML aktualisieren</summary>
+            <div className="max-h-[20vh] overflow-y-auto py-2">
+              <XMLFileUpdateControl onUpdate={onUpdateXml} currentSourceLabel={fileName} />
+            </div>
+          </details>
+        )}
 
         {/* Top Control Bar: Search input & Filters */}
-        <div className="bg-[#13151c] border-b border-[#20222d] p-3 flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between flex-shrink-0">
+        <div className="bg-[#13151c] border-b border-[#20222d] px-3 py-1.5 flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between flex-shrink-0">
           {/* Search bar */}
           <div className="relative flex-1 max-w-xl">
             <Search
@@ -273,6 +291,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
             />
             <input
               type="text"
+              aria-label="Importierte Sammlung durchsuchen"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Tracks durchsuchen nach Titel, Interpret, BPM, Tonart, Album..."
@@ -338,6 +357,8 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
           </div>
         </div>
 
+        <BrowserLibraryFilters filters={libraryFilters} {...filterOptions} active={filtersActive} onChange={setLibraryFilters} onReset={resetFilters} />
+        <p role="status" className="px-4 py-1 text-[10px] text-neutral-400">{filteredTracks.length} von {xmlTracks.length} Tracks · {libraryStemsLoading ? 'Stems werden geprüft…' : 'Stems: nur geprüfte, nutzbare Dateien gelten als vorhanden.'} Ungeprüfte Stems passen zu keinem Verfügbarkeitsfilter.</p>
         <div className="px-4 py-2 border-b border-[#20222d] bg-[#11131a] text-[10px] text-[#fbbf24]">
           <div>Beim Laden müssen Original-Audio und eine passende Rekordbox-ANLZ-Waveform erreichbar sein. Ohne native Daten gibt es keine Ersatz-Waveform.</div>
           {analysisIndexStatus && <div className="mt-1 text-neutral-400">{analysisIndexStatus}</div>}
@@ -357,10 +378,10 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                 <Search size={32} className="mx-auto mb-3 opacity-40 text-neutral-400" />
                 <p className="text-sm text-neutral-300 font-medium">Keine passenden Tracks gefunden</p>
                 <p className="text-xs text-neutral-500 mt-1">
-                  Suchbegriff "{searchQuery}" ergab keine Übereinstimmungen.
+                  Keine Übereinstimmungen mit den aktuellen Such-, Cue- und Sammlungsfiltern.
                 </p>
                 <button
-                  onClick={() => { setSearchQuery(''); setCueFilter('all'); }}
+                  onClick={resetFilters}
                   className="mt-3 px-3 py-1 bg-[#1a1c26] hover:bg-[#252838] border border-[#2b2e3e] rounded text-neutral-300 text-xs transition-colors"
                 >
                   Filter zurücksetzen
@@ -411,10 +432,14 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                       className="py-2 px-3 cursor-pointer hover:text-white w-16 text-center"
                     >
                       <div className="flex items-center justify-center space-x-1">
-                        <span>KEY</span>
+                        <span>TONART</span>
                         {sortField === 'key' && <ArrowUpDown size={10} className="text-[#0088ff]" />}
                       </div>
                     </th>
+                    <th className="py-2 px-3">GENRE</th>
+                    <th className="py-2 px-3">STEMS</th>
+                    <th className="py-2 px-3">ERSTELLT</th>
+                    <th className="py-2 px-3">GEÄNDERT</th>
                     <th
                       onClick={() => handleSortToggle('duration')}
                       className="py-2 px-3 cursor-pointer hover:text-white w-20 text-center"
@@ -440,7 +465,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                 </thead>
                 <tbody className="divide-y divide-[#171922]">
                   {visibleTracks.map((tr, idx) => {
-                    const isSelected = tr.id === selectedTrackId;
+                    const isSelected = tr.id === selectedTrack?.id;
                     const memCuesCount = tr.cues.filter((c) => c.type === 'MEMORY').length;
                     const hotCuesCount = tr.cues.filter((c) => c.type === 'HOT_CUE').length;
                     const isCurrentlyInDeck = tr.id === currentTrackId;
@@ -491,10 +516,11 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                         {/* Key */}
                         <td className="py-2.5 px-3 text-center">
                           <span className="px-1.5 py-0.5 rounded-xs bg-[#1f2230] border border-[#2f3348] text-neutral-200 font-mono text-[10.5px]">
-                            {tr.key || '--'}
+                            {tr.key || 'Unbekannt'}
                           </span>
                         </td>
 
+                        <BrowserLibraryMetadataCells track={tr} status={getLibraryStemStatus(tr, libraryStems)} />
                         {/* Time */}
                         <td className="py-2.5 px-3 text-center font-mono text-neutral-300">
                           {formatTime(tr.duration)}
@@ -550,7 +576,7 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
 
           {/* Selected Track Deep Preview Panel */}
           {selectedTrack && (
-            <div className="border-t border-[#222533] bg-[#0e0f14] p-3 flex flex-col sm:flex-row gap-3 items-start justify-between flex-shrink-0 text-xs">
+            <div className="border-t border-[#222533] bg-[#0e0f14] p-2 flex flex-col sm:flex-row gap-3 items-start justify-between flex-shrink-0 max-h-[20vh] overflow-auto text-xs">
               {/* Left Column: Metadata summary */}
               <div className="space-y-1 min-w-[280px]">
                 <div className="flex items-center space-x-2">
@@ -561,11 +587,11 @@ export const RekordboxXmlImportModal: React.FC<RekordboxXmlImportModalProps> = (
                 <div className="flex items-center space-x-3 text-[11px] text-neutral-400 font-mono">
                   <span>BPM: <strong className="text-white">{selectedTrack.bpm.toFixed(2)}</strong></span>
                   <span>•</span>
-                  <span>Tonart: <strong className="text-[#00e5ff]">{selectedTrack.key || '2A'}</strong></span>
+                  <span>Tonart: <strong className="text-[#00e5ff]">{selectedTrack.key || 'Unbekannt'}</strong></span>
                   <span>•</span>
                   <span>Dauer: <strong className="text-white">{formatTime(selectedTrack.duration)}</strong></span>
                   <span>•</span>
-                  <span>Sample Rate: <strong className="text-neutral-300">{selectedTrack.sampleRate || 44100} Hz</strong></span>
+                  <span>Sample Rate: <strong className="text-neutral-300">{selectedTrack.sampleRate ? `${selectedTrack.sampleRate} Hz` : 'Unbekannt'}</strong></span>
                 </div>
                 {selectedTrack.comments && (
                   <p className="text-[10px] text-neutral-500 italic max-w-md truncate">

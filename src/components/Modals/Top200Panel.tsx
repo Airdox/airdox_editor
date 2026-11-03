@@ -22,7 +22,7 @@ export function Top200Panel({ loadTracks, modelId, libraryName, libraryRevision 
   useEffect(() => {
     if (!selected) return;
     let active = true;
-    const refresh = () => request('refresh', undefined, selected).then((batch: Top200Batch) => { if (active) { setEntries(batch.entries); setError(batch.error || (batch.published ? '' : 'Übertragung läuft; Colab erst nach Veröffentlichung starten.')); } }).catch(reason => { if (active) setError(String(reason)); });
+    const refresh = () => request('refresh', undefined, selected).then((batch: Top200Batch) => { if (active) { setEntries(batch.entries); setError(batch.error || (batch.published ? batch.uploadComplete === false ? 'Teilaufträge sind veröffentlicht; Colab kann bereits trennen, während weitere Tracks übertragen werden.' : '' : 'Übertragung läuft; der erste Zwischenstand wird nach zehn Tracks veröffentlicht.')); } }).catch(reason => { if (active) setError(String(reason)); });
     void refresh();
     const timer = setInterval(refresh, 5000);
     return () => { active = false; clearInterval(timer); };
@@ -44,6 +44,7 @@ export function Top200Panel({ loadTracks, modelId, libraryName, libraryRevision 
   };
   return <section className="border border-neutral-700 rounded p-3 space-y-2">
     <h3 className="font-bold">Rekordbox Top 200 · Colab-Stapel</h3>
+    <p>Für diesen Stapel das Notebook <code>airdox-top200-batch.ipynb</code> verwenden und BATCH_ID übernehmen. Das Einzelauftrag-Notebook ist für diesen Ablauf nicht geeignet. Bei fehlgeschlagenen Aufträgen zuerst Modell und Konfiguration vollständig prüfen lassen, danach im Stapel-Notebook die Fehlerwiederholung aktivieren. Fertige Aufträge werden übersprungen.</p>
     <p>Importierte Sammlung: {libraryName}</p>
     <p>Editor-Modell: {modelId} · Neue Stapel übernehmen diese Auswahl; gespeicherte Stapel behalten ihr Modell.</p>
     <p>Auswahl nach Abspielzähler. Fehlende Dateien bleiben ihrem Rang zugeordnet. Für Audiokonvertierung wird ffmpeg benötigt.</p>

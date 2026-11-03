@@ -16,10 +16,23 @@ const { inspectStemRuntime } = require('./stemRuntime.cjs');
 const { mainLogger: logger, summarizeForLog } = require('./logger.cjs');
 const { installStemEngine } = require('./stemInstaller.cjs');
 const { registerStemEngineIpc } = require('./stemEngineBridge.cjs');
+const {
+  describeStemDataRoot,
+  directoryCheck,
+  resolveStemDataRoot,
+  saveStemDataRoot,
+} = require('./stemStorageRoot.cjs');
 
 const APP_NAME = 'airdox_SMART_Editor';
 const APP_PROTOCOL = 'airdox';
 const IS_DEV = Boolean(process.env.ELECTRON_RENDERER_URL);
+const appDataDir = path.join(app.getPath('appData'), app.getName());
+const userDataDir = app.getPath('userData');
+const initialStemStorage = resolveStemDataRoot({
+  appData: app.getPath('appData'),
+  appName: app.getName(),
+  userDataDir,
+});
 
 // ---------------------------------------------------------------------------
 // Logging-System so früh wie möglich aktivieren – noch vor dem ersten
@@ -422,7 +435,7 @@ ipcMain.handle('stems:install-engine', async (event, options) => {
       try {
         event.sender.send('stems:install-progress', progress);
       } catch { /* window may be closing */ }
-    }, { stemsRoot: path.join(app.getPath('appData'), app.getName(), 'stems'), ...(modelId ? { modelId } : {}) });
+    }, { stemsRoot: stemEngineHost.root || initialStemStorage.root, ...(modelId ? { modelId } : {}) });
     if (result.ok && stemEngineHost.refreshRuntime && !stemEngineHost.refreshRuntime()) {
       return { ...result, restartRequired: true };
     }
@@ -466,8 +479,8 @@ ipcMain.handle('stems:separate', async (_event, wavBytes) => {
 // bekommt Fortschritt über `stems:job-progress` und lädt Stems einzeln.
 const stemEngineHost = registerStemEngineIpc({
   repoRoot: path.join(__dirname, '..'),
-  // Dieselbe Lage wie der Log-Ordner: %APPDATA%/airdox_SMART_Editor/stems/…
-  userDataDir: path.join(app.getPath('appData'), app.getName()),
+  userDataDir: appDataDir,
+  stemRoot: initialStemStorage.root,
   logger,
   ipcMain,
   broadcast: (channel, payload) => {
@@ -482,7 +495,36 @@ const stemEngineHost = registerStemEngineIpc({
 });
 logger.info('SYSTEM', stemEngineHost.available ? 'Stem-Engine (Teil-1-Kern) aktiv' : 'Stem-Engine-Kern nicht verfügbar', {
   bundle: stemEngineHost.bundlePath,
+  stemRoot: stemEngineHost.root || initialStemStorage.root,
+  stemRootSource: initialStemStorage.source,
   reason: stemEngineHost.reason,
+});
+
+function storageRootStatus() {
+  const root = stemEngineHost.root || initialStemStorage.root;
+  const resolved = describeStemDataRoot({
+    appData: app.getPath('appData'),
+    appName: app.getName(),
+    userDataDir,
+  });
+  return {
+    root,
+    source: root === resolved.root ? resolved.source : 'configured',
+    configPath: resolved.configPath,
+    writable: directoryCheck(root).ok,
+    reason: resolved.reason,
+    pendingRoot: root === resolved.root ? undefined : resolved.root,
+  };
+}
+
+ipcMain.handle('stems:storage-root', async () => ({ ok: true, data: storageRootStatus() }));
+ipcMain.handle('stems:storage-root-configure', async (_event, requestedRoot) => {
+  if (typeof requestedRoot !== 'string' || requestedRoot.trim().length === 0) {
+    return { ok: false, code: 'STEM_ROOT_INVALID', message: 'Bitte einen Stem-Datenordner auswählen.' };
+  }
+  const saved = saveStemDataRoot(userDataDir, requestedRoot);
+  if (!saved.ok) return saved;
+  return { ok: true, data: storageRootStatus() };
 });
 
 // --- IPC-Handler bleiben unverändert ---
@@ -653,6 +695,23 @@ ipcMain.handle('rekordbox:read-bundled-xml', async () => {
 });
 
 const selectedXmlUpdateSources = new Set();
+let activeXmlLibrary;
+function getActiveXmlLibrary() {
+  if (!activeXmlLibrary) {
+    const { ActiveXmlLibrary } = require('./activeXmlLibrary.cjs');
+    activeXmlLibrary = new ActiveXmlLibrary(path.join(app.getPath('userData'), 'rekordbox-active-xml.json'));
+  }
+  return activeXmlLibrary;
+}
+ipcMain.handle('rekordbox:read-active-xml-library', async () => {
+  const active = await getActiveXmlLibrary().read();
+  if (active) selectedXmlUpdateSources.add(path.resolve(active.path));
+  return active;
+});
+ipcMain.handle('rekordbox:activate-xml-library', async (_event, filePath, sourceToken) => {
+  if (typeof filePath !== 'string' || !selectedXmlUpdateSources.has(path.resolve(filePath))) throw new Error('XML-Quelldatei zuerst auswählen.');
+  return getActiveXmlLibrary().activate(path.resolve(filePath), sourceToken, () => getAnalysisPathRegistry().clear());
+});
 ipcMain.handle('rekordbox:choose-xml-update', async () => {
   const chosen = await dialog.showOpenDialog({ title: 'XML-Datei-Update', properties: ['openFile'], filters: [{ name: 'Rekordbox XML', extensions: ['xml'] }] });
   if (chosen.canceled || !chosen.filePaths.length) return null;
@@ -669,7 +728,7 @@ ipcMain.handle('rekordbox:read-xml-update', async (_event, filePath) => {
   const after = await stat(selected);
   if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('XML wurde während des Lesens verändert. Bitte erneut aktualisieren.');
   originalSourceRegistry.register(selected);
-  return { data, path: selected, modifiedAt: after.mtimeMs };
+  return getActiveXmlLibrary().stage({ data, path: selected, modifiedAt: after.mtimeMs });
 });
 
 // Persistent, app-owned association index. It intentionally stores neither
@@ -833,7 +892,7 @@ ipcMain.handle('rekordbox:open-project-file', async () => {
 ipcMain.handle('rekordbox:read-original-audio', async (_event, location) => {
   const localPath = toLocalPath(location);
   if (!localPath) throw new Error('Die XML-Location ist kein lokaler Dateipfad.');
-  const allowedExtensions = new Set(['.wav', '.mp3', '.flac', '.aiff', '.aif', '.m4a', '.aac', '.ogg']);
+  const allowedExtensions = new Set(['.wav', '.mp3', '.flac', '.aiff', '.aif', '.m4a', '.aac', '.ogg', '.webm']);
   if (!allowedExtensions.has(path.extname(localPath).toLowerCase())) {
     throw new Error('Die referenzierte Originaldatei ist keine unterstützte Audiodatei.');
   }
@@ -932,8 +991,8 @@ app.whenReady().then(() => {
       return;
     }
     try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'] });
-      if (!sources.length) return callback({});
+      const requestedAt = Date.now();
+      logger.info('RECORDER', 'Systemaudio-Freigabe angefragt', { requestedAt });
       const result = await dialog.showMessageBox(owner, {
         type: 'question',
         title: 'Systemaudio aufnehmen',
@@ -943,7 +1002,8 @@ app.whenReady().then(() => {
         defaultId: 0,
         cancelId: 0,
       });
-      callback(result.response === 1 ? { video: sources[0], audio: 'loopback' } : {});
+      logger.info('RECORDER', result.response === 1 ? 'Systemaudio-Freigabe bestätigt' : 'Systemaudio-Freigabe abgebrochen', { requestedAt, consentAt: Date.now() });
+      callback(result.response === 1 ? { video: request.frame, audio: 'loopback' } : {});
     } catch (error) {
       logger.error('RECORDER', 'Systemaudio-Freigabe fehlgeschlagen', error);
       callback({});

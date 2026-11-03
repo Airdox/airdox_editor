@@ -110,6 +110,15 @@ async function run() {
     modelStoreDir: storeDir,
     registry,
     mode: 'fast_dj',
+    // This is a status/manifest test. Loading the machine's native ONNX DLLs
+    // would measure antivirus/cold library startup instead of status latency.
+    onnxRuntime: {
+      InferenceSession: { create: async () => { throw new Error('Status darf keine Inferenz-Session erzeugen'); } },
+      Tensor: class {
+        constructor(public type: 'float32', public data: Float32Array, public dims: readonly number[]) {}
+      },
+      listSupportedBackends: () => [{ name: 'cpu', bundled: true }],
+    },
     backend: {
       pythonCommand: nonExistentPython,
     },
@@ -119,6 +128,8 @@ async function run() {
   const serviceStatus = await service.status();
   const svcElapsed = Date.now() - svcStart;
   assert.ok(serviceStatus.profiles.length > 0, 'Profile müssen vorhanden sein');
+  assert.equal(serviceStatus.onnx?.runtimeAvailable, true);
+  assert.deepEqual(serviceStatus.onnx?.providers, ['cpu']);
   assert.ok(svcElapsed < 2500, `Statusabfrage muss schnell sein (war ${svcElapsed} ms)`);
   console.log(`  ✓ StemJobService.status() abgeschlossen in ${svcElapsed} ms`);
 

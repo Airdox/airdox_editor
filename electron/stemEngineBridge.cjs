@@ -23,6 +23,7 @@ const crypto = require('node:crypto');
 const CHANNELS = {
   status: 'stems:engine-status',
   findSaved: 'stems:find-saved',
+  library: 'stems:library-probe',
   start: 'stems:job-start',
   wait: 'stems:job-wait',
   job: 'stems:job-get',
@@ -157,16 +158,17 @@ function sanitizeRequest(raw) {
  *
  * @param {object} options
  * @param {string} options.repoRoot      Root der App (enthält dist/)
- * @param {string} options.userDataDir   Schreibbarer Datenordner der Engine
+ * @param {string} options.userDataDir   Schreibbarer App-Datenordner der Engine
+ * @param {string} [options.stemRoot]    Persistenter Stem-Datenordner
  * @param {object} [options.logger]      mainLogger mit debug/info/warn/error
  * @param {object} options.ipcMain       Electron ipcMain
  * @param {(channel: string, payload: unknown) => void} [options.broadcast]
  *        Verteilt Fortschritts-Events an alle Fenster.
  */
-function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadcast }) {
+function registerStemEngineIpc({ repoRoot, userDataDir, stemRoot, logger, ipcMain, broadcast }) {
   const loaded = loadStemBridge(repoRoot, logger);
   const roots = {
-    root: path.join(userDataDir, 'stems'),
+    root: path.resolve(stemRoot || path.join(userDataDir, 'stems')),
   };
 
   if (!loaded.bridge) {
@@ -225,6 +227,15 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
     }
   }
   attachEvents();
+
+  ipcMain.handle(CHANNELS.library, async (_event, requests) => {
+    if (!Array.isArray(requests) || requests.length > 100000 || requests.some(request =>
+      !request || typeof request.trackId !== 'string' || typeof request.sourcePath !== 'string' ||
+      request.trackId.length > 512 || request.sourcePath.length > 32768)) {
+      return { ok: false, code: 'INVALID_REQUEST', message: 'Ungültige Library-Anfrage.' };
+    }
+    return bridge.probeLibraryStems(requests);
+  });
 
   ipcMain.handle(CHANNELS.status, async () => {
     const status = await bridge.status();
@@ -338,6 +349,7 @@ function registerStemEngineIpc({ repoRoot, userDataDir, logger, ipcMain, broadca
   log(logger, 'info', 'Stem-Engine IPC registriert', { bundle: loaded.bundlePath, root: roots.root });
 
   return { available: true, reason: undefined, bundlePath: loaded.bundlePath, channels: CHANNELS, get bridge() { return bridge; },
+    get root() { return roots.root; },
     refreshRuntime() {
       // Keep active job handles alive; completed/failed jobs must not force a
       // full app restart after an engine install because the renderer can read

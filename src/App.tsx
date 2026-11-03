@@ -81,6 +81,7 @@ import { DetailWaveform } from './components/DetailWaveform';
 import { PalettePanel } from './components/PalettePanel';
 import { ClipDeckView } from './components/ClipDeckView';
 import { BrowserMultiTrackBar } from './components/BrowserMultiTrackBar';
+import { getLibraryStemRequests, type LibraryStemSnapshot } from './features/library';
 import { ProjectInfoModal } from './components/Modals/ProjectInfoModal';
 import { OperationFeedbackModal, OperationTelemetry } from './components/Modals/OperationFeedbackModal';
 import { InitialSetupModal } from './components/Modals/InitialSetupModal';
@@ -312,9 +313,10 @@ export default function App() {
   // The bundled collection is parsed once. Rekordbox DB/ANLZ data is resolved
   // only for the explicitly selected TrackID through the targeted read-only gate.
   const bundledCollectionPromiseRef = useRef<Promise<TrackModel[]> | null>(null);
-  const applyXmlCollectionUpdate = useCallback(async (updated: TrackModel[], sourceLabel: string) => {
-    const desktop = window.rekordboxDesktop as typeof window.rekordboxDesktop & { invalidateCollectionCache?: () => Promise<unknown> };
-    await desktop?.invalidateCollectionCache?.();
+  const applyXmlCollectionUpdate = useCallback(async (updated: TrackModel[], sourceLabel: string, sourceToken?: string) => {
+    const desktop = window.rekordboxDesktop;
+    if (sourceToken && desktop?.activateXmlLibrary) await desktop.activateXmlLibrary(sourceLabel, sourceToken);
+    else await desktop?.invalidateCollectionCache?.();
     bundledCollectionPromiseRef.current = Promise.resolve(updated);
     setXmlImportedTracks(updated);
     setXmlFileName(sourceLabel);
@@ -342,6 +344,32 @@ export default function App() {
 
   // Stems Separation and Multi-Track Mixer state
   const [activeTrackStems, setActiveTrackStems] = useState<TrackStems | null>(null);
+  const [libraryStems, setLibraryStems] = useState<LibraryStemSnapshot>({});
+  useEffect(() => {
+    const api = window.rekordboxDesktop?.stemEngine;
+    if (!api?.probeLibraryStems) return;
+    let disposed = false;
+    let running = false;
+    let pending = false;
+    const requests = getLibraryStemRequests([...xmlImportedTracks, ...tracks]);
+    const refresh = async () => {
+      if (running) { pending = true; return; }
+      running = true;
+      do {
+        pending = false;
+        try {
+          const result = await api.probeLibraryStems!(requests);
+          if (!disposed) setLibraryStems(result.ok ? result.data : {});
+        } catch { if (!disposed) setLibraryStems({}); }
+      } while (pending && !disposed);
+      running = false;
+    };
+    void refresh();
+    const detach = api.onStemJobProgress?.((event) => { if (event.type === 'completed') void refresh(); });
+    const detachRemote = api.onRemoteStemJobProgress?.((event) => { void refresh(); });
+    window.addEventListener('focus', refresh);
+    return () => { disposed = true; detach?.(); detachRemote?.(); window.removeEventListener('focus', refresh); };
+  }, [xmlImportedTracks, tracks, activeTrackStems]);
   const [stemsMixerState, setStemsMixerState] = useState<StemsMixerState>({ ...DEFAULT_STEMS_MIXER_STATE });
   const [stemPanelOpen, setStemPanelOpen] = useState(true);
   const [isSeparatingStems, setIsSeparatingStems] = useState<boolean>(false);
@@ -429,6 +457,7 @@ export default function App() {
   const [workspacePaths, setWorkspacePaths] = useState<WorkspacePathSettings>(() =>
     loadWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage)
   );
+  const [stemStorageRoot, setStemStorageRoot] = useState<Awaited<ReturnType<typeof stemEngine.storageRoot>>>(null);
   const [initialSetupOpen, setInitialSetupOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const done = window.localStorage?.getItem('airdox.initialSetupCompleted');
@@ -915,6 +944,7 @@ export default function App() {
   // Installationslage kann sich zwischenzeitlich geändert haben.
   useEffect(() => {
     if (!settingsModalOpen) return;
+    void stemEngine.storageRoot().then(setStemStorageRoot).catch(() => setStemStorageRoot(null));
     void refreshStemArchitectures();
   }, [settingsModalOpen, refreshStemArchitectures]);
 
@@ -932,6 +962,7 @@ export default function App() {
     try {
       const effectiveArchitecture = architectureOverride ?? stemArchitecture;
       const separated = await stemEngine.separateWithEngine(workingAudioBuffer, activeTrack.id, activeTrack.originalSha256, {
+        sourceTrack: activeTrack,
         profile,
         ...resolveArchitectureJobOptions(effectiveArchitecture),
         onProgress: (prog) => setSeparationProgress(prog),
@@ -1030,6 +1061,7 @@ export default function App() {
           {
             profile,
             signal: remoteAbortRef.current,
+              sourceTrack: activeTrack,
             onProgress: (prog) => setSeparationProgress(prog),
             onRemoteJob: (job) => { setRemoteFlowJob(job); setRemoteFlowJobId(job.jobId); },
           }
@@ -3285,11 +3317,18 @@ export default function App() {
 
           {/* Unterster Streifen: Browser & Sammlung */}
           <BrowserMultiTrackBar
+            libraryStems={libraryStems}
             isOpen={browserOpen}
             onToggle={() => setBrowserOpen(!browserOpen)}
             tracks={tracks}
+            collectionTracks={xmlImportedTracks.length ? xmlImportedTracks : undefined}
             activeTrackId={activeTrackId}
             onSelectTrack={(id) => {
+              if (!tracks.some((track) => track.id === id)) {
+                const selected = xmlImportedTracks.find((track) => track.id === id);
+                if (selected) void handleSelectTrackFromXml(selected);
+                return;
+              }
               setActiveTrackId(id);
               const t = tracks.find((tr) => tr.id === id);
               if (t && t.audioBuffer) {
@@ -3446,6 +3485,12 @@ export default function App() {
         stemArchitecturesLoading={stemArchitecturesLoading}
         onRefreshStemArchitectures={() => { void refreshStemArchitectures(); }}
         workspacePaths={workspacePaths}
+        stemStorageRoot={stemStorageRoot}
+        onConfigureStemStorageRoot={stemStorageRoot ? async (root) => {
+          const status = await stemEngine.configureStorageRoot(root);
+          setStemStorageRoot(status);
+          return status;
+        } : undefined}
         onSetWorkspacePaths={(paths) => {
           setWorkspacePaths(paths);
           saveWorkspacePathSettings(typeof window === 'undefined' ? null : window.localStorage, paths);
@@ -3485,6 +3530,7 @@ export default function App() {
 
       {/* Rekordbox XML Track-Auswahl Modal with Search Bar */}
       <LazyRekordboxXmlImportModal
+        libraryStems={libraryStems}
         onUpdateXml={applyXmlCollectionUpdate}
         isOpen={xmlCollectionModalOpen}
         onClose={() => setXmlCollectionModalOpen(false)}

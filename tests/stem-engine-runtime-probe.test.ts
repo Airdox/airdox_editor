@@ -147,20 +147,28 @@ async function run() {
   console.log('\n[ TEST ] #7 Zeitüberschreitung wird nicht festgeschrieben');
   const slow = fakeInterpreter('slow');
   const slowCache = path.join(temp, 'CacheSlow');
+  const attemptsBefore = torchProbeSpawnCount();
   const slowResult = await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 1200 });
   assert.equal(slowResult.available, false);
   assert.match(slowResult.reason ?? '', /nicht verfügbar|Zeitüberschreitung/);
+  assert.match(slowResult.detail ?? '', /1200 ms/, 'Der kurze Probe-Timeout muss tatsächlich ablaufen');
   const persisted = path.join(slowCache, 'runtime-probe.json');
   const persistedEntries = existsSync(persisted)
     ? Object.values(JSON.parse(readFileSync(persisted, 'utf8')).entries ?? {}).length
     : 0;
   assert.equal(persistedEntries, 0, 'Ein Timeout ist keine belastbare Aussage und darf nicht auf Platte landen');
   // Und der nächste Aufruf misst wirklich wieder.
-  const before = spawnCount('slow');
-  assert.ok(before >= 1, 'Der erste Aufruf muss den Interpreter überhaupt gestartet haben');
+  // The deadline includes OS startup. Windows may kill the child before its
+  // first JS instruction, so the child's file counter cannot prove a retry.
+  // Count host probe attempts instead; the protocol cases above separately
+  // verify that children execute and write their counters.
+  assert.equal(torchProbeSpawnCount(), attemptsBefore + 1, 'Der erste Aufruf muss eine Probe starten');
   clearTorchProbeCache();
-  await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 1200 });
-  assert.ok(spawnCount('slow') > before, 'Nach einem Timeout muss neu gemessen werden');
+  const retried = await probeTorchRuntime({ ...slow, cacheDir: slowCache, mode: 'fast', fastTimeoutMs: 1200 });
+  assert.equal(retried.available, false);
+  assert.equal(retried.cached, false);
+  assert.match(retried.detail ?? '', /1200 ms/);
+  assert.equal(torchProbeSpawnCount(), attemptsBefore + 2, 'Nach einem Timeout muss neu gemessen werden');
   console.log('  ✓ Timeout nur im Speicher, nächste Messung startet neu');
 
   // ---- #8: Installation verwirft die Verdikte ------------------------------

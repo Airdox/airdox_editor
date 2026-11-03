@@ -96,18 +96,57 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
   savedPath,
   stats,
 }) => {
-  const [meter, setMeter] = React.useState({ peak: 0, rms: 0 });
+  const [meter, setMeter] = React.useState({ peak: 0, rms: 0, label: '', muted: false, sampleRate: 0 });
   const [formats, setFormats] = React.useState<string[]>([]);
   React.useEffect(() => { void window.airdoxRecorder?.formats().then(setFormats).catch(() => setFormats(['WEBM'])); }, []);
   const isAudioExportFormatSupported = (value: RecorderFormat) => window.airdoxRecorder ? formats.includes(value) && typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus') : exportSupported(value);
   const [devices, setDevices] = React.useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = React.useState(() => typeof localStorage === 'undefined' ? '' : localStorage.getItem('airdox.recorderInput') || '');
   const [deviceError, setDeviceError] = React.useState('');
+  const [playbackUrl, setPlaybackUrl] = React.useState<string | null>(null);
+  const [playbackError, setPlaybackError] = React.useState('');
+  const [playbackLoading, setPlaybackLoading] = React.useState(false);
+  const playbackGeneration = React.useRef(0);
   React.useEffect(() => {
-    const listener = (event: Event) => setMeter((event as CustomEvent<{ peak: number; rms: number }>).detail);
+    playbackGeneration.current++;
+    setPlaybackUrl(null);
+    setPlaybackError('');
+    setPlaybackLoading(false);
+  }, [savedPath, isOpen]);
+  React.useEffect(() => () => { if (playbackUrl) URL.revokeObjectURL(playbackUrl); }, [playbackUrl]);
+  const preparePlayback = async () => {
+    if (!savedPath || !window.rekordboxDesktop) return;
+    const generation = playbackGeneration.current;
+    setPlaybackLoading(true);
+    setPlaybackError('');
+    try {
+      const result = await window.rekordboxDesktop.readOriginalAudio(savedPath);
+      if (generation !== playbackGeneration.current) return;
+      const extension = savedPath.split('.').pop()?.toLowerCase();
+      const mime = extension === 'webm' ? 'audio/webm' : extension === 'mp3' ? 'audio/mpeg' : extension === 'flac' ? 'audio/flac' : 'audio/wav';
+      setPlaybackUrl(URL.createObjectURL(new Blob([result.data], { type: mime })));
+    } catch (error) {
+      if (generation === playbackGeneration.current) setPlaybackError(String(error));
+    } finally {
+      if (generation === playbackGeneration.current) setPlaybackLoading(false);
+    }
+  };
+  React.useEffect(() => {
+    const listener = (event: Event) => setMeter((event as CustomEvent<typeof meter>).detail);
     window.addEventListener('airdox-recorder-meter', listener);
     return () => window.removeEventListener('airdox-recorder-meter', listener);
   }, []);
+  React.useEffect(() => {
+    if (stage !== 'RECORDING') setMeter({ peak: 0, rms: 0, label: '', muted: false, sampleRate: 0 });
+  }, [stage]);
+  const [countdown, setCountdown] = React.useState<number>(preRoll);
+  React.useEffect(() => {
+    setCountdown(preRoll);
+    if (stage !== 'PREROLL' || source === 'SYSTEM_LOOPBACK') return;
+    const start = Date.now();
+    const timer = window.setInterval(() => setCountdown(Math.max(0, preRoll - Math.floor((Date.now() - start) / 1000))), 200);
+    return () => window.clearInterval(timer);
+  }, [stage, preRoll, source]);
   if (!isOpen) return null;
   const busy = stage === 'PREROLL' || stage === 'RECORDING' || stage === 'OPTIMIZING' || stage === 'SAVING';
   const canEdit = !busy;
@@ -115,7 +154,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
 
   return (
     <div className={stage === 'RECORDING' ? 'fixed bottom-4 right-4 z-[120] w-[420px] max-w-[95vw] select-none' : 'fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[120] p-4 select-none'}>
-      <div className="w-full max-w-2xl bg-[#111319] border border-[#303441] rounded-md shadow-[0_20px_80px_rgba(0,0,0,.65)] overflow-hidden text-neutral-200">
+      <div role="dialog" aria-label="Set-Recorder" aria-modal={stage !== 'RECORDING'} className="w-full max-w-2xl bg-[#111319] border border-[#303441] rounded-md shadow-[0_20px_80px_rgba(0,0,0,.65)] overflow-hidden text-neutral-200">
         <div className="h-12 px-5 bg-gradient-to-r from-[#1b1e29] to-[#151720] border-b border-[#2a2e3a] flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={`w-8 h-8 rounded-full flex items-center justify-center ${busy ? 'bg-[#ff3b30]/20 text-[#ff5147] animate-pulse' : 'bg-[#0088ff]/15 text-[#00a2ff]'}`}>
@@ -126,7 +165,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
               <div className="text-[10px] text-neutral-500">Set-Aufnahme · {source === 'SYSTEM_LOOPBACK' ? 'Systemaudio' : source === 'AUDIO_INPUT' ? 'Audiointerface' : 'Editor Master'} · {format}</div>
             </div>
           </div>
-          <button onClick={onClose} disabled={busy} className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#2b2e3a] rounded disabled:opacity-30" title="Recorder schließen">
+          <button onClick={onClose} disabled={busy} className="p-1.5 text-neutral-400 hover:text-white hover:bg-[#2b2e3a] rounded disabled:opacity-30" title="Recorder schließen" aria-label="Recorder schließen">
             <X size={16} />
           </button>
         </div>
@@ -137,13 +176,13 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
               <div className={`w-2.5 h-2.5 rounded-full ${stage === 'RECORDING' ? 'bg-[#ff3b30] shadow-[0_0_12px_#ff3b30]' : isDone ? 'bg-[#00c853]' : 'bg-[#4b5160]'}`} />
               <div>
                 <div className="text-[10px] uppercase tracking-[.16em] text-neutral-500">Status</div>
-                <div className="text-xs font-semibold text-white">
-                  {stage === 'IDLE' && 'Bereit für die Aufnahme'}
-                  {stage === 'PREROLL' && `Start in ${preRoll} Sekunden…`}
+                <div role="status" className="text-xs font-semibold text-white">
+                  {stage === 'IDLE' && 'Startbereit · Quelle wird beim Start geprüft'}
+                  {stage === 'PREROLL' && (source === 'SYSTEM_LOOPBACK' ? 'Systemaudio-Freigabe wird angefragt…' : countdown > 0 ? `Start in ${countdown} Sekunden…` : 'Audioquelle wird vorbereitet…')}
                   {stage === 'RECORDING' && 'Aufnahme läuft'}
                   {stage === 'OPTIMIZING' && 'Gesamtes Set wird optimiert…'}
                   {stage === 'SAVING' && 'Datei wird gespeichert…'}
-                  {stage === 'DONE' && 'Set erfolgreich gespeichert'}
+                  {stage === 'DONE' && (savedPath ? 'Set gespeichert' : 'Keine Datei gespeichert')}
                   {stage === 'ERROR' && 'Aufnahme konnte nicht abgeschlossen werden'}
                 </div>
               </div>
@@ -151,17 +190,21 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
             <div className={`font-mono text-2xl tabular-nums ${stage === 'RECORDING' ? 'text-[#ff5147]' : 'text-neutral-300'}`}>{formatTime(elapsed)}</div>
           </div>
 
-          {error && <div className="rounded border border-[#ff3b30]/40 bg-[#3a1517] px-3 py-2 text-[11px] text-[#ffaaa5]">{error}</div>}
+          {error && <div role="alert" className="rounded border border-[#ff3b30]/40 bg-[#3a1517] px-3 py-2 text-[11px] text-[#ffaaa5]">{error}<p className="mt-2">Quelle und Routing prüfen, Freigabe erlauben und freien Speicher prüfen. Danach erneut starten oder einen anderen Eingang wählen.</p></div>}
           {savedPath && (
             <div className="rounded border border-[#00c853]/30 bg-[#0d281b] px-3 py-2 text-[11px] text-[#8af0b1] flex gap-2 items-start">
               <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
-              <span className="break-all"><b>{stage === 'RECORDING' ? 'Laufende Sicherung:' : 'Gespeichert:'}</b> {savedPath}{stage === 'DONE' && window.rekordboxDesktop && <button onClick={() => void window.rekordboxDesktop?.openPath(savedPath)} className="block mt-2 underline">Aufnahme öffnen / abspielen</button>}</span>
+              <div className="min-w-0 flex-1 break-all"><b>{busy ? 'Laufende Sicherung:' : stage === 'ERROR' ? 'Sicherung prüfen:' : 'Gespeichert:'}</b> {savedPath}{(stage === 'DONE' || stage === 'ERROR') && window.rekordboxDesktop && <div className="flex gap-4 mt-2"><button onClick={() => void preparePlayback()} disabled={playbackLoading} className="underline">{playbackLoading ? 'Wiedergabe laden…' : 'Aufnahme anhören'}</button><button onClick={() => void window.rekordboxDesktop?.openPath(savedPath)} className="underline">Im Ordner anzeigen</button></div>}
+                {playbackUrl && <audio aria-label="Gespeicherte Aufnahme" className="w-full mt-3" controls src={playbackUrl} onError={() => setPlaybackError('Wiedergabe nicht möglich. Datei im Ordner prüfen oder in einem externen Player öffnen.')} />}
+                {playbackError && <p role="alert" className="text-red-300 mt-2">{playbackError}</p>}
+              </div>
             </div>
           )}
 
           {stage === 'RECORDING' && <div className="rounded border border-[#252936] bg-[#0b0d12] p-3" aria-label="Aufnahmepegel">
-            <div className="flex justify-between text-xs mb-2"><span>{meter.peak < 0.0001 ? 'Kein Signal – Routing prüfen' : meter.peak >= 0.99 ? 'Übersteuerung' : 'Eingangssignal aktiv'}</span><span>{(20 * Math.log10(Math.max(meter.peak, 0.00001))).toFixed(1)} dBFS</span></div>
-            <meter min={0} max={1} value={meter.rms} className="w-full h-4" />
+            <p className="text-xs text-blue-200 mb-2">{meter.label || 'Quelle wird verbunden…'}{meter.sampleRate > 0 && ` · ${meter.sampleRate / 1000} kHz`}</p>
+            <div className="flex justify-between text-xs mb-2"><span>{meter.muted ? 'Quelle stummgeschaltet' : meter.peak < 0.0001 ? 'Kein Signal – Routing prüfen' : meter.peak >= 0.99 ? 'Übersteuerung' : 'Eingangssignal aktiv'}</span><span>{(20 * Math.log10(Math.max(meter.peak, 0.00001))).toFixed(1)} dBFS</span></div>
+            <meter aria-label="RMS-Eingangspegel" min={-80} max={0} value={20 * Math.log10(Math.max(meter.rms, 0.0001))} className="w-full h-4" />
           </div>}
           <section className={stage === 'RECORDING' ? 'hidden' : 'space-y-2'}>
             {source === 'AUDIO_INPUT' && <div className="space-y-2">
@@ -179,7 +222,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
               {deviceError && <p role="alert" className="text-xs text-red-300">{deviceError}</p>}
             </div>}
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-neutral-500"><Activity size={13} /> Signalquelle</div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {sourceItems.map((item) => (
                 <button key={item.id} disabled={!canEdit} onClick={() => onSetSource(item.id)} className={`text-left p-3 rounded border transition-colors ${source === item.id ? 'border-[#0088ff] bg-[#0b2540] text-white' : 'border-[#282c38] bg-[#171a22] text-neutral-400 hover:border-[#4b5365]'} disabled:opacity-45`}>
                   <div className="flex items-center gap-2 mb-1.5">{item.icon}<span className="text-[11px] font-bold">{item.label}</span></div>
@@ -214,10 +257,10 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
                 Desktop: Aufnahme wird laufend unter Musik / AirDox Recordings gesichert. WebM/Opus: ca. 144 MB/h; Samplerate und Kanäle bestimmt die Quelle. WAV, MP3 und FLAC benötigen FFmpeg und werden nach Stop konvertiert. Die Opus-Sicherung bleibt erhalten. Keine nachträgliche Lautheitsanpassung im Streaming-Modus.
               </p>
               <div className="grid grid-cols-2 gap-2">
-                <label className="text-[10px] text-neutral-500">Samplerate<select disabled={!canEdit} value={sampleRate} onChange={(e) => onSetSampleRate(Number(e.target.value) as 44100 | 48000)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={48000}>48 kHz</option><option value={44100}>44.1 kHz</option></select></label>
-                <label className="text-[10px] text-neutral-500">Bit-Tiefe<select disabled={!canEdit || format === 'MP3'} value={bitDepth} onChange={(e) => onSetBitDepth(Number(e.target.value) as 16 | 24 | 32)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={24}>24 Bit</option><option value={16}>16 Bit</option><option value={32}>32 Bit Float</option></select></label>
+                <label className="text-[10px] text-neutral-500">Samplerate<select disabled={!canEdit || format === 'WEBM'} value={sampleRate} onChange={(e) => onSetSampleRate(Number(e.target.value) as 44100 | 48000)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={48000}>48 kHz</option><option value={44100}>44.1 kHz</option></select></label>
+                <label className="text-[10px] text-neutral-500">Bit-Tiefe<select disabled={!canEdit || format === 'MP3' || format === 'WEBM'} value={bitDepth} onChange={(e) => onSetBitDepth(Number(e.target.value) as 16 | 24 | 32)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={24}>24 Bit</option><option value={16}>16 Bit</option><option value={32}>32 Bit Float</option></select></label>
               </div>
-              <label className="text-[10px] text-neutral-500">Kanäle<select disabled={!canEdit} value={channels} onChange={(e) => onSetChannels(e.target.value as 'STEREO' | 'MONO')} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value="STEREO">Stereo</option><option value="MONO">Mono</option></select></label>
+              <label className="text-[10px] text-neutral-500">Kanäle<select disabled={!canEdit || format === 'WEBM'} value={channels} onChange={(e) => onSetChannels(e.target.value as 'STEREO' | 'MONO')} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value="STEREO">Stereo</option><option value="MONO">Mono</option></select></label>
             </div>
 
             <div className="space-y-3">
@@ -225,8 +268,8 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
               <Toggle label="Eingangs-Limiter" detail="Dynamikkompressor · kein garantierter True-Peak-Grenzwert" checked={limiter} disabled={!canEdit} onChange={onSetLimiter} />
               <Toggle label="Set-Loudness optimieren" detail={window.airdoxRecorder ? 'Streaming: keine nachträgliche Lautheitsanpassung' : 'Gesamtdatei · RMS-basierte Schätzung'} checked={window.airdoxRecorder ? false : optimize} disabled={!canEdit || Boolean(window.airdoxRecorder)} onChange={onSetOptimize} />
               <div className="grid grid-cols-2 gap-2">
-                <label className="text-[10px] text-neutral-500">Ziel-Lautheit<select disabled={!canEdit || !optimize} value={targetLufs} onChange={(e) => onSetTargetLufs(Number(e.target.value) as -14 | -12 | -9)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={-14}>-14 LUFS</option><option value={-12}>-12 LUFS</option><option value={-9}>-9 LUFS</option></select></label>
-                <label className="text-[10px] text-neutral-500">Ceiling<select disabled={!canEdit || !optimize} value={truePeak} onChange={(e) => onSetTruePeak(Number(e.target.value) as -1 | -0.3)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={-1}>-1.0 dBTP</option><option value={-0.3}>-0.3 dBTP</option></select></label>
+                <label className="text-[10px] text-neutral-500">Ziel-Lautheit<select disabled={!canEdit || !optimize || Boolean(window.airdoxRecorder)} value={targetLufs} onChange={(e) => onSetTargetLufs(Number(e.target.value) as -14 | -12 | -9)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={-14}>-14 LUFS</option><option value={-12}>-12 LUFS</option><option value={-9}>-9 LUFS</option></select></label>
+                <label className="text-[10px] text-neutral-500">Ceiling<select disabled={!canEdit || !optimize || Boolean(window.airdoxRecorder)} value={truePeak} onChange={(e) => onSetTruePeak(Number(e.target.value) as -1 | -0.3)} className="mt-1 w-full bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1.5 text-xs text-neutral-200"><option value={-1}>-1.0 dBTP</option><option value={-0.3}>-0.3 dBTP</option></select></label>
               </div>
               <label className="flex items-center gap-2 text-[10px] text-neutral-400"><Timer size={13} className="text-[#00a2ff]" /> Vorlauf<select disabled={!canEdit} value={preRoll} onChange={(e) => onSetPreRoll(Number(e.target.value) as 0 | 3 | 5)} className="ml-auto bg-[#0c0e13] border border-[#2a2e39] rounded px-2 py-1 text-xs text-neutral-200"><option value={0}>Aus</option><option value={3}>3 s</option><option value={5}>5 s</option></select></label>
             </div>
@@ -235,7 +278,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
           <section className={stage === 'RECORDING' ? 'hidden' : 'border-t border-[#242834] pt-4 space-y-2'}>
             <div className="text-[10px] uppercase tracking-[.14em] text-neutral-500">Zieldatei</div>
             <div className="flex gap-2">
-              <input disabled={!canEdit} value={fileName} onChange={(e) => onSetFileName(e.target.value)} className="flex-1 bg-[#0c0e13] border border-[#2a2e39] rounded px-3 py-2 text-xs text-white placeholder:text-neutral-600" placeholder="mein_rekordbox_set" />
+              <input aria-label="Dateiname der Aufnahme" disabled={!canEdit} value={fileName} onChange={(e) => onSetFileName(e.target.value)} className="flex-1 bg-[#0c0e13] border border-[#2a2e39] rounded px-3 py-2 text-xs text-white placeholder:text-neutral-600" placeholder="mein_rekordbox_set" />
               <div className="px-3 py-2 bg-[#181b24] border border-[#2a2e39] rounded text-xs text-neutral-400 self-stretch flex items-center">.{format.toLowerCase()}</div>
             </div>
           </section>
@@ -255,7 +298,7 @@ export const RecorderModal: React.FC<RecorderModalProps> = ({
           <div className="flex gap-2">
             {stage === 'PREROLL' && <button onClick={onStop} className="px-3 py-2 text-xs text-red-300">Start abbrechen</button>}
             {isDone ? <button onClick={onClose} className="px-4 py-2 rounded bg-[#2a2e3a] hover:bg-[#383d4b] text-xs text-white">Schließen</button> : <button onClick={onClose} disabled={busy} className="px-4 py-2 rounded text-xs text-neutral-400 hover:text-white disabled:opacity-40">Abbrechen</button>}
-            {stage === 'RECORDING' ? <button onClick={onStop} className="px-5 py-2 rounded bg-[#c92727] hover:bg-[#e23636] text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} /> Aufnahme stoppen</button> : <button onClick={onStart} disabled={busy || stage === 'DONE' || !isAudioExportFormatSupported(format)} title={!isAudioExportFormatSupported(format) ? 'Dieses Aufnahmeformat ist derzeit nicht verfügbar; bitte WAV wählen.' : undefined} className="px-5 py-2 rounded bg-[#0088ff] hover:bg-[#1595ff] disabled:opacity-40 text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} />{stage === 'PREROLL' ? 'Vorbereiten…' : 'Aufnahme starten'}</button>}
+            {stage === 'RECORDING' ? <button onClick={onStop} className="px-5 py-2 rounded bg-[#c92727] hover:bg-[#e23636] text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} /> Aufnahme stoppen</button> : <button onClick={onStart} disabled={busy || !isAudioExportFormatSupported(format)} title={!isAudioExportFormatSupported(format) ? 'Dieses Aufnahmeformat ist derzeit nicht verfügbar; bitte WAV wählen.' : undefined} className="px-5 py-2 rounded bg-[#0088ff] hover:bg-[#1595ff] disabled:opacity-40 text-white text-xs font-bold flex items-center gap-2"><CircleStop size={14} />{stage === 'PREROLL' ? 'Vorbereiten…' : stage === 'DONE' ? 'Neue Aufnahme' : stage === 'ERROR' ? 'Erneut versuchen' : 'Aufnahme starten'}</button>}
           </div>
         </div>
       </div>

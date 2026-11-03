@@ -1,8 +1,8 @@
 import { parseRekordboxXmlAsync, unescapeXml } from '../../rekordbox/xmlParser';
-import { buildCollectionTrackModel } from '../project/projectModel';
+import { buildCollectionTrackModel } from './collectionTrackModel';
 import { DataOrigin, type TrackModel } from '../../types/rekordbox';
 
-export interface XmlFileSource { data: string; path: string; modifiedAt?: number }
+export interface XmlFileSource { data: string; path: string; modifiedAt?: number; sourceToken?: string }
 export interface XmlUpdateBridge {
   chooseXmlFile?: () => Promise<{ path: string } | null>;
   readXmlFile?: (path: string) => Promise<XmlFileSource>;
@@ -11,8 +11,9 @@ export interface XmlCollectionUpdate {
   tracks: TrackModel[];
   sourceLabel: string;
   modifiedAt?: number;
+  sourceToken?: string;
 }
-export type XmlUpdateCommit = (tracks: TrackModel[], sourceLabel: string) => void | Promise<void>;
+export type XmlUpdateCommit = (tracks: TrackModel[], sourceLabel: string, sourceToken?: string) => void | Promise<void>;
 
 export function getXmlTrackIdentity(track: Pick<TrackModel, 'originalSha256' | 'originalMedia'>): string | null {
   if (/^[a-f0-9]{64}$/i.test(track.originalSha256)) return `sha256:${track.originalSha256.toLowerCase()}`;
@@ -92,7 +93,7 @@ export async function prepareXmlCollectionUpdate(source: XmlFileSource): Promise
     originalSha256: track.originalSha256 || '',
   }, index, DataOrigin.REKORDBOX_XML));
   for (const track of tracks) track.originalSha256 = '';
-  return { tracks, sourceLabel: source.path, modifiedAt: source.modifiedAt };
+  return { tracks, sourceLabel: source.path, modifiedAt: source.modifiedAt, sourceToken: source.sourceToken };
 }
 
 export async function readXmlCollectionUpdate(path: string | undefined, bridge: XmlUpdateBridge): Promise<XmlCollectionUpdate> {
@@ -104,5 +105,5 @@ export async function readXmlCollectionUpdate(path: string | undefined, bridge: 
 }
 
 export async function commitXmlCollectionUpdate(update: XmlCollectionUpdate, onUpdate: XmlUpdateCommit): Promise<void> {
-  await onUpdate(update.tracks, update.sourceLabel);
+  await onUpdate(update.tracks, update.sourceLabel, update.sourceToken);
 }

@@ -18,8 +18,11 @@
 
 import { BufferFactory } from './editingEngine';
 import { prepareStemInput } from './stemInput';
+import { sanitizeLibrarySourceExtras, type LibrarySourceExtras } from '../features/library/stems';
+import type { TrackModel } from '../types/rekordbox';
 import { logger } from '../utils/logger';
 import type { StemComputeDevice, StemJobView, StemServiceStatus, StemValidationMode } from '../stems/transportTypes';
+import type { StemStorageRootStatus } from '../stems/transportTypes';
 // Fernpfad (High Quality extern): eigene Importzeile, damit der bestehende
 // Vertragstest („Renderer importiert den Vertrag typ-only“) unverändert gilt.
 import type { RemoteCancelResult, RemoteServiceStatus, RemoteSettings, RemoteStemJobView } from '../stems/transportTypes';
@@ -149,6 +152,8 @@ export interface StemEngineInfo {
 }
 
 export interface EngineSeparationOptions {
+  /** Used only to prove that the submitted PCM is the unchanged imported original. */
+  sourceTrack?: TrackModel;
   profile?: StemQualityProfile;
   /** Fest gewählte Architektur (Modell-ID). Ohne Angabe entscheidet das Profil. */
   modelId?: string;
@@ -166,6 +171,26 @@ export interface EngineSeparationOptions {
 }
 
 type StemCacheOrigin = 'local' | 'remote';
+
+export function buildLibrarySourceExtras(sourceBuffer: AudioBuffer, track?: TrackModel): LibrarySourceExtras | undefined {
+  if (!track || sourceBuffer !== track.audioBuffer || track.originalMedia?.status !== 'AVAILABLE' || !track.isOriginalUntouched) return undefined;
+  const segments = track.workingSegments;
+  const segment = segments?.[0];
+  const tolerance = 1 / sourceBuffer.sampleRate;
+  if (segments?.length !== 1 || !segment || !Number.isFinite(sourceBuffer.sampleRate) || sourceBuffer.sampleRate <= 0 ||
+      !Number.isFinite(sourceBuffer.duration) || sourceBuffer.duration <= 0 ||
+      !Number.isFinite(segment.sourceEnd) || !Number.isFinite(segment.projectDuration) ||
+      segment.type !== 'ORIGINAL' || segment.trackId !== track.id ||
+      segment.sourceStart !== 0 || segment.projectStart !== 0 || segment.gain !== 1 ||
+      Math.abs(segment.sourceEnd - sourceBuffer.duration) > tolerance ||
+      Math.abs(segment.projectDuration - sourceBuffer.duration) > tolerance) return undefined;
+  return sanitizeLibrarySourceExtras({
+    librarySourcePath: track.originalMedia.resolvedPath || track.originalMedia.location,
+    librarySourceSize: track.originalMedia.size,
+    librarySourceModifiedAt: track.originalMedia.modifiedAt,
+    librarySourceUnedited: true,
+  });
+}
 
 /** AudioBuffers in the editor are treated as immutable working-copy revisions. */
 const inputFingerprintByBuffer = new WeakMap<AudioBuffer, string>();
@@ -879,6 +904,8 @@ class StemEngine {
       }
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
 
+      const extras = buildLibrarySourceExtras(sourceBuffer, options.sourceTrack);
+
       let job: StemJobView;
       if (desktop?.startStemJob) {
         const started = await desktop.startStemJob({
@@ -889,6 +916,7 @@ class StemEngine {
           family: options.modelId ? undefined : options.family,
           device: options.device,
           mode: options.mode,
+          extras,
         });
         if (started.ok === false) throw Object.assign(new Error(`${started.code}: ${started.message}`), { code: started.code });
         job = started.data;
@@ -931,6 +959,7 @@ class StemEngine {
             family: options.modelId ? undefined : options.family,
             device: options.device,
             mode: options.mode,
+            extras,
           }),
         });
         const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string; code?: string; data?: StemJobView };
@@ -1070,6 +1099,23 @@ class StemEngine {
     return payload.ok && payload.data ? payload.data : null;
   }
 
+  /** Persistenter lokaler Ergebnispfad für GUI-Rückimport und Wiedergabe. */
+  public async storageRoot(): Promise<StemStorageRootStatus | null> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (!desktop?.getStorageRoot) return null;
+    const result = await desktop.getStorageRoot();
+    return result.ok === true ? result.data : null;
+  }
+
+  /** Ändert den Stem-Datenpfad ohne Audio- oder Projektdateien zu verschieben. */
+  public async configureStorageRoot(root: string): Promise<StemStorageRootStatus> {
+    const desktop = typeof window !== 'undefined' ? window.rekordboxDesktop?.stemEngine : undefined;
+    if (!desktop?.configureStorageRoot) throw new Error('Lokale Stem-Speicherortauswahl ist in dieser Laufzeit nicht verfügbar.');
+    const result = await desktop.configureStorageRoot(root);
+    if (result.ok !== true) throw new Error(result.message);
+    return result.data;
+  }
+
   /**
    * Ein Poll-Zyklus: erkennt fertige Jobs, lädt die Ergebnisse herunter, prüft
    * sie und importiert sie über den bestehenden Stem-Pfad. Wird beim App-Start
@@ -1193,6 +1239,7 @@ class StemEngine {
       }
       const wav = preparedInput.wav;
       const trackName = `track_${trackId}`.replace(/[^a-zA-Z0-9._-]+/g, '_');
+      const extras = buildLibrarySourceExtras(sourceBuffer, options.sourceTrack);
       if (options.signal?.aborted) {
         throw Object.assign(new Error('Die Fern-Separation wurde vor dem Upload abgebrochen.'), { code: 'INFERENCE_CANCELLED' });
       }
@@ -1201,6 +1248,8 @@ class StemEngine {
       if (desktop?.startRemoteStemJob) {
         const started = await desktop.startRemoteStemJob({
           bytes: wav,
+          extras,
+          sourceOriginalPath: extras?.librarySourcePath,
           trackName,
           profile,
           modelId: options.modelId,
@@ -1216,6 +1265,8 @@ class StemEngine {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             bytes: base64FromBytes(wav),
+            extras,
+            sourceOriginalPath: extras?.librarySourcePath,
             trackName,
             profile,
             modelId: options.modelId,

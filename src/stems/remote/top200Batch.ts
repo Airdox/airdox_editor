@@ -9,7 +9,7 @@ import type { RemoteStemJobService } from './remoteStemJobService';
 
 export interface BatchTrack { id: string; title?: string; playCount?: number; originalSha256?: string; originalMedia?: { location: string }; databaseRecord?: { filePath?: string } }
 export interface BatchEntry { track: BatchTrack; inputPath?: string; originalSha256?: string; jobId?: string; status: string; percent: number; error?: string; localJobId?: string }
-export interface Top200Batch { id: string; entries: BatchEntry[]; createdAt: number; modelId?: string; published?: boolean; error?: string }
+export interface Top200Batch { id: string; entries: BatchEntry[]; createdAt: number; modelId?: string; published?: boolean; uploadComplete?: boolean; error?: string }
 export function selectTop200(tracks: BatchTrack[]): BatchTrack[] {
   const seen = new Set<string>();
   return tracks.filter(track => typeof track.id === 'string' && !seen.has(track.id) && !!seen.add(track.id))
@@ -66,8 +66,8 @@ export class Top200BatchService {
     for (const batch of await this.list()) {
       for (const entry of batch.entries) {
         if (entry.track.id === trackId && entry.originalSha256 === hash && entry.jobId) {
-          const job = this.remote.get(entry.jobId);
-          if (job?.status === 'COMPLETED' && job.localJobId) return job.localJobId;
+          const localJobId = await this.remote.restoreCompletedJob(entry.jobId, hash);
+          if (localJobId) return localJobId;
         }
       }
     }
@@ -97,6 +97,15 @@ export class Top200BatchService {
     const batch = await this.refresh(id);
     for (const entry of batch.entries) {
       if (entry.status !== 'FAILED') continue;
+      if (entry.jobId) {
+        try {
+          const imported = await this.remote.retryImport(entry.jobId);
+          entry.status = imported.status; entry.percent = imported.percent; entry.localJobId = imported.localJobId; entry.error = imported.error?.message;
+          continue;
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'REMOTE_RESULT_NOT_READY') { entry.error = String(error); continue; }
+        }
+      }
       entry.jobId = undefined; entry.error = undefined; entry.status = 'READY'; entry.percent = 0;
     }
     batch.error = undefined; batch.published = false;
@@ -106,6 +115,7 @@ export class Top200BatchService {
   }
   private async run(id: string) {
     const batch = await this.get(id);
+    let checkpointCount = 0;
     for (const entry of batch.entries) {
       if (entry.jobId || entry.status === 'FAILED') continue;
       const work = path.join(this.directory(), `${id}-${batch.entries.indexOf(entry)}.wav`);
@@ -116,15 +126,23 @@ export class Top200BatchService {
         await this.save(batch);
         await this.convert(entry.inputPath, work);
         if (await sha256File(entry.inputPath) !== entry.originalSha256) throw new Error('Originaldatei wurde während der Konvertierung verändert');
-        const job = await this.remote.start({ inputPath: work, sourceOriginalPath: entry.inputPath, trackName: entry.track.title || entry.track.id, profile: 'HIGH_QUALITY', modelId: batch.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo' });
+        const job = await this.remote.start({ inputPath: work, sourceOriginalPath: entry.inputPath, trackName: entry.track.title || entry.track.id, profile: 'HIGH_QUALITY', modelId: batch.modelId ?? 'bsroformer-musdb18hq-4stem-zfturbo', queueWaitTimeoutMs: 7 * 24 * 60 * 60_000 });
         entry.jobId = job.jobId;
         entry.status = job.status;
       } catch (error) { entry.status = 'FAILED'; entry.error = String(error); }
       await this.save(batch);
       await rm(work, { force: true });
+      checkpointCount++;
+      if (checkpointCount % 10 === 0) {
+        await this.remote.publishBatch(batch.id, batch.entries.flatMap(item => item.jobId ? [item.jobId] : []), false);
+        batch.published = true;
+        batch.uploadComplete = false;
+        await this.save(batch);
+      }
     }
     await this.remote.publishBatch(batch.id, batch.entries.flatMap(entry => entry.jobId ? [entry.jobId] : []));
     batch.published = true;
+    batch.uploadComplete = true;
     batch.error = undefined;
     await this.save(batch);
   }
